@@ -4,6 +4,7 @@ import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.StopProof;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -30,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -73,11 +76,52 @@ import java.util.concurrent.TimeUnit;
  *       certifying a workspace a live, unreachable writer can still mutate.</li>
  * </ul>
  *
+ * <p>R7: a run's tree is sampled while the run is live, so a child that outlives
+ * its root (the bridge exits, its CLI child takes a moment to follow) is still one
+ * of this run's discovered records at stop time and is killed by identity instead
+ * of failing the proof as an unreachable writer. The sampler never builds a
+ * supervision channel -- it snapshots the live one and skips when there is none --
+ * never signals anything, and keeps a pruned population: an over-cap set spends a
+ * bounded probe budget on identities the OS reports gone or recycled (a gone or
+ * recycled identity can never account for a live writer), and that budget rotates
+ * through the population pass by pass, so a dead record behind a wall of live ones
+ * is still reached and evicted instead of sitting behind the same probed head for
+ * the life of the run. A live or unverifiable record is never shed: the job
+ * inventory is best-effort (the assignment can be refused and breakaway children
+ * are invisible to it), so a sampled record can be the only evidence attributing a
+ * live child to this run, and shedding it to honour the cap could certify a live
+ * writer as stopped. The cap therefore bounds dead evidence only; an over-cap live
+ * (or unverifiable) population is retained over the cap.
+ *
+ * <p>Release-blocking live finding (run 8af5e2a6, WAITING_INPUT cancel): a run's
+ * core exiting on its own is a normal lifecycle -- the assistant's clarification
+ * question was delivered -- and the run then stays WAITING_INPUT until an operator
+ * cancels it. The OS identity of the root is gone, but the in-memory binding
+ * ({@link #bound}: nonce, root pid and creation identity of the launch this
+ * controller performed) is not, so the stop proof must still run: the root tree
+ * is not swept (a gone root's orphaned children still carry its parent pid, but
+ * the lookup cannot distinguish them from a recycled pid's tree, so nothing is
+ * enumerated or signalled from it), the sampler's observed records are killed
+ * and verdict-checked by identity, the inventory still nets unaccounted members,
+ * and the proof is true only when every known record is gone or a recycled identity, no
+ * unverifiable record remains and nothing is unaccounted for. Only a record that
+ * is not this controller's binding is refused without action. {@code owns} keeps
+ * requiring a live root, so pause/resume stay refused on a run that is no longer
+ * alive. Every false proof is logged (identities only) with the path that fired:
+ * binding mismatch, live records remaining, unverifiable records, deadline expiry
+ * or an exception -- the live failure produced no diagnostic at all.
+ *
+ * <p>Residual (review round 6): a writer spawned after the sampler's last pass and
+ * before the root exited, and invisible to the job inventory, is not enumerable at
+ * proof time; an inventory-visible member fails the proof closed, while a
+ * job-invisible one is outside what this proof can observe.
+ *
  * <p>Every command is a synchronous JSON-free line exchange; a supervisor that
  * is missing, dead or silent fails the operation explicitly rather than
  * degrading to PID signalling. PowerShell, kernel32 and ntdll are the OS's own
  * components -- nothing is installed or downloaded.
  */
+@Slf4j
 final class WindowsProcessController implements OwnedProcessController {
 
     /**
@@ -98,13 +142,96 @@ final class WindowsProcessController implements OwnedProcessController {
     private final Path powershell;
     private final Map<UUID, OwnedProcess> started = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Integer>> suspensions = new ConcurrentHashMap<>();
+    /**
+     * R7: records this run's tree has contained while it was still alive. The stop
+     * proof's first enumeration walks the tree from the root, so a child that
+     * outlives the root (the bridge exits, its CLI child takes a moment to follow)
+     * would otherwise be unreachable and fail the proof closed. Sampling while the
+     * run is live keeps that child attributable to this run; the proof then kills it
+     * by identity like any other writer.
+     */
+    private final Map<UUID, Set<String>> observedRecords = new ConcurrentHashMap<>();
+    /** The largest population one run's sampler has held before pruning it (test-visible peak). */
+    private final Map<UUID, Integer> observedPeaks = new ConcurrentHashMap<>();
+    /**
+     * R7 memory bound: the records one run's sampler remembers. The cap is soft and
+     * bounds <em>dead</em> evidence only -- identities the OS reports gone or
+     * recycled are pruned, a live or unverifiable record is never shed: in the
+     * documented best-effort job configuration (assignment refused, breakaway
+     * children invisible) the sampled record is the only attribution evidence for a
+     * child unreachable from the root, so shedding it could let a later proof
+     * certify a live writer as stopped. An over-cap live population is therefore
+     * retained over the cap.
+     */
+    static final int MAX_OBSERVED_RECORDS = 512;
+    /** Probes one over-cap sampling pass spends on records the OS may report gone or recycled. */
+    private static final int OBSERVED_PRUNE_PROBES = 32;
+    /**
+     * R7 (review round 3, P3-a): where the run's next over-cap pass starts probing.
+     * The pass budget is small and the population is iteration-ordered, so a pass
+     * that always began at the head would spend every budget on the same records:
+     * with 32+ live records at the head, the gone records behind them would never be
+     * probed and the population would never be pruned. The cursor rotates the start
+     * of each pass, so successive passes sweep the whole population. Cleared with the
+     * run's population on release/close (and on a rolled-back start).
+     */
+    private final Map<UUID, Integer> observedProbeCursors = new ConcurrentHashMap<>();
+    /**
+     * R7 (review round 3, P3-b): the supervisor's verdict prefix for an identity it
+     * could not read -- a failed OS query that is not a definite absence. It is
+     * deliberately distinct from {@code gone}: an unreadable query is never folded
+     * into absence, so the record is retained, never signalled, and a stop proof
+     * that meets one fails closed instead of certifying a live writer as stopped.
+     */
+    private static final String UNVERIFIABLE = "unverifiable";
     private final Object supervisorLock = new Object();
     private final ExecutorService controlExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "host-process-control");
         thread.setDaemon(true);
         return thread;
     });
+    private final ScheduledExecutorService treeSampler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "host-process-tree-sampler");
+        thread.setDaemon(true);
+        return thread;
+    });
 
+    private volatile boolean sampling = false;
+    /**
+     * R7: close() is terminal. Once it returns, no control path may build a new
+     * supervision channel -- a supervisor created after the close would be closed
+     * by nobody (leaking its process, job handle and temp script), and its
+     * construction blocks for the whole start window inside {@link #supervisorLock}.
+     */
+    private volatile boolean closed = false;
+    /**
+     * Test-visible seam for the window between the bind and the terminal-state
+     * re-check: production never assigns it. It lets a test deterministically
+     * interleave {@code close()} with a {@code start()} that has already bound
+     * its run, which the race the re-check defends cannot be forced otherwise --
+     * and it hands the bound record to the test, so the rollback itself (not a
+     * concurrent {@code close()}) can be shown to have removed every trace of it.
+     */
+    volatile java.util.function.Consumer<OwnedProcess> afterBind = owned -> { };
+    /**
+     * Test-visible seam for the window between the root sweep and the straggler
+     * scan of {@link #stop}: production never assigns it. The sampler runs on its
+     * own thread and can add a record at any point of the proof, so a test can
+     * only place that addition deterministically through a seam. It receives the
+     * run's live observed set -- the same set the sampler adds to.
+     */
+    volatile java.util.function.Consumer<Set<String>> afterRootSweep = records -> { };
+    /**
+     * Test-visible seam for the window after the final job inventory of
+     * {@link #stop}: production never assigns it. The straggler kill, the
+     * per-record verdicts and the inventory are all round trips after the last
+     * population re-read, so a record the sampler adds in this last window was
+     * never scanned, killed or verdict-checked -- and a breakaway writer is
+     * invisible to the inventory. The seam receives the run's live observed set
+     * (the same set the sampler adds to), so a test can place that addition
+     * deterministically and assert the proof fails closed on it.
+     */
+    volatile java.util.function.Consumer<Set<String>> afterFinalInventory = records -> { };
     private Supervisor supervisor;
 
     WindowsProcessController() {
@@ -124,6 +251,10 @@ final class WindowsProcessController implements OwnedProcessController {
         Objects.requireNonNull(runId, "runId");
         Objects.requireNonNull(profile, "profile");
         Objects.requireNonNull(coreLog, "coreLog");
+        if (closed) {
+            throw new IllegalStateException(
+                    "This Host process controller is closed; no new run can be supervised");
+        }
         // The run's job must exist before the core does: the supervisor's script
         // creates the job object (with kill-on-close) before it prints the ready
         // line, and this constructor call awaits that line -- so the only
@@ -131,24 +262,63 @@ final class WindowsProcessController implements OwnedProcessController {
         // identity-validated enumerated sweep covers.
         Supervisor current = supervisor();
         Process process = OwnedProcessController.launch(profile, coreLog);
+        OwnedProcess owned = null;
         try {
             String jobMembership = current.command("assign " + process.pid());
             String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(
                     "The launched runtime (pid " + process.pid() + ") vanished before its creation identity"
                             + " could be recorded"));
-            OwnedProcess owned = new OwnedProcess(runId, UUID.randomUUID().toString(), process.pid(), creation,
+            owned = new OwnedProcess(runId, UUID.randomUUID().toString(), process.pid(), creation,
                     current.selfIdentity(), TECHNIQUE + " [job-backstop=assign:" + jobMembership + "]",
                     process);
             started.put(runId, owned);
+            Set<String> observed = ConcurrentHashMap.newKeySet();
+            observed.add(recordOf(owned));
+            observedRecords.put(runId, observed);
+            observedPeaks.put(runId, observed.size());
+            observedProbeCursors.remove(runId);
+            afterBind.accept(owned);
+            // close() sets the terminal state before it clears the bindings and
+            // cannot be excluded by the launch, so it is re-checked after the bind:
+            // reporting success here would hand back a run the kill-on-close job
+            // then terminates, and startSampling would be rejected by the shut-down
+            // sampler after a partial bind. The rollback in the catch removes the
+            // binding and terminates the launched process.
+            if (closed) {
+                throw new IllegalStateException(
+                        "This Host process controller is closed; no new run can be supervised");
+            }
+            startSampling();
             return owned;
         } catch (RuntimeException e) {
+            if (owned != null) {
+                started.remove(runId, owned);
+                suspensions.remove(runId);
+                observedRecords.remove(runId);
+                observedPeaks.remove(runId);
+                observedProbeCursors.remove(runId);
+            }
             process.destroyForcibly();
             throw e;
         }
     }
 
-    @Override
-    public boolean owns(OwnedProcess process) {
+    /**
+     * True when the record is the binding this controller created for its run at
+     * {@link #start}: the in-memory record exists for the run and its ownership
+     * nonce, root pid and creation identity all match. Unlike {@link #owns} this
+     * does not require the root's creation identity to still be live.
+     *
+     * <p>That distinction is what the release-blocking WAITING_INPUT finding
+     * needed: a run whose core exits on its own -- the assistant's clarification
+     * question was delivered and the bridge is gone, a normal lifecycle -- is
+     * still this controller's run. Its binding is intact, so its observed writers
+     * must still be stopped by identity; refusing at the live-root gate instead
+     * left them unkilled and unverified and always failed finalization. A record
+     * with no binding for the run, or one whose nonce/pid/creation differ from it,
+     * belongs to someone else and is refused by every control path.
+     */
+    private boolean bound(OwnedProcess process) {
         if (process == null) {
             return false;
         }
@@ -162,9 +332,14 @@ final class WindowsProcessController implements OwnedProcessController {
             // evidence, never to a durable record plus an OS look-up.
             return false;
         }
-        if (!known.ownershipNonce().equals(process.ownershipNonce())
-                || known.rootPid() != process.rootPid()
-                || !known.rootCreationIdentity().equals(process.rootCreationIdentity())) {
+        return known.ownershipNonce().equals(process.ownershipNonce())
+                && known.rootPid() == process.rootPid()
+                && known.rootCreationIdentity().equals(process.rootCreationIdentity());
+    }
+
+    @Override
+    public boolean owns(OwnedProcess process) {
+        if (!bound(process)) {
             return false;
         }
         try {
@@ -179,16 +354,49 @@ final class WindowsProcessController implements OwnedProcessController {
         Objects.requireNonNull(process, "process");
         Objects.requireNonNull(deadline, "deadline");
         if (!Instant.now().isBefore(deadline)) {
-            return new StopProof(process.runId(), false);
+            return refused(process, "the caller's window had already elapsed before anything was signalled");
         }
-        if (!owns(process)) {
+        if (!bound(process)) {
+            // Not this controller's launch: no signal, no verdict, fail closed --
+            // and say so, because a silent false proof is unoperable. A bound run
+            // whose root is gone is deliberately NOT this path.
+            log.warn("Run {} stop proof: binding mismatch for record {} (bound={}); nothing was signalled."
+                            + " A bound run whose root is gone is a different path: it is stopped by identity,"
+                            + " never refused here",
+                    process.runId(), recordOf(process), boundIdentityOf(process.runId()));
             return new StopProof(process.runId(), false);
         }
         List<String> known = new ArrayList<>();
-        known.add(recordOf(process));
+        mergeObserved(process.runId(), known);
+        if (!known.contains(recordOf(process))) {
+            known.add(recordOf(process));
+        }
         try {
+            String rootVerdict = verdictOf(recordOf(process));
+            if (rootVerdict.startsWith(UNVERIFIABLE)) {
+                // The root's identity is unknown: it may still be a live writer, and
+                // no proof may be minted over a root that cannot be identified.
+                return refused(process, "the root " + recordOf(process) + " cannot be verified ("
+                        + rootVerdict + "); a root that may still be live is not stopped by identity");
+            }
+            // Only a live, identity-validated root may anchor the enumerated sweep.
+            // A "mismatch" means the pid was recycled by an unrelated process, and a
+            // "gone" root's orphaned children still carry its parent pid: the same
+            // lookup cannot distinguish the two, so anchoring on either would
+            // enumerate -- and potentially signal -- a stranger's children. Both take
+            // the proof's identity-only path over the sampler's records and the job
+            // inventory, with an empty sweep.
+            boolean anchorTree = "match".equals(rootVerdict);
+            if (!anchorTree) {
+                // The run's core exited on its own (the WAITING_INPUT lifecycle) or its
+                // pid was recycled: only the binding still identifies this run.
+                log.info("Run {} stop proof: the root {} answered {} -- its binding still matches, but its"
+                                + " tree cannot be distinguished from a recycled pid's tree and is not"
+                                + " enumerated; stopping this run's observed records by identity",
+                        process.runId(), recordOf(process), rootVerdict);
+            }
             for (int round = 0; round < MAX_ROUNDS; round++) {
-                List<String> live = liveRecords(process.rootPid());
+                List<String> live = anchorTree ? liveRecords(process.rootPid()) : List.of();
                 if (live.isEmpty()) {
                     break;
                 }
@@ -199,16 +407,47 @@ final class WindowsProcessController implements OwnedProcessController {
                 }
                 operate("kill", live);
                 if (!Instant.now().isBefore(deadline)) {
-                    return new StopProof(process.runId(), false);
+                    return refused(process, "the caller's window elapsed during the root sweep");
                 }
                 Thread.sleep(SETTLE_MILLIS);
             }
             // Records discovered earlier can outlive the tree walk when an
-            // intermediate process died: they are still killed by identity.
-            List<String> stragglers = known.stream().filter(record -> "match".equals(verdictOf(record))).toList();
+            // intermediate process died: they are still killed by identity. The
+            // verdicts are round trips too, so the caller's window is re-checked
+            // inside the scan and before anything is signalled.
+            //
+            // R7 (review round 3, P3-d): the copy at the top of the proof is a
+            // snapshot, and the root sweep above is a long series of round trips --
+            // the sampler can add a record meanwhile (the set itself is weakly
+            // consistent, so addAll on it is no guarantee either). A record added in
+            // that window can be a live breakaway writer unreachable from the root's
+            // tree and invisible to the job inventory: if the proof never scans it,
+            // it certifies a live writer as stopped. The run's observed set is
+            // therefore re-read here, after the sweep and before the straggler scan.
+            Set<String> sampled = observedRecords.get(process.runId());
+            if (sampled != null) {
+                afterRootSweep.accept(sampled);
+            }
+            mergeObserved(process.runId(), known);
+            List<String> stragglers = new ArrayList<>();
+            for (String record : known) {
+                if (!Instant.now().isBefore(deadline)) {
+                    return refused(process, "the caller's window elapsed while the known records were"
+                            + " verdict-checked; nothing further was signalled");
+                }
+                if ("match".equals(verdictOf(record))) {
+                    stragglers.add(record);
+                }
+            }
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed before the straggler kill");
+            }
             if (!stragglers.isEmpty()) {
                 operate("kill", stragglers);
                 Thread.sleep(SETTLE_MILLIS);
+            }
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed after the straggler kill");
             }
             // Per-run isolation ruling (Task 13): the job object is shared by every run
             // this controller supervises, so a per-run stop never issues a job-wide kill
@@ -222,26 +461,145 @@ final class WindowsProcessController implements OwnedProcessController {
                 operate("kill", ownJobSurvivors);
                 Thread.sleep(SETTLE_MILLIS);
             }
-            boolean clean = liveRecords(process.rootPid()).isEmpty();
-            for (String record : known) {
-                clean &= !"match".equals(verdictOf(record));
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed after the job-survivor kill");
             }
+            // R7 (review round 3, P3-d): the straggler kill and the inventory above are
+            // round trips as well, so the population is re-read once more before the
+            // per-record verdict decides the proof.
+            mergeObserved(process.runId(), known);
+            List<String> remaining = anchorTree ? liveRecords(process.rootPid()) : List.of();
+            if (!remaining.isEmpty()) {
+                log.warn("Run {} stop proof: live records remain in the root's tree {}; the proof fails closed",
+                        process.runId(), remaining);
+            }
+            boolean clean = remaining.isEmpty();
+            List<String> survivors = new ArrayList<>();
+            List<String> unverifiable = new ArrayList<>();
+            for (String record : known) {
+                if (!Instant.now().isBefore(deadline)) {
+                    return refused(process, "the caller's window elapsed while the final verdicts were decided");
+                }
+                // R7 (review round 3, P3-b): only a definite absence supports the proof.
+                // A record the OS still verifies live survived the kills; a record it
+                // cannot verify at all may be a live writer it cannot identify. Reading
+                // either as "not match, therefore stopped" is exactly the fail-open
+                // reading of an unreadable query.
+                String verdict = verdictOf(record);
+                if (verdict.startsWith(UNVERIFIABLE)) {
+                    unverifiable.add(record + " (" + verdict + ")");
+                } else if (!("gone".equals(verdict) || verdict.startsWith("mismatch"))) {
+                    survivors.add(record + " (" + verdict + ")");
+                }
+            }
+            if (!survivors.isEmpty()) {
+                // A live record that survived every kill: the proof cannot be true over
+                // it. Only OS identities are logged.
+                log.warn("Run {} stop proof: live records remain after the kill sweep {}; the proof fails closed",
+                        process.runId(), survivors);
+            }
+            if (!unverifiable.isEmpty()) {
+                // Unknown is not absent: the record may be a live writer the OS cannot
+                // identify, so it is neither signalled nor read as stopped.
+                log.warn("Run {} stop proof: the OS could not verify records {}; an unverifiable record may"
+                        + " still be a live writer, so the proof fails closed", process.runId(), unverifiable);
+            }
+            clean &= survivors.isEmpty() && unverifiable.isEmpty();
             Thread.sleep(SETTLE_MILLIS);
-            clean &= liveRecords(process.rootPid()).isEmpty();
+            List<String> stillLive = anchorTree ? liveRecords(process.rootPid()) : List.of();
+            if (!stillLive.isEmpty()) {
+                log.warn("Run {} stop proof: the root's tree still enumerates records {} after the settle;"
+                        + " the proof fails closed", process.runId(), stillLive);
+            }
+            clean &= stillLive.isEmpty();
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed before the final verdict");
+            }
             // The job-membership completeness net (class javadoc): the enumerated tree
             // cannot see a descendant whose intermediate parent died before the first
             // enumeration, so the job inventory is the net that catches one. This run's
             // own members are covered by the checks above; another live run's members are
             // that run's writers -- left alone and excluded from this proof; anything
-            // unaccounted for fails the proof closed.
-            clean &= jobMembershipIsAccounted(process, known);
+            // unaccounted for fails the proof closed. The inventory and its
+            // classification are round trips like every earlier phase, so the caller's
+            // window is re-checked around them as well: a proof is never returned after
+            // the window elapsed.
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed before the job inventory");
+            }
+            List<String> job = jobMembers();
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed during the job inventory");
+            }
+            List<String> unaccounted = unaccountedJobMembers(process, known, job);
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed after the job inventory");
+            }
+            if (!unaccounted.isEmpty()) {
+                // R7 diagnostics: without the inventory a failed proof is opaque. Only OS
+                // identities (pid@creation) are logged -- never command lines, paths or
+                // environment. The parenthetical states exactly what was enumerated: a
+                // member of another supervised run whose own root no longer re-verifies is
+                // not excluded above, so it can be neither attributed nor dismissed here.
+                log.warn("Run {} stop proof: root={} known={} job={} unaccounted={} "
+                                + "(not this run's records and not enumerated from another supervised root"
+                                + " that still re-verifies); the proof fails closed",
+                        process.runId(), verdictOf(recordOf(process)), known, job, unaccounted);
+            }
+            clean &= unaccounted.isEmpty();
+            // R7 (review round 4, P2): the population re-read before the straggler scan is
+            // not the proof's last word -- the per-record verdicts, the own-survivor kill
+            // and the final inventory with its classification are round trips after it. A
+            // record the sampler adds in that window was never scanned, killed or
+            // verdict-checked, and a breakaway writer is invisible to the inventory, so
+            // nothing else accounts for it: returning true would certify a live writer as
+            // stopped. The proof therefore takes one last snapshot and fails closed unless
+            // every record in it is one it already decided. It is a snapshot, not a merge:
+            // deciding a late record inside this proof would add the round trips that
+            // reopen exactly this window.
+            Set<String> lastObserved = observedRecords.get(process.runId());
+            if (lastObserved != null) {
+                afterFinalInventory.accept(lastObserved);
+                List<String> lateRecords = lastObserved.stream().filter(record -> !known.contains(record)).toList();
+                if (!lateRecords.isEmpty()) {
+                    // R7 diagnostics: only OS identities (pid@creation) are logged. The
+                    // proof never probed these records, so their liveness is unknown and
+                    // the proof is false regardless.
+                    log.warn("Run {} stop proof: records first observed after the final inventory {};"
+                            + " they were never scanned, killed or verdict-checked, so the proof fails closed",
+                            process.runId(), lateRecords);
+                }
+                clean &= lateRecords.isEmpty();
+            }
             return new StopProof(process.runId(), clean);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new StopProof(process.runId(), false);
+            return refused(process, "the stop was interrupted before it could verify the writers");
         } catch (RuntimeException e) {
-            return new StopProof(process.runId(), false);
+            // The channel refused or died mid-proof: nothing may be certified. The
+            // message carries OS identities only (supervisor protocol lines).
+            return refused(process, "the stop could not be completed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Fails one stop proof closed and logs why -- OS identities only, never a
+     * command line, path or environment. Every false stop-proof path is logged:
+     * this helper covers the deadline, unverifiable-root and later refusals, while
+     * the binding-mismatch and final-clean paths log directly. The live
+     * release-blocking failure returned a false proof with no diagnostic at all,
+     * which left the operator unable to tell a binding mismatch from a root that
+     * exited before its observed writers could be stopped.
+     */
+    private StopProof refused(OwnedProcess process, String path) {
+        log.warn("Run {} stop proof refused: {}", process.runId(), path);
+        return new StopProof(process.runId(), false);
+    }
+
+    /** The identity this controller bound for the run, for diagnostics only (never authority). */
+    private String boundIdentityOf(UUID runId) {
+        OwnedProcess known = started.get(runId);
+        return known == null ? "none" : recordOf(known);
     }
 
     /**
@@ -251,21 +609,44 @@ final class WindowsProcessController implements OwnedProcessController {
      * <em>live</em> run's enumerated tree is that run's writer and is excluded;
      * any other member is unaccounted for and fails the proof closed. Nothing
      * but this run's own records is ever signalled here.
+     *
+     * @return the unaccounted members (empty when the inventory is fully explained)
      */
-    private boolean jobMembershipIsAccounted(OwnedProcess process, List<String> ownRecords) {
+    private List<String> unaccountedJobMembers(OwnedProcess process, List<String> ownRecords,
+            List<String> jobMembers) {
         List<String> foreignRunTrees = new ArrayList<>();
         for (OwnedProcess other : started.values()) {
             if (!other.runId().equals(process.runId()) && rootMatches(other)) {
                 foreignRunTrees.addAll(liveRecords(other.rootPid()));
             }
         }
-        for (String member : jobMembers()) {
+        List<String> unaccounted = new ArrayList<>();
+        for (String member : jobMembers) {
             if (ownRecords.contains(member) || foreignRunTrees.contains(member)) {
                 continue;
             }
-            return false;
+            unaccounted.add(member);
         }
-        return true;
+        return unaccounted;
+    }
+
+    /**
+     * R7 (review round 3, P3-d): folds the run's current sampled population into the
+     * proof's known records. The proof must call this after every phase that is a
+     * long series of round trips -- the sampler adds records on its own thread, and a
+     * writer attributed in those windows is otherwise never scanned, killed or
+     * verdict-checked, which is a true proof over a live writer.
+     */
+    private void mergeObserved(UUID runId, List<String> known) {
+        Set<String> observed = observedRecords.get(runId);
+        if (observed == null) {
+            return;
+        }
+        for (String record : observed) {
+            if (!known.contains(record)) {
+                known.add(record);
+            }
+        }
     }
 
     @Override
@@ -285,6 +666,9 @@ final class WindowsProcessController implements OwnedProcessController {
         }
         started.remove(process.runId());
         suspensions.remove(process.runId());
+        observedRecords.remove(process.runId());
+        observedPeaks.remove(process.runId());
+        observedProbeCursors.remove(process.runId());
         synchronized (supervisorLock) {
             if (started.isEmpty() && supervisor != null) {
                 // No run is supervised any more: closing the channel closes the last
@@ -299,6 +683,16 @@ final class WindowsProcessController implements OwnedProcessController {
 
     @Override
     public void close() {
+        // Terminal state first: the sampler, a concurrent stop or a later start must
+        // never rebuild the channel that is being closed. Every run binding and every
+        // sampled record belongs to the channel, so they go with it.
+        closed = true;
+        treeSampler.shutdownNow();
+        started.clear();
+        suspensions.clear();
+        observedRecords.clear();
+        observedPeaks.clear();
+        observedProbeCursors.clear();
         synchronized (supervisorLock) {
             if (supervisor != null) {
                 supervisor.close();
@@ -306,6 +700,162 @@ final class WindowsProcessController implements OwnedProcessController {
             }
         }
         controlExecutor.shutdownNow();
+    }
+
+    // ------------------------------------------------------------------ sampling
+
+    /** Test-visible state: the population the sampler currently remembers for one run. */
+    int observedRecordCount(UUID runId) {
+        Set<String> observed = observedRecords.get(runId);
+        return observed == null ? 0 : observed.size();
+    }
+
+    /** Test-visible state: the largest population the sampler held for one run before pruning it. */
+    int observedPeak(UUID runId) {
+        return observedPeaks.getOrDefault(runId, 0);
+    }
+
+    /** Test-visible state: whether the sampler still remembers one identity for the run. */
+    boolean observedRecordContains(UUID runId, String record) {
+        Set<String> observed = observedRecords.get(runId);
+        return observed != null && observed.contains(record);
+    }
+
+    /**
+     * Test-visible seam: forces the supervision channel through {@link #supervisor()}
+     * so the terminal-state guard on channel creation is asserted directly -- the
+     * binding look-up in {@code owns()}/{@code stop()} returns before it otherwise.
+     */
+    String supervisorSelfIdentity() {
+        return supervisor().selfIdentity();
+    }
+
+    /**
+     * Test-visible: one raw exchange on the real supervision channel. The embedded
+     * script's identity classification only executes on Windows, so its protocol
+     * test drives the same PowerShell process, script and line protocol every
+     * control action uses -- a revert of the classification in {@link #SCRIPT}
+     * fails a test instead of silently restoring the fail-open reading.
+     */
+    String supervisorCommand(String line) {
+        return supervisor().command(line);
+    }
+
+    /**
+     * Starts the one sampler this controller ever runs (latched): the tree of every
+     * supervised run is sampled while it is live.
+     */
+    private void startSampling() {
+        if (sampling) {
+            return;
+        }
+        synchronized (supervisorLock) {
+            if (sampling) {
+                return;
+            }
+            sampling = true;
+        }
+        treeSampler.scheduleWithFixedDelay(this::sampleLiveTrees, 500, 500, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * R7: samples every live run's enumerated tree so a descendant that outlives its
+     * root stays attributable at stop time. The sampler signals nothing and decides
+     * no proof; it only remembers identity-validated records. A supervisor hiccup
+     * skips one sample -- the stop proof still fails closed on its own.
+     *
+     * <p>The channel is a non-creating snapshot: the sampler never builds a
+     * supervisor. One created here after {@code release()}/{@code close()} would be
+     * closed by nobody, and {@code new Supervisor()} can block for the whole start
+     * window inside the supervisor lock, stalling {@code start()}/{@code release()}.
+     */
+    private void sampleLiveTrees() {
+        if (closed || started.isEmpty()) {
+            return; // closed or between runs: there is nothing to sample
+        }
+        Supervisor current = liveSupervisor();
+        if (current == null) {
+            return; // no live channel: a sample must never rebuild one
+        }
+        for (Map.Entry<UUID, OwnedProcess> entry : started.entrySet()) {
+            Set<String> observed = observedRecords.get(entry.getKey());
+            if (observed == null) {
+                continue;
+            }
+            try {
+                OwnedProcess process = entry.getValue();
+                if (!"match".equals(current.command("record " + recordOf(process)))) {
+                    continue;
+                }
+                observed.addAll(recordsFrom(current.command("tree " + process.rootPid())));
+                observedPeaks.merge(entry.getKey(), observed.size(), Math::max);
+                pruneObserved(entry.getKey(), current, observed);
+            } catch (RuntimeException e) {
+                log.debug("Run {} descendant sampling skipped: {}", entry.getKey(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * The live supervision channel, or null when there is none. Never creates one:
+     * the sampler must not race {@code release()}/{@code close()} into building a
+     * channel nobody owns.
+     */
+    private Supervisor liveSupervisor() {
+        synchronized (supervisorLock) {
+            return supervisor != null && supervisor.isAlive() ? supervisor : null;
+        }
+    }
+
+    /**
+     * R7 memory bound ({@link #MAX_OBSERVED_RECORDS}): a gone or recycled identity
+     * can never account for a live writer, so an over-cap population spends a
+     * bounded number of probes on records the OS reports gone or recycled and
+     * evicts only those. The cap is deliberately <b>soft</b>: a record the OS still
+     * reports live -- and a record it cannot verify at all -- is never shed. In the
+     * documented best-effort job configuration (the assignment refused with
+     * {@code assign_failed:5}, breakaway children invisible to the job inventory)
+     * the sampled record is the only attribution evidence for a child unreachable
+     * from the root at stop time, so shedding it would let the proof miss a live
+     * writer and return {@code allWritersStopped=true} over it. An over-cap live
+     * population is therefore retained: the cap bounds dead evidence only.
+     *
+     * <p>R7 (review round 3, P3-a): the probe budget is per pass, and each pass
+     * starts at the run's cursor instead of at the head of the iteration order.
+     * Without the rotation, 32+ live records at the head would consume the whole
+     * budget on every pass and the gone records behind them would never be probed --
+     * the population would never be pruned at all, the opposite of a memory bound.
+     * The cursor advances past the last probed record and wraps, so consecutive
+     * passes sweep the whole population. Nothing here signals anything.
+     */
+    private void pruneObserved(UUID runId, Supervisor current, Set<String> observed) {
+        if (observed.size() <= MAX_OBSERVED_RECORDS) {
+            return;
+        }
+        List<String> population = new ArrayList<>(observed);
+        int size = population.size();
+        if (size == 0) {
+            return;
+        }
+        int cursor = Math.floorMod(observedProbeCursors.getOrDefault(runId, 0), size);
+        int probes = 0;
+        while (probes < OBSERVED_PRUNE_PROBES && probes < size && observed.size() > MAX_OBSERVED_RECORDS) {
+            String record = population.get(cursor);
+            cursor = (cursor + 1) % size;
+            probes++;
+            String verdict;
+            try {
+                verdict = current.command("record " + record);
+            } catch (RuntimeException e) {
+                break; // a channel hiccup ends this pass; the next pass resumes at the cursor
+            }
+            if ("gone".equals(verdict) || verdict.startsWith("mismatch")) {
+                observed.remove(record);
+            }
+            // R7 (review round 3, P3-b): an unverifiable (or otherwise unrecognised)
+            // verdict is not a definite absence -- the record stays as evidence.
+        }
+        observedProbeCursors.put(runId, cursor);
     }
 
     // ------------------------------------------------------------------ control
@@ -401,6 +951,10 @@ final class WindowsProcessController implements OwnedProcessController {
 
     private Supervisor supervisor() {
         synchronized (supervisorLock) {
+            if (closed) {
+                throw new IllegalStateException("This Host process controller is closed;"
+                        + " no supervision channel can be created");
+            }
             if (supervisor == null || !supervisor.isAlive()) {
                 supervisor = new Supervisor();
             }
@@ -432,7 +986,11 @@ final class WindowsProcessController implements OwnedProcessController {
 
     /** Live owned records of the run's tree, deepest first, each identity-validated by the OS. */
     private List<String> liveRecords(long rootPid) {
-        String payload = command("tree " + rootPid);
+        return recordsFrom(command("tree " + rootPid));
+    }
+
+    /** Parses a supervisor tree payload ("pid@created@depth;...") into records, deepest first. */
+    private static List<String> recordsFrom(String payload) {
         List<Map.Entry<String, Integer>> records = new ArrayList<>();
         for (String entry : payload.split(";", -1)) {
             if (entry.isEmpty()) {
@@ -822,20 +1380,41 @@ final class WindowsProcessController implements OwnedProcessController {
                   return TerminateProcess(hp, 1) ? "ok" : "terminate_failed:" + Marshal.GetLastWin32Error();
                 } finally { CloseHandle(hp); }
               }
-              // The creation identity of a live PID: FILETIME ticks since 1601 (100 ns), or null when the
-              // process is gone. A terminated process with an open handle (every ProcessBuilder child
-              // whose Process object is still referenced) keeps answering GetProcessTimes, so liveness
-              // is decided by the exit code and never by the mere presence of the PID.
-              public static string Creation(int pid) {
+              // The creation identity of a live PID: FILETIME ticks since 1601 (100 ns). The three
+              // outcomes are deliberately distinct: "<ticks>" when the OS verified the identity, "gone"
+              // only for a definite absence, and "unverifiable:<detail>" when the query failed for any
+              // other reason. Only ERROR_INVALID_PARAMETER (87) from OpenProcess means "no such
+              // process", and a process that exited reports an exit code other than STILL_ACTIVE (a
+              // terminated process with an open handle -- every ProcessBuilder child whose Process
+              // object is still referenced -- keeps answering GetProcessTimes, so liveness is decided
+              // by the exit code and never by the mere presence of the PID). Any other failure leaves
+              // the identity unknown, and unknown must never be read as absence: a record shed that way
+              // is a live writer the stop proof would then certify as stopped.
+              public static string Identity(int pid) {
                 IntPtr hp = OpenProcess(QueryLimited, false, pid);
-                if (hp == IntPtr.Zero) { return null; }
+                if (hp == IntPtr.Zero) {
+                  int error = Marshal.GetLastWin32Error();
+                  return error == 87 ? "gone" : "unverifiable:open:" + error;
+                }
                 try {
                   uint exitCode;
-                  if (!GetExitCodeProcess(hp, out exitCode) || exitCode != StillActive) { return null; }
+                  if (!GetExitCodeProcess(hp, out exitCode)) {
+                    return "unverifiable:exit-code:" + Marshal.GetLastWin32Error();
+                  }
+                  if (exitCode != StillActive) { return "gone"; }
                   FILETIME creation, exit, kernel, user;
-                  if (!GetProcessTimes(hp, out creation, out exit, out kernel, out user)) { return null; }
+                  if (!GetProcessTimes(hp, out creation, out exit, out kernel, out user)) {
+                    return "unverifiable:times:" + Marshal.GetLastWin32Error();
+                  }
                   return ((long)(((ulong)creation.High << 32) | creation.Low)).ToString();
                 } finally { CloseHandle(hp); }
+              }
+              // The creation identity of a verifiable PID, or null when it is not: the enumeration
+              // paths (tree, self record) list only identities the OS confirmed, and the stop proof
+              // treats an unlisted process as unaccounted rather than absent.
+              public static string Creation(int pid) {
+                string identity = Identity(pid);
+                return identity == "gone" || identity.StartsWith("unverifiable") ? null : identity;
               }
               // Identity-validated descendant tree of one root: "pid@created@depth" entries.
               public static string[] Tree(int root) {
@@ -879,19 +1458,23 @@ final class WindowsProcessController implements OwnedProcessController {
             function Get-SelfRecord {
               return ('{0}@{1}' -f $PID, [AriaHostControl]::Creation($PID))
             }
+            function Get-Identity([int]$targetPid) {
+              return [AriaHostControl]::Identity($targetPid)
+            }
             function Get-RecordOf([int]$targetPid) {
-              $created = [AriaHostControl]::Creation($targetPid)
-              if ($null -eq $created) { return $null }
-              return ('{0}@{1}' -f $targetPid, $created)
+              $identity = Get-Identity $targetPid
+              if ($identity -eq 'gone' -or $identity.StartsWith('unverifiable')) { return $null }
+              return ('{0}@{1}' -f $targetPid, $identity)
             }
             function Test-Record([string]$record) {
               $parts = $record.Split('@')
               $targetPid = [int]$parts[0]
               $expected = if ($parts.Count -gt 1) { $parts[1] } else { '' }
-              $now = Get-RecordOf $targetPid
-              if ($null -eq $now) { return 'gone' }
-              if ($expected -eq '' -or $now -eq $record) { return 'match' }
-              return ('mismatch:' + $now)
+              $identity = Get-Identity $targetPid
+              if ($identity -eq 'gone') { return 'gone' }
+              if ($identity.StartsWith('unverifiable')) { return $identity }
+              if ($expected -eq '' -or $identity -eq $expected) { return 'match' }
+              return ('mismatch:' + $targetPid + '@' + $identity)
             }
             function Invoke-Records([string]$records, [int]$op) {
               $results = @()
@@ -923,8 +1506,15 @@ final class WindowsProcessController implements OwnedProcessController {
                   'pids'     {
                     $recs = @()
                     foreach ($member in [AriaHostControl]::JobPids($job)) {
-                      $rec = Get-RecordOf ([int]$member)
-                      if ($null -ne $rec) { $recs += $rec }
+                      $identity = Get-Identity ([int]$member)
+                      if ($identity -eq 'gone') { continue }
+                      if ($identity.StartsWith('unverifiable')) {
+                        # An identity the OS cannot read is not an absence: it stays in the inventory
+                        # as an unaccounted member, which fails the stop proof closed.
+                        $recs += ('unverifiable:' + $member)
+                        continue
+                      }
+                      $recs += ('{0}@{1}' -f $member, $identity)
                     }
                     $r = 'ok|' + ($recs -join ';')
                   }

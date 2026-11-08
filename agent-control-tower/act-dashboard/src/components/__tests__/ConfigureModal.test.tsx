@@ -128,6 +128,15 @@ describe('ConfigureModal runtime tab', () => {
     const optionTexts = Array.from(modeSelect.options).map((o) => o.text);
     expect(optionTexts).toEqual(['Select a mode...', 'Host']);
   });
+
+  it('hosts the git pack credential editor on the Runtime tab (F8)', async () => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    await renderOpenedModal();
+
+    // F8: the pack's stored git token had no editor anywhere in Configure.
+    expect(await screen.findByTestId('git-credential-card')).toBeInTheDocument();
+    expect(screen.getByLabelText('Git credential (GITHUB_TOKEN)')).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

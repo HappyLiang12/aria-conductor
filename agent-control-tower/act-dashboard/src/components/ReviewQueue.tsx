@@ -5,6 +5,7 @@ import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 import DiffPreview from './DiffPreview';
+import { ApprovalToolDetails } from './ApprovalToolDetails';
 import {
   NativePermissionFacts,
   NativePermissionKindPill,
@@ -128,6 +129,10 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                   <NativePermissionFacts ask={approval} permission={permission} />
                 </div>
               )}
+              {/* F7: the row title already names the tool; only the arguments
+                  (pretty-printed, redacted) are added here, and nothing renders
+                  when the payload predates the fields. */}
+              <ApprovalToolDetails ask={approval} includeToolName={false} />
               {(approval.toolName === 'git_push' || approval.toolName === 'git_create_pr'
                 || approval.riskTier === 'PUSH') && <DiffPreview runId={approval.runId} />}
               {approval.source === 'CLARIFICATION' ? (

@@ -75,19 +75,36 @@ public class CoreRuntimeConfiguration {
         return new RunRuntimeRegistry();
     }
 
+    /**
+     * The workspace service. Its roots are provisioned here so a first boot with an
+     * empty data directory succeeds; the configured value goes through
+     * {@link WorkspacePaths#configuredRoot} first, so an unexpanded Windows
+     * {@code %NAME%} token is expanded or refused instead of becoming a literal
+     * directory (F21). The git credential and the optional workflow binding are what a
+     * run scratch is checked out with (F15); with no binding bean wired, scratch
+     * provisioning is unchanged.
+     */
     @Bean
     public RunWorkspaceService runWorkspaceService(RunWorkspaceLeaseRepository leases,
+            io.aria.conductor.execution.git.GitTokenSource gitTokenSource,
+            org.springframework.beans.factory.ObjectProvider<ScratchWorkspaceProvisioner> scratchProvisioners,
             @Value("${aria.workspaces.runtime-root:./data/workspaces/runs}") String runtimeRoot,
             @Value("${aria.workspaces.result-root:./data/workspaces/results}") String resultRoot) {
-        return new RunWorkspaceService(leases, provisionedRoot(runtimeRoot), provisionedRoot(resultRoot));
+        return new RunWorkspaceService(leases,
+                provisionedRoot(runtimeRoot, "aria.workspaces.runtime-root"),
+                provisionedRoot(resultRoot, "aria.workspaces.result-root"),
+                gitTokenSource, scratchProvisioners.getIfAvailable(() -> ScratchWorkspaceProvisioner.NONE));
     }
 
     /**
      * The service requires existing canonical roots; provisioning them is the
-     * wiring's job, so a first boot with an empty data directory succeeds.
+     * wiring's job, so a first boot with an empty data directory succeeds. The
+     * configured value goes through {@link WorkspacePaths#configuredRoot} first, so
+     * an unexpanded Windows {@code %NAME%} token is expanded or refused instead of
+     * becoming a literal directory (F21).
      */
-    private static Path provisionedRoot(String configured) {
-        Path path = Path.of(configured).toAbsolutePath().normalize();
+    private static Path provisionedRoot(String configured, String property) {
+        Path path = WorkspacePaths.configuredRoot(configured, property);
         try {
             return Files.createDirectories(path);
         } catch (IOException e) {
@@ -293,15 +310,28 @@ public class CoreRuntimeConfiguration {
      * ({@code aria.cores.qoder.model}, default {@code efficient} -- the model the
      * Qoder acceptance pins; a paid model must be a deliberate operator choice,
      * never a shipped default). The bridge entry and the CLI executable are
-     * resolved to absolute existing paths at launch by the adapter (a bare CLI
-     * name is resolved on PATH), because the committed bridge refuses anything
-     * else before it binds its endpoint.
+     * resolved to absolute existing paths at launch by the adapter (a bare CLI name
+     * is resolved on PATH and, when that misses, in the released CLI's versioned
+     * install directory), because the committed bridge refuses anything else before
+     * it binds its endpoint.
+     *
+     * <p>{@code aria.cores.toolchain-path} (comma-separated directories) is appended
+     * to the host PATH the core's shell resolves tools through (F10/F13): the run
+     * launcher clears the process environment, so a tool that is only on the
+     * operator's ambient PATH (e.g. the GitHub CLI or a non-standard JDK/Maven) is
+     * absent in the core without this value.
+     *
+     * <p>The git credential the launch injects is resolved per launch from the
+     * git-pack credential source (F14), so a credential stored at runtime is what
+     * the next run's core receives; an ambient value is never forwarded.
      */
     @Bean
     public QoderCoreAdapter qoderCoreAdapter(RunMcpWiring runMcp,
             @Value("${aria.cores.qoder.node-executable:node}") String nodeExecutable,
             @Value("${aria.cores.qoder.bridge-entry:packages/qoder-acp-bridge/dist/main.js}") String bridgeEntry,
             @Value("${aria.cores.qoder.executable:qoder}") String coreExecutable,
+            @Value("${aria.cores.toolchain-path:}") String toolchainPath,
+            io.aria.conductor.execution.git.GitTokenSource gitTokenSource,
             // The recorded ACP invocation of the real CLI (Task 1's probe): the
             // pinned qodercli speaks the newline-delimited JSON-RPC protocol on
             // stdio only in this mode, so a launch without it never answers
@@ -314,7 +344,9 @@ public class CoreRuntimeConfiguration {
                 .filter(argument -> !argument.isBlank())
                 .toList();
         return new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(nodeExecutable, bridgeEntry,
-                coreExecutable, coreArguments, Map.of(), Map.of(), version, model), runMcp);
+                coreExecutable, coreArguments, Map.of(), Map.of(), version, model), runMcp,
+                CoreLaunchEnvironment.forCurrentProcess(
+                        CoreLaunchEnvironment.parseDirectories(toolchainPath), gitTokenSource));
     }
 
     @Bean

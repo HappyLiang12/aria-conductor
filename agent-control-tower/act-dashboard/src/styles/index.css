@@ -2561,6 +2561,24 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-card:last-of-type { border-bottom: none; }
 .ask-q { font-weight: 600; margin-bottom: 4px; }
 .ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
+/* F7: approval toolName + redacted arguments (present only when the payload
+   carries them). The block scrolls instead of stretching the row. */
+.ask-tool { margin: 6px 0 8px; }
+.ask-tool .col-label { font-size: 10px; letter-spacing: .8px; text-transform: uppercase; color: var(--text-mute); margin: 6px 0 3px; }
+.ask-args {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
 .ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .ask-actions .dod-textarea { width: 100%; }
 /* In-place expand (spec 10.3): the ReviewWorkspace renders INSIDE the Overview

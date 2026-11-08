@@ -3,10 +3,14 @@ package io.aria.conductor.app;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.util.StringUtils;
 
 import javax.sql.DataSource;
+import java.sql.Connection;
 import java.util.List;
 import java.util.Map;
 
@@ -92,14 +96,14 @@ class V43SeedConfigTest {
         assertThat(yaml).contains("## Questions");
         assertThat(yaml).contains("Spec was rejected");
         // DEV prompt: clone the project independently before implementing.
-        assertThat(yaml).contains("git clone");
+        assertThat(yaml).contains("git -c core.longpaths=true clone");
     }
 
     @Test
     void v45_pipelinePrompts_presentInTemplateYaml() {
         String yaml = templateYaml();
         // DEV prompt: branch-scoped clone, spec.md read, push, real-test honesty.
-        assertThat(yaml).contains("git clone --branch {branchName} {repoUrl}");
+        assertThat(yaml).contains("git -c core.longpaths=true clone --branch {branchName} {repoUrl}");
         assertThat(yaml).contains("spec/spec.md");
         assertThat(yaml).contains("git push origin {branchName}");
         assertThat(yaml).contains("Do NOT claim tests passed");
@@ -118,10 +122,33 @@ class V43SeedConfigTest {
     @Test
     void v47_qaPrompt_pushesReportToBranch() {
         String yaml = templateYaml();
-        // QA prompt: copy qa_report.md into the branch and push it so the backend
-        // can capture it into a platform report artifact (R8-F4).
-        assertThat(yaml).contains("cp /workspace/qa_report.md ./qa_report.md");
-        assertThat(yaml).contains("git commit -m 'sdd qa report'");
+        // QA prompt: write the report inside the checkout and commit ONLY it, so the
+        // backend can capture it into a platform report artifact (R8-F4).
+        assertThat(yaml).contains("Write your findings to qa_report.md inside the checkout");
+        assertThat(yaml).contains("git commit -m 'sdd qa report' -- qa_report.md");
+    }
+
+    @Test
+    void v77_prompts_useAParameterisedWorkspaceRoot() {
+        String yaml = templateYaml();
+        // F11: no prompt may name the sandbox-only absolute path; the checkout root is
+        // the {workspaceRoot} placeholder WorkflowService resolves per step.
+        assertThat(yaml).contains("{workspaceRoot}");
+        assertThat(yaml).doesNotContain("/workspace");
+        // F14: never claim a token the environment may not provide.
+        assertThat(yaml).doesNotContain("GH_TOKEN is already configured");
+        assertThat(yaml).doesNotContain("GH_TOKEN is configured for private repos");
+        assertThat(yaml).contains("only if this environment actually provides them");
+        // F19: the report is committed with an explicit pathspec and the pushed diff is
+        // verified first.
+        assertThat(yaml).contains("git diff --stat HEAD~1");
+        // F23: test errors are not a green run.
+        assertThat(yaml).contains("is not a green run");
+        // F22: a PASS cannot coexist with an unverified acceptance criterion.
+        assertThat(yaml).contains("if any criterion is NOT VERIFIED, report VERDICT=DEFECT instead");
+        // F15: the BA prompt names the bound checkout instead of claiming the
+        // working directory starts empty (the run now gets a shallow clone).
+        assertThat(yaml).contains("a shallow clone of its default branch is provisioned at {workspaceRoot}/");
     }
 
     @Test
@@ -133,6 +160,47 @@ class V43SeedConfigTest {
         assertThat(yaml).contains("Write the FULL spec text to the file spec.md in your working directory");
         assertThat(yaml).doesNotContain("/workspace/spec.md");
         assertThat(yaml).contains("short summary alone is NOT enough");
+    }
+
+    @Test
+    void v79_devAndQaPrompts_cloneWithCoreLongPaths() {
+        String yaml = templateYaml();
+        // R1: on Windows the agent-side clone died with "Filename too long" and left a
+        // broken checkout, because only the backend clone set core.longpaths. Both the
+        // DEV and the QA prompt must prefix their clone with it, and no bare clone may
+        // survive. The checkout root that follows {repoUrl} is pinned independently.
+        assertThat(yaml).doesNotContain("git clone --branch");
+        assertThat(StringUtils.countOccurrencesOf(yaml,
+                "git -c core.longpaths=true clone --branch {branchName} {repoUrl} "))
+                .as("DEV and QA prompts must each clone with core.longpaths")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void v80_existingAriaPrompt_dropsTheDecideApprovalClaim() throws Exception {
+        // R4: the sync chat path reads the assistant prompt from agents.config, and the
+        // create-only initializer never rewrites an existing row. A row created before
+        // the prompt correction must lose the decide_approval claim, keep a read-only
+        // approvals line, and leave the rest of the operator-visible prompt intact.
+        String oldConfig = "{\"systemPrompt\":\"You are Aria.\\n\\n**Approvals:**\\n"
+                + "- list_pending_approvals: List actions waiting for human approval\\n"
+                + "- decide_approval: Approve or reject a pending action (requires id, decision, reason)\\n"
+                + "\\n**Knowledge:**\\n- query_knowledge: Search APPROVED knowledge only\"}";
+        jdbc.update("INSERT INTO agents (id, name, agent_type, config, health_status, created_at) "
+                        + "VALUES (CAST('00000000-0000-0000-0000-000000000001' AS UUID), 'Aria', 'ADK', ?,"
+                        + " 'HEALTHY', CURRENT_TIMESTAMP)",
+                oldConfig);
+        try (Connection connection = jdbc.getDataSource().getConnection()) {
+            ScriptUtils.executeSqlScript(connection,
+                    new ClassPathResource("db/migration/V80__aria_prompt_operator_only_approvals.sql"));
+        }
+
+        String config = jdbc.queryForObject(
+                "SELECT config FROM agents WHERE id = CAST('00000000-0000-0000-0000-000000000001' AS UUID)",
+                String.class);
+        assertThat(config).doesNotContain("decide_approval");
+        assertThat(config).contains("you cannot decide them, and no tool lets you");
+        assertThat(config).contains("**Knowledge:**");
     }
 
     @Test

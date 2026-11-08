@@ -80,8 +80,10 @@ describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
       pendingApprovals: 5, runningRuns: 3,
     });
     kanbanData = [
-      { id: 'k-1', title: 'a', priority: 'MEDIUM', status: 'REVIEW' },
-      { id: 'k-2', title: 'b', priority: 'MEDIUM', status: 'REVIEW' },
+      // F24: only the card with an open ask is waiting on the operator; the
+      // finished REVIEW card (pendingAskCount 0) must not inflate the signal.
+      { id: 'k-1', title: 'a', priority: 'MEDIUM', status: 'REVIEW', pendingAskCount: 2 },
+      { id: 'k-2', title: 'b', priority: 'MEDIUM', status: 'REVIEW', pendingAskCount: 0 },
       { id: 'k-3', title: 'c', priority: 'MEDIUM', status: 'TODO' },
     ];
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -91,12 +93,13 @@ describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
     // waitFor (not a bare act flush): under full-suite load the React Query
     // resolution needs more microtask turns than one act gives it.
     await waitFor(() => {
-      expect(container.textContent).toContain('2 cards in review');
+      expect(container.textContent).toContain('1 cards in review');
     });
 
-    // Review cards are the real waiting-on-review signal (BLOCKED was retired
+    // Review asks are the real waiting-on-review signal (BLOCKED was retired
     // in V52, so the old count was always 0).
-    expect(container.textContent).toContain('2 cards in review');
+    expect(container.textContent).toContain('1 cards in review');
+    expect(container.textContent).not.toContain('2 cards in review');
     expect(container.textContent).not.toContain('blocker');
     // Second HITL signal removed: D7 wants exactly one "Waiting on you" signal.
     expect(container.textContent).not.toContain('queued for approval');

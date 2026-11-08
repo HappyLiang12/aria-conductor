@@ -56,8 +56,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - cancel_run: Cancel a run (requires id)
 
             **Approvals:**
-            - list_pending_approvals: List actions waiting for human approval
-            - decide_approval: Approve or reject a pending action (requires id, decision, reason)
+            - list_pending_approvals: List actions waiting for human approval. Approval decisions belong to the operator in the dashboard; you cannot decide them, and no tool lets you.
 
             **Knowledge:**
             - store_knowledge: Save new knowledge as PENDING (requires name, content, type). Valid types: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE

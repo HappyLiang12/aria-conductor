@@ -332,3 +332,54 @@ describe('ReviewQueue CLARIFICATION rows (waiting input)', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// F7 (SDD hardening): approval rows gain a nullable toolName + arguments from
+// the bridge/api lanes. Render them when present (arguments redacted) and keep
+// the row unchanged when they are null.
+// ---------------------------------------------------------------------------
+
+describe('ReviewQueue approval tool details (F7)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('renders the tool name and the formatted, redacted arguments', async () => {
+    serve([
+      {
+        ...gateAsk(),
+        toolName: 'mcp__aria__instantiate_workflow_template',
+        arguments: JSON.stringify({
+          templateId: 'development-workflow',
+          token: 'ghp_live_secret',
+        }),
+      } as Approval,
+    ]);
+    ui();
+
+    expect(
+      await screen.findByText('mcp__aria__instantiate_workflow_template'),
+    ).toBeInTheDocument();
+    const args = screen.getByTestId('approval-arguments');
+    expect(args.textContent).toContain('"templateId": "development-workflow"');
+    expect(args.textContent).toContain('"token": "***"');
+    expect(screen.queryByText(/ghp_live_secret/)).not.toBeInTheDocument();
+  });
+
+  it('renders no arguments block for a row whose payload predates the fields', async () => {
+    serve([gateAsk()]);
+    ui();
+
+    expect(await screen.findByText(/Run ·/)).toBeInTheDocument();
+    expect(screen.queryByTestId('approval-arguments')).not.toBeInTheDocument();
+    expect(screen.queryByText('Arguments (redacted)')).not.toBeInTheDocument();
+  });
+});

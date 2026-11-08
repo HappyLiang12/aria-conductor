@@ -3,14 +3,18 @@ package io.aria.conductor.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.dto.CreateRunRequest;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
+import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -22,8 +26,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -121,6 +128,61 @@ class WorkflowServiceSddTest {
     }
 
     @Test
+    void rescheduleStep_recordsTheSupersededRunId() {
+        // R6: startStep overwrites step.runId on every loop-back, so without this history
+        // the superseded attempt's REVIEW card is unreachable forever.
+        WorkflowChain chain = chainWithDevStepAt(1, 0);
+        UUID supersededRunId = UUID.randomUUID();
+        List<WorkflowStep> before = deserializeSteps(chain.getStepsJson());
+        before.get(1).setRunId(supersededRunId);
+        chain.setStepsJson(serializeSteps(before));
+
+        when(workflowChainRepository.findById(chain.getId())).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        UUID currentRunId = UUID.randomUUID();
+        when(runService.createRun(any())).thenReturn(RunResponse.builder().id(currentRunId).build());
+
+        workflowService.rescheduleStep(chain.getId(), 1, "QA found a defect: off-by-one");
+
+        ArgumentCaptor<WorkflowChain> saved = ArgumentCaptor.forClass(WorkflowChain.class);
+        verify(workflowChainRepository, atLeastOnce()).save(saved.capture());
+        // The last saved state is the one startStep wrote: the fresh run id, and the
+        // history that still names the superseded attempt, round-tripped through JSON.
+        List<WorkflowStep> roundTripped = deserializeSteps(saved.getValue().getStepsJson());
+        WorkflowStep dev = roundTripped.get(1);
+        assertThat(dev.getPreviousRunIds()).containsExactly(supersededRunId);
+        assertThat(dev.getRunId()).isEqualTo(currentRunId).isNotEqualTo(supersededRunId);
+    }
+
+    @Test
+    void rescheduleStep_replacesThePreviousRoundsFeedback() {
+        // R9: R5's 6,000-char feedback carried over a second round used to exceed
+        // startStep's 10,000-char HEAD truncation, cutting off the newest findings.
+        WorkflowChain chain = chainWithDevStepAt(1, 0);
+        when(workflowChainRepository.findById(chain.getId())).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(runService.createRun(any()))
+                .thenAnswer(inv -> RunResponse.builder().id(UUID.randomUUID()).build());
+
+        String firstRound = "A".repeat(6_000);
+        String secondRound = "B".repeat(6_000);
+
+        workflowService.rescheduleStep(chain.getId(), 1, firstRound);
+        workflowService.rescheduleStep(chain.getId(), 1, secondRound);
+
+        ArgumentCaptor<CreateRunRequest> prompts = ArgumentCaptor.forClass(CreateRunRequest.class);
+        verify(runService, times(2)).createRun(prompts.capture());
+        String firstPrompt = prompts.getAllValues().get(0).getPromptSeed();
+        String secondPrompt = prompts.getAllValues().get(1).getPromptSeed();
+
+        assertThat(firstPrompt).contains(firstRound);
+        assertThat(secondPrompt).contains(secondRound);
+        assertThat(secondPrompt).doesNotContain(firstRound);
+        assertThat(secondPrompt).doesNotContain("[truncated]");
+        assertThat(secondPrompt.length()).isLessThanOrEqualTo(10_000);
+    }
+
+    @Test
     void rescheduleStep_exceedingMaxAttempts_failsChain() {
         // DEV step already at attemptCount == maxAttempts (3)
         WorkflowChain chain = chainWithDevStepAt(1, 3);
@@ -132,6 +194,25 @@ class WorkflowServiceSddTest {
         assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.FAILED);
         assertThat(chain.getCompletedAt()).isNotNull();
         verify(runService, never()).createRun(any());
+    }
+
+    @Test
+    void rescheduleStep_exhaustionPublishesTheFailedChainEvent() {
+        // R8: an exhausted SDD loop must announce the dead chain with the same event
+        // shape as markStepFailed, so the completion listener settles the dead chain's
+        // cards and listeners learn the chain died.
+        WorkflowChain chain = chainWithDevStepAt(1, 3);
+        when(workflowChainRepository.findById(chain.getId())).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        workflowService.rescheduleStep(chain.getId(), 1, "still broken");
+
+        ArgumentCaptor<WorkflowAdvancedEvent> event = ArgumentCaptor.forClass(WorkflowAdvancedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getWorkflowId()).isEqualTo(chain.getId());
+        assertThat(event.getValue().getChainStatus()).isEqualTo(WorkflowChain.Status.FAILED);
+        assertThat(event.getValue().getCompletedStep()).isEqualTo(1);
+        assertThat(event.getValue().getNextStep()).isEqualTo(-1);
     }
 
     @Test
@@ -155,6 +236,47 @@ class WorkflowServiceSddTest {
                         () -> workflowService.rescheduleStep(chain.getId(), 1, "late feedback"))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(runService, never()).createRun(any());
+    }
+
+    // ==================== stepRunIds ====================
+
+    @Test
+    void stepRunIds_returnsSupersededThenCurrentIdsInStepOrder() {
+        UUID baRunId = UUID.randomUUID();
+        UUID supersededDevRunId = UUID.randomUUID();
+        UUID currentDevRunId = UUID.randomUUID();
+        List<WorkflowStep> steps = new ArrayList<>();
+        steps.add(WorkflowStep.builder()
+                .agentId(UUID.randomUUID()).promptTemplate("BA: gather spec")
+                .kind(WorkflowStep.StepKind.BA).status(WorkflowStep.Status.COMPLETED)
+                .runId(baRunId).build());
+        steps.add(WorkflowStep.builder()
+                .agentId(UUID.randomUUID()).promptTemplate("DEV: implement feature")
+                .kind(WorkflowStep.StepKind.DEV).status(WorkflowStep.Status.RUNNING)
+                .runId(currentDevRunId).previousRunIds(List.of(supersededDevRunId)).build());
+        steps.add(WorkflowStep.builder()
+                .agentId(UUID.randomUUID()).promptTemplate("QA: verify")
+                .kind(WorkflowStep.StepKind.QA).status(WorkflowStep.Status.PENDING).build());
+        WorkflowChain chain = WorkflowChain.builder()
+                .id(UUID.randomUUID()).name("SDD run ids")
+                .status(WorkflowChain.Status.RUNNING)
+                .currentStepIndex(1)
+                .stepsJson(serializeSteps(steps))
+                .createdAt(Instant.now())
+                .build();
+        when(workflowChainRepository.findById(chain.getId())).thenReturn(Optional.of(chain));
+
+        assertThat(workflowService.stepRunIds(chain.getId()))
+                .containsExactly(baRunId, supersededDevRunId, currentDevRunId);
+    }
+
+    @Test
+    void stepRunIds_unknownChain_throws() {
+        UUID unknown = UUID.randomUUID();
+        when(workflowChainRepository.findById(unknown)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> workflowService.stepRunIds(unknown))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     // ==================== cancelWorkflow (WAITING_APPROVAL) ====================

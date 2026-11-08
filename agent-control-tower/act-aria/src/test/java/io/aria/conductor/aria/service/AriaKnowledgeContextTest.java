@@ -56,7 +56,10 @@ class AriaKnowledgeContextTest {
                 intentClassifier,
                 knowledgeService,
                 trajectoryRepository,
-                toolCallRepository
+                toolCallRepository,
+                new AriaSyncRunWaiter(
+                        org.mockito.Mockito.mock(io.aria.conductor.aria.repository.AriaRunStateRepository.class),
+                        AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L)
         );
     }
 

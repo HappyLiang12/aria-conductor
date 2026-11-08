@@ -162,7 +162,10 @@ class ToolPackControllerTest extends WebMvcTestBase {
                         .content(json(Map.of("key", "API_TOKEN", "value", "s3cret", "agentId", "agent-9"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("stored"))
-                .andExpect(jsonPath("$.key").value("API_TOKEN"));
+                .andExpect(jsonPath("$.key").value("API_TOKEN"))
+                // F8: the git handoff now resolves the token per request, so a
+                // stored credential applies without restarting the backend.
+                .andExpect(jsonPath("$.restartRequired").value(false));
 
         verify(credentialService).store("pack-1", "agent-9", "API_TOKEN", "s3cret");
     }

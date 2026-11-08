@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -87,6 +88,30 @@ class RunControllerTest extends WebMvcTestBase {
                         .content(json(CreateRunRequest.builder()
                                 .agentId(UUID.randomUUID()).promptSeed("x").build())))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void getRun_serializesAnUnobservedTokenTotalAsJsonNull() throws Exception {
+        // F9: the dashboard treats null as "not reported by this core"; a real provider zero
+        // must still arrive as 0.
+        UUID id = UUID.randomUUID();
+        when(runService.getRun(id)).thenReturn(run(id, UUID.randomUUID(), RunStatus.COMPLETED));
+
+        mvc.perform(get("/api/v1/runs/{id}", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalTokensUsed").value(nullValue()));
+    }
+
+    @Test
+    void getRun_serializesAGenuineReportedZero() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(runService.getRun(id)).thenReturn(RunResponse.builder()
+                .id(id).agentId(UUID.randomUUID()).status(RunStatus.COMPLETED)
+                .promptSeed("seed").maxIterations(5).totalTokensUsed(0L).build());
+
+        mvc.perform(get("/api/v1/runs/{id}", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalTokensUsed").value(0));
     }
 
     @Test

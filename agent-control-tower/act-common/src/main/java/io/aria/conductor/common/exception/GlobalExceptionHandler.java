@@ -4,7 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -85,6 +88,39 @@ public class GlobalExceptionHandler {
                 .map(e -> e.getField() + ": " + e.getDefaultMessage())
                 .collect(java.util.stream.Collectors.joining("; "));
         return buildResponse(HttpStatus.BAD_REQUEST, message.isBlank() ? "Validation failed" : message);
+    }
+
+    /**
+     * A value that cannot be converted to the controller's declared type (e.g.
+     * {@code /api/v1/runs/46650059} where a UUID is required) is a client error.
+     * Without this mapping it falls through to the catch-all and reads as 500.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String expected = ex.getRequiredType() != null
+                ? ex.getRequiredType().getSimpleName() : "the required type";
+        String message = "Invalid value '" + ex.getValue() + "' for parameter '" + ex.getName()
+                + "': expected " + expected;
+        return buildResponse(HttpStatus.BAD_REQUEST, message);
+    }
+
+    /** An endpoint that exists but not for this HTTP method is 405, not a server error. */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex) {
+        String message = "Request method '" + ex.getMethod() + "' is not supported";
+        if (ex.getSupportedHttpMethods() != null && !ex.getSupportedHttpMethods().isEmpty()) {
+            message += "; supported: " + ex.getSupportedHttpMethods();
+        }
+        return buildResponse(HttpStatus.METHOD_NOT_ALLOWED, message);
+    }
+
+    /** A required query parameter that is absent is a client error. */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingParameter(
+            MissingServletRequestParameterException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST,
+                "Required request parameter '" + ex.getParameterName() + "' is missing");
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

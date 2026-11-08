@@ -23,6 +23,13 @@ public class TrajectoryResponse {
     private int latencyMs;
     private Instant createdAt;
 
+    /**
+     * How an injected message reached the run (F16): {@code LIVE} when delivered
+     * to a parked operator-input waiter, {@code TRAJECTORY_ONLY} when the run is
+     * terminal and the row is an annotation. Null for ordinary trajectory reads.
+     */
+    private String delivery;
+
     public static TrajectoryResponse from(SessionTrajectory t) {
         return TrajectoryResponse.builder()
                 .id(t.getId())

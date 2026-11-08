@@ -22,7 +22,8 @@ import java.util.regex.Pattern;
 public class WorkflowTemplateConverter {
 
     /** Placeholder names reserved for the system — never user-substitutable or exposed. */
-    private static final Set<String> SYSTEM_PLACEHOLDERS = Set.of("previousOutput", "specRef", "branchName");
+    private static final Set<String> SYSTEM_PLACEHOLDERS =
+            Set.of("previousOutput", "specRef", "branchName", "workspaceRoot");
 
     /** Matches {@code {paramName}} placeholders but NOT system placeholders. */
     private static final Pattern PARAM_PATTERN =

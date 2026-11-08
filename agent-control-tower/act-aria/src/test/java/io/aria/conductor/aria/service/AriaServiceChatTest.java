@@ -2,6 +2,7 @@ package io.aria.conductor.aria.service;
 
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.aria.repository.AriaRunStateRepository;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.dto.AriaChatRequest;
 import io.aria.conductor.aria.dto.AriaChatResponse;
@@ -58,6 +59,7 @@ class AriaServiceChatTest {
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
+    @Mock AriaRunStateRepository stateRepository;
 
     private AriaService ariaService;
     private Agent ariaAgent;
@@ -65,9 +67,11 @@ class AriaServiceChatTest {
 
     @BeforeEach
     void setUp() {
+        AriaSyncRunWaiter waiter = new AriaSyncRunWaiter(stateRepository,
+                AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L);
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
                 intentClassifier,
-                knowledgeService, trajectoryRepository, toolCallRepository);
+                knowledgeService, trajectoryRepository, toolCallRepository, waiter);
 
         ariaAgent = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
@@ -93,27 +97,23 @@ class AriaServiceChatTest {
             r.setId(RUN_ID);
             return r;
         });
-        lenient().when(runRepository.findStateById(RUN_ID))
+        lenient().when(stateRepository.findSnapshotById(RUN_ID))
                 .thenAnswer(inv -> Optional.of(committedState()));
     }
 
     /** The committed row the projection reads; tests mutate {@code completedRun}. */
-    private RunRepository.RunStateView committedState() {
-        return new RunRepository.RunStateView() {
-            @Override
-            public RunStatus getStatus() {
-                return completedRun.getStatus();
-            }
-
-            @Override
-            public String getFinalOutput() {
-                return completedRun.getFinalOutput();
-            }
-        };
+    private AriaRunStateRepository.RunSnapshot committedState() {
+        return snapshot(completedRun.getStatus(), completedRun.getFinalOutput(),
+                completedRun.getErrorCode(), completedRun.getErrorMessage());
     }
 
-    private static RunRepository.RunStateView state(RunStatus status, String finalOutput) {
-        return new RunRepository.RunStateView() {
+    private static AriaRunStateRepository.RunSnapshot state(RunStatus status, String finalOutput) {
+        return snapshot(status, finalOutput, null, null);
+    }
+
+    private static AriaRunStateRepository.RunSnapshot snapshot(RunStatus status, String finalOutput,
+                                                               String errorCode, String errorMessage) {
+        return new AriaRunStateRepository.RunSnapshot() {
             @Override
             public RunStatus getStatus() {
                 return status;
@@ -122,6 +122,16 @@ class AriaServiceChatTest {
             @Override
             public String getFinalOutput() {
                 return finalOutput;
+            }
+
+            @Override
+            public String getErrorCode() {
+                return errorCode;
+            }
+
+            @Override
+            public String getErrorMessage() {
+                return errorMessage;
             }
         };
     }
@@ -155,14 +165,14 @@ class AriaServiceChatTest {
      */
     @Test
     void chat_pollReadsTheCommittedStateProjectionForEveryRead() {
-        when(runRepository.findStateById(RUN_ID))
+        when(stateRepository.findSnapshotById(RUN_ID))
                 .thenReturn(Optional.of(state(RunStatus.PENDING, null)),
                         Optional.of(state(RunStatus.COMPLETED, "All done")));
 
         AriaChatResponse response = ariaService.chat(request("hello"));
 
         assertThat(response.getMessage()).isEqualTo("All done");
-        verify(runRepository, times(2)).findStateById(RUN_ID);
+        verify(stateRepository, times(2)).findSnapshotById(RUN_ID);
         verify(runRepository, never()).findById(RUN_ID);
     }
 
@@ -226,6 +236,74 @@ class AriaServiceChatTest {
         AriaChatResponse response = ariaService.chat(request("hi"));
 
         assertThat(response.getMessage()).isEqualTo("Budget exhausted summary");
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+    }
+
+    /**
+     * F2: a failed run with no narrative output must surface its stable error
+     * identity and reason, and must never borrow the completed-run fallback.
+     */
+    @Test
+    void chat_surfacesFailedRunErrorCodeAndMessageWhenNoOutput() {
+        completedRun.setStatus(RunStatus.FAILED);
+        completedRun.setFinalOutput(null);
+        completedRun.setErrorCode("RUNTIME_CREDENTIAL_NOT_CONFIGURED");
+        completedRun.setErrorMessage("No qoder credential is configured");
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getErrorCode()).isEqualTo("RUNTIME_CREDENTIAL_NOT_CONFIGURED");
+        assertThat(response.getErrorMessage()).isEqualTo("No qoder credential is configured");
+        assertThat(response.getMessage())
+                .contains("No qoder credential is configured")
+                .contains("RUNTIME_CREDENTIAL_NOT_CONFIGURED")
+                .doesNotContain("completed your request");
+    }
+
+    @Test
+    void chat_surfacesAbortedRunErrorCodeAndMessage() {
+        completedRun.setStatus(RunStatus.ABORTED);
+        completedRun.setFinalOutput(null);
+        completedRun.setErrorCode("RUN_DEADLINE_EXCEEDED");
+        completedRun.setErrorMessage("Run deadline exceeded");
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("ABORTED");
+        assertThat(response.getErrorCode()).isEqualTo("RUN_DEADLINE_EXCEEDED");
+        assertThat(response.getErrorMessage()).isEqualTo("Run deadline exceeded");
+        assertThat(response.getMessage()).contains("Run deadline exceeded");
+        assertThat(response.getMessage()).doesNotContain("completed your request");
+    }
+
+    /**
+     * F2: while the run is still live the sync window can expire. The reply must
+     * report the observed status and run id -- never a completion it did not see.
+     */
+    @Test
+    void chat_runningRunAfterTheSyncWindowNeverClaimsCompletion() {
+        when(stateRepository.findSnapshotById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.RUNNING, null)));
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("RUNNING");
+        assertThat(response.getRunId()).isEqualTo(RUN_ID.toString());
+        assertThat(response.getMessage())
+                .contains("RUNNING")
+                .contains(RUN_ID.toString())
+                .doesNotContain("completed your request");
+        assertThat(response.getErrorCode()).isNull();
+    }
+
+    @Test
+    void chat_completedRunReportsCompletedStatusAndNoErrorIdentity() {
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getErrorCode()).isNull();
+        assertThat(response.getErrorMessage()).isNull();
     }
 
     @Test
@@ -416,14 +494,17 @@ class AriaServiceChatTest {
     }
 
     @Test
-    void chat_returnsCancelledRunWithFallbackMessage() {
+    void chat_returnsCancelledRunWithHonestMessage() {
         completedRun.setStatus(RunStatus.CANCELLED);
         completedRun.setFinalOutput(null);
 
         AriaChatResponse response = ariaService.chat(request("hi"));
 
         assertThat(response.getRunId()).isEqualTo(RUN_ID.toString());
-        assertThat(response.getMessage()).contains("completed your request");
+        assertThat(response.getStatus()).isEqualTo("CANCELLED");
+        assertThat(response.getMessage())
+                .contains("cancelled")
+                .doesNotContain("completed your request");
     }
 
     /** The conversation history the chat handed to the engine, in order. */

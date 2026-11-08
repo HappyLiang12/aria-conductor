@@ -10,6 +10,7 @@ import java.util.Base64;
 import java.util.Optional;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
@@ -200,12 +201,202 @@ class GitBranchServiceTest {
     @Test
     void isAvailable_falseWhenTokenIsBlank() {
         assertThat(new GitBranchService("").isAvailable()).isFalse();
-        assertThat(new GitBranchService(null).isAvailable()).isFalse();
+        assertThat(new GitBranchService((String) null).isAvailable()).isFalse();
         assertThat(new GitBranchService("   ").isAvailable()).isFalse();
     }
 
     @Test
     void isAvailable_trueWhenTokenIsPresent() {
         assertThat(new GitBranchService("ghp_dummy_token").isAvailable()).isTrue();
+    }
+
+    // ---- F19: commit read for the report-step tree guard ----
+
+    /**
+     * F19: the observed QA commit 984df552 (parent 451c4867) removed 300 files. The
+     * commit read must expose the parent, the head and every file status so the tree
+     * guard can judge what the step pushed.
+     */
+    @Test
+    void commitFileChanges_mapsThe300FileRemovalCommit() {
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/commits/984df552"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(removalCommitJson(300))));
+
+        Optional<GitBranchService.CommitFileChanges> commit =
+                service.commitFileChanges(REPO_URL, "984df552");
+
+        assertThat(commit).isPresent();
+        assertThat(commit.get().sha()).isEqualTo("984df552");
+        assertThat(commit.get().parentShas()).containsExactly("451c4867");
+        assertThat(commit.get().files()).hasSize(301);
+        assertThat(commit.get().files())
+                .filteredOn(file -> file.status() == GitBranchService.CommitFile.Status.REMOVED)
+                .hasSize(300)
+                .allSatisfy(file -> assertThat(file.path()).endsWith(".java"));
+        assertThat(commit.get().files())
+                .filteredOn(file -> file.path().equals("qa_report.md"))
+                .singleElement()
+                .satisfies(file -> assertThat(file.status())
+                        .isEqualTo(GitBranchService.CommitFile.Status.ADDED));
+    }
+
+    @Test
+    void commitFileChanges_mapsACleanReportCommit() {
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/commits/abc1234"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"sha":"abc1234",
+                                 "parents":[{"sha":"parent-1"}],
+                                 "files":[{"filename":"qa_report.md","status":"added"},
+                                          {"filename":"spec/spec.md","status":"modified"}]}
+                                """)));
+
+        Optional<GitBranchService.CommitFileChanges> commit =
+                service.commitFileChanges(REPO_URL, "abc1234");
+
+        assertThat(commit).isPresent();
+        assertThat(commit.get().parentShas()).containsExactly("parent-1");
+        assertThat(commit.get().files()).containsExactly(
+                new GitBranchService.CommitFile("qa_report.md",
+                        GitBranchService.CommitFile.Status.ADDED),
+                new GitBranchService.CommitFile("spec/spec.md",
+                        GitBranchService.CommitFile.Status.MODIFIED));
+    }
+
+    /**
+     * GitHub reports a rename as one {@code renamed} entry carrying the new
+     * {@code filename} (plus {@code previous_filename}), and a mode-only change as
+     * {@code changed}; none of them is a removal and the raw status must survive the
+     * read so the guard can map it.
+     */
+    @Test
+    void commitFileChanges_keepsRenameCopyAndChangedStatuses() {
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/commits/rename987"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"sha":"rename987",
+                                 "parents":[{"sha":"parent-1"}],
+                                 "files":[
+                                   {"filename":"docs/report.md","previous_filename":"report.md","status":"renamed"},
+                                   {"filename":"docs/copy.md","previous_filename":"spec/spec.md","status":"copied"},
+                                   {"filename":"scripts/run.sh","status":"changed"}]}
+                                """)));
+
+        Optional<GitBranchService.CommitFileChanges> commit =
+                service.commitFileChanges(REPO_URL, "rename987");
+
+        assertThat(commit).isPresent();
+        assertThat(commit.get().files()).extracting(GitBranchService.CommitFile::status)
+                .containsExactly(GitBranchService.CommitFile.Status.RENAMED,
+                        GitBranchService.CommitFile.Status.COPIED,
+                        GitBranchService.CommitFile.Status.CHANGED);
+    }
+
+    @Test
+    void commitFileChanges_missingCommit_returnsEmpty() {
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/commits/gone"))
+                .willReturn(aResponse().withStatus(404)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"Not Found\"}")));
+
+        assertThat(service.commitFileChanges(REPO_URL, "gone")).isEmpty();
+    }
+
+    /**
+     * F19 wiring: the guard must never fail a step for an infrastructure error, so a
+     * non-2xx commit read (or a blank sha) is empty, not an exception.
+     */
+    @Test
+    void commitFileChanges_apiFailure_returnsEmptyWithoutThrowing() {
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/commits/broken"))
+                .willReturn(aResponse().withStatus(500)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"Server Error\"}")));
+
+        assertThatCode(() -> assertThat(service.commitFileChanges(REPO_URL, "broken")).isEmpty())
+                .doesNotThrowAnyException();
+        assertThat(service.commitFileChanges(REPO_URL, "  ")).isEmpty();
+    }
+
+    @Test
+    void commitFileChanges_withoutACredential_sendsNothingAndReturnsEmpty() {
+        GitBranchService none = new GitBranchService(() -> null, wireMock.baseUrl());
+
+        assertThat(none.commitFileChanges(REPO_URL, "abc1234")).isEmpty();
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/repos/owner/repo/commits/abc1234")));
+    }
+
+    /**
+     * F8: the credential is resolved per operation, so a credential stored after
+     * the backend started is used by the next GitHub call. Resolving it once when
+     * the bean was created made every stored credential require a restart.
+     */
+    @Test
+    void aCredentialStoredAfterStartupIsUsedByTheNextOperationWithoutRestart() {
+        java.util.concurrent.atomic.AtomicReference<String> stored = new java.util.concurrent.atomic.AtomicReference<>();
+        GitBranchService live = new GitBranchService(stored::get, wireMock.baseUrl());
+
+        assertThat(live.isAvailable())
+                .as("positive control: nothing is stored yet, so the service reports unavailable")
+                .isFalse();
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/sdd/9"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"object\":{\"sha\":\"abc123\"}}")));
+
+        stored.set("ghp_stored_at_runtime");
+
+        assertThat(live.isAvailable()).as("the store is visible without rebuilding the service").isTrue();
+        assertThat(live.branchHeadSha(REPO_URL, "sdd/9")).contains("abc123");
+        wireMock.verify(getRequestedFor(urlEqualTo("/repos/owner/repo/git/ref/heads/sdd/9"))
+                .withHeader("Authorization", equalTo("Bearer ghp_stored_at_runtime")));
+    }
+
+    /**
+     * F8: a credential row that cannot be decrypted is an operator problem, not a
+     * crash. The service reports unavailable and every operation refuses with the
+     * documented guidance instead of propagating an arbitrary runtime failure.
+     */
+    @Test
+    void anUnresolvableCredentialDisablesTheServiceWithoutCrashing() {
+        GitBranchService degraded = new GitBranchService(() -> {
+            throw new IllegalStateException("Credential decryption failed");
+        }, wireMock.baseUrl());
+
+        assertThat(degraded.isAvailable()).isFalse();
+        assertThatThrownBy(() -> degraded.createBranch(REPO_URL, "b"))
+                .isInstanceOf(GitBranchException.class)
+                .hasMessageContaining("GITHUB_TOKEN");
+    }
+
+    /** No credential means no request: the operation refuses with guidance and sends nothing. */
+    @Test
+    void anUnresolvedCredentialRefusesTheOperationBeforeAnyRequestIsSent() {
+        GitBranchService none = new GitBranchService(() -> null, wireMock.baseUrl());
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/b"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"object\":{\"sha\":\"abc123\"}}")));
+
+        assertThatThrownBy(() -> none.branchHeadSha(REPO_URL, "b"))
+                .isInstanceOf(GitBranchException.class)
+                .hasMessageContaining("GITHUB_TOKEN");
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/repos/owner/repo/git/ref/heads/b")));
+    }
+
+    /** The shape of the observed QA commit 984df552: N removed sources plus the report. */
+    private static String removalCommitJson(int removals) {
+        StringBuilder body = new StringBuilder("{\"sha\":\"984df552\",\"parents\":[{\"sha\":\"451c4867\"}],");
+        body.append("\"files\":[{\"filename\":\"qa_report.md\",\"status\":\"added\"}");
+        for (int i = 0; i < removals; i++) {
+            body.append(",{\"filename\":\"agent-control-tower/src/main/File").append(i)
+                    .append(".java\",\"status\":\"removed\"}");
+        }
+        body.append("]}");
+        return body.toString();
     }
 }

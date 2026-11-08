@@ -2,6 +2,7 @@ package io.aria.conductor.common.model;
 
 import lombok.*;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -39,6 +40,12 @@ public class WorkflowStep {
 
     /** Run ID once this step has been started. */
     private UUID runId;
+
+    /**
+     * Run ids this step was previously dispatched with (DEFECT/SPEC_GAP reschedules),
+     * oldest first. Null for rows serialized before the field existed.
+     */
+    private List<UUID> previousRunIds;
 
     /** Current step status. */
     @Builder.Default

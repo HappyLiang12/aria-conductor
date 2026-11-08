@@ -8,10 +8,13 @@ import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
+import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.execution.security.CredentialRedactor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +22,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -27,6 +31,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -100,6 +105,8 @@ public class PermissionCoordinator {
     private final Clock clock;
     /** The run coordinator that owns the sessions a decided native reply must reach. */
     private final Supplier<PermissionReplySink> replySinks;
+    /** Governance risk tier of an ask's tool, stamped on the approval row (F7). */
+    private final Function<String, RiskTier> riskTierResolver;
     /** Runs whose manual pause holds decided-but-undelivered replies (spec §5.4). */
     private final Set<UUID> manuallyPausedRuns = ConcurrentHashMap.newKeySet();
     /** Serializes the deciders of this instance before they read the approval. */
@@ -111,9 +118,15 @@ public class PermissionCoordinator {
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
                                  PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher,
-                                 ObjectProvider<PermissionReplySink> replySinks) {
+                                 ObjectProvider<PermissionReplySink> replySinks,
+                                 ToolRiskResolver toolRiskResolver) {
         this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
-                eventPublisher, replySinks::getIfAvailable, Clock.systemUTC());
+                eventPublisher, replySinks::getIfAvailable,
+                name -> {
+                    RiskTier tier = toolRiskResolver.resolve(name);
+                    return tier != null ? tier : RiskTier.READ;
+                },
+                Clock.systemUTC());
     }
 
     /** Test/override seam: every expiry check uses this clock. No sink is bound. */
@@ -123,7 +136,7 @@ public class PermissionCoordinator {
                                  PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher, Clock clock) {
         this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
-                eventPublisher, () -> null, clock);
+                eventPublisher, () -> null, name -> RiskTier.READ, clock);
     }
 
     /** Test/override seam: the clock and the reply sink are both explicit. */
@@ -133,6 +146,18 @@ public class PermissionCoordinator {
                                  PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher,
                                  Supplier<PermissionReplySink> replySinks, Clock clock) {
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
+                eventPublisher, replySinks, name -> RiskTier.READ, clock);
+    }
+
+    /** Test/override seam: the clock, the reply sink and the risk resolver are explicit. */
+    public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
+                                 ApprovalDecisionLockRepository decisionLocks,
+                                 AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
+                                 ApplicationEventPublisher eventPublisher,
+                                 Supplier<PermissionReplySink> replySinks,
+                                 Function<String, RiskTier> riskTierResolver, Clock clock) {
         this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.decisionLocks = Objects.requireNonNull(decisionLocks, "decisionLocks");
@@ -141,6 +166,7 @@ public class PermissionCoordinator {
         this.platformMcpAutoApproval = Objects.requireNonNull(platformMcpAutoApproval, "platformMcpAutoApproval");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
         this.replySinks = Objects.requireNonNull(replySinks, "replySinks");
+        this.riskTierResolver = Objects.requireNonNull(riskTierResolver, "riskTierResolver");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -196,6 +222,12 @@ public class PermissionCoordinator {
                 // name the option the core actually offered, so the decision UI
                 // and the E2E assertions read exactly what the core asked for.
                 .optionsJson(optionsJson(request.options()))
+                // F7: the ask's tool identity, argument document and risk tier belong
+                // on the operator-facing row; a native ask has no ToolCall to enrich
+                // from. Credential-shaped argument values are masked before persistence.
+                .toolName(request.toolName())
+                .arguments(boundedRedactedArguments(request.argumentsJson()))
+                .riskTier(riskTierOf(request.toolName()))
                 .expiresAt(request.expiresAt())
                 .build();
         approvals.save(approval);
@@ -209,8 +241,11 @@ public class PermissionCoordinator {
                 .requestId(request.requestId())
                 .toolName(request.toolName())
                 .target(request.target().name())
+                // The digest stays over the exact payload (a write grant must match
+                // the operation verbatim); the persisted document is redacted and
+                // bounded because it is attacker-influenced and the column is TEXT.
                 .argumentsDigest(WriteGrantService.digestOf(request.argumentsJson()))
-                .argumentsJson(request.argumentsJson())
+                .argumentsJson(boundedRedactedArguments(request.argumentsJson()))
                 .optionsJson(optionsJson(request.options()))
                 .expiresAt(request.expiresAt())
                 .deliveryState(PermissionDeliveryState.AWAITING_DECISION.name())
@@ -660,6 +695,11 @@ public class PermissionCoordinator {
                 && row.getExpiresAt().equals(request.expiresAt());
     }
 
+    private String riskTierOf(String toolName) {
+        RiskTier tier = riskTierResolver.apply(toolName);
+        return tier != null ? tier.name() : null;
+    }
+
     private static String registrationReason(NativePermission request) {
         return "Native permission request " + request.requestId() + " from session " + request.sessionId()
                 + " for tool " + request.toolName() + " (" + request.target() + ")";
@@ -670,6 +710,35 @@ public class PermissionCoordinator {
                 ? "Operator allowed one use of " + row.getToolName()
                 : "Operator denied " + row.getToolName();
         return verdict + " (native permission request " + row.getRequestId() + ")";
+    }
+
+    /** TEXT column bound: MariaDB TEXT holds 64 KiB of bytes; keep a margin for the row. */
+    static final int MAX_ARGUMENTS_BYTES = 60_000;
+
+    /** Appended to a bounded document so a reader can tell it is incomplete. */
+    static final String ARGUMENTS_TRUNCATION_SUFFIX = " [truncated]";
+
+    /**
+     * F7 bound: the ask's argument document is attacker-influenced (a Write ask
+     * carries the file content) and both the approval row and the native-request
+     * ledger store it. Redact credential-shaped values, then bound it by UTF-8
+     * bytes — a character count would let multi-byte text overflow the TEXT
+     * column — and cut on a character boundary.
+     */
+    static String boundedRedactedArguments(String argumentsJson) {
+        String redacted = CredentialRedactor.redact(argumentsJson);
+        if (redacted == null) {
+            return null;
+        }
+        byte[] bytes = redacted.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length <= MAX_ARGUMENTS_BYTES) {
+            return redacted;
+        }
+        int end = MAX_ARGUMENTS_BYTES - ARGUMENTS_TRUNCATION_SUFFIX.getBytes(StandardCharsets.UTF_8).length;
+        while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
+            end--; // never split a UTF-8 continuation byte
+        }
+        return new String(bytes, 0, end, StandardCharsets.UTF_8) + ARGUMENTS_TRUNCATION_SUFFIX;
     }
 
     private static String optionsJson(List<PermissionOption> options) {

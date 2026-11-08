@@ -54,9 +54,10 @@ public class WorkspaceManager {
         // falling back to the injected property. @Value does not perform @ConfigurationProperties-style
         // relaxed binding, so reading the env var directly removes any binding ambiguity. The default
         // is CWD-relative, so log the resolved absolute path to make the effective location observable.
+        // F21: a Windows %NAME% token is expanded or refused here, never taken as a literal segment.
         String envDir = System.getenv("TOOLS_FILE_WORKSPACE_DIR");
         String effective = (envDir != null && !envDir.isBlank()) ? envDir : workspaceDir;
-        Path spelled = Path.of(effective).toAbsolutePath().normalize();
+        Path spelled = WorkspacePaths.configuredRoot(effective, "tools.file.workspace-dir");
         Path adopted = spelled;
         try {
             Files.createDirectories(spelled);

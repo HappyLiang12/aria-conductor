@@ -498,7 +498,7 @@ public class RunService {
                 .status(run.getStatus())
                 .promptSeed(run.getPromptSeed())
                 .maxIterations(run.getMaxIterations())
-                .totalTokensUsed(run.getTotalTokensUsed())
+                .totalTokensUsed(observedTotalTokens(run))
                 .iterationCount(run.getIterationCount())
                 .errorMessage(run.getErrorMessage())
                 .errorCode(run.getErrorCode())
@@ -511,5 +511,23 @@ public class RunService {
                 .updatedAt(run.getUpdatedAt())
                 .completedAt(run.getCompletedAt())
                 .build();
+    }
+
+    /**
+     * The usage value the API reports (F9), or null when the run never observed any.
+     *
+     * <p>The stored total is a non-null column defaulting to 0, so it cannot by
+     * itself distinguish "the provider reported zero" from "no usage was ever
+     * observed". The provider-reported input/output columns (F9's telemetry) are
+     * that evidence: both null with a 0 total means nothing was reported, while a
+     * carried zero wrote the observed 0 into them and is reported as 0. A total the
+     * engine accounted without the provider columns stays as reported.
+     */
+    private static Long observedTotalTokens(Run run) {
+        long total = run.getTotalTokensUsed();
+        if (total == 0 && run.getInputTokens() == null && run.getOutputTokens() == null) {
+            return null;
+        }
+        return total;
     }
 }

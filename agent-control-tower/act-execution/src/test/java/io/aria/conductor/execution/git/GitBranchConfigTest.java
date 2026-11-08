@@ -18,7 +18,7 @@ class GitBranchConfigTest {
         when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
                 .thenReturn("ghp_from_store");
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
 
         assertThat(service.isAvailable()).isTrue();
     }
@@ -32,7 +32,7 @@ class GitBranchConfigTest {
                 GitBranchConfig.DEPRECATED_GH_TOKEN_KEY))
                 .thenReturn("ghp_legacy");
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
 
         assertThat(service.isAvailable()).isTrue();
     }
@@ -43,7 +43,7 @@ class GitBranchConfigTest {
         when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
                 .thenReturn(null);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.createBranch("https://github.com/owner/repo.git", "b"))
@@ -61,7 +61,7 @@ class GitBranchConfigTest {
         when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
                 .thenThrow(new RuntimeException("Credential decryption failed"));
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.createBranch("https://github.com/owner/repo.git", "b"))
@@ -78,11 +78,33 @@ class GitBranchConfigTest {
                 GitBranchConfig.DEPRECATED_GH_TOKEN_KEY))
                 .thenThrow(new RuntimeException("Credential decryption failed"));
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.getFile("https://github.com/owner/repo.git", "b", "p.md"))
                 .isInstanceOf(GitBranchException.class)
                 .hasMessageContaining("GITHUB_TOKEN");
+    }
+
+    /**
+     * F8: the token is resolved per operation, so a credential stored through
+     * {@code POST /api/v1/packs/pack-git-0001/credentials} is used by the next
+     * branch operation without restarting the backend. The bean built at startup
+     * must not freeze the answer it saw then.
+     */
+    @Test
+    void aCredentialStoredAfterStartupTakesEffectWithoutRebuildingTheBean() {
+        java.util.concurrent.atomic.AtomicReference<String> stored = new java.util.concurrent.atomic.AtomicReference<>();
+        PackCredentialService credentials = mock(PackCredentialService.class);
+        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+                .thenAnswer(invocation -> stored.get());
+
+        GitBranchService service = config.gitBranchService(config.gitTokenSource(credentials));
+
+        assertThat(service.isAvailable()).as("nothing stored at startup").isFalse();
+        stored.set("ghp_stored_after_startup");
+        assertThat(service.isAvailable())
+                .as("the stored credential is resolved on the next operation")
+                .isTrue();
     }
 }

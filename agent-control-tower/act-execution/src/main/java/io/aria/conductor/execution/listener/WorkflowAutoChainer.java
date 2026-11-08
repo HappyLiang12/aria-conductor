@@ -11,7 +11,10 @@ import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.dod.DoDStageReview;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -40,6 +43,11 @@ import java.util.regex.Pattern;
  * advancing, a DEV step auto-submits the dev-stage DoD review then advances,
  * a QA step routes on its recorded verdict, and GENERIC/CODE_REVIEW keep the
  * existing linear advance.
+ *
+ * <p>A QA PASS carries two gates before any PASS side effect: F22 refuses it while the
+ * run's own output records an acceptance criterion as NOT VERIFIED, and F19 refuses it
+ * when the commit it pushed on {@code sdd/<chainId>} removed files from the branch tree
+ * (the live QA commit 984df552 removed 300). Both fail the step instead of advancing.
  */
 @Slf4j
 @Component
@@ -52,17 +60,48 @@ public class WorkflowAutoChainer {
     private final DoDService dodService;
     private final WorkflowChainRepository chainRepository;
     private final ApplicationEventPublisher eventPublisher;
+    /** F19: supplies the QA step's branch tree move; null disables the guard. */
+    private final ReportStepTreeGuard.TreeDiffSupplier treeDiffSupplier;
+    private final ReportStepTreeGuard treeGuard = new ReportStepTreeGuard();
 
+    /**
+     * Production wiring. The tree-diff supplier is optional so the listener still works
+     * in a context without the GitHub-backed supplier (and in the existing tests).
+     */
+    @Autowired
+    public WorkflowAutoChainer(WorkflowService workflowService,
+                               DoDService dodService,
+                               WorkflowChainRepository chainRepository,
+                               ApplicationEventPublisher eventPublisher,
+                               ObjectProvider<ReportStepTreeGuard.TreeDiffSupplier> treeDiffSupplier) {
+        this(workflowService, dodService, chainRepository, eventPublisher,
+                treeDiffSupplier.getIfAvailable());
+    }
+
+    /** Wiring without the F19 tree guard (non-Git chains and the pre-guard tests). */
     public WorkflowAutoChainer(WorkflowService workflowService,
                                DoDService dodService,
                                WorkflowChainRepository chainRepository,
                                ApplicationEventPublisher eventPublisher) {
+        this(workflowService, dodService, chainRepository, eventPublisher,
+                (ReportStepTreeGuard.TreeDiffSupplier) null);
+    }
+
+    /** Test seam: the tree diff is supplied explicitly (a fake, or null to disable). */
+    public WorkflowAutoChainer(WorkflowService workflowService,
+                               DoDService dodService,
+                               WorkflowChainRepository chainRepository,
+                               ApplicationEventPublisher eventPublisher,
+                               ReportStepTreeGuard.TreeDiffSupplier treeDiffSupplier) {
         this.workflowService = workflowService;
         this.dodService = dodService;
         this.chainRepository = chainRepository;
         this.eventPublisher = eventPublisher;
+        this.treeDiffSupplier = treeDiffSupplier;
     }
 
+    /** F24 ordering: runs after the kanban mirror (order 0) queued the card move. */
+    @org.springframework.core.annotation.Order(100)
     @EventListener
     public void onRunCompleted(RunCompletedEvent event) {
         try {
@@ -187,15 +226,31 @@ public class WorkflowAutoChainer {
         // the record; reading the DoD review first would re-route a previous DEFECT/SPEC_GAP
         // verdict and ignore this run's fresh PASS marker (reschedule never completes).
         Optional<String> marker = parseVerdictMarker(finalOutput);
+        DoDStageReview latest = dodService.latestQaReview(record);
         if (marker.isPresent()) {
-            applyVerdict(chain, stepIndex, marker.get(), "verdict from output marker", finalOutput);
+            // F22: the marker is the authoritative verdict, but a review submitted by
+            // this same run can still record a criterion as NOT VERIFIED. Scan its
+            // comment/evidence only when it agrees with the marker, so a stale review
+            // from an earlier DEFECT attempt cannot block a fresh PASS.
+            String gateComment = null;
+            String gateEvidence = null;
+            if (latest != null && latest.getVerdict() != null
+                    && latest.getVerdict().equalsIgnoreCase(marker.get())) {
+                gateComment = latest.getComment();
+                gateEvidence = latest.getEvidence();
+            }
+            applyVerdict(chain, stepIndex, marker.get(), markerFeedback(marker.get(), finalOutput),
+                    finalOutput, gateComment, gateEvidence);
             return;
         }
         // No marker — fall back to the tool-submitted qa-stage verdict (submit_dod_review).
-        DoDStageReview latest = dodService.latestQaReview(record);
+        // The tool path can carry the criterion status in its comment or evidence, so
+        // the F22 gate reads those too (a PASS submitted through the tool is not a
+        // second-class verdict with a weaker gate).
         if (latest != null && latest.getVerdict() != null) {
             String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);
-            applyVerdict(chain, stepIndex, verdict, latest.getComment(), finalOutput);
+            applyVerdict(chain, stepIndex, verdict, latest.getComment(), finalOutput,
+                    latest.getEvidence());
             return;
         }
         // F17: give the operator an actionable retry hint instead of a bare failure message.
@@ -206,12 +261,52 @@ public class WorkflowAutoChainer {
     }
 
     /**
+     * F22 gate: a PASS verdict may not stand while the QA run's output or its
+     * submitted review records an acceptance criterion as NOT VERIFIED — the live
+     * run 8c51fa8f reported AC4 "NOT VERIFIED (environment limitation)" next to
+     * `VERDICT=PASS` and the chain completed. The matcher below needs an AC context,
+     * so a PASS that merely mentions the phrase elsewhere is not rejected.
+     */
+    /** An acceptance-criterion reference: AC4, AC 4, ACs 1-4, Acceptance Criteria. */
+    private static final Pattern AC_CONTEXT = Pattern.compile(
+            "(?i)(?:\\bACs?\\s*\\d+(?:\\s*[-–]\\s*\\d+)?\\b|\\bAC[-\\s]?\\d+\\b"
+                    + "|\\bAcceptance\\s+Criteri(?:on|a)\\b)");
+    /** The unverified phrase, including the common "not yet verified" variant. */
+    private static final Pattern NOT_VERIFIED = Pattern.compile(
+            "(?i)\\bnot\\s+(?:yet\\s+)?verified\\b");
+    /**
+     * A line that records a criterion as later resolved ("... was NOT VERIFIED on the
+     * first attempt but passed on re-run") is a historical note, not a live gap.
+     */
+    private static final Pattern RESOLVED_AFTER = Pattern.compile(
+            "(?i)\\b(?:first\\s+attempt|initially|earlier|previous(?:ly)?|re-?run|retry)\\b"
+                    + "[^\\n]{0,80}?\\b(?:but|however|then)\\b[^\\n]{0,60}?\\b(?:pass(?:ed)?|verified|now)\\b");
+
+    /**
      * Apply a normalized QA verdict ({@code PASS}/{@code DEFECT}/{@code SPEC_GAP}) to the chain.
      * Shared by the tool-verdict path and the VERDICT= marker fallback so both route identically.
      */
-    private void applyVerdict(WorkflowChain chain, int stepIndex, String verdict, String reason, String finalOutput) {
+    private void applyVerdict(WorkflowChain chain, int stepIndex, String verdict, String reason,
+            String finalOutput, String... extraTexts) {
         switch (verdict) {
             case "PASS" -> {
+                // F22: checked before any PASS side effect (DoD review, report capture, advance).
+                Optional<String> unverified = findUnverifiedAcceptanceCriterion(
+                        concatGateTexts(finalOutput, reason, extraTexts));
+                if (unverified.isPresent()) {
+                    workflowService.markStepFailed(chain.getId(), stepIndex,
+                            "QA reported VERDICT=PASS but the acceptance criterion '"
+                                    + unverified.get() + "' is not verified. A PASS requires every"
+                                    + " criterion to be verified: run the missing check, or report"
+                                    + " VERDICT=DEFECT. Retry the QA step after fixing the environment.");
+                    return;
+                }
+                // F19: the step must not have destroyed the branch tree it reported on.
+                Optional<String> treeViolation = reportTreeViolation(chain);
+                if (treeViolation.isPresent()) {
+                    workflowService.markStepFailed(chain.getId(), stepIndex, treeViolation.get());
+                    return;
+                }
                 recordQaVerdictReview(chain, true, verdict);
                 storeQaReportIdIfPresent(chain, finalOutput);
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
@@ -273,6 +368,140 @@ public class WorkflowAutoChainer {
             return Optional.of(matcher.group(1).toUpperCase(Locale.ROOT));
         }
         return Optional.empty();
+    }
+
+    /**
+     * F22: the first acceptance criterion recorded as NOT VERIFIED in any of the QA
+     * verdict texts (run output, the submitted review's comment, its evidence), as a
+     * short quotable excerpt, or empty when every criterion is accounted for.
+     *
+     * <p>The AC context may precede or follow the phrase and may be split over two
+     * lines ({@code AC4} / {@code Status: NOT VERIFIED}); the phrase may be
+     * {@code NOT VERIFIED} or {@code not yet verified}. A report that merely
+     * discusses the phrase without tying it to a criterion is not blocked, and a
+     * criterion recorded as later resolved ("... but passed on re-run") is a
+     * historical note rather than a live gap.
+     */
+    static Optional<String> findUnverifiedAcceptanceCriterion(String... texts) {
+        if (texts == null) {
+            return Optional.empty();
+        }
+        for (String text : texts) {
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            String[] lines = text.split("\\R");
+            for (int index = 0; index < lines.length; index++) {
+                String line = lines[index];
+                if (isUnverifiedCriterion(line)) {
+                    return excerpt(line);
+                }
+                if (index + 1 < lines.length) {
+                    String next = lines[index + 1];
+                    // A status line under the criterion: "AC4" / "Status: NOT VERIFIED".
+                    // A generic next-line mention ("Note: ... NOT VERIFIED, out of
+                    // scope") is not a criterion status and must not block a PASS.
+                    if (AC_CONTEXT.matcher(line).find() && isCriterionStatusLine(next)) {
+                        return excerpt(line + " " + next);
+                    }
+                    if (NOT_VERIFIED.matcher(line).find()
+                            && AC_CONTEXT.matcher(next).find()
+                            && startsWithAcceptanceContext(next)) {
+                        return excerpt(line + " " + next);
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String[] concatGateTexts(String finalOutput, String reason, String[] extraTexts) {
+        java.util.List<String> texts = new java.util.ArrayList<>(2 + (extraTexts == null ? 0 : extraTexts.length));
+        texts.add(finalOutput);
+        texts.add(reason);
+        if (extraTexts != null) {
+            java.util.Collections.addAll(texts, extraTexts);
+        }
+        return texts.toArray(String[]::new);
+    }
+
+    /** Bound of the QA output carried into a DEFECT/SPEC_GAP reschedule feedback. */
+    static final int FEEDBACK_MAX_CHARS = 6_000;
+
+    /**
+     * F26: a DEFECT/SPEC_GAP reschedule hands its reason to the next DEV/BA run as
+     * the retry prompt's feedback. The marker path has no review comment, so the
+     * reason must carry the QA run's own report; the previous literal
+     * "verdict from output marker" told the retry nothing it could act on.
+     */
+    private static String markerFeedback(String verdict, String finalOutput) {
+        String text = finalOutput == null ? "" : finalOutput.trim();
+        if (text.length() > FEEDBACK_MAX_CHARS) {
+            text = text.substring(0, FEEDBACK_MAX_CHARS) + "\n[... truncated]";
+        }
+        return text.isEmpty()
+                ? "VERDICT=" + verdict
+                : "VERDICT=" + verdict + " from the QA run. The QA report says:\n" + text;
+    }
+
+    private static boolean isUnverifiedCriterion(String line) {
+        return AC_CONTEXT.matcher(line).find()
+                && NOT_VERIFIED.matcher(line).find()
+                && !RESOLVED_AFTER.matcher(line).find();
+    }
+
+    /** A continuation line that states the criterion's status ("Status: NOT VERIFIED"). */
+    private static boolean isCriterionStatusLine(String line) {
+        String trimmed = stripListMarker(line);
+        if (!NOT_VERIFIED.matcher(trimmed).find()) {
+            return false;
+        }
+        return trimmed.regionMatches(true, 0, "NOT VERIFIED", 0, "NOT VERIFIED".length())
+                || trimmed.matches("(?i)^(?:status|result|verification|outcome)\\b.*");
+    }
+
+    /** A line whose first token is the criterion reference (not prose mentioning it). */
+    private static boolean startsWithAcceptanceContext(String line) {
+        String trimmed = stripListMarker(line);
+        Matcher matcher = AC_CONTEXT.matcher(trimmed);
+        return matcher.find() && matcher.start() == 0;
+    }
+
+    private static String stripListMarker(String line) {
+        return line.replaceFirst("^\\s*[-*\\u2022]\\s*", "").trim();
+    }
+
+    private static Optional<String> excerpt(String text) {
+        String excerpt = text.replaceAll("\\s+", " ").trim();
+        return Optional.of(excerpt.length() > 80 ? excerpt.substring(0, 80) + "..." : excerpt);
+    }
+
+    /**
+     * F19: judge the tree move the QA step pushed on its {@code sdd/<chainId>} branch.
+     *
+     * <p>Empty when the chain carries no {@code repoUrl} (a non-Git SDD flow keeps its
+     * previous behaviour), when no supplier is wired, or when the diff cannot be read —
+     * an infrastructure error must not fail a step. A supplier that throws is treated
+     * the same way, so a broken GitHub read can never block a legitimate PASS.
+     */
+    private Optional<String> reportTreeViolation(WorkflowChain chain) {
+        if (treeDiffSupplier == null) {
+            return Optional.empty();
+        }
+        String repoUrl = GitHandoffMetadata.parse(chain.getTemplateParams())
+                .get(GitHandoffMetadata.KEY_REPO_URL);
+        if (repoUrl == null || repoUrl.isBlank()) {
+            log.debug("Chain {} has no repoUrl; skipping the QA report tree guard", chain.getId());
+            return Optional.empty();
+        }
+        String branchName = GitHandoffMetadata.branchName(chain.getId());
+        try {
+            return treeDiffSupplier.diffFor(repoUrl, branchName).flatMap(treeGuard::violation);
+        } catch (RuntimeException e) {
+            log.warn("Could not read the tree diff of branch {} for chain {} — the QA step continues"
+                    + " unguarded: {}", branchName, chain.getId(), e.getMessage());
+            return Optional.empty();
+        }
     }
 
     private void publishAdvanced(WorkflowChain chain, int stepIndex, boolean started) {

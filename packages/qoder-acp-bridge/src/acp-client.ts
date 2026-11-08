@@ -15,6 +15,8 @@ import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'n
 import { createHash } from 'node:crypto';
 
 import { permissionResponseFrame, type PermissionOption } from './permissions.js';
+import { redactCredentialFields } from './events.js';
+import { toolEventsFromUpdate, type ToolNameRegistry } from './tool-events.js';
 
 export const BRIDGE_ERROR_CODES = {
   usage: 'E_USAGE',
@@ -42,6 +44,41 @@ export class BridgeError extends Error {
 }
 
 // ------------------------------------------------------------------ child launch
+
+/**
+ * Bridge-process variable naming toolchain directories to prepend to the child
+ * PATH. The trusted launcher sets it on the *bridge* process (finding F13: the
+ * qoder core's Bash saw a reduced PATH with no `gh`/`jq`/`mvn`); the bridge
+ * consumes it and never forwards it as its own variable.
+ */
+export const EXTRA_PATH_VARIABLE = 'ARIA_CORE_EXTRA_PATH';
+
+/**
+ * Prepend `extra` entries to `inherited`, both read as platform-delimited lists
+ * (`;` on Windows, `:` elsewhere). Entries are emitted verbatim, so POSIX-form
+ * (`/c/Users/User/bin`) and Windows-form (`C:\Users\User\bin`) entries both
+ * survive; empty entries are dropped and the inherited value is never dropped.
+ */
+export function composeChildPath(
+  inherited: string | undefined,
+  extra: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const delimiter = platform === 'win32' ? ';' : ':';
+  const entries = [
+    ...splitPathList(extra, delimiter),
+    ...splitPathList(inherited, delimiter),
+  ];
+  return entries.length === 0 ? undefined : entries.join(delimiter);
+}
+
+function splitPathList(value: string | undefined, delimiter: string): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
 
 export interface AcpLaunch {
   executable: string;
@@ -89,6 +126,12 @@ export function buildChildEnvironment(config: ChildEnvironmentConfig): Record<st
     }
     env[config.credential.name] = config.credential.value;
   }
+  // The launcher-declared toolchain entries lead the effective PATH, including
+  // when the launcher declared PATH explicitly through --child-env. The
+  // forwarding variable itself is consumed here and never reaches the child.
+  const extraPath = readBaseEnvironment(config.base, EXTRA_PATH_VARIABLE, isWindows);
+  const composed = composeChildPath(env.PATH, extraPath, config.platform);
+  if (composed !== undefined) env.PATH = composed;
   return env;
 }
 
@@ -125,7 +168,7 @@ export function spawnChild(launch: AcpLaunch): ChildProcessWithoutNullStreams {
   return spawn(launch.executable, [...launch.args], childSpawnOptions(launch)) as ChildProcessWithoutNullStreams;
 }
 
-function isEnvironmentKey(key: string): boolean {
+export function isEnvironmentKey(key: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
 }
 
@@ -138,6 +181,8 @@ export interface PermissionRequestRecord {
   toolName: string | null;
   toolKind: string | null;
   toolCallTitle: string | null;
+  /** The tool arguments as offered by the core; credential-shaped keys redacted. */
+  toolInput: unknown;
   argumentsDigest: string;
   options: PermissionOption[];
 }
@@ -196,6 +241,8 @@ export class AcpClient {
   private readonly pendingRequests = new Map<number, PendingRequest>();
   private readonly pendingPermissions = new Map<number, PendingPermission>();
   private readonly requestMethods = new Map<number, string>();
+  /** Tool name per ACP tool call id, remembered from the `tool_call` update. */
+  private readonly toolNames: ToolNameRegistry = new Map();
   private state: AcpClientState = 'idle';
   private sessionIdValue: string | null = null;
   private observedModel: string | null = null;
@@ -550,6 +597,7 @@ export class AcpClient {
       toolName: extractToolName(toolCall),
       toolKind: typeof toolCall.kind === 'string' ? toolCall.kind : null,
       toolCallTitle: typeof toolCall.title === 'string' ? toolCall.title : null,
+      toolInput: redactCredentialFields(toolCall.rawInput),
       argumentsDigest: digestArguments(toolCall.rawInput),
       options,
     };
@@ -650,7 +698,18 @@ export class AcpClient {
     const params = (frame.params ?? {}) as Record<string, unknown>;
     if (frame.method === 'session/update') {
       const update = params.update ?? null;
-      this.options.onEvent('session.update', { sessionId: params.sessionId ?? null, update });
+      // The session update is republished as an event, so credential-shaped
+      // tool arguments are redacted here too: a token the agent discovered in
+      // the run is not a known launch secret, and the event stream is an API
+      // surface the owning backend persists.
+      const redacted = redactCredentialFields(update);
+      this.options.onEvent('session.update', {
+        sessionId: params.sessionId ?? null,
+        update: redacted,
+      });
+      for (const derived of toolEventsFromUpdate(redacted, this.toolNames)) {
+        this.options.onEvent(derived.type, derived.payload);
+      }
       return;
     }
     this.options.onEvent('acp.notification_in', { method: frame.method, params });

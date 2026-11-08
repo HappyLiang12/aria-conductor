@@ -8,6 +8,7 @@
 //     --cli <abs path to pinned executable> [--cli-arg <arg> ...] \
 //     --control-secret-file <abs path> \
 //     [--child-env KEY=VALUE ...] \
+//     [--child-env-file <abs path>] \
 //     [--credential-env NAME --credential-file <abs path>] \
 //     [--worker-mcp-name <name> --worker-mcp-url <url> --worker-mcp-token-file <abs path>] \
 //     [--host 127.0.0.1] [--port 0] [--max-frame-bytes N] [--event-buffer-size N] \
@@ -19,18 +20,22 @@
 // `child.diagnostic` events, never mixed into stdout.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   AcpClient,
   BridgeError,
   BRIDGE_ERROR_CODES,
   buildChildEnvironment,
+  isEnvironmentKey,
   type AcpClientState,
   type PermissionRequestRecord,
 } from './acp-client.js';
 import { ControlLedger, EventBuffer, redactText } from './events.js';
 import { parseChoice, selectOption } from './permissions.js';
 import { createBridgeServer, type BridgeHandlers, type ControlAckBody, type PermissionDecisionBody } from './server.js';
+import { capToolPayload } from './tool-events.js';
+import { extractTokenUsage } from './usage.js';
 
 export const EXIT_CODES = {
   ok: 0,
@@ -85,6 +90,7 @@ export function parseArgs(argv: string[]): BridgeOptions {
     'control-secret-file',
     'credential-env',
     'credential-file',
+    'child-env-file',
     'worker-mcp-name',
     'worker-mcp-url',
     'worker-mcp-token-file',
@@ -134,6 +140,16 @@ export function parseArgs(argv: string[]): BridgeOptions {
     const at = pair.indexOf('=');
     if (at <= 0) fail(`--child-env must be KEY=VALUE, got ${pair}`);
     childEnv[pair.slice(0, at)] = pair.slice(at + 1);
+  }
+  // F14: the resolved git credential is delivered through a run-owned file
+  // instead of --child-env, so it never appears in the process table. The file
+  // is written by the trusted launcher; names and values are merged last (the
+  // launcher owns that file), and a malformed line never echoes its value.
+  const childEnvFile = values.get('child-env-file');
+  if (childEnvFile !== undefined) {
+    for (const [name, value] of readEnvironmentFile(childEnvFile)) {
+      childEnv[name] = value;
+    }
   }
   const host = values.get('host') ?? '127.0.0.1';
   if (host !== '127.0.0.1' && host !== '::1') fail(`--host must be a loopback address, got ${host}`);
@@ -189,6 +205,44 @@ function readSecretFile(path: string, flag: string): string {
   const value = readFileSync(path, 'utf8').trim();
   if (value.length === 0) throw new BridgeError(BRIDGE_ERROR_CODES.config, `${flag} is empty: ${path}`);
   return value;
+}
+
+/**
+ * Parse the run-owned child-environment file named by {@code --child-env-file}:
+ * one `KEY=VALUE` per line (LF or CRLF), blank lines ignored, values taken
+ * verbatim after the first `=`. Errors name the line number, never the value,
+ * because these entries carry the resolved git credential.
+ */
+function readEnvironmentFile(path: string): Array<[string, string]> {
+  if (!isAbsolute(path)) {
+    throw new BridgeError(BRIDGE_ERROR_CODES.config, `--child-env-file must be an absolute path: ${path}`);
+  }
+  if (!existsSync(path) || !statSync(path).isFile()) {
+    throw new BridgeError(BRIDGE_ERROR_CODES.config, `--child-env-file is not a readable file: ${path}`);
+  }
+  const content = readFileSync(path, 'utf8');
+  const entries: Array<[string, string]> = [];
+  const lines = content.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (line.trim().length === 0) continue;
+    const at = line.indexOf('=');
+    if (at <= 0) {
+      throw new BridgeError(
+        BRIDGE_ERROR_CODES.config,
+        `--child-env-file line ${index + 1} must be KEY=VALUE`,
+      );
+    }
+    const name = line.slice(0, at);
+    if (!isEnvironmentKey(name)) {
+      throw new BridgeError(
+        BRIDGE_ERROR_CODES.config,
+        `--child-env-file line ${index + 1} has an invalid environment key`,
+      );
+    }
+    entries.push([name, line.slice(at + 1)]);
+  }
+  return entries;
 }
 
 function exitCodeFor(error: BridgeError): number {
@@ -288,6 +342,10 @@ async function main(): Promise<void> {
       events.push(type, payload);
     },
     onPermissionRequest: (request: PermissionRequestRecord) => {
+      // F7 bound: the ask's input is attacker-influenced and can carry a whole
+      // file. It is capped like a tool event so the persisted argument document
+      // cannot overflow the TEXT column and stall the run on its registration.
+      const input = capToolPayload(request.toolInput);
       events.push('permission.request', {
         requestId: request.requestId,
         sessionId: request.sessionId,
@@ -295,8 +353,17 @@ async function main(): Promise<void> {
         toolName: request.toolName,
         toolKind: request.toolKind,
         toolCallTitle: request.toolCallTitle,
+        input: input.value,
+        inputBytes: input.bytes,
+        inputTruncated: input.truncated,
         argumentsDigest: request.argumentsDigest,
-        options: request.options,
+        // The full native option list, including an allow-for-session option
+        // when the core offers one; `name` is null when the core omitted it.
+        options: request.options.map((option) => ({
+          optionId: option.optionId,
+          kind: option.kind,
+          name: option.name ?? null,
+        })),
       });
     },
     onFatal: (error) => {
@@ -418,6 +485,12 @@ async function main(): Promise<void> {
           const stopReason = typeof result.stopReason === 'string' ? result.stopReason : null;
           const model = extractObservedModel(result);
           if (model !== null) observedModel = model;
+          // Emitted before the terminal prompt.result so a consumer that stops
+          // reading at prompt.result still observed the provider's counters.
+          const usage = extractTokenUsage(result);
+          if (usage !== null) {
+            events.push('usage', { promptId: handle.promptId, ...usage });
+          }
           events.push('prompt.result', {
             promptId: handle.promptId,
             stopReason,
@@ -651,12 +724,17 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-main().catch((error: unknown) => {
-  const bridgeError = error instanceof BridgeError ? error : new BridgeError('E_INTERNAL', String(error));
-  const line = redactText(
-    JSON.stringify({ type: 'bridge.error', code: bridgeError.code, message: bridgeError.message }),
-    observedSecrets,
-  );
-  process.stderr.write(`${line}\n`);
-  process.exit(exitCodeFor(bridgeError));
-});
+// Entry-point guard: importing this module (the argv parser tests) must not
+// start a bridge. Only the file node was launched with runs the bridge.
+const launchedEntry = process.argv[1];
+if (launchedEntry !== undefined && resolve(launchedEntry) === fileURLToPath(import.meta.url)) {
+  main().catch((error: unknown) => {
+    const bridgeError = error instanceof BridgeError ? error : new BridgeError('E_INTERNAL', String(error));
+    const line = redactText(
+      JSON.stringify({ type: 'bridge.error', code: bridgeError.code, message: bridgeError.message }),
+      observedSecrets,
+    );
+    process.stderr.write(`${line}\n`);
+    process.exit(exitCodeFor(bridgeError));
+  });
+}

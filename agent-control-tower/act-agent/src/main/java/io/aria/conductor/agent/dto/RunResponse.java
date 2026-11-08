@@ -20,7 +20,13 @@ public class RunResponse {
     private RunStatus status;
     private String promptSeed;
     private int maxIterations;
-    private long totalTokensUsed;
+    /**
+     * The usage the provider actually reported (F9), or null when this run never
+     * observed any. The stored total defaults to 0, so a primitive here claimed a
+     * zero cost for every run whose core reported nothing; a genuine reported zero
+     * still arrives as 0.
+     */
+    private Long totalTokensUsed;
     private int iterationCount;
     private String errorMessage;
     /** Stable identity and repair surface of an actionable failure (null otherwise). */

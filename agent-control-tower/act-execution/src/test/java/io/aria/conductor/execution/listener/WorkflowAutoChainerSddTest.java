@@ -32,6 +32,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -342,7 +343,7 @@ class WorkflowAutoChainerSddTest {
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
 
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService).rescheduleStep(eq(chain.getId()), eq(0), argThat(reason -> reason.contains("VERDICT=DEFECT") && reason.contains("Parser crashes.")));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }
@@ -363,7 +364,7 @@ class WorkflowAutoChainerSddTest {
 
         verify(dodService).review(chain.getId().toString(),
                 "engine", "SDD Engine", false, null, "verdict from output marker", "DEFECT");
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService).rescheduleStep(eq(chain.getId()), eq(0), argThat(reason -> reason.contains("VERDICT=DEFECT") && reason.contains("Parser crashes.")));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
     }
 
@@ -383,7 +384,7 @@ class WorkflowAutoChainerSddTest {
         // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Auth flows missing.\nverdict = spec_gap"));
 
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService).rescheduleStep(eq(chain.getId()), eq(0), argThat(reason -> reason.contains("VERDICT=SPEC_GAP") && reason.contains("Auth flows missing.")));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }
@@ -406,7 +407,7 @@ class WorkflowAutoChainerSddTest {
 
         verify(dodService).review(chain.getId().toString(),
                 "engine", "SDD Engine", false, null, "verdict from output marker", "SPEC_GAP");
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService).rescheduleStep(eq(chain.getId()), eq(0), argThat(reason -> reason.contains("VERDICT=SPEC_GAP") && reason.contains("Auth flows missing.")));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }

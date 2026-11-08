@@ -107,6 +107,47 @@ class RunRepositoryCancellationIntegrationTest extends DataJpaTestBase {
         assertThat(reloaded.getErrorSurface()).isNull();
     }
 
+    /**
+     * F9: the qoder core reports usage only through the bridge's usage event, while
+     * the engine's own counter stays 0. Completion must not erase the observed
+     * provider total with that zero.
+     */
+    @Test
+    void completeIfNotTerminal_keepsAnObservedProviderTotalWhenTheEngineReportsZero() {
+        Instant completedAt = Instant.parse("2026-10-24T11:05:00Z");
+        Run run = persist(RunStatus.RUNNING);
+        run.setInputTokens(120L);
+        run.setOutputTokens(30L);
+        run.setTotalTokensUsed(150L);
+        entityManager.flush();
+        flushAndClear();
+
+        assertThat(repository.completeIfNotTerminal(run.getId(), RunStatus.COMPLETED, 1, 0L,
+                completedAt, "answer", null, null, null, completedAt, TERMINAL)).isEqualTo(1);
+        flushAndClear();
+
+        Run reloaded = entityManager.find(Run.class, run.getId());
+        assertThat(reloaded.getTotalTokensUsed()).isEqualTo(150L);
+        assertThat(reloaded.getInputTokens()).isEqualTo(120L);
+        assertThat(reloaded.getOutputTokens()).isEqualTo(30L);
+    }
+
+    /** A positive engine total still owns the cell: the engine's accounting wins. */
+    @Test
+    void completeIfNotTerminal_letsAPositiveEngineTotalReplaceTheStoredOne() {
+        Instant completedAt = Instant.parse("2026-10-24T11:06:00Z");
+        Run run = persist(RunStatus.RUNNING);
+        run.setTotalTokensUsed(150L);
+        entityManager.flush();
+        flushAndClear();
+
+        assertThat(repository.completeIfNotTerminal(run.getId(), RunStatus.COMPLETED, 4, 42L,
+                completedAt, "answer", null, null, null, completedAt, TERMINAL)).isEqualTo(1);
+        flushAndClear();
+
+        assertThat(entityManager.find(Run.class, run.getId()).getTotalTokensUsed()).isEqualTo(42L);
+    }
+
     @Test
     void completeIfNotTerminal_preservesExistingOutputAndFailureIdentityWhenNullsArePassed() {
         Instant completedAt = Instant.parse("2026-10-24T11:10:00Z");

@@ -293,7 +293,7 @@ class KanbanReviewCardListenerTest {
     }
 
     @Test
-    void aHugeArgumentDocumentIsTruncatedToAnExcerpt() {
+    void aHugeArgumentDocumentIsStoredWholeForTheReviewer() {
         Approval approval = approval();
         approval.setSource(ApprovalSource.ACP_PERMISSION);
         String arguments = "{\"prompt\":\"" + "x".repeat(400) + "\"}";
@@ -309,7 +309,9 @@ class KanbanReviewCardListenerTest {
         ArgumentCaptor<CreateKanbanItemRequest> captor =
                 ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
         verify(kanbanService).create(captor.capture());
-        assertThat(captor.getValue().getDescription()).isEqualTo(arguments.substring(0, 200) + "...");
+        assertThat(captor.getValue().getDescription())
+                .as("F7: the stored description keeps the whole redacted/bounded document")
+                .isEqualTo(arguments);
     }
 
     @Test

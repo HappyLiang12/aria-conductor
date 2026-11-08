@@ -14,6 +14,8 @@ import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus 
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
+import { tokenUsageText } from '../utils/tokenUsage';
+import { reviewNeedsHuman } from '../utils/reviewState';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -354,7 +356,15 @@ export function TaskDrawer() {
                   flexWrap: 'wrap',
                 }}
               >
-                <span className="pill">{STATUS_LABEL[item.status]}</span>
+                {/* F24: badge REVIEW only while an ask is open. A finished card
+                    still parked in REVIEW is waiting for sign-off, not review. */}
+                <span
+                  className={reviewNeedsHuman(item) ? 'pill warn' : 'pill'}
+                >
+                  {item.status === 'REVIEW' && !reviewNeedsHuman(item)
+                    ? 'Awaiting sign-off'
+                    : STATUS_LABEL[item.status]}
+                </span>
                 <span className={PRIORITY_TONE[item.priority]}>{item.priority}</span>
                 {item.assignee && (
                   <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
@@ -443,7 +453,7 @@ export function TaskDrawer() {
                         <span className="pill">{linkedRun.status}</span>
                         <span className="cell-mono">Iter {linkedRun.iterationCount}</span>
                         <span className="cell-mono">
-                          {linkedRun.totalTokensUsed.toLocaleString()} tokens
+                          {tokenUsageText(linkedRun.totalTokensUsed)}
                         </span>
                         <span className="cell-mono">
                           {linkedRun.completedAt

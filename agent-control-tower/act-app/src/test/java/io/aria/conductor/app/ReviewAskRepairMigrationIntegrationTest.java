@@ -37,9 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * instance once the pre-state exists -- the staged-migrate pattern of
  * {@link ExecutionBindingMigrationIntegrationTest}.
  *
- * <p>The current {@code Run} entity selects the error-contract columns that
- * V72 adds after the pinned target; {@link SchemaCompatConfig} adds them right
- * after the pinned migration so the old-schema context can still boot.
+ * <p>The current {@code Run} and {@code Approval} entities select the
+ * error-contract columns that V72 adds and the usage/tool-payload columns that
+ * V76 adds after the pinned target; {@link SchemaCompatConfig} applies those
+ * scripts right after the pinned migration so the old-schema context can boot.
  */
 @SpringBootTest(
         classes = {ActApplication.class, NoopLlmTestConfig.class, ReviewAskRepairMigrationIntegrationTest.SchemaCompatConfig.class},
@@ -54,16 +55,21 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
     static class SchemaCompatConfig {
 
         @Bean
-        FlywayMigrationStrategy addRunErrorColumnsAfterThePinnedMigration(DataSource dataSource) {
+        FlywayMigrationStrategy addPostTargetColumnsAfterThePinnedMigration(DataSource dataSource) {
             return flyway -> {
                 flyway.migrate();
-                // The real V72 script, not a copy: a drift between the shim and the
-                // migration would let this context boot on a schema production never has.
-                try (Connection connection = dataSource.getConnection()) {
-                    ScriptUtils.executeSqlScript(connection,
-                            new ClassPathResource("db/migration/V72__run_error_contract.sql"));
-                } catch (SQLException e) {
-                    throw new IllegalStateException("Failed to apply V72 after the pinned migration", e);
+                // The real scripts, not copies: a drift between the shim and the
+                // migrations would let this context boot on a schema production
+                // never has.
+                for (String script : new String[] {
+                        "db/migration/V72__run_error_contract.sql",
+                        "db/migration/V76__sdd_approval_tool_payload.sql"}) {
+                    try (Connection connection = dataSource.getConnection()) {
+                        ScriptUtils.executeSqlScript(connection, new ClassPathResource(script));
+                    } catch (SQLException e) {
+                        throw new IllegalStateException("Failed to apply " + script
+                                + " after the pinned migration", e);
+                    }
                 }
             };
         }

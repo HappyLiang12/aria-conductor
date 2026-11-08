@@ -348,6 +348,42 @@ class RunServiceTest {
     }
 
     @Test
+    void getRun_reportsAnUnobservedTokenTotalAsNull() {
+        // F9: a run whose core never reported usage carries totalTokensUsed 0 and both
+        // provider columns NULL. Zero would claim a cost the provider never stated.
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
+                .withTotalTokensUsed(0L).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        assertThat(service.getRun(id).getTotalTokensUsed()).isNull();
+    }
+
+    @Test
+    void getRun_preservesAGenuineReportedZero() {
+        // The same total (0), but the provider DID report usage: null would hide the report.
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
+                .withTotalTokensUsed(0L).build();
+        run.setInputTokens(0L);
+        run.setOutputTokens(0L);
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        assertThat(service.getRun(id).getTotalTokensUsed()).isZero();
+    }
+
+    @Test
+    void listRuns_alsoReportsAnUnobservedTokenTotalAsNull() {
+        Run unobserved = TestDataBuilder.aRun().withPromptSeed("unobserved").build();
+        Run reported = TestDataBuilder.aRun().withPromptSeed("reported").withTotalTokensUsed(150L).build();
+        when(runRepository.findAll()).thenReturn(List.of(unobserved, reported));
+
+        List<RunResponse> responses = service.listRuns();
+
+        assertThat(responses).extracting(RunResponse::getTotalTokensUsed).containsExactly(null, 150L);
+    }
+
+    @Test
     void getRun_throwsNotFoundWhenMissing() {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.empty());

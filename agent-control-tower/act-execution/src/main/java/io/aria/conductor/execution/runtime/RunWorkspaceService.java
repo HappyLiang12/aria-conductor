@@ -5,6 +5,7 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.git.GitTokenSource;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
 
 import java.io.IOException;
@@ -20,6 +21,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +53,9 @@ import static io.aria.conductor.execution.runtime.WorkspaceGuidance.refusal;
  * Spring annotation so tests and callers use one explicit constructor.
  */
 public class RunWorkspaceService implements WorkspaceService {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(RunWorkspaceService.class);
 
     /** Process-wide serialization of lease admission and release. */
     private static final ReentrantLock LEASE_LOCK = new ReentrantLock();
@@ -92,9 +97,21 @@ public class RunWorkspaceService implements WorkspaceService {
     private final Path resultRoot;
     private final List<String> gitCommand;
     private final Duration gitTimeout;
+    /** The git credential a scratch checkout authenticates with; null in legacy construction. */
+    private final GitTokenSource gitTokenSource;
+    /** The workflow's repository binding for a run scratch (F15); none by default. */
+    private final ScratchWorkspaceProvisioner scratchProvisioner;
 
     public RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot) {
-        this(leases, runtimeRoot, resultRoot, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS));
+        this(leases, runtimeRoot, resultRoot, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS), null,
+                ScratchWorkspaceProvisioner.NONE);
+    }
+
+    /** Production wiring: scratch checkouts follow the workflow's binding and the git-pack credential. */
+    public RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
+            GitTokenSource gitTokenSource, ScratchWorkspaceProvisioner scratchProvisioner) {
+        this(leases, runtimeRoot, resultRoot, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS),
+                gitTokenSource, scratchProvisioner);
     }
 
     /**
@@ -104,9 +121,19 @@ public class RunWorkspaceService implements WorkspaceService {
      */
     RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
             List<String> gitCommand, Duration gitTimeout) {
+        this(leases, runtimeRoot, resultRoot, gitCommand, gitTimeout, null,
+                ScratchWorkspaceProvisioner.NONE);
+    }
+
+    RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
+            List<String> gitCommand, Duration gitTimeout, GitTokenSource gitTokenSource,
+            ScratchWorkspaceProvisioner scratchProvisioner) {
         this.leases = Objects.requireNonNull(leases, "Lease repository is required");
         this.gitCommand = List.copyOf(Objects.requireNonNull(gitCommand, "Git command is required"));
         this.gitTimeout = Objects.requireNonNull(gitTimeout, "Git timeout is required");
+        this.gitTokenSource = gitTokenSource;
+        this.scratchProvisioner = scratchProvisioner == null
+                ? ScratchWorkspaceProvisioner.NONE : scratchProvisioner;
         try {
             this.runtimeRoot = canonicalDirectory(root(runtimeRoot, "runtime root"));
             this.resultRoot = canonicalDirectory(root(resultRoot, "result root"));
@@ -209,10 +236,108 @@ public class RunWorkspaceService implements WorkspaceService {
     private WorkspaceLease acquireScratch(ExecutionSpec spec) {
         try {
             Path localRoot = canonicalDirectory(createDirectory(runtimeRoot.resolve("scratch").resolve(spec.runId().toString())));
+            scratchProvisioner.bindingFor(spec).ifPresent(binding ->
+                    provisionScratchCheckout(localRoot, binding.repository(), binding.baseRef()));
             Path configRoot = configRoot(spec.runId());
             return persist(spec.runId(), WorkspaceKind.SCRATCH, localRoot, null, configRoot, null, false);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /** The directory of a scratch run's repository checkout, below its own workspace root. */
+    static final String SCRATCH_CHECKOUT_DIRECTORY = "repo";
+
+    /**
+     * F15: a run whose workflow binding names a repository
+     * ({@link ScratchWorkspaceProvisioner}) starts with an isolated checkout of it
+     * at {@code <scratch>/repo} instead of an empty directory the agent then fills
+     * by reading the operator's live worktree.
+     *
+     * <p>The checkout is shallow ({@code --depth 1 --single-branch}) and made
+     * inside the run-owned scratch, so it is isolated from the operator's tree and
+     * from the base revision's history. It is a fresh clone, not an enforced
+     * read-only mount: a run may write inside it, and only the run-owned scratch is
+     * affected. The git-pack credential reaches git through the process environment
+     * (an {@code http.extraheader}), never the argv or the persisted remote URL; no
+     * resolved credential means an anonymous clone of a public repository.
+     */
+    private void provisionScratchCheckout(Path localRoot, String repository, String baseRef) {
+        Path target = localRoot.resolve(SCRATCH_CHECKOUT_DIRECTORY);
+        List<String> argv = new ArrayList<>(gitCommand);
+        argv.add("-c");
+        argv.add("core.longpaths=true");
+        // The checkout must be byte-faithful: the operator's global autocrlf must not
+        // rewrite the base revision's files inside the run's workspace.
+        argv.add("-c");
+        argv.add("core.autocrlf=false");
+        argv.add("clone");
+        argv.add("--depth");
+        argv.add("1");
+        argv.add("--single-branch");
+        if (baseRef != null && !baseRef.isBlank()) {
+            argv.add("--branch");
+            argv.add(baseRef);
+        }
+        argv.add(repository);
+        argv.add(target.toString());
+        Map<String, String> environment = new LinkedHashMap<>();
+        String token = scratchCheckoutToken();
+        if (token != null) {
+            environment.put("GIT_CONFIG_COUNT", "2");
+            environment.put("GIT_CONFIG_KEY_0", "http.extraheader");
+            environment.put("GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic "
+                    + Base64.getEncoder().encodeToString(
+                    ("x-access-token:" + token).getBytes(StandardCharsets.UTF_8)));
+            environment.put("GIT_CONFIG_KEY_1", "core.longpaths");
+            environment.put("GIT_CONFIG_VALUE_1", "true");
+        }
+        Path parent = localRoot.getParent();
+        if (parent != null) {
+            environment.put("GIT_CEILING_DIRECTORIES", parent.toString());
+        }
+        GitResult result;
+        try {
+            result = runGit(argv, environment);
+        } catch (IOException e) {
+            discardPartialCheckout(target);
+            throw new IllegalStateException("The run workspace could not be provisioned from " + repository
+                    + refSuffix(baseRef) + ": " + e.getMessage(), e);
+        }
+        if (result.exitCode() != 0) {
+            discardPartialCheckout(target);
+            throw new IllegalStateException("The run workspace could not be provisioned from " + repository
+                    + refSuffix(baseRef) + ": git clone exited " + result.exitCode()
+                    + (result.output().isBlank() ? "" : " — " + result.output().strip()));
+        }
+    }
+
+    private static String refSuffix(String baseRef) {
+        return baseRef == null || baseRef.isBlank() ? "" : " (ref " + baseRef + ")";
+    }
+
+    /** The git-pack credential, or null when none resolves (an anonymous clone of a public repository). */
+    private String scratchCheckoutToken() {
+        if (gitTokenSource == null) {
+            return null;
+        }
+        try {
+            String token = gitTokenSource.token();
+            return token == null || token.isBlank() ? null : token;
+        } catch (RuntimeException e) {
+            // An unreadable stored credential is "no credential here": the clone runs
+            // anonymously and fails visibly rather than leaking a wrong value.
+            return null;
+        }
+    }
+
+    private void discardPartialCheckout(Path target) {
+        try {
+            WorkspacePaths.deleteTree(runtimeRoot, target);
+        } catch (IOException e) {
+            // A partial clone left behind is inside this run's own scratch, which the
+            // lease cleanup owns; failing the refusal on it would hide the cause.
+            log.warn("Could not remove the partial scratch checkout {}: {}", target, e.getMessage());
         }
     }
 
@@ -473,11 +598,28 @@ public class RunWorkspaceService implements WorkspaceService {
      * output had already been written.
      */
     private GitResult runGit(List<String> argv) throws IOException {
+        return runGit(argv, Map.of());
+    }
+
+    /**
+     * Runs git with the wait always bounded by {@link #gitTimeout}, reading the child's output
+     * only after that wait. Reading the stdout pipe before waiting (the earlier shape) blocks
+     * for as long as the child keeps stdout open, so a stalled git hung indefinitely — and the
+     * mutating calls run under the lease lock and the common-git lock, so one stalled git
+     * wedged every later acquisition until a restart. Output is redirected to a file instead,
+     * the process tree is destroyed on expiry, and the timeout is reported with whatever
+     * output had already been written. {@code extraEnvironment} carries a per-invocation
+     * credential or config and is never rendered into the argv.
+     */
+    private GitResult runGit(List<String> argv, Map<String, String> extraEnvironment) throws IOException {
         Path outputFile = Files.createTempFile("aria-git-", ".log");
         Process process = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(argv);
             pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+            if (extraEnvironment != null && !extraEnvironment.isEmpty()) {
+                pb.environment().putAll(extraEnvironment);
+            }
             pb.redirectErrorStream(true);
             pb.redirectOutput(outputFile.toFile());
             process = pb.start();

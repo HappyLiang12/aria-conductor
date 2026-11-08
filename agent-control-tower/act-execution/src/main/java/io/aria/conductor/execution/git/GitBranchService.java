@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.aria.conductor.common.git.GitCredentialGuidance;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -13,6 +15,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +25,14 @@ import org.slf4j.LoggerFactory;
  * the GitHub REST API (no local git binary). The GitHub token is injected
  * through the constructor (never read from the environment inside the class)
  * so the service is testable against a WireMock server.
+ *
+ * <p>The token is read from its {@link GitTokenSource} on every request (F8), not
+ * captured once: a credential stored through the git pack endpoint after startup
+ * is authoritative for the next operation. Resolving it per request is what
+ * removes the restart step the operator used to need. A source that resolves
+ * nothing (or throws, e.g. on an undecryptable stored row) makes the operation
+ * refuse with the documented {@link GitCredentialGuidance} and sends no request
+ * at all, so a missing credential is never mistaken for an unauthenticated call.
  *
  * <p>repoUrl parsing: {@code https://github.com/owner/repo.git} -> {@code owner/repo}.
  */
@@ -33,18 +44,31 @@ public class GitBranchService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(GitBranchService.class);
 
-    private final String ghToken;
+    private final GitTokenSource tokenSource;
     private final String apiBaseUrl;
     private final HttpClient httpClient;
 
     /** Production entry point: token supplied explicitly (injectable for tests). */
     public GitBranchService(String ghToken) {
-        this(ghToken, DEFAULT_API_BASE_URL);
+        this(() -> ghToken, DEFAULT_API_BASE_URL);
     }
 
     /** Test entry point: allow pointing the API base at a WireMock server. */
     public GitBranchService(String ghToken, String apiBaseUrl) {
-        this.ghToken = ghToken;
+        this(() -> ghToken, apiBaseUrl);
+    }
+
+    /**
+     * Production entry point: the token is resolved from {@code tokenSource} on
+     * every request, so a store made after startup takes effect immediately.
+     */
+    public GitBranchService(GitTokenSource tokenSource) {
+        this(tokenSource, DEFAULT_API_BASE_URL);
+    }
+
+    /** The per-request resolution with an explicit API base (test/WireMock seam). */
+    public GitBranchService(GitTokenSource tokenSource, String apiBaseUrl) {
+        this.tokenSource = java.util.Objects.requireNonNull(tokenSource, "tokenSource");
         this.apiBaseUrl = (apiBaseUrl == null || apiBaseUrl.isBlank())
                 ? DEFAULT_API_BASE_URL : apiBaseUrl;
         this.httpClient = HttpClient.newBuilder()
@@ -53,12 +77,39 @@ public class GitBranchService {
     }
 
     /**
-     * True when a non-blank token was supplied, i.e. branch operations can be
-     * attempted. Callers use this to fail fast instead of catching
-     * {@link GitBranchException} from the first operation.
+     * True when a non-blank token resolves right now, i.e. branch operations can
+     * be attempted. Callers use this to fail fast instead of catching
+     * {@link GitBranchException} from the first operation. A source whose stored
+     * row cannot be read reports unavailable rather than throwing here.
      */
     public boolean isAvailable() {
-        return ghToken != null && !ghToken.isBlank();
+        try {
+            String token = tokenSource.token();
+            return token != null && !token.isBlank();
+        } catch (RuntimeException e) {
+            log.warn("Could not resolve the GitHub credential — {}. Git branch operations will refuse"
+                    + " until a readable credential is stored", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * The credential this request carries. A blank answer refuses the operation
+     * before any request is built: an unauthenticated call would be reported as a
+     * 401/404 from GitHub instead of the operator guidance that explains what to
+     * configure.
+     */
+    private String requireToken() {
+        String token;
+        try {
+            token = tokenSource.token();
+        } catch (RuntimeException e) {
+            throw new GitBranchException(0, GitCredentialGuidance.REQUIRED_MESSAGE + " (" + e.getMessage() + ")");
+        }
+        if (token == null || token.isBlank()) {
+            throw new GitBranchException(0, GitCredentialGuidance.REQUIRED_MESSAGE);
+        }
+        return token;
     }
 
     /**
@@ -154,6 +205,116 @@ public class GitBranchService {
         return Optional.ofNullable(node.path("object").path("sha").asText(null));
     }
 
+    // ---- commit read (F19 report-step tree guard) ----
+
+    /**
+     * One {@code files[]} entry of a GitHub commit: the new path plus GitHub's raw
+     * status. The raw status is preserved rather than pre-judged so the caller can map
+     * a {@code renamed} to something that is not a removal of the new path.
+     */
+    public record CommitFile(String path, Status status) {
+
+        /** The {@code files[].status} values the commits API documents. */
+        public enum Status { ADDED, MODIFIED, REMOVED, RENAMED, COPIED, CHANGED, UNKNOWN }
+
+        public CommitFile {
+            if (path == null || path.isBlank()) {
+                throw new IllegalArgumentException("Commit file path is required");
+            }
+            status = status == null ? Status.UNKNOWN : status;
+        }
+
+        static Status fromGitHub(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return Status.UNKNOWN;
+            }
+            return switch (raw.toLowerCase(java.util.Locale.ROOT)) {
+                case "added" -> Status.ADDED;
+                case "modified" -> Status.MODIFIED;
+                case "removed" -> Status.REMOVED;
+                case "renamed" -> Status.RENAMED;
+                case "copied" -> Status.COPIED;
+                case "changed" -> Status.CHANGED;
+                default -> Status.UNKNOWN;
+            };
+        }
+    }
+
+    /** The parents and file changes of one commit, as the commits API reports them. */
+    public record CommitFileChanges(String sha, List<String> parentShas, List<CommitFile> files) {
+        public CommitFileChanges {
+            parentShas = parentShas == null ? List.of() : List.copyOf(parentShas);
+            files = files == null ? List.of() : List.copyOf(files);
+        }
+    }
+
+    /**
+     * Read one commit's parents and file-level changes:
+     * {@code GET /repos/{owner}/{repo}/commits/{sha}} (F19).
+     *
+     * <p>Unlike the branch/file operations this never throws for an API failure. Its
+     * caller is the report-step tree guard, and an infrastructure error (missing
+     * credential, 404, 5xx, invalid payload) must leave the step's existing behaviour
+     * intact instead of failing it — every such case is {@link Optional#empty()} plus a
+     * log line that never contains the token.
+     */
+    public Optional<CommitFileChanges> commitFileChanges(String repoUrl, String commitSha) {
+        if (commitSha == null || commitSha.isBlank()) {
+            return Optional.empty();
+        }
+        String ownerRepo;
+        try {
+            ownerRepo = parseOwnerRepo(repoUrl);
+        } catch (RuntimeException e) {
+            // A missing or malformed URL is an infrastructure condition for this
+            // read, not a step failure. The URL itself is not logged (it may carry
+            // userinfo).
+            log.warn("Could not parse the repository URL for commit {} — the tree guard"
+                    + " degrades to no guard", commitSha);
+            return Optional.empty();
+        }
+        HttpResponse<String> response;
+        try {
+            response = rawGet("/repos/" + ownerRepo + "/commits/" + commitSha);
+        } catch (GitBranchException e) {
+            log.warn("Could not read commit {} of {} — the tree guard degrades to no guard: {}",
+                    commitSha, ownerRepo, e.getMessage());
+            return Optional.empty();
+        }
+        int status = response.statusCode();
+        if (status == 404) {
+            log.debug("Commit {} not found on {}", commitSha, ownerRepo);
+            return Optional.empty();
+        }
+        if (status < 200 || status >= 300) {
+            log.warn("Could not read commit {} of {} — the tree guard degrades to no guard: {}",
+                    commitSha, ownerRepo, errorMessage(response));
+            return Optional.empty();
+        }
+        try {
+            JsonNode node = parse(response.body());
+            List<String> parents = new java.util.ArrayList<>();
+            node.path("parents").forEach(parent -> {
+                String sha = parent.path("sha").asText(null);
+                if (sha != null && !sha.isBlank()) {
+                    parents.add(sha);
+                }
+            });
+            List<CommitFile> files = new java.util.ArrayList<>();
+            node.path("files").forEach(file -> {
+                String path = file.path("filename").asText(null);
+                if (path != null && !path.isBlank()) {
+                    files.add(new CommitFile(path, CommitFile.fromGitHub(file.path("status").asText(null))));
+                }
+            });
+            return Optional.of(new CommitFileChanges(node.path("sha").asText(commitSha), parents, files));
+        } catch (GitBranchException e) {
+            log.warn("Invalid commit payload for {} of {} — the tree guard degrades to no guard: {}",
+                    commitSha, ownerRepo, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     // ---- helpers ----
 
     static String parseOwnerRepo(String repoUrl) {
@@ -184,7 +345,8 @@ public class GitBranchService {
             path = path.substring(0, path.length() - 1);
         }
         if (path.isBlank() || !path.contains("/")) {
-            throw new GitBranchException(0, "Unable to parse owner/repo from repoUrl: " + repoUrl);
+            // Never echo the URL: a clone URL may carry userinfo (a token).
+            throw new GitBranchException(0, "Unable to parse owner/repo from the repository URL");
         }
         return path;
     }
@@ -216,15 +378,13 @@ public class GitBranchService {
     }
 
     private HttpRequest.Builder newRequest(String path) {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(apiBaseUrl + path))
+        String token = requireToken();
+        return HttpRequest.newBuilder(URI.create(apiBaseUrl + path))
                 .timeout(REQUEST_TIMEOUT)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
-                .header("User-Agent", "aria-conductor");
-        if (ghToken != null && !ghToken.isBlank()) {
-            builder.header("Authorization", "Bearer " + ghToken);
-        }
-        return builder;
+                .header("User-Agent", "aria-conductor")
+                .header("Authorization", "Bearer " + token);
     }
 
     private HttpResponse<String> send(HttpRequest request) {

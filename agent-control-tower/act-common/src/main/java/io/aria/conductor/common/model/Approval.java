@@ -70,6 +70,23 @@ public class Approval {
     @Column(name = "knowledge_item_id", columnDefinition = "UUID")
     private UUID knowledgeItemId;
 
+    /**
+     * Tool identity of an ACP permission ask (F7). A native ask has no companion
+     * {@code ToolCall} row, so without this the operator-facing approval used to
+     * expose {@code toolName = null}. Null for legacy gate approvals, whose tool
+     * identity still comes from the linked tool call.
+     */
+    @Column(name = "tool_name", length = 255)
+    private String toolName;
+
+    /** Argument document of the ask, credential-redacted before persistence. */
+    @Column(name = "arguments", columnDefinition = "TEXT")
+    private String arguments;
+
+    /** Governance risk tier resolved for {@link #toolName} at registration time. */
+    @Column(name = "risk_tier", length = 32)
+    private String riskTier;
+
     @Column(nullable = false)
     private Instant requestedAt;
 

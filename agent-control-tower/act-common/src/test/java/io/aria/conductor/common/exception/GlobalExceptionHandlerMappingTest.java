@@ -10,7 +10,10 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
@@ -137,6 +140,48 @@ class GlobalExceptionHandlerMappingTest {
         var response = handler.handleValidation(ex);
         assertStandardBody(response, HttpStatus.BAD_REQUEST);
         assertThat(response.getBody().get("message")).isEqualTo("Validation failed");
+    }
+
+    // ------------------------------------------------------------------
+    // F5: client-input errors are 4xx, never 500
+    // ------------------------------------------------------------------
+
+    @Test
+    void handleTypeMismatch_maps400WithParameterName() {
+        MethodArgumentTypeMismatchException ex = new MethodArgumentTypeMismatchException(
+                "46650059", UUID.class, "id", null, new IllegalArgumentException("not a uuid"));
+
+        var response = handler.handleTypeMismatch(ex);
+
+        assertStandardBody(response, HttpStatus.BAD_REQUEST);
+        assertThat((String) response.getBody().get("message"))
+                .contains("id")
+                .contains("46650059")
+                .contains("UUID");
+    }
+
+    @Test
+    void handleMethodNotSupported_maps405WithMethodName() {
+        HttpRequestMethodNotSupportedException ex =
+                new HttpRequestMethodNotSupportedException("GET", List.of("POST"));
+
+        var response = handler.handleMethodNotSupported(ex);
+
+        assertStandardBody(response, HttpStatus.METHOD_NOT_ALLOWED);
+        assertThat((String) response.getBody().get("message"))
+                .contains("GET")
+                .contains("not supported");
+    }
+
+    @Test
+    void handleMissingParameter_maps400WithParameterName() {
+        MissingServletRequestParameterException ex =
+                new MissingServletRequestParameterException("status", "String");
+
+        var response = handler.handleMissingParameter(ex);
+
+        assertStandardBody(response, HttpStatus.BAD_REQUEST);
+        assertThat((String) response.getBody().get("message")).contains("status");
     }
 
     @Test

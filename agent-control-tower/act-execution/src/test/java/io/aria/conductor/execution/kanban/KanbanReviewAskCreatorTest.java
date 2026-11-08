@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -26,6 +27,7 @@ class KanbanReviewAskCreatorTest {
     private ApprovalRepository approvalRepository;
     private KanbanRepository kanbanRepository;
     private RunRepository runRepository;
+    private WorkflowService workflowService;
     private KanbanReviewAskCreator creator;
 
     private KanbanItem card;
@@ -36,7 +38,9 @@ class KanbanReviewAskCreatorTest {
         approvalRepository = mock(ApprovalRepository.class);
         kanbanRepository = mock(KanbanRepository.class);
         runRepository = mock(RunRepository.class);
-        creator = new KanbanReviewAskCreator(approvalRepository, kanbanRepository, runRepository);
+        workflowService = mock(WorkflowService.class);
+        creator = new KanbanReviewAskCreator(approvalRepository, kanbanRepository, runRepository,
+                workflowService);
 
         card = KanbanItem.builder().id("c1").title("add CSV export")
                 .status(KanbanStatus.REVIEW).priority(KanbanPriority.MEDIUM)
@@ -111,6 +115,19 @@ class KanbanReviewAskCreatorTest {
         creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
 
         verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
+    void skipsWhenTheRunBelongsToAWorkflowChain() {
+        // F18: the auto-chainer owns a chain step's progression, so the card gets no
+        // REVIEW_REQUEST gate. The live run left one PENDING legacy ask per step
+        // (55737967 / 75910d4b / 9060a1af) while the chain advanced and completed.
+        when(workflowService.isRunPartOfWorkflowChain(runId)).thenReturn(true);
+
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+
+        verify(approvalRepository, never()).save(any());
+        verifyNoInteractions(runRepository);
     }
 
     @Test

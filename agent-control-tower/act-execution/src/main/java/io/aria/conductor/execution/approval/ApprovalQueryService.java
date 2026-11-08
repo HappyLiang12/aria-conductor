@@ -6,6 +6,7 @@ import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.execution.controller.ApprovalController;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.execution.security.CredentialRedactor;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -64,8 +65,15 @@ public class ApprovalQueryService {
     }
 
     private ApprovalController.ApprovalDetail toDetail(Approval a, ToolCall tc) {
-        String toolName = tc != null ? tc.getToolName() : null;
-        String riskTier = toolName != null ? toolRiskResolver.resolve(toolName).name() : null;
+        // An ACP permission ask has no ToolCall link; the ask itself now carries the
+        // tool identity and arguments (V76), with the linked call winning for legacy
+        // gate approvals. Arguments are redacted on read as well as on write, so rows
+        // persisted before the redaction existed can never leak a credential.
+        String toolName = tc != null ? tc.getToolName() : a.getToolName();
+        String arguments = CredentialRedactor.redact(tc != null ? tc.getArguments() : a.getArguments());
+        String riskTier = toolName != null
+                ? toolRiskResolver.resolve(toolName).name()
+                : a.getRiskTier();
         return new ApprovalController.ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -73,7 +81,7 @@ public class ApprovalQueryService {
                 a.getContent(),
                 a.getContentKind() != null ? a.getContentKind().name() : null,
                 a.getKnowledgeItemId(),
-                toolName, tc != null ? tc.getArguments() : null, riskTier,
+                toolName, arguments, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
                 a.getSource() == null ? null : a.getSource().name(),

@@ -64,6 +64,36 @@ if ($javaVersion -notmatch '"21') {
 $mvnVersion = (mvn -version 2>&1 | Select-Object -First 1)
 Write-Host "  Maven : $mvnVersion"
 
+# ── Qoder HOST launch preflight (F3/F4/F10/F13) ──
+# The run launcher clears the process environment, so the core's shell sees only
+# the PATH this backend was started with (plus aria.cores.toolchain-path). Report
+# what the core can and cannot resolve, with the locations the launcher will use.
+$qoderCli = Join-Path $env:USERPROFILE ".qoder/bin/qodercli"
+if (Test-Path -LiteralPath $qoderCli -PathType Container) {
+    $cliVersioned = Get-ChildItem -LiteralPath $qoderCli -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'qodercli*' } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($cliVersioned) {
+        Write-Host "  qoder CLI: $($cliVersioned.FullName)" -ForegroundColor DarkGray
+    } else {
+        Write-Warning "No qodercli executable under $qoderCli. A HOST qoder run cannot start: install the Qoder CLI, or set ARIA_CORES_QODER_EXECUTABLE to its absolute path."
+    }
+} else {
+    Write-Host "  qoder CLI: not found under $qoderCli (a HOST qoder run needs ARIA_CORES_QODER_EXECUTABLE then)." -ForegroundColor DarkGray
+}
+$bridgeDist = Join-Path $ProjectRoot "packages/qoder-acp-bridge/dist/main.js"
+if (-not (Test-Path -LiteralPath $bridgeDist -PathType Leaf)) {
+    Write-Warning "The committed qoder bridge is not built ($bridgeDist). Build it with: pnpm --dir packages/qoder-acp-bridge build. The default property resolves against the repository root, not the backend working directory."
+}
+foreach ($tool in @("gh", "jq")) {
+    if (Get-Command $tool -ErrorAction SilentlyContinue) {
+        Write-Host "  $tool : $((Get-Command $tool).Source)" -ForegroundColor DarkGray
+    } else {
+        Write-Warning "$tool is not on this PATH; a HOST core will not see it either. Add its directory to ARIA_CORES_TOOLCHAIN_PATH (comma-separated) if a workflow step needs it."
+    }
+}
+
 # Container runtime status (required only for -AdkProvider opencode)
 foreach ($rt in @("docker", "podman")) {
     if (Get-Command $rt -ErrorAction SilentlyContinue) {
@@ -101,7 +131,7 @@ if (-not $env:DEEPSEEK_API_KEY) {
 }
 
 if (-not $env:GITHUB_TOKEN) {
-    Write-Warning "GITHUB_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox. Set GITHUB_TOKEN and restart the backend: the credential is resolved once at startup. The dashboard has no credential editor yet; an operator with API access can store it via POST /api/v1/packs/pack-git-0001/credentials and restart."
+    Write-Warning "GITHUB_TOKEN is not set. The backend resolves the git credential per operation, so a credential stored with POST /api/v1/packs/pack-git-0001/credentials is used by the next branch operation without a restart - but a HOST core only receives the resolved pack credential, never an ambient GH_TOKEN/GITHUB_TOKEN. A gh CLI login is not adopted either. Store it once (or export GITHUB_TOKEN before starting) if BA/Dev steps need private repository access."
 }
 
 # Windows: the host cores find their own runtimes; no Python runtime is needed.

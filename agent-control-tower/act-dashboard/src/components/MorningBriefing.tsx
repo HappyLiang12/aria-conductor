@@ -5,6 +5,7 @@ import { listKanbanItems } from '../api/kanban';
 import { useWebSocketContext } from './Layout';
 import { formatTimestamp } from '../utils/formatTime';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+import { reviewNeedsHuman } from '../utils/reviewState';
 
 function getTimeGreeting(): string {
   const hour = new Date().getHours();
@@ -50,8 +51,10 @@ export default function MorningBriefing() {
     return {
       done: items.filter((i) => i.status === 'DONE').length,
       // Review cards are the waiting-on-review signal; BLOCKED was retired
-      // (V52 migration), so counting it always yielded 0.
-      review: items.filter((i) => i.status === 'REVIEW').length,
+      // (V52 migration), so counting it always yielded 0. F24: only a REVIEW
+      // card with an open ask is waiting on the operator — a finished card
+      // parked in REVIEW must not inflate the signal.
+      review: items.filter(reviewNeedsHuman).length,
       inProgress: items.filter((i) => i.status === 'IN_PROGRESS').length,
     };
   }, [kanbanItems]);

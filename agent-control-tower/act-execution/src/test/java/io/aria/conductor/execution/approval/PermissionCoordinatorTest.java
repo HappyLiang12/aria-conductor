@@ -6,11 +6,13 @@ import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
+import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -217,6 +220,19 @@ class PermissionCoordinatorTest {
                 writeGrants, new PlatformMcpAutoApproval(mcp), eventPublisher, () -> sink, clock);
     }
 
+    /** Coordinator with the governance risk resolver the production wiring supplies. */
+    private PermissionCoordinator coordinatorWithRisk(Instant now, ToolRiskResolver resolver) {
+        this.clock = new MutableClock(now);
+        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
+        this.writeGrants = new WriteGrantService(permissionRepository, clock);
+        return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
+                writeGrants, new PlatformMcpAutoApproval(new McpProperties()), eventPublisher,
+                () -> null, name -> {
+                    RiskTier tier = resolver.resolve(name);
+                    return tier != null ? tier : RiskTier.READ;
+                }, clock);
+    }
+
     private NativePermission permission(PermissionTarget target) {
         return new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID, TOOL, target,
                 "{\"path\":\"notes.txt\",\"content\":\"hello\"}", OFFERED, EXPIRES_AT);
@@ -259,6 +275,86 @@ class PermissionCoordinatorTest {
         assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
         assertThat(requestedEvents.get(0).getRunId()).isEqualTo(RUN_ID);
         assertThat(requestedEvents.get(0).getToolCallId()).isNull();
+    }
+
+    /**
+     * F7: the operator-facing approval row must carry the tool identity, the
+     * argument document and the governance risk tier, because an ACP ask has no
+     * companion ToolCall row to enrich it from. Credential-shaped values are
+     * masked before they are persisted or exposed.
+     */
+    @Test
+    void registrationStoresToolNameRedactedArgumentsAndRiskTierOnTheApprovalRow() {
+        ToolRiskResolver resolver = mock(ToolRiskResolver.class);
+        when(resolver.resolve(TOOL)).thenReturn(RiskTier.PUSH);
+        coordinator = coordinatorWithRisk(T0, resolver);
+        String arguments = "{\"path\":\"notes.txt\",\"token\":\"ghp_abcdefghijklmnopqrstuvwxyz012345\"}";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                TOOL, PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getToolName()).isEqualTo(TOOL);
+        assertThat(approval.getArguments())
+                .contains("[REDACTED]")
+                .doesNotContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+        assertThat(approval.getRiskTier()).isEqualTo("PUSH");
+    }
+
+    /**
+     * F7 bound: a Write ask can carry a whole file, and the argument document is
+     * stored on both the operator row and the native-request ledger (TEXT columns).
+     * The persisted copy is redacted and bounded, while the write-grant digest keeps
+     * matching the exact payload.
+     */
+    @Test
+    void registrationRedactsAndBoundsThePersistedArgumentDocument() {
+        ToolRiskResolver resolver = mock(ToolRiskResolver.class);
+        when(resolver.resolve(TOOL)).thenReturn(RiskTier.PUSH);
+        coordinator = coordinatorWithRisk(T0, resolver);
+        String token = "ghp_abcdefghijklmnopqrstuvwxyz012345";
+        // Multi-byte characters: a character-count bound would overflow the TEXT
+        // column, so this also proves the byte semantics.
+        String arguments = "{\"content\":\"" + "\u6f22".repeat(25_000)
+                + "\",\"token\":\"" + token + "\"}";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                TOOL, PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getArguments().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(PermissionCoordinator.MAX_ARGUMENTS_BYTES);
+        assertThat(approval.getArguments())
+                .endsWith(PermissionCoordinator.ARGUMENTS_TRUNCATION_SUFFIX)
+                .doesNotContain(token);
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getArgumentsJson().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(PermissionCoordinator.MAX_ARGUMENTS_BYTES);
+        assertThat(row.getArgumentsJson())
+                .endsWith(PermissionCoordinator.ARGUMENTS_TRUNCATION_SUFFIX)
+                .doesNotContain(token);
+        assertThat(row.getArgumentsDigest())
+                .as("the write grant still matches the exact operation")
+                .isEqualTo(WriteGrantService.digestOf(arguments));
+    }
+
+    /**
+     * The bridge contract is nullable: an event without an argument document must
+     * still register, leaving the payload fields null instead of inventing one.
+     */
+    @Test
+    void registrationToleratesAnAbsentArgumentDocument() {
+        ToolRiskResolver resolver = mock(ToolRiskResolver.class);
+        when(resolver.resolve(TOOL)).thenReturn(RiskTier.READ);
+        coordinator = coordinatorWithRisk(T0, resolver);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                TOOL, PermissionTarget.NATIVE_TOOL, null, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getToolName()).isEqualTo(TOOL);
+        assertThat(approval.getArguments()).isNull();
+        assertThat(approval.getRiskTier()).isEqualTo("READ");
     }
 
     /**

@@ -3,6 +3,7 @@ package io.aria.conductor.aria.service;
 import io.aria.conductor.aria.dto.AriaAction;
 import io.aria.conductor.aria.dto.AriaChatRequest;
 import io.aria.conductor.aria.dto.AriaChatResponse;
+import io.aria.conductor.aria.repository.AriaRunStateRepository;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.*;
@@ -62,6 +63,7 @@ public class AriaService {
     private final KnowledgeService knowledgeService;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
+    private final AriaSyncRunWaiter syncRunWaiter;
 
     public AriaService(AgentLoopEngine agentLoopEngine,
                        AgentRepository agentRepository,
@@ -69,7 +71,8 @@ public class AriaService {
                        IntentClassifier intentClassifier,
                        KnowledgeService knowledgeService,
                        SessionTrajectoryRepository trajectoryRepository,
-                       ToolCallRepository toolCallRepository) {
+                       ToolCallRepository toolCallRepository,
+                       AriaSyncRunWaiter syncRunWaiter) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
@@ -77,6 +80,7 @@ public class AriaService {
         this.knowledgeService = knowledgeService;
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
+        this.syncRunWaiter = syncRunWaiter;
     }
 
     public AriaChatResponse chat(AriaChatRequest request) {
@@ -105,79 +109,79 @@ public class AriaService {
         // Execute via unified engine with prior conversation context
         agentLoopEngine.startRun(run.getId(), priorMessages);
 
-        // Poll for completion (synchronous non-streaming contract). Every read must
-        // observe the engine's committed progress, not the request-scoped snapshot
-        // (see readCommittedState).
-        int polls = 0;
-        while (polls < 120) {
-            RunRepository.RunStateView current = readCommittedState(run.getId());
-            if (current != null && (current.getStatus() == RunStatus.COMPLETED
-                    || current.getStatus() == RunStatus.FAILED
-                    || current.getStatus() == RunStatus.CANCELLED)) {
-                String assistantMessage = current.getFinalOutput();
-                // Populate actionsTaken from executed tool calls
-                List<AriaAction> actions = buildActionsTaken(run.getId());
-                // Empty-content fallback: synthesize from executed tool calls
-                if (assistantMessage == null || assistantMessage.isBlank()) {
-                    if (!actions.isEmpty()) {
-                        assistantMessage = "Executed: " + actions.stream()
-                                .map(AriaAction::description)
-                                .collect(Collectors.joining(", "));
-                    } else {
-                        assistantMessage = "I've completed your request. Check the Run dashboard for details.";
-                    }
-                }
-                return AriaChatResponse.builder()
-                        .runId(run.getId().toString())
-                        .conversationId(conversationId)
-                        .message(assistantMessage)
-                        .intent(intent)
-                        .actionsTaken(actions)
-                        .timestamp(Instant.now())
-                        .build();
-            }
-            try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            polls++;
-        }
-        // Timeout: grace wait for budget exhaustion summary (takes 2-5s for LLM call)
-        log.warn("Aria sync chat exceeded the sync window for run {} — grace wait for final output", run.getId());
-        try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        RunRepository.RunStateView finalCheck = readCommittedState(run.getId());
-        if (finalCheck != null && (finalCheck.getStatus() == RunStatus.COMPLETED
-                || finalCheck.getStatus() == RunStatus.FAILED)) {
-            String output = finalCheck.getFinalOutput();
-            if (output != null && !output.isBlank()) {
-                return AriaChatResponse.builder()
-                        .runId(run.getId().toString())
-                        .conversationId(conversationId)
-                        .message(output)
-                        .intent(intent)
-                        .actionsTaken(buildActionsTaken(run.getId()))
-                        .timestamp(Instant.now())
-                        .build();
-            }
-        }
-        // Still not done — return "Still working" as before
-        log.warn("Aria sync chat: run {} still not complete after grace wait", run.getId());
+        // Wait for the run without holding a request transaction or DB connection
+        // (F6): every read is its own short transaction, the sleep is outside one.
+        AriaSyncRunWaiter.Outcome outcome = syncRunWaiter.await(run.getId());
+        return buildResponse(run.getId(), conversationId, intent, outcome);
+    }
+
+    /**
+     * Maps the observed committed state to the wire contract (F2): the reply
+     * always carries the run id and the status that was actually read, and only
+     * a COMPLETED run may claim completion. A FAILED/ABORTED run carries its
+     * stable error identity and reason.
+     */
+    private AriaChatResponse buildResponse(UUID runId, String conversationId, String intent,
+                                           AriaSyncRunWaiter.Outcome outcome) {
+        AriaRunStateRepository.RunSnapshot snapshot = outcome.snapshot();
+        RunStatus status = snapshot != null && snapshot.getStatus() != null
+                ? snapshot.getStatus() : RunStatus.PENDING;
+        List<AriaAction> actions = buildActionsTaken(runId);
         return AriaChatResponse.builder()
-                .runId(run.getId().toString())
+                .runId(runId.toString())
                 .conversationId(conversationId)
-                .message("Still working — reasoning models can take a little longer. The result will appear in the Runs dashboard, or use streaming chat for live updates.")
+                .message(messageFor(runId, status, snapshot, actions))
                 .intent(intent)
-                .actionsTaken(buildActionsTaken(run.getId()))
+                .actionsTaken(actions)
+                .status(status.name())
+                .errorCode(snapshot != null ? snapshot.getErrorCode() : null)
+                .errorMessage(snapshot != null ? snapshot.getErrorMessage() : null)
                 .timestamp(Instant.now())
                 .build();
     }
 
-    /**
-     * Reads the run's committed status and output. Open Session In View binds the
-     * persistence context to this HTTP request, so {@code findById} serves the very
-     * instance this request saved (PENDING) for the whole poll and the loop would
-     * never observe the engine's terminal state; refreshing that instance fails
-     * without a transaction. The projection query always issues its SELECT.
-     */
-    private RunRepository.RunStateView readCommittedState(UUID runId) {
-        return runRepository.findStateById(runId).orElse(null);
+    private static String messageFor(UUID runId, RunStatus status,
+                                     AriaRunStateRepository.RunSnapshot snapshot,
+                                     List<AriaAction> actions) {
+        String output = snapshot != null ? snapshot.getFinalOutput() : null;
+        if (status == RunStatus.COMPLETED) {
+            if (output != null && !output.isBlank()) {
+                return output;
+            }
+            if (!actions.isEmpty()) {
+                return "Executed: " + actions.stream()
+                        .map(AriaAction::description)
+                        .collect(Collectors.joining(", "));
+            }
+            return "I've completed your request. Check the Run dashboard for details.";
+        }
+        if (status == RunStatus.FAILED || status == RunStatus.ABORTED) {
+            if (output != null && !output.isBlank()) {
+                return output;
+            }
+            String code = snapshot != null ? snapshot.getErrorCode() : null;
+            String reason = snapshot != null ? snapshot.getErrorMessage() : null;
+            StringBuilder message = new StringBuilder(
+                    status == RunStatus.ABORTED ? "Run was aborted" : "Run failed");
+            if (code != null && !code.isBlank()) {
+                message.append(" (").append(code).append(')');
+            }
+            if (reason != null && !reason.isBlank()) {
+                message.append(": ").append(reason);
+            } else {
+                message.append(" before producing a result.");
+            }
+            return message.append(" Check the Runs dashboard for details.").toString();
+        }
+        if (status == RunStatus.CANCELLED) {
+            if (output != null && !output.isBlank()) {
+                return output;
+            }
+            return "Run was cancelled before producing a result. Check the Runs dashboard for details.";
+        }
+        // Still live after the bounded sync window: report exactly what was seen.
+        return "Run " + runId + " is still " + status
+                + ". It has not completed; follow it in the Runs dashboard or use streaming chat for live updates.";
     }
 
     String buildSystemPrompt() {
@@ -206,8 +210,7 @@ public class AriaService {
                 - cancel_run: Cancel a run (requires id)
 
                 **Approvals:**
-                - list_pending_approvals: List actions waiting for human approval
-                - decide_approval: Approve or reject a pending action (requires id, decision, reason)
+                - list_pending_approvals: List actions waiting for human approval. Approval decisions belong to the operator in the dashboard; you cannot decide them, and no tool lets you.
 
                 **Knowledge:**
                 - store_knowledge: Save new knowledge as PENDING (requires name, content, type). Valid types: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE

@@ -215,6 +215,65 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         assertThat(released.isRetained()).isFalse();
     }
 
+    /**
+     * F15: the BA step started in an empty scratch (total 4) and then read the
+     * operator's live worktree instead of the target revision. A scratch run whose
+     * workflow binding names a repository now starts with an isolated depth-1
+     * checkout of the requested base ref at {@code <scratch>/repo}.
+     */
+    @Test
+    void aScratchRunWithARepositoryBindingStartsWithAShallowIsolatedCheckout() throws Exception {
+        Path source = temp.resolve("checkout-source");
+        initDisposableRepo(source);
+        Files.writeString(source.resolve("tracked.txt"), "v2\n");
+        git(source, "commit", "-q", "-am", "second");
+        String baseBranch = git(source, "rev-parse", "--abbrev-ref", "HEAD");
+
+        UUID runId = UUID.randomUUID();
+        ScratchWorkspaceProvisioner provisioner = spec -> spec.runId().equals(runId)
+                ? java.util.Optional.of(new ScratchWorkspaceProvisioner.RepositoryBinding(
+                source.toUri().toString(), baseBranch))
+                : java.util.Optional.empty();
+        WorkspaceLease lease = service(provisioner).acquire(hostSpec(runId, null, null, null));
+
+        Path checkout = lease.localRoot().resolve("repo");
+        assertThat(checkout.resolve("tracked.txt")).as("the base ref is checked out").isRegularFile();
+        assertThat(Files.readString(checkout.resolve("tracked.txt"))).isEqualTo("v2\n");
+        assertThat(git(checkout, "rev-list", "--count", "HEAD"))
+                .as("depth 1: the checkout is the base revision, not the whole history")
+                .isEqualTo("1");
+        assertThat(lease.kind()).isEqualTo(WorkspaceKind.SCRATCH);
+    }
+
+    /** A run without a binding keeps the empty scratch it always had. */
+    @Test
+    void aScratchRunWithoutABindingStaysEmpty() throws Exception {
+        UUID runId = UUID.randomUUID();
+        WorkspaceLease lease = service(ScratchWorkspaceProvisioner.NONE)
+                .acquire(hostSpec(runId, null, null, null));
+
+        assertThat(Files.exists(lease.localRoot().resolve("repo")))
+                .as("positive control: a binding is what provisions the checkout, not the scratch kind")
+                .isFalse();
+    }
+
+    /** A repository that cannot be checked out refuses the run instead of leaving a half-provisioned scratch. */
+    @Test
+    void aFailedScratchCheckoutRefusesTheRunAndLeavesNoPartialCheckout() throws Exception {
+        UUID runId = UUID.randomUUID();
+        Path absent = temp.resolve("no-such-repository");
+        ScratchWorkspaceProvisioner provisioner = spec -> java.util.Optional.of(
+                new ScratchWorkspaceProvisioner.RepositoryBinding(absent.toUri().toString(), null));
+
+        assertThatThrownBy(() -> service(provisioner).acquire(hostSpec(runId, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("could not be provisioned")
+                .hasMessageContaining("no-such-repository");
+        assertThat(Files.exists(runtimeRoot.resolve("scratch").resolve(runId.toString()).resolve("repo")))
+                .isFalse();
+        assertThat(leases.findByRunId(runId)).as("no lease is recorded for a refused provisioning").isEmpty();
+    }
+
     @Test
     void sandboxLeaseRecordsSnapshotBindingWithoutHostExclusion() throws Exception {
         Path source = Files.createDirectories(temp.resolve("sandbox-source"));
@@ -1233,6 +1292,11 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
 
     private RunWorkspaceService service() {
         return new RunWorkspaceService(leases, runtimeRoot, resultRoot);
+    }
+
+    private RunWorkspaceService service(ScratchWorkspaceProvisioner provisioner) {
+        return new RunWorkspaceService(leases, runtimeRoot, resultRoot, List.of("git"),
+                Duration.ofSeconds(60), null, provisioner);
     }
 
     private RunWorkspaceService serviceWithGit(List<String> gitCommand, Duration timeout) {

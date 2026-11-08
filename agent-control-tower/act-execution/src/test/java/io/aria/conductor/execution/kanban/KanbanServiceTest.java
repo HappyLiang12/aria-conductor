@@ -446,6 +446,27 @@ class KanbanServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
+    /**
+     * F24: the decision surfaces derive "needs a human" from pendingAskCount on a
+     * GET; the single-item read used to return the bare entity, so an ask-ful
+     * REVIEW card looked settled while its own decision panel listed the asks.
+     */
+    @Test
+    void get_enrichesTheOpenAskCountAndRunOutcomeLikeTheList() {
+        stored.setStatus(KanbanStatus.REVIEW);
+        stored.setLinkedRunId(LINKED_RUN_ID.toString());
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(approvalRepository.countPendingByKanbanItemIds(List.of(stored.getId())))
+                .thenReturn(List.<Object[]>of(new Object[]{stored.getId(), 2L}));
+        when(runRepository.findAllById(List.of(LINKED_RUN_ID)))
+                .thenReturn(List.of(Run.builder().id(LINKED_RUN_ID).status(RunStatus.COMPLETED).build()));
+
+        KanbanItem result = service.get(stored.getId());
+
+        assertThat(result.getPendingAskCount()).isEqualTo(2);
+        assertThat(result.getRunOutcome()).isEqualTo("COMPLETED");
+    }
+
     @Test
     void update_partialFields_mergesIntoExisting() {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));

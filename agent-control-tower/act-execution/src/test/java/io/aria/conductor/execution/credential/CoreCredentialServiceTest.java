@@ -50,12 +50,18 @@ class CoreCredentialServiceTest {
 
     @Test
     void resolveOfMissingCredentialFailsAdmissionLoudlyWithTheProvisioningPath() {
+        // F1: the fix is a preflight/hint one -- the qoder CLI's own login on this
+        // machine is not adopted, so the hint says so instead of leaving the operator
+        // to wonder why a logged-in CLI still cannot start a run.
         assertThatThrownBy(() -> service.resolve("qoder:operator"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Qoder runtime credential is not configured (qoder:operator)."
                         + " Save a Qoder personal access token in Configure > LLM Providers"
                         + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
-                        + " then re-dispatch the run.");
+                        + " then re-dispatch the run."
+                        + " A qoder CLI login on this machine is not adopted automatically: the"
+                        + " platform sends the saved token itself, so save it once even when the CLI"
+                        + " already works here.");
     }
 
     @Test

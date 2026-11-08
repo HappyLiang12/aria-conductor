@@ -1937,18 +1937,29 @@ class HostExecutionBackendIntegrationTest {
     }
 
     /**
-     * The Windows form of the T9 completeness net (Task 13 fix round 1, C1): a writer
-     * whose intermediate parent died before the first enumeration is unreachable from the
-     * root's tree walk while it keeps mutating the workspace -- the exact window T9 closed
-     * on POSIX. The enumerated sweep alone would report {@code allWritersStopped=true} for
-     * an empty tree while that live writer keeps writing, so the job inventory must fail
-     * the proof closed. The writer is a real job member (it inherits the job through the
-     * intermediate); the test asserts that premise non-vacuously at the end, where closing
-     * the last supervision channel must take it down through kill-on-close.
+     * F25, high: the Windows form of the T9 completeness net (Task 13 fix round 1, C1).
+     * A writer whose intermediate parent died before the first enumeration is
+     * unreachable from the root's tree walk while it keeps mutating the workspace;
+     * the enumerated sweep alone would report {@code allWritersStopped=true} for an
+     * empty tree while that live writer keeps writing. The live failure (run
+     * 4bd06a41) was the fail-closed side of the same shape: the shared job inventory
+     * saw the orphan and could not say whose writer it was. While exactly one run is
+     * supervised, a job member created at or after that run's root cannot belong to
+     * anyone else, so the proof must attribute it to the run, kill it by identity and
+     * verdict-check it -- and the writer is then really gone, not left mutating.
+     *
+     * <p>The ambiguity that must stay fail-closed is a member that a concurrent run
+     * could own, or one older than this run's root: those keep the inventory path
+     * closed and are covered by
+     * {@link #aForeignRunsUnverifiableJobMemberFailsTheProofClosed()} and
+     * {@link #anUnaccountedJobMemberFailsTheProofClosedAndIsLogged()}. This test also
+     * asserts the premise non-vacuously: the writer is a real job member, so only the
+     * job-attributed kill can take it down (a non-member orphan would survive the
+     * proof and fail the {@code isAlive} assertion below).
      */
     @Test
     @EnabledOnOs(OS.WINDOWS)
-    void stopRefusesWhenAJobMemberIsUnreachableFromTheEnumeratedTree() throws Exception {
+    void stopAttributesAnOrphanedJobMemberToTheOnlySupervisedRunAndStopsIt() throws Exception {
         Path dir = canonical(Files.createTempDirectory("host-orphaned-job-member"));
         Path workspace = Files.createDirectories(dir.resolve("workspace"));
         Path writerLog = workspace.resolve("orphan-writer.log");
@@ -2013,27 +2024,26 @@ class HostExecutionBackendIntegrationTest {
 
         assertThat(proof.runId()).isEqualTo(runId);
         assertThat(proof.allWritersStopped())
-                .as("a live job member unreachable from the enumerated tree must fail the proof closed,"
-                        + " not certify a workspace it can still mutate")
-                .isFalse();
+                .as("F25: a job member created after the only supervised run's root is attributable to"
+                        + " that run -- the proof must kill it by identity and be true over it")
+                .isTrue();
         assertThat(isAlive(owned.rootPid())).as("the enumerated tree is stopped").isFalse();
         assertThat(isAlive(writerPid))
-                .as("a refused proof must leave an unaccounted member alone: it may belong to another run")
-                .isTrue();
-        long atRefusal = sizeOf(writerLog);
+                .as("the attributed orphan is stopped by identity and verdict-checked, not left alive"
+                        + " behind the proof as it was on the failing live run")
+                .isFalse();
+        long atStop = sizeOf(writerLog);
         Thread.sleep(300);
         assertThat(sizeOf(writerLog))
-                .as("the unreachable writer keeps writing behind the refused proof")
-                .isGreaterThan(atRefusal);
+                .as("a stopped writer can no longer mutate the workspace it was proved stopped over")
+                .isEqualTo(atStop);
         assertThat(sentinel.isAlive()).as("an unrelated process must survive").isTrue();
 
-        // The premise, non-vacuously: the writer is a real job member -- the job's
-        // kill-on-close limit takes it down with the last supervision channel.
+        // The premise stays non-vacuous: the writer was a real job member (it inherited
+        // the job through the intermediate) and only this run's job-attributed kill could
+        // take it down; an unrelated process above is untouched.
         controller.close();
-        awaitDead(writerPid);
-        assertThat(isAlive(writerPid))
-                .as("the writer must be a real job member (kill-on-close), or this test proved nothing")
-                .isFalse();
+        assertThat(isAlive(writerPid)).isFalse();
     }
 
     /**

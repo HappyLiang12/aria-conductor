@@ -71,7 +71,10 @@ import java.util.concurrent.TimeUnit;
  *   <li>a member that belongs to another live run's enumerated tree is that
  *       run's writer: it is deliberately left alive and excluded from this run's
  *       proof (the per-run isolation ruling -- a per-run stop acts per run);</li>
- *   <li>any member that is neither is unaccounted for and the proof
+ *   <li>a member that is none of those is unaccounted for. While this controller
+ *       supervises exactly one run, a member created at or after that run's root
+ *       is attributed to it, killed by identity and verdict-checked (F25); a
+ *       member that survives that check, or one the attribution may not claim,
  *       <b>fails closed</b> ({@code allWritersStopped=false}) instead of
  *       certifying a workspace a live, unreachable writer can still mutate.</li>
  * </ul>
@@ -111,10 +114,21 @@ import java.util.concurrent.TimeUnit;
  * binding mismatch, live records remaining, unverifiable records, deadline expiry
  * or an exception -- the live failure produced no diagnostic at all.
  *
- * <p>Residual (review round 6): a writer spawned after the sampler's last pass and
- * before the root exited, and invisible to the job inventory, is not enumerable at
- * proof time; an inventory-visible member fails the proof closed, while a
- * job-invisible one is outside what this proof can observe.
+ * <p>Residual (review round 6, revised for F25): a writer spawned after the
+ * sampler's last pass and before the root exited, and invisible to the job
+ * inventory, is not enumerable at proof time; an inventory-visible member either
+ * fails the proof closed (see below) or, when this controller supervises exactly
+ * one run, is attributed to that run and killed by identity. The live failure
+ * was the single-run case: a child whose intermediate parent exited between two
+ * 500 ms tree samples (run 4bd06a41, {@code unaccounted=[35224@...]}) is
+ * unreachable from the root forever, so the shared job was the only observer of
+ * a writer the proof then refused. Attribution is deliberately narrow -- one
+ * supervised run only, member creation ticks not older than the root (a process
+ * cannot predate the run that spawned it), and no {@code unverifiable} or
+ * malformed record -- because the shared-job isolation ruling forbids guessing
+ * across runs. With more than one supervised run a concurrent run's writer is
+ * indistinguishable from this run's orphan, so the case stays fail-closed; a
+ * job-invisible writer remains outside what this proof can observe.
  *
  * <p>Every command is a synchronous JSON-free line exchange; a supervisor that
  * is missing, dead or silent fails the operation explicitly rather than
@@ -535,6 +549,48 @@ final class WindowsProcessController implements OwnedProcessController {
             if (!Instant.now().isBefore(deadline)) {
                 return refused(process, "the caller's window elapsed after the job inventory");
             }
+            // F25: a descendant whose intermediate parent exited between two 500 ms tree
+            // samples is unreachable from the root for the rest of the run, and the shared
+            // job is the only place that can still observe it. The inventory cannot say
+            // whose writer it is, so the run only claims a member when it is the single
+            // supervised run and the member was created at or after its root -- then no
+            // concurrent run exists to own it and it cannot predate the run. Attribution
+            // never signals anything on its own: each attributed member is killed by
+            // identity below and only leaves the unaccounted set when the OS reports it
+            // gone or recycled, so a member that survives still fails the proof closed.
+            List<String> attributable = attributableJobMembers(unaccounted, rootCreationTicks(process),
+                    started.size());
+            if (!attributable.isEmpty()) {
+                if (!Instant.now().isBefore(deadline)) {
+                    return refused(process, "the caller's window elapsed before the attributed job members"
+                            + " could be stopped");
+                }
+                log.info("Run {} stop proof: the shared job holds members {} created at or after this run's"
+                                + " root while it is the only supervised run; stopping them by identity",
+                        process.runId(), attributable);
+                operate("kill", attributable);
+                Thread.sleep(SETTLE_MILLIS);
+                List<String> attributedSurvivors = new ArrayList<>();
+                for (String member : attributable) {
+                    if (!Instant.now().isBefore(deadline)) {
+                        return refused(process, "the caller's window elapsed while the attributed job"
+                                + " members were verdict-checked");
+                    }
+                    // Only a definite absence or a recycled pid supports the attribution:
+                    // a member the OS still verifies live, or cannot verify at all, stays
+                    // unaccounted for and keeps the proof closed.
+                    String verdict = verdictOf(member);
+                    if ("gone".equals(verdict) || verdict.startsWith("mismatch")) {
+                        unaccounted.remove(member);
+                    } else {
+                        attributedSurvivors.add(member + " (" + verdict + ")");
+                    }
+                }
+                if (!attributedSurvivors.isEmpty()) {
+                    log.warn("Run {} stop proof: attributed job members {} did not verify as stopped;"
+                            + " the proof fails closed", process.runId(), attributedSurvivors);
+                }
+            }
             if (!unaccounted.isEmpty()) {
                 // R7 diagnostics: without the inventory a failed proof is opaque. Only OS
                 // identities (pid@creation) are logged -- never command lines, paths or
@@ -628,6 +684,72 @@ final class WindowsProcessController implements OwnedProcessController {
             unaccounted.add(member);
         }
         return unaccounted;
+    }
+
+    /**
+     * F25: the shared-job members this proof may attribute to the run it is stopping.
+     * A descendant whose intermediate parent died between two tree samples is
+     * unreachable from the root's tree forever, and the shared job is the only place
+     * that can still observe it; the inventory alone cannot say whose writer it is.
+     * Attribution is therefore allowed only when this controller supervises exactly
+     * one run -- no concurrent or foreign run exists that could own the member -- and
+     * the member's creation ticks are not older than this run's root, because a
+     * process cannot be created before the run that spawned it. An
+     * {@code unverifiable:...} record names no identity at all, a malformed record
+     * names no comparable creation time, and a member older than the root predates
+     * the run, so none of those is ever attributed.
+     *
+     * <p>Nothing is signalled here: {@code stop} kills every attributed member by
+     * identity and verdict-checks it, and the attribution only removes the member
+     * from the unaccounted set once the OS reports it gone or recycled.
+     *
+     * @param unaccounted        inventory members the proof could not classify
+     * @param rootCreationTicks  the run root's creation identity in FILETIME ticks
+     * @param supervisedRunCount how many runs this controller currently supervises
+     * @return the members attributable to this run (empty when ambiguous)
+     */
+    static List<String> attributableJobMembers(List<String> unaccounted, long rootCreationTicks,
+            int supervisedRunCount) {
+        if (supervisedRunCount != 1 || rootCreationTicks <= 0 || unaccounted == null
+                || unaccounted.isEmpty()) {
+            return List.of();
+        }
+        List<String> attributable = new ArrayList<>();
+        for (String member : unaccounted) {
+            // "unverifiable:<pid>" is an identity the OS could not read -- unknown is
+            // never absence, and it is not even a pid@ticks record.
+            if (member == null || member.startsWith(UNVERIFIABLE)) {
+                continue;
+            }
+            int at = member.indexOf('@');
+            if (at <= 0 || at != member.lastIndexOf('@') || at == member.length() - 1) {
+                continue;
+            }
+            long pid;
+            long created;
+            try {
+                pid = Long.parseLong(member.substring(0, at));
+                created = Long.parseLong(member.substring(at + 1));
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            if (pid > 0 && created >= rootCreationTicks) {
+                attributable.add(member);
+            }
+        }
+        return attributable;
+    }
+
+    /**
+     * This run's root creation identity as FILETIME ticks, or a non-positive value
+     * when it is not a readable tick count -- which attributes nothing.
+     */
+    private static long rootCreationTicks(OwnedProcess process) {
+        try {
+            return Long.parseLong(process.rootCreationIdentity());
+        } catch (NumberFormatException e) {
+            return -1L;
+        }
     }
 
     /**

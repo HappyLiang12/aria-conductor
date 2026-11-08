@@ -192,11 +192,6 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
             this.launchCancelRequested = true;
         }
 
-        /** Compatibility for callers with no termination identity to carry. */
-        void requestLaunchCancel() {
-            requestLaunchCancel(null, null, null);
-        }
-
         void recordVerifiedControl(String state) {
             this.controlState = state;
             this.pendingControl = null;

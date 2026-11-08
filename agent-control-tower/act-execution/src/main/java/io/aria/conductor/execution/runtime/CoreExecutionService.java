@@ -920,7 +920,16 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     private void settleCancelAfterVerifiedLaunchAbort(RunRuntimeRegistry.RunRuntime runtime) {
         UUID runId = runtime.spec().runId();
         runtime.recordVerifiedStop(STATE_CANCELLED);
-        persistState(runtime, STATE_CANCELLED);
+        // The settlement must never abort on its own record: the stop is already verified and the
+        // runtime is classified CANCELLED, so a binding-store failure here only loses the observed
+        // state write. Letting it escape would re-enter abortLaunch from the launch's generic
+        // catch and record a fail-closed pending control over a cancellation that already settled.
+        try {
+            persistState(runtime, STATE_CANCELLED);
+        } catch (RuntimeException e) {
+            log.warn("Run {}: the verified launch abort settled the runtime but the binding store"
+                    + " refused the CANCELLED state: {}", runId, messageOf(e));
+        }
         actorTokens.revokeRun(runId);
         inputs.recordTerminationIntent(runId, runtime.launchCancelReason(),
                 runtime.launchCancelCode(), runtime.launchCancelSurface());
@@ -1093,6 +1102,16 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * of a launch that reported a spawn, takes exactly the path it took before.
      */
     void abortLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease, RuntimeException launchFailure) {
+        if (runtime.writersVerifiedStopped()) {
+            // An earlier abort or cancel already proved the stop, destroyed the environment and
+            // released the lease: re-entering here (the launch's generic catch after a settlement
+            // that failed, a re-driven cancel) must not stop, destroy or release a second time and
+            // must never record a fail-closed pending control over an already settled run.
+            log.debug("Run {}: the launch abort is idempotent -- the stop was already verified,"
+                    + " so nothing is stopped, destroyed or released again", runtime.spec().runId());
+            runtimes.remove(runtime.spec().runId());
+            return;
+        }
         RuntimeHandle handle = runtime.handle();
         if (handle == null) {
             cleanupProvablyNeverSpawnedLaunch(runtime, lease, launchFailure);

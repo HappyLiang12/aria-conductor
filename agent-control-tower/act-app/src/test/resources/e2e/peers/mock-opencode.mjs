@@ -324,6 +324,15 @@ async function streamParts() {
  */
 async function startDecisionFlow(body) {
   switch (SCENARIO) {
+    case 'quota-usage':
+      // F29's placeholder-vs-quota shape is Qoder-specific; the OpenCode peer
+      // serves the same fixture completion with its recorded counters so the
+      // scenario manifest keeps describing both peers honestly.
+      return assistantMessage({
+        text: 'fixture-complete',
+        tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: 'efficient',
+      });
     case 'reported-usage':
       return assistantMessage({
         text: 'fixture-complete',

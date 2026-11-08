@@ -199,6 +199,49 @@ class CoreAdapterContractTest {
     }
 
     /**
+     * F29: the pinned CLI (1.1.61) fills {@code prompt.result.usage} with a
+     * placeholder {@code {0,0,0}} while the real counts sit in
+     * {@code _meta.quota.token_count}. The bridge extracts them into a separate
+     * {@code usage} event emitted before {@code prompt.result}; the session must
+     * prefer that report instead of persisting the placeholder.
+     */
+    @Test
+    void qoderQuotaUsageSupersedesThePlaceholderPromptCounter() throws Exception {
+        try (QoderRun run = new QoderRun("quota-usage")) {
+            CoreResult result = run.session()
+                    .prompt(new CoreTask(null, List.of(), "Reply with the fixture completion"), event -> { })
+                    .toCompletableFuture().get(120, TimeUnit.SECONDS);
+
+            assertThat(result.finalOutput()).isEqualTo("fixture-complete");
+            assertThat(result.usage().inputTokens())
+                    .as("the real _meta.quota count, not the placeholder usage zero")
+                    .isEqualTo(12L);
+            assertThat(result.usage().outputTokens()).isEqualTo(7L);
+            assertThat(result.usage().credits()).isNull();
+            assertThat(result.usage().observedModel())
+                    .as("the quota shape carries no model_usage, so no observed model is invented")
+                    .isNull();
+        }
+    }
+
+    /**
+     * A genuinely reported zero is still a zero: preferring the usage event must
+     * never turn a carried zero into an unknown (or an unknown into a zero).
+     */
+    @Test
+    void qoderGenuineZeroUsageStaysZeroRatherThanUnknown() throws Exception {
+        try (QoderRun run = new QoderRun("complete")) {
+            CoreResult result = run.session()
+                    .prompt(new CoreTask(null, List.of(), "Reply with the fixture completion"), event -> { })
+                    .toCompletableFuture().get(120, TimeUnit.SECONDS);
+
+            assertThat(result.finalOutput()).isEqualTo("pong");
+            assertThat(result.usage().inputTokens()).isZero();
+            assertThat(result.usage().outputTokens()).isZero();
+        }
+    }
+
+    /**
      * Two turns of one session: the second turn must carry the exact prior user
      * and assistant messages as context. The peer echoes the exact text it
      * received, so the assertion is on what the core really saw.

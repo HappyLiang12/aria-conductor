@@ -46,6 +46,10 @@ const WRITER_COMMAND = fixtures.writer.command;
 // envelopes stay the recorded ones; only the values are fixture-defined.
 const COMPLETION_TEXT = {
   'reported-usage': 'fixture-complete',
+  // F29: the pinned CLI (1.1.61) reports a placeholder ACP usage block while the
+  // real counts live in _meta.quota. The bridge extracts those into a separate
+  // `usage` event; the adapter must prefer it over the placeholder.
+  'quota-usage': 'fixture-complete',
   // The SDD QA step's deterministic verdict: WorkflowAutoChainer routes a QA
   // step on the VERDICT= marker its run's finalOutput carries.
   'sdd-qa-pass': 'fixture-qa-report\nVERDICT=PASS',
@@ -305,7 +309,9 @@ function cancelPendingRequests() {
  * same JSON-RPC id a second time (the recording contains no duplicate response).
  *
  * The `reported-usage` scenario reports the fixture's exact counters and quota;
- * the `unknown-usage` scenario reports neither member, so the adapter must keep
+ * the `quota-usage` scenario reproduces the pinned 1.1.61 shape -- a placeholder
+ * `usage {0,0,0}` next to the real `_meta.quota.token_count` counts; the
+ * `unknown-usage` scenario reports neither member, so the adapter must keep
  * the unknown values unknown instead of inventing zeros.
  */
 function finishPrompt(stopReason) {
@@ -315,17 +321,22 @@ function finishPrompt(stopReason) {
   const extras =
     SCENARIO === 'reported-usage'
       ? { usage: REPORTED_USAGE_RESULT.usage, _meta: { quota: REPORTED_USAGE_RESULT.quota } }
-      : SCENARIO === 'unknown-usage'
-        ? {}
-        : {
+      : SCENARIO === 'quota-usage'
+        ? {
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-            _meta: {
-              quota: {
-                token_count: { input_tokens: 0, output_tokens: 0 },
-                model_usage: [{ model: currentModel, token_count: { input_tokens: 0, output_tokens: 0 } }],
+            _meta: { quota: { token_count: { input_tokens: 12, output_tokens: 7 } } },
+          }
+        : SCENARIO === 'unknown-usage'
+          ? {}
+          : {
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              _meta: {
+                quota: {
+                  token_count: { input_tokens: 0, output_tokens: 0 },
+                  model_usage: [{ model: currentModel, token_count: { input_tokens: 0, output_tokens: 0 } }],
+                },
               },
-            },
-          };
+            };
   send({
     jsonrpc: '2.0',
     id,

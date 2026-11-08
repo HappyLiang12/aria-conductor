@@ -71,6 +71,30 @@
       "expected": ["no fixture write", "no external model request", "acknowledged model equals the requested model"]
     },
     {
+      "id": "quota-usage",
+      "title": "The pinned 1.1.61 placeholder usage block beside the real quota counters (F29)",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "usage": { "inputTokens": 0, "outputTokens": 0, "totalTokens": 0 },
+        "quotaTokenCount": { "input_tokens": 12, "output_tokens": 7 },
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message"],
+        "tokens": { "input": 12, "output": 7 },
+        "modelID": "efficient",
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "expected": [
+        "the adapter reports the real quota counters (12/7), not the placeholder zeros",
+        "the bridge emits the usage event before prompt.result"
+      ]
+    },
+    {
       "id": "reported-usage",
       "title": "Completion that reports the observed model and the fixture usage counters",
       "prompt": "Reply with the fixture completion",

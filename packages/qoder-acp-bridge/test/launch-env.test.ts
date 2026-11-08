@@ -46,6 +46,22 @@ test('composeChildPath keeps POSIX-form entries verbatim on Windows', () => {
   );
 });
 
+test('composeChildPath joins the launcher POSIX PATH with the POSIX delimiter on Windows', () => {
+  // CoreLaunchEnvironment.bridgeEnvironment() sends both values in the Windows
+  // POSIX style (`:`-joined, `/c/...` entries). Joining those on `;` would merge
+  // the inherited entries into one invalid list and every extra directory after
+  // the first into one entry; the launcher's real shape must round-trip.
+  expect(
+    composeChildPath(
+      '/c/Windows/system32:/c/Program Files/Git/cmd',
+      '/c/Program Files/GitHub CLI:/c/Users/User/tools/apache-maven-3.9.6/bin',
+      'win32',
+    ),
+  ).toBe(
+    '/c/Program Files/GitHub CLI:/c/Users/User/tools/apache-maven-3.9.6/bin:/c/Windows/system32:/c/Program Files/Git/cmd',
+  );
+});
+
 test('composeChildPath prepends POSIX entries without dropping the inherited PATH', () => {
   expect(composeChildPath('/usr/local/bin:/usr/bin:/bin', '/opt/gh/bin:/opt/maven/bin', 'linux')).toBe(
     '/opt/gh/bin:/opt/maven/bin:/usr/local/bin:/usr/bin:/bin',

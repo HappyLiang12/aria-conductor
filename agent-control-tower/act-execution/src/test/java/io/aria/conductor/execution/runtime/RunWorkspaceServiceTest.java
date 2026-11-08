@@ -38,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -272,6 +273,48 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         assertThat(Files.exists(runtimeRoot.resolve("scratch").resolve(runId.toString()).resolve("repo")))
                 .isFalse();
         assertThat(leases.findByRunId(runId)).as("no lease is recorded for a refused provisioning").isEmpty();
+    }
+
+    @Test
+    void aScratchBindingWithUserinfoIsRefusedWithoutLeakingTheCredential() {
+        UUID runId = UUID.randomUUID();
+        String secret = "synthetic-userinfo-secret";
+        ScratchWorkspaceProvisioner provisioner = spec -> java.util.Optional.of(
+                new ScratchWorkspaceProvisioner.RepositoryBinding(
+                        "https://user:" + secret + "@example.invalid/org/repo.git", null));
+
+        assertThatThrownBy(() -> service(provisioner).acquire(hostSpec(runId, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not include userinfo")
+                .hasMessageNotContaining(secret);
+        assertThat(Files.exists(runtimeRoot.resolve("scratch").resolve(runId.toString()).resolve("repo")))
+                .as("a refused clone must not leave a partial checkout")
+                .isFalse();
+    }
+
+    @Test
+    void anSshUrlWithTheGitUserIsNotTreatedAsUserinfo() {
+        assertThatCode(() -> RunWorkspaceService.requireSafeCloneArguments(
+                "ssh://git@example.invalid/org/repo.git", null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aScratchBindingWithALeadingDashOperandIsRefusedBeforeGit() {
+        UUID dashRepositoryRun = UUID.randomUUID();
+        ScratchWorkspaceProvisioner dashRepository = spec -> java.util.Optional.of(
+                new ScratchWorkspaceProvisioner.RepositoryBinding("-not-a-repository", null));
+        assertThatThrownBy(() -> service(dashRepository).acquire(hostSpec(dashRepositoryRun, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot begin with '-'");
+
+        UUID dashRefRun = UUID.randomUUID();
+        ScratchWorkspaceProvisioner dashRef = spec -> java.util.Optional.of(
+                new ScratchWorkspaceProvisioner.RepositoryBinding(
+                        temp.toUri().toString(), "-not-a-ref"));
+        assertThatThrownBy(() -> service(dashRef).acquire(hostSpec(dashRefRun, null, null, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("base ref cannot begin with '-'");
     }
 
     @Test

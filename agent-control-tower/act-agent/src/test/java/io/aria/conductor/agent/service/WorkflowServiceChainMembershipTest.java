@@ -75,6 +75,17 @@ class WorkflowServiceChainMembershipTest {
     }
 
     @Test
+    void aSupersededAttempt_isStillARecognisedChainStep() {
+        UUID previousRunId = UUID.randomUUID();
+        UUID currentRunId = UUID.randomUUID();
+        when(workflowChainRepository.findAll()).thenReturn(List.of(
+                chainWithPrevious(WorkflowChain.Status.COMPLETED, currentRunId, previousRunId)));
+
+        assertThat(workflowService.isRunPartOfWorkflowChain(previousRunId)).isTrue();
+        assertThat(workflowService.isRunPartOfWorkflowChain(currentRunId)).isTrue();
+    }
+
+    @Test
     void aNullRunId_isNotAChainStepAndSkipsTheScan() {
         assertThat(workflowService.isRunPartOfWorkflowChain(null)).isFalse();
 
@@ -82,12 +93,17 @@ class WorkflowServiceChainMembershipTest {
     }
 
     private WorkflowChain chainWith(WorkflowChain.Status status, UUID stepRunId) {
+        return chainWithPrevious(status, stepRunId);
+    }
+
+    private WorkflowChain chainWithPrevious(WorkflowChain.Status status, UUID stepRunId, UUID... previousRunIds) {
         WorkflowStep step = WorkflowStep.builder()
                 .agentId(UUID.randomUUID())
                 .promptTemplate("step")
                 .maxIterations(3)
                 .status(WorkflowStep.Status.COMPLETED)
                 .runId(stepRunId)
+                .previousRunIds(previousRunIds == null ? null : List.of(previousRunIds))
                 .build();
         try {
             return TestDataBuilder.aWorkflowChain()

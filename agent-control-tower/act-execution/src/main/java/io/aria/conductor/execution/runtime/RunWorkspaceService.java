@@ -263,6 +263,7 @@ public class RunWorkspaceService implements WorkspaceService {
      * resolved credential means an anonymous clone of a public repository.
      */
     private void provisionScratchCheckout(Path localRoot, String repository, String baseRef) {
+        requireSafeCloneArguments(repository, baseRef);
         Path target = localRoot.resolve(SCRATCH_CHECKOUT_DIRECTORY);
         List<String> argv = new ArrayList<>(gitCommand);
         argv.add("-c");
@@ -279,6 +280,9 @@ public class RunWorkspaceService implements WorkspaceService {
             argv.add("--branch");
             argv.add(baseRef);
         }
+        // The repository and target are operands, never options: a leading-dash
+        // value is refused above and the `--` separator keeps the shape explicit.
+        argv.add("--");
         argv.add(repository);
         argv.add(target.toString());
         Map<String, String> environment = new LinkedHashMap<>();
@@ -309,6 +313,39 @@ public class RunWorkspaceService implements WorkspaceService {
             throw new IllegalStateException("The run workspace could not be provisioned from " + repository
                     + refSuffix(baseRef) + ": git clone exited " + result.exitCode()
                     + (result.output().isBlank() ? "" : " — " + result.output().strip()));
+        }
+    }
+
+    /**
+     * Gate the values that reach {@code git clone} argv. A URL with userinfo would
+     * put a credential in the process table and in any failure message; a
+     * leading-dash value would be parsed as an option. The git-pack credential is
+     * supplied through the environment, so userinfo is never an accepted input.
+     */
+    static void requireSafeCloneArguments(String repository, String baseRef) {
+        if (repository == null || repository.isBlank()) {
+            throw new IllegalStateException("The run workspace repository is empty.");
+        }
+        if (repository.startsWith("-")) {
+            throw new IllegalStateException("The run workspace repository cannot begin with '-'.");
+        }
+        int scheme = repository.indexOf("://");
+        if (scheme >= 0) {
+            String schemeName = repository.substring(0, scheme);
+            // HTTP(S) userinfo is either a username or a token that git would put in
+            // argv and any error message. SSH userinfo (ssh://git@host/...) is the
+            // normal SSH form and is not a credential in the URL.
+            boolean httpScheme = schemeName.equalsIgnoreCase("http") || schemeName.equalsIgnoreCase("https");
+            int authorityStart = scheme + 3;
+            int slash = repository.indexOf('/', authorityStart);
+            int at = repository.indexOf('@', authorityStart);
+            if (httpScheme && at >= 0 && (slash < 0 || at < slash)) {
+                throw new IllegalStateException("The run workspace repository URL must not include"
+                        + " userinfo; the git credential is supplied separately.");
+            }
+        }
+        if (baseRef != null && baseRef.startsWith("-")) {
+            throw new IllegalStateException("The run workspace base ref cannot begin with '-'.");
         }
     }
 

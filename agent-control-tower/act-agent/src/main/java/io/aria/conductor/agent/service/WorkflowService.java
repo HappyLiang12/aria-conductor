@@ -281,6 +281,13 @@ public class WorkflowService {
                 if (runId.equals(step.getRunId())) {
                     return true;
                 }
+                // R6: a DEFECT/SPEC_GAP reschedule overwrites step.runId. The
+                // superseded attempt is still a chain run — its card must not be
+                // given a legacy review gate while the F24 settlement reaches it
+                // through stepRunIds().
+                if (step.getPreviousRunIds() != null && step.getPreviousRunIds().contains(runId)) {
+                    return true;
+                }
             }
         }
         return false;

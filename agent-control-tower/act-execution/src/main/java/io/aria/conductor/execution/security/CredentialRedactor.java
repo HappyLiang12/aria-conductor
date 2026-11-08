@@ -28,8 +28,7 @@ public final class CredentialRedactor {
     private static final Pattern BEARER =
             Pattern.compile("(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]{8,}");
     private static final Pattern NAMED_SECRET_JSON_VALUE = Pattern.compile(
-            "(?i)(\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\"\\s*:\\s*\")"
-                    + "([^\"]*)(\")");
+            "(?i)(\\\\?\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\\\\?\"\\s*:\\s*\\\\?\")([^\"\\\\]*)(\\\\?\")");
 
     private CredentialRedactor() {
     }

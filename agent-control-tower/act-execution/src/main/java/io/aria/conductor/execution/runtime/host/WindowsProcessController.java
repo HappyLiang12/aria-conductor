@@ -131,6 +131,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * indistinguishable from this run's orphan, so the case stays fail-closed; a
  * job-invisible writer remains outside what this proof can observe.
  *
+ * <p>Review round 2 tightened two edges of that net. The inventory is now taken
+ * <em>twice</em>: a member being killed is still a live process until the OS
+ * reports it gone, so it can spawn a child that inherits the shared job after
+ * the first inventory, and the repeated inventory fails the proof closed on that
+ * child instead of certifying it stopped. And attribution counts launches that
+ * are still in flight, not just registered runs: a launch becomes a job member
+ * before it is registered, so a concurrent stop must not read it as this run's
+ * orphan and kill another run's root. Only {@code pid@creation} identities are
+ * ever logged by either path.
+ *
  * <p>Every command is a synchronous JSON-free line exchange; a supervisor that
  * is missing, dead or silent fails the operation explicitly rather than
  * degrading to PID signalling. PowerShell, kernel32 and ntdll are the OS's own
@@ -297,52 +307,64 @@ final class WindowsProcessController implements OwnedProcessController {
             throw new IllegalStateException(
                     "This Host process controller is closed; no new run can be supervised");
         }
-        // The run's job must exist before the core does: the supervisor's script
-        // creates the job object (with kill-on-close) before it prints the ready
-        // line, and this constructor call awaits that line -- so the only
-        // unsupervised window left is CreateProcess-to-assign, which the
-        // identity-validated enumerated sweep covers.
-        Supervisor current = supervisor();
-        Process process = OwnedProcessController.launch(profile, coreLog);
-        OwnedProcess owned = null;
+        // F2 (review round 2): a launch is in flight from before the OS can make it a
+        // job member until its binding is registered below. A concurrent stop must not
+        // read that window as "this controller supervises exactly one run" and attribute
+        // the launching run's root as an orphan: the launch is a live writer of another
+        // run. The counter therefore covers supervisor()/launch, the assignment, the
+        // creation identity and the registration, and is released by the finally --
+        // including every rollback path.
+        inFlightLaunches.incrementAndGet();
         try {
-            String jobMembership = current.command("assign " + process.pid());
-            afterAssign.accept((int) process.pid());
-            String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(
-                    "The launched runtime (pid " + process.pid() + ") vanished before its creation identity"
-                            + " could be recorded"));
-            owned = new OwnedProcess(runId, UUID.randomUUID().toString(), process.pid(), creation,
-                    current.selfIdentity(), TECHNIQUE + " [job-backstop=assign:" + jobMembership + "]",
-                    process);
-            started.put(runId, owned);
-            Set<String> observed = ConcurrentHashMap.newKeySet();
-            observed.add(recordOf(owned));
-            observedRecords.put(runId, observed);
-            observedPeaks.put(runId, observed.size());
-            observedProbeCursors.remove(runId);
-            afterBind.accept(owned);
-            // close() sets the terminal state before it clears the bindings and
-            // cannot be excluded by the launch, so it is re-checked after the bind:
-            // reporting success here would hand back a run the kill-on-close job
-            // then terminates, and startSampling would be rejected by the shut-down
-            // sampler after a partial bind. The rollback in the catch removes the
-            // binding and terminates the launched process.
-            if (closed) {
-                throw new IllegalStateException(
-                        "This Host process controller is closed; no new run can be supervised");
-            }
-            startSampling();
-            return owned;
-        } catch (RuntimeException e) {
-            if (owned != null) {
-                started.remove(runId, owned);
-                suspensions.remove(runId);
-                observedRecords.remove(runId);
-                observedPeaks.remove(runId);
+            // The run's job must exist before the core does: the supervisor's script
+            // creates the job object (with kill-on-close) before it prints the ready
+            // line, and this constructor call awaits that line -- so the only
+            // unsupervised window left is CreateProcess-to-assign, which the
+            // identity-validated enumerated sweep covers.
+            Supervisor current = supervisor();
+            Process process = OwnedProcessController.launch(profile, coreLog);
+            OwnedProcess owned = null;
+            try {
+                String jobMembership = current.command("assign " + process.pid());
+                afterAssign.accept((int) process.pid());
+                String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(
+                        "The launched runtime (pid " + process.pid() + ") vanished before its creation identity"
+                                + " could be recorded"));
+                owned = new OwnedProcess(runId, UUID.randomUUID().toString(), process.pid(), creation,
+                        current.selfIdentity(), TECHNIQUE + " [job-backstop=assign:" + jobMembership + "]",
+                        process);
+                started.put(runId, owned);
+                Set<String> observed = ConcurrentHashMap.newKeySet();
+                observed.add(recordOf(owned));
+                observedRecords.put(runId, observed);
+                observedPeaks.put(runId, observed.size());
                 observedProbeCursors.remove(runId);
+                afterBind.accept(owned);
+                // close() sets the terminal state before it clears the bindings and
+                // cannot be excluded by the launch, so it is re-checked after the bind:
+                // reporting success here would hand back a run the kill-on-close job
+                // then terminates, and startSampling would be rejected by the shut-down
+                // sampler after a partial bind. The rollback in the catch removes the
+                // binding and terminates the launched process.
+                if (closed) {
+                    throw new IllegalStateException(
+                            "This Host process controller is closed; no new run can be supervised");
+                }
+                startSampling();
+                return owned;
+            } catch (RuntimeException e) {
+                if (owned != null) {
+                    started.remove(runId, owned);
+                    suspensions.remove(runId);
+                    observedRecords.remove(runId);
+                    observedPeaks.remove(runId);
+                    observedProbeCursors.remove(runId);
+                }
+                process.destroyForcibly();
+                throw e;
             }
-            process.destroyForcibly();
-            throw e;
+        } finally {
+            inFlightLaunches.decrementAndGet();
         }
     }
 
@@ -587,8 +609,11 @@ final class WindowsProcessController implements OwnedProcessController {
             // never signals anything on its own: each attributed member is killed by
             // identity below and only leaves the unaccounted set when the OS reports it
             // gone or recycled, so a member that survives still fails the proof closed.
+            // A launch that is still in flight counts as a supervised run here: its root is
+            // already a job member of a live run this controller does not supervise yet, so
+            // it is never this run's orphan.
             List<String> attributable = attributableJobMembers(unaccounted, rootCreationTicks(process),
-                    started.size());
+                    supervisedOrLaunchingRunCount());
             if (!attributable.isEmpty()) {
                 if (!Instant.now().isBefore(deadline)) {
                     return refused(process, "the caller's window elapsed before the attributed job members"
@@ -632,7 +657,35 @@ final class WindowsProcessController implements OwnedProcessController {
                         process.runId(), verdictOf(recordOf(process)), known, job, unaccounted);
             }
             clean &= unaccounted.isEmpty();
+            // F1 (review round 2): the inventory above was taken before the attribution
+            // kill and its verdict round trips. A member being killed is still a live
+            // process until the OS reports it gone, so it can spawn a child that inherits
+            // the shared job after that inventory; the child is not in `unaccounted`, so a
+            // proof that trusted the first inventory alone could return true while a live
+            // job member keeps writing. The inventory is therefore repeated after the
+            // attribution block, and any member still unaccounted fails the proof closed.
+            // Nothing is signalled here: a member this proof never decided is not guessed
+            // at. Only OS identities are logged.
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed before the second job inventory");
+            }
             afterAttribution.run();
+            List<String> jobAfter = jobMembers();
+            if (!Instant.now().isBefore(deadline)) {
+                return refused(process, "the caller's window elapsed during the second job inventory");
+            }
+            List<String> unaccountedAfter = unaccountedJobMembers(process, known, jobAfter);
+            if (!unaccountedAfter.isEmpty()) {
+                List<String> introduced = membersIntroducedSince(unaccountedAfter, unaccounted);
+                List<String> persistent = unaccountedAfter.stream()
+                        .filter(unaccounted::contains)
+                        .toList();
+                log.warn("Run {} stop proof: the second job inventory still holds unaccounted members {} "
+                                + "(introduced after the first inventory={}, persistent from it={}); "
+                                + "the proof fails closed",
+                        process.runId(), unaccountedAfter, introduced, persistent);
+            }
+            clean &= unaccountedAfter.isEmpty();
             // R7 (review round 4, P2): the population re-read before the straggler scan is
             // not the proof's last word -- the per-record verdicts, the own-survivor kill
             // and the final inventory with its classification are round trips after it. A
@@ -722,25 +775,28 @@ final class WindowsProcessController implements OwnedProcessController {
      * unreachable from the root's tree forever, and the shared job is the only place
      * that can still observe it; the inventory alone cannot say whose writer it is.
      * Attribution is therefore allowed only when this controller supervises exactly
-     * one run -- no concurrent or foreign run exists that could own the member -- and
-     * the member's creation ticks are not older than this run's root, because a
-     * process cannot be created before the run that spawned it. An
-     * {@code unverifiable:...} record names no identity at all, a malformed record
-     * names no comparable creation time, and a member older than the root predates
-     * the run, so none of those is ever attributed.
+     * one run <em>and</em> no launch is in flight -- no concurrent, foreign or
+     * still-launching run exists that could own the member -- and the member's
+     * creation ticks are not older than this run's root, because a process cannot be
+     * created before the run that spawned it. The caller passes
+     * {@code started.size() + inFlightLaunches.get()}, so a count of exactly one can
+     * only mean that state. An {@code unverifiable:...} record names no identity at
+     * all, a malformed record names no comparable creation time, and a member older
+     * than the root predates the run, so none of those is ever attributed.
      *
      * <p>Nothing is signalled here: {@code stop} kills every attributed member by
      * identity and verdict-checks it, and the attribution only removes the member
      * from the unaccounted set once the OS reports it gone or recycled.
      *
-     * @param unaccounted        inventory members the proof could not classify
-     * @param rootCreationTicks  the run root's creation identity in FILETIME ticks
-     * @param supervisedRunCount how many runs this controller currently supervises
+     * @param unaccounted                   inventory members the proof could not classify
+     * @param rootCreationTicks             the run root's creation identity in FILETIME ticks
+     * @param supervisedOrLaunchingRunCount supervised runs plus launches still in flight;
+     *                                      exactly one is required, so one run and no launch
      * @return the members attributable to this run (empty when ambiguous)
      */
     static List<String> attributableJobMembers(List<String> unaccounted, long rootCreationTicks,
-            int supervisedRunCount) {
-        if (supervisedRunCount != 1 || rootCreationTicks <= 0 || unaccounted == null
+            int supervisedOrLaunchingRunCount) {
+        if (supervisedOrLaunchingRunCount != 1 || rootCreationTicks <= 0 || unaccounted == null
                 || unaccounted.isEmpty()) {
             return List.of();
         }

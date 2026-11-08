@@ -165,6 +165,75 @@ try {
     }
     Assert-True ($null -eq $problem) "bridge dir without src files does not crash and is fresh with dist"
 
+    # ── F31: bridge input manifest (hash freshness beyond mtime) ──
+    # The helper contract: exit 0 = fresh, 1 = problem (reason on stdout), 2 = usage
+    # or filesystem error. The start scripts rely on those codes, so pin them here.
+    $freshnessHelper = Join-Path $repoRoot "scripts/lib/bridge-freshness.mjs"
+    Assert-True (Test-Path -LiteralPath $freshnessHelper -PathType Leaf) `
+        "bridge freshness helper is committed at scripts/lib/bridge-freshness.mjs"
+    Assert-True ($null -ne (Get-Command node -ErrorAction SilentlyContinue)) `
+        "node is available to exercise the bridge freshness helper"
+
+    $usage = & node $freshnessHelper 2>&1
+    Assert-True ($LASTEXITCODE -eq 2) "no arguments exits 2 (usage error), got $LASTEXITCODE"
+    $unknown = & node $freshnessHelper verify $noSrc 2>&1
+    Assert-True ($LASTEXITCODE -eq 2) "an unknown command exits 2 (usage error), got $LASTEXITCODE"
+
+    $hashFresh = New-BridgeFixture "bridge-hash-fresh"
+    New-Item -ItemType Directory -Path (Join-Path $hashFresh "src"), (Join-Path $hashFresh "dist") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $hashFresh "src/main.ts") -Value "export {}"
+    Set-Content -LiteralPath (Join-Path $hashFresh "dist/main.js") -Value "// built"
+    $writeOutput = & node $freshnessHelper write $hashFresh 2>&1
+    Assert-True ($LASTEXITCODE -eq 0) "writing the manifest exits 0 (got ${LASTEXITCODE}: $writeOutput)"
+    Assert-True (Test-Path -LiteralPath (Join-Path $hashFresh "dist/.build-inputs") -PathType Leaf) `
+        "the manifest lives under the git-ignored dist/"
+    $checkOutput = & node $freshnessHelper check $hashFresh 2>&1
+    Assert-True ($LASTEXITCODE -eq 0) "a matching manifest reports fresh (exit 0), got '$checkOutput'"
+
+    # A matching manifest is fresh even when the source mtime is newer than dist/main.js.
+    (Get-Item -LiteralPath (Join-Path $hashFresh "src/main.ts")).LastWriteTimeUtc = $now.AddMinutes(10)
+    $problem = Get-BridgeDistProblem -BridgeDir $hashFresh
+    Assert-True ($null -eq $problem) "a matching manifest is fresh even when mtimes suggest otherwise (got '$problem')"
+
+    # A mismatched manifest is a problem, and it names the changed input, even when the
+    # changed file's mtime is older than dist/main.js.
+    Set-Content -LiteralPath (Join-Path $hashFresh "src/main.ts") -Value "export const changed = true"
+    (Get-Item -LiteralPath (Join-Path $hashFresh "src/main.ts")).LastWriteTimeUtc = $now.AddMinutes(-30)
+    $checkOutput = & node $freshnessHelper check $hashFresh 2>&1
+    Assert-True ($LASTEXITCODE -eq 1) "a mismatched manifest reports a problem (exit 1), got $LASTEXITCODE"
+    Assert-True (($checkOutput | Out-String) -match "src/main\.ts") `
+        "the mismatch names the changed state (got '$checkOutput')"
+    $problem = Get-BridgeDistProblem -BridgeDir $hashFresh
+    Assert-True ($null -ne $problem) "Get-BridgeDistProblem reports a manifest mismatch"
+    Assert-True ($problem -match "src/main\.ts") "the manifest problem names the changed file"
+
+    # A missing manifest falls back to the legacy mtime comparison.
+    $legacy = New-BridgeFixture "bridge-legacy"
+    New-Item -ItemType Directory -Path (Join-Path $legacy "src"), (Join-Path $legacy "dist") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacy "src/main.ts") -Value "export {}"
+    Set-Content -LiteralPath (Join-Path $legacy "dist/main.js") -Value "// built"
+    (Get-Item -LiteralPath (Join-Path $legacy "dist/main.js")).LastWriteTimeUtc = $now
+    (Get-Item -LiteralPath (Join-Path $legacy "src/main.ts")).LastWriteTimeUtc = $now.AddMinutes(-30)
+    $problem = Get-BridgeDistProblem -BridgeDir $legacy
+    Assert-True ($null -eq $problem) "a missing manifest falls back to a fresh mtime result (got '$problem')"
+    (Get-Item -LiteralPath (Join-Path $legacy "src/main.ts")).LastWriteTimeUtc = $now.AddMinutes(5)
+    $problem = Get-BridgeDistProblem -BridgeDir $legacy
+    Assert-True ($null -ne $problem) "a missing manifest still detects a stale mtime"
+    Assert-True ($problem -match "main\.ts") "the legacy mtime problem names the newer file"
+
+    # Node absent (or the helper missing) must not break the start path: mtime fallback.
+    $problem = Get-BridgeDistProblem -BridgeDir $legacy -NodeCommand "aria-no-such-node"
+    Assert-True ($null -ne $problem) "node absent falls back to the mtime comparison"
+
+    # Writing without a dist is a problem, not a partial manifest.
+    $noDist = New-BridgeFixture "bridge-write-no-dist"
+    New-Item -ItemType Directory -Path (Join-Path $noDist "src") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $noDist "src/main.ts") -Value "export {}"
+    $writeOutput = & node $freshnessHelper write $noDist 2>&1
+    Assert-True ($LASTEXITCODE -eq 1) "writing a manifest without dist/main.js exits 1, got $LASTEXITCODE"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $noDist "dist/.build-inputs"))) `
+        "a failed write leaves no manifest behind"
+
     Write-Host ""
     Write-Host "PASS: $($script:passes) assertions" -ForegroundColor Green
 } finally {

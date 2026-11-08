@@ -3,6 +3,10 @@
 # No side effects: safe to dot-source and self-test without starting a stack.
 # Dot-source from another script: . "$PSScriptRoot/startup-checks.ps1"
 
+# Resolved when this file is loaded (dot-sourced), never from the caller's cwd: the
+# bridge freshness helper lives next to this file even when a test runs from a temp dir.
+$BridgeFreshnessHelperPath = Join-Path $PSScriptRoot "bridge-freshness.mjs"
+
 <#
 .SYNOPSIS
 Resolves the run-owned workspace roots (F30).
@@ -53,14 +57,49 @@ Stale means any file under src/ (recursively), or package.json, tsconfig.json or
 pnpm-lock.yaml when present, has a newer LastWriteTimeUtc than dist/main.js. A bridge
 directory without a src/ tree is not an error (the check stays quiet the moment dist
 exists). The caller decides whether to rebuild or to fail with a actionable message.
+<#
+.SYNOPSIS
+Returns a reason string when packages/qoder-acp-bridge/dist is missing or stale (F31),
+or $null when dist/main.js exists and matches its build inputs.
+
+Freshness is decided by scripts/lib/bridge-freshness.mjs when node is available: it
+hashes src/** plus package.json, tsconfig.json and pnpm-lock.yaml with SHA-256 and
+compares the result with dist/.build-inputs (written by the start scripts after a
+rebuild). A missing dist is a problem. A manifest whose hash differs is a problem that
+names the changed input(s). A missing or unusable manifest is the documented legacy
+state and falls back to mtime: any input newer than dist/main.js is stale. Without
+node (or without the helper) the same mtime comparison is used.
+
+The caller decides whether to rebuild or to fail with an actionable message.
 #>
 function Get-BridgeDistProblem {
-    param([Parameter(Mandatory)][string]$BridgeDir)
+    param(
+        [Parameter(Mandatory)][string]$BridgeDir,
+        # Tests inject a bogus command to exercise the documented mtime fallback.
+        [string]$NodeCommand = "node"
+    )
 
     $distMain = Join-Path $BridgeDir "dist/main.js"
     if (-not (Test-Path -LiteralPath $distMain -PathType Leaf)) {
         return "dist/main.js is missing under '$BridgeDir'"
     }
+
+    # 0 = fresh, 1 = problem (reason on stdout), 2 = usage/IO error. Anything the helper
+    # cannot answer keeps the start path working through the legacy mtime comparison.
+    if ($NodeCommand -and (Test-Path -LiteralPath $BridgeFreshnessHelperPath -PathType Leaf) -and
+        (Get-Command $NodeCommand -ErrorAction SilentlyContinue)) {
+        $reason = & $NodeCommand $BridgeFreshnessHelperPath "check" $BridgeDir 2>$null
+        $nodeExit = $LASTEXITCODE
+        if ($nodeExit -eq 0) {
+            return $null
+        }
+        if ($nodeExit -eq 1) {
+            $text = ($reason | Out-String).Trim()
+            if ($text) { return $text }
+            return "the bridge build inputs do not match dist/.build-inputs"
+        }
+    }
+
     $distTime = (Get-Item -LiteralPath $distMain).LastWriteTimeUtc
 
     $newer = @()

@@ -59,6 +59,15 @@ public class Run {
     @Builder.Default
     private long totalTokensUsed = 0;
 
+    /**
+     * Provider-reported input tokens (F9). Nullable on purpose: a core that does
+     * not report usage leaves it unknown; it is never recorded as zero.
+     */
+    private Long inputTokens;
+
+    /** Provider-reported output tokens; nullable for the same reason as {@link #inputTokens}. */
+    private Long outputTokens;
+
     @Builder.Default
     private int iterationCount = 0;
 

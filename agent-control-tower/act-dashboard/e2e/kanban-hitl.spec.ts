@@ -219,7 +219,8 @@ test.describe('kanban HITL board', () => {
     await page.goto('/');
     const reviewCard = page.locator(`[data-col="REVIEW"] [data-card="${askItem.id}"]`);
     await expect(reviewCard).toBeVisible({ timeout: 15_000 });
-    await expect(reviewCard.locator('.pill.warn')).toHaveText('1 asks');
+    // The F24 Review badge is also .pill.warn; scope to the ask badge by text.
+    await expect(reviewCard.locator('.pill.warn', { hasText: 'asks' })).toHaveText('1 asks');
 
     // Clicking the review card opens the Task drawer with the decision zone.
     await reviewCard.click();

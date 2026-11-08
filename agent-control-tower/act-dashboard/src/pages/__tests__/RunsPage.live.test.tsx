@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, act, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RunsPage } from '../RunsPage';
 import { getRunTrajectory } from '../../api/runs';
@@ -175,5 +175,45 @@ describe('RunsPage live trajectory (S3)', () => {
     });
     await act(async () => {});
     expect((getRunTrajectory as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F9 (SDD hardening): qoder runs reported totalTokensUsed 0 because the core
+// never reported usage. The list must show an explicit "not reported" state
+// when the field is absent, and a genuine 0 when the core does report zero.
+// ---------------------------------------------------------------------------
+
+describe('RunsPage token usage (F9)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    runsData = [
+      { ...runningRun('r-null', 'COMPLETED'), totalTokensUsed: null },
+      { ...runningRun('r-zero', 'COMPLETED'), totalTokensUsed: 0 },
+    ];
+  });
+
+  it('renders "not reported" for absent usage and a real 0 for a reported zero', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    const absentRow = (await screen.findByText('r-null')).closest('tr') as HTMLElement;
+    expect(within(absentRow).getByText('not reported')).toBeInTheDocument();
+    expect(within(absentRow).queryByText('0')).not.toBeInTheDocument();
+
+    const zeroRow = screen.getByText('r-zero').closest('tr') as HTMLElement;
+    expect(within(zeroRow).getByText('0')).toBeInTheDocument();
+    expect(within(zeroRow).queryByText('not reported')).not.toBeInTheDocument();
+  });
+
+  it('reports absence in the detail view instead of a zero', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    const absentRow = (await screen.findByText('r-null')).closest('tr') as HTMLElement;
+    fireEvent.click(within(absentRow).getByText('Details'));
+
+    const detail = (await screen.findByText('Tokens Used')).closest('.detail-info-item') as HTMLElement;
+    expect(within(detail).getByText('usage not reported')).toBeInTheDocument();
   });
 });

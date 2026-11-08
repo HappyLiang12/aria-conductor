@@ -1,8 +1,12 @@
 package io.aria.conductor.execution.controller;
 
+import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.test.WebMvcTestBase;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -13,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,8 +41,10 @@ class RunToolCallControllerWebTest extends WebMvcTestBase {
 
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
     private final SessionTrajectoryRepository trajectoryRepository = mock(SessionTrajectoryRepository.class);
+    private final RunRepository runRepository = mock(RunRepository.class);
+    private final RunInputCoordinator runInputs = mock(RunInputCoordinator.class);
     private final MockMvc mvc = mockMvcFor(
-            new RunToolCallController(toolCallRepository, trajectoryRepository));
+            new RunToolCallController(toolCallRepository, trajectoryRepository, runRepository, runInputs));
 
     private void stubSaveEcho() {
         when(trajectoryRepository.save(any(SessionTrajectory.class))).thenAnswer(inv -> {
@@ -48,9 +55,15 @@ class RunToolCallControllerWebTest extends WebMvcTestBase {
         });
     }
 
+    private void stubTerminalRun(UUID runId) {
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).agentId(UUID.randomUUID()).status(RunStatus.COMPLETED).build()));
+    }
+
     @Test
     void injectMessage_appendsEntryAtNextTurnWithGivenRole() throws Exception {
         UUID runId = UUID.randomUUID();
+        stubTerminalRun(runId);
         when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(4);
         stubSaveEcho();
 
@@ -76,6 +89,7 @@ class RunToolCallControllerWebTest extends WebMvcTestBase {
     })
     void injectMessage_missingOrBlankRole_defaultsToUser(String body) throws Exception {
         UUID runId = UUID.randomUUID();
+        stubTerminalRun(runId);
         when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(0);
         stubSaveEcho();
 
@@ -101,5 +115,44 @@ class RunToolCallControllerWebTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.message").value(containsString("content")));
         verify(trajectoryRepository, never()).save(any());
+    }
+
+    /**
+     * F16: a live run that is not parked on an operator ask cannot receive the
+     * message. The endpoint must say so (409 + actionable fields) rather than
+     * silently writing a trajectory row the core will never see.
+     */
+    @Test
+    void injectMessage_runningRunWithoutLiveDeliveryReturns409() throws Exception {
+        UUID runId = UUID.randomUUID();
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).agentId(UUID.randomUUID()).status(RunStatus.RUNNING).build()));
+        org.mockito.Mockito.doThrow(new IllegalStateException(
+                        "Run " + runId + " is not waiting for operator input"))
+                .when(runInputs).submitAnswer(runId, "hint");
+
+        mvc.perform(post("/api/v1/runs/" + runId + "/inject")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("content", "hint"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("LIVE_INJECT_UNAVAILABLE"))
+                .andExpect(jsonPath("$.runStatus").value("RUNNING"))
+                .andExpect(jsonPath("$.message").value(containsString("not waiting")));
+
+        verify(trajectoryRepository, never()).save(any());
+    }
+
+    @Test
+    void injectMessage_terminalRunIsMarkedTrajectoryOnly() throws Exception {
+        UUID runId = UUID.randomUUID();
+        stubTerminalRun(runId);
+        when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(1);
+        stubSaveEcho();
+
+        mvc.perform(post("/api/v1/runs/" + runId + "/inject")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("content", "post-mortem note"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.delivery").value("TRAJECTORY_ONLY"));
     }
 }

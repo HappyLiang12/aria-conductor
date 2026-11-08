@@ -140,9 +140,16 @@ public class KanbanService {
         return repository.save(item);
     }
 
+    /**
+     * One card, enriched exactly like the list rows (F24): the decision surfaces
+     * derive "needs a human" from {@code pendingAskCount}, so a GET that omitted it
+     * made an ask-ful REVIEW card look settled.
+     */
     @Transactional(readOnly = true)
     public KanbanItem get(String id) {
-        return findOrThrow(id);
+        KanbanItem item = findOrThrow(id);
+        enrich(List.of(item));
+        return item;
     }
 
     /**
@@ -151,36 +158,45 @@ public class KanbanService {
     @Transactional(readOnly = true)
     public List<KanbanItem> list(KanbanStatus status) {
         List<KanbanItem> items = status == null ? repository.findAll() : repository.findByStatus(status);
-        if (!items.isEmpty()) {
-            List<Object[]> counts = approvalRepository.countPendingByKanbanItemIds(
-                    items.stream().map(KanbanItem::getId).toList());
-            Map<String, Long> byItem = new HashMap<>();
-            counts.forEach(row -> byItem.put((String) row[0], (Long) row[1]));
-            items.forEach(item -> item.setPendingAskCount(byItem.getOrDefault(item.getId(), 0L).intValue()));
-        }
-        if (!items.isEmpty()) {
-            List<UUID> linkedRunIds = items.stream()
-                    .map(KanbanItem::getLinkedRunId)
-                    .filter(linkedRunId -> linkedRunId != null && !linkedRunId.isBlank())
-                    .map(linkedRunId -> {
-                        try {
-                            return UUID.fromString(linkedRunId);
-                        } catch (IllegalArgumentException e) {
-                            return null; // a corrupt link is history, not an outcome
-                        }
-                    })
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .toList();
-            Map<UUID, RunStatus> statuses = linkedRunIds.isEmpty() ? Map.of()
-                    : runRepository.findAllById(linkedRunIds).stream()
-                            .collect(Collectors.toMap(Run::getId, Run::getStatus));
-            items.forEach(item -> {
-                RunStatus runStatus = item.getLinkedRunId() == null ? null : parseStatusOrNull(statuses, item.getLinkedRunId());
-                item.setRunOutcome(runOutcome(runStatus));
-            });
-        }
+        enrich(items);
         return items;
+    }
+
+    /**
+     * Adds the derived, non-persisted fields every card view reads: the open-ask
+     * count and the linked run's outcome class. Shared by {@link #get(String)} and
+     * {@link #list(KanbanStatus)} so the two wire shapes cannot drift.
+     */
+    private void enrich(List<KanbanItem> items) {
+        if (items.isEmpty()) {
+            return;
+        }
+        List<Object[]> counts = approvalRepository.countPendingByKanbanItemIds(
+                items.stream().map(KanbanItem::getId).toList());
+        Map<String, Long> byItem = new HashMap<>();
+        counts.forEach(row -> byItem.put((String) row[0], (Long) row[1]));
+        items.forEach(item -> item.setPendingAskCount(byItem.getOrDefault(item.getId(), 0L).intValue()));
+
+        List<UUID> linkedRunIds = items.stream()
+                .map(KanbanItem::getLinkedRunId)
+                .filter(linkedRunId -> linkedRunId != null && !linkedRunId.isBlank())
+                .map(linkedRunId -> {
+                    try {
+                        return UUID.fromString(linkedRunId);
+                    } catch (IllegalArgumentException e) {
+                        return null; // a corrupt link is history, not an outcome
+                    }
+                })
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<UUID, RunStatus> statuses = linkedRunIds.isEmpty() ? Map.of()
+                : runRepository.findAllById(linkedRunIds).stream()
+                        .collect(Collectors.toMap(Run::getId, Run::getStatus));
+        items.forEach(item -> {
+            RunStatus runStatus = item.getLinkedRunId() == null ? null : parseStatusOrNull(statuses, item.getLinkedRunId());
+            item.setRunOutcome(runOutcome(runStatus));
+        });
     }
 
     /** The four display classes of a linked run; UNKNOWN when there is no resolvable run. */

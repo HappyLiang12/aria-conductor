@@ -351,6 +351,46 @@ function clarificationAsk(overrides: Partial<Approval> = {}): Approval {
   } as Approval;
 }
 
+// ---------------------------------------------------------------------------
+// F7 (SDD hardening): the bridge/api lanes add a nullable `toolName` and
+// `arguments` to an approval. The drawer's decision panel must render both when
+// present (arguments pretty-printed and redacted) and claim nothing when absent.
+// ---------------------------------------------------------------------------
+
+describe('DecisionPanel approval tool details (F7)', () => {
+  it('renders the tool name and the formatted, redacted arguments when present', () => {
+    renderPanel(
+      <DecisionPanel
+        item={item}
+        pendingAsks={[
+          {
+            ...gateAsk(),
+            toolName: 'mcp__aria__instantiate_workflow_template',
+            arguments: JSON.stringify({
+              templateId: 'development-workflow',
+              token: 'ghp_live_secret',
+            }),
+          } as Approval,
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('tool mcp__aria__instantiate_workflow_template')).toBeInTheDocument();
+    const args = screen.getByTestId('approval-arguments');
+    expect(args.textContent).toContain('"templateId": "development-workflow"');
+    expect(args.textContent).toContain('"token": "***"');
+    expect(args.textContent).not.toContain('ghp_live_secret');
+  });
+
+  it('renders no tool-details block for an approval without them (null-safe)', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk()]} />);
+
+    expect(screen.queryByTestId('approval-arguments')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^tool /)).not.toBeInTheDocument();
+    expect(screen.queryByText('Arguments (redacted)')).not.toBeInTheDocument();
+  });
+});
+
 describe('DecisionPanel CLARIFICATION asks (waiting input)', () => {
   it('renders Answer & continue + Finalize instead of Approve/Deny', () => {
     renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);

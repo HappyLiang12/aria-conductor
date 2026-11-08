@@ -5,6 +5,7 @@ import { answerAsk, approveApproval, finalizeRun, rejectApproval } from '../api/
 import { applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import { presentError, type PresentedError } from '../api/errorPresentation';
 import ErrorNotice from './ErrorNotice';
+import { ApprovalToolDetails } from './ApprovalToolDetails';
 import { formatTimestamp } from '../utils/formatTime';
 import {
   NativePermissionFacts,
@@ -128,6 +129,10 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
             : {ask.content?.slice(0, 160)}
           </div>
           <AskMeta ask={ask} permission={nativePermissionOf(ask)} />
+          {/* F7: toolName + redacted arguments when the api/bridge payload
+              carries them; a native ask already names its tool in the facts
+              row above, so only the arguments are added for it. */}
+          <ApprovalToolDetails ask={ask} includeToolName={nativePermissionOf(ask) === null} />
           {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
           <textarea
             className="dod-textarea"

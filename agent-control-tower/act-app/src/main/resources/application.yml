@@ -97,6 +97,13 @@ aria:
   # `aria.cores.opencode.model`, `aria.cores.opencode.version`) keep their Java
   # defaults.
   cores:
+    # Extra tool directories appended to the host PATH a HOST core's shell resolves
+    # tools through (comma-separated; either the native `C:\...` or the MSYS
+    # `/c/...` spelling). The run launcher clears the process environment, so a
+    # tool that is only on the operator's ambient PATH (GitHub CLI, a non-standard
+    # JDK/Maven, jq) is absent in the core without this value. The host PATH itself
+    # is always passed through; this list is for what is not on it.
+    toolchain-path: ${ARIA_CORES_TOOLCHAIN_PATH:}
     qoder:
       # Reviewed model pin of a qoder run. `efficient` is the operator-set default
       # (the pinned model of the Qoder acceptance); a paid model must be set here

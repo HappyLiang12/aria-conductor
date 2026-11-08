@@ -28,6 +28,7 @@ import { createBridgeServer } from '../src/server.js';
 const MOCK_CLI = fileURLToPath(
   new URL('../../../agent-control-tower/act-app/src/test/resources/e2e/peers/mock-qoder.mjs', import.meta.url),
 );
+const SCRIPTED_PEER = fileURLToPath(new URL('./fixtures/scripted-peer.mjs', import.meta.url));
 const MAIN_JS = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 const TSC_JS = fileURLToPath(new URL('../node_modules/typescript/lib/tsc.js', import.meta.url));
 const CONTROL_SECRET_HEADER = 'x-bridge-control-secret';
@@ -117,6 +118,10 @@ function startBridge(config: {
   extraArgs?: string[];
   credential?: string;
   worker?: { name?: string; url: string; token: string };
+  /** A scripted peer replaces the recorded mock CLI (same ACP framing). */
+  peerScript?: string;
+  /** Extra variables for the *bridge* process environment. */
+  env?: Record<string, string>;
 }): BridgeHandle {
   const root = mkdtempSync(join(tmpdir(), 'aria-bridge-'));
   roots.push(root);
@@ -127,6 +132,10 @@ function startBridge(config: {
   const secretFile = join(root, 'control.secret');
   writeFileSync(secretFile, `${secret}\n`, 'utf8');
   const peerToken = `peer-token-${randomBytes(10).toString('hex')}`;
+  const peerArgs =
+    config.peerScript !== undefined
+      ? [config.peerScript]
+      : [MOCK_CLI, '--scenario', config.scenario, '--workspace', workspace];
   const args = [
     '--run-id',
     runId,
@@ -136,16 +145,7 @@ function startBridge(config: {
     config.model ?? 'efficient',
     '--cli',
     process.execPath,
-    '--cli-arg',
-    MOCK_CLI,
-    '--cli-arg',
-    '--scenario',
-    '--cli-arg',
-    config.scenario,
-    '--cli-arg',
-    '--workspace',
-    '--cli-arg',
-    workspace,
+    ...peerArgs.flatMap((arg) => ['--cli-arg', arg]),
     '--control-secret-file',
     secretFile,
     '--child-env',
@@ -174,7 +174,7 @@ function startBridge(config: {
     // The bridge process itself is given the secret in its environment on
     // purpose: it must only ever read it from --control-secret-file and must
     // never forward it to the child.
-    env: { ...process.env, QODER_BRIDGE_CONTROL_SECRET: secret },
+    env: { ...process.env, QODER_BRIDGE_CONTROL_SECRET: secret, ...(config.env ?? {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -1691,4 +1691,186 @@ test(
     });
   },
   30000,
+);
+
+test(
+  'permission request payload: requestId, tool name, redacted input arguments and the full option list',
+  async () => {
+    const bridge = startBridge({ scenario: 'scripted', peerScript: SCRIPTED_PEER });
+    await bridge.ready();
+    await bridge.api('POST', '/prompt', { text: 'Inspect issue 81 with gh' });
+
+    const permission = await bridge.waitForEvent((event) => event.type === 'permission.request');
+    expect(String(permission.toolCallId)).toMatch(/^call_/);
+    // F7 bound: the permission input is capped like a tool event, and the frame
+    // says whether the stored copy is complete.
+    expect(permission.inputTruncated).toBe(false);
+    expect(permission.inputBytes).toBeGreaterThan(0);
+    // The approval payload is argument-aware: the tool name, the raw arguments
+    // (credential-shaped keys replaced) and every offered native option.
+    expect(
+      pick(permission, [
+        'type',
+        'requestId',
+        'sessionId',
+        'toolName',
+        'toolKind',
+        'toolCallTitle',
+        'input',
+        'argumentsDigest',
+        'options',
+      ]),
+    ).toEqual({
+      type: 'permission.request',
+      requestId: 0,
+      sessionId: String(bridge.events().find((event) => event.type === 'bridge.ready')?.sessionId),
+      toolName: 'Bash',
+      toolKind: 'execute',
+      toolCallTitle: 'gh issue view 81 --json title,body',
+      input: {
+        command: 'gh issue view 81 --json title,body',
+        api_key: REDACTED,
+        headers: { Authorization: REDACTED },
+        note: 'visible',
+      },
+      argumentsDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      // The allow-for-session option is surfaced unchanged, never invented.
+      options: [
+        { optionId: 'proceed_always', kind: 'allow_always', name: 'Allow for this session' },
+        { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
+        { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+      ],
+    });
+
+    // The decision still selects the offered allow-once option and the run
+    // continues; the approval payload never carries the raw credential values.
+    const allowed = await bridge.api('POST', '/permission-response', { requestId: 0, choice: 'ALLOW_ONCE' });
+    expect(allowed.json.optionId).toBe('proceed_once');
+    const result = await bridge.waitForEvent((event) => event.type === 'prompt.result');
+    expect(result.stopReason).toBe('end_turn');
+    const surfaced = `${bridge.stdoutLines.join('\n')}\n${bridge.stderrText()}\n${JSON.stringify(bridge.events())}`;
+    expect(surfaced).not.toContain('sk-scripted-do-not-leak');
+    expect(surfaced).not.toContain('ghp-scripted-do-not-leak');
+  },
+  30000,
+);
+
+test(
+  'tool call and result events: id, name, input, result text, isError and explicit truncation',
+  async () => {
+    const bridge = startBridge({ scenario: 'scripted', peerScript: SCRIPTED_PEER });
+    await bridge.ready();
+    await bridge.api('POST', '/prompt', { text: 'Inspect issue 81 with gh' });
+    const permission = await bridge.waitForEvent((event) => event.type === 'permission.request');
+    await bridge.api('POST', '/permission-response', { requestId: permission.requestId, choice: 'ALLOW_ONCE' });
+    await bridge.waitForEvent((event) => event.type === 'prompt.result');
+
+    const calls = bridge.events().filter((event) => event.type === 'tool.call');
+    expect(calls).toHaveLength(2);
+    const firstCall = calls[0] as BridgeEvent;
+    expect(
+      pick(firstCall, ['type', 'toolCallId', 'toolName', 'kind', 'title', 'input', 'inputTruncated']),
+    ).toEqual({
+      type: 'tool.call',
+      toolCallId: 'call_scripted_permission_0001',
+      toolName: 'Bash',
+      kind: 'execute',
+      title: 'gh issue view 81 --json title,body',
+      input: {
+        command: 'gh issue view 81 --json title,body',
+        api_key: REDACTED,
+        headers: { Authorization: REDACTED },
+        note: 'visible',
+      },
+      inputTruncated: false,
+    });
+    expect(firstCall.inputBytes).toBe(
+      Buffer.byteLength(
+        JSON.stringify({
+          command: 'gh issue view 81 --json title,body',
+          api_key: REDACTED,
+          headers: { Authorization: REDACTED },
+          note: 'visible',
+        }),
+        'utf8',
+      ),
+    );
+
+    // The oversized second call is capped and marked, not dropped.
+    const secondCall = calls[1] as BridgeEvent;
+    const expectedLargeBytes = Buffer.byteLength(
+      JSON.stringify({ command: `deploy ${'y'.repeat(20000)}` }),
+      'utf8',
+    );
+    expect(secondCall.toolCallId).toBe('call_scripted_large_0002');
+    expect(secondCall.toolName).toBe('Bash');
+    expect(secondCall.inputTruncated).toBe(true);
+    expect(secondCall.inputBytes).toBe(expectedLargeBytes);
+    expect(typeof secondCall.input).toBe('string');
+    expect(String(secondCall.input).endsWith('[truncated]')).toBe(true);
+    expect(Buffer.byteLength(String(secondCall.input), 'utf8')).toBeLessThanOrEqual(8192);
+
+    const results = bridge.events().filter((event) => event.type === 'tool.result');
+    expect(
+      results.map((event) =>
+        pick(event, ['type', 'toolCallId', 'toolName', 'status', 'isError', 'result', 'resultTruncated']),
+      ),
+    ).toEqual([
+      {
+        type: 'tool.result',
+        toolCallId: 'call_scripted_permission_0001',
+        toolName: 'Bash',
+        status: 'completed',
+        isError: false,
+        result: 'issue #81 body',
+        resultTruncated: false,
+      },
+      {
+        type: 'tool.result',
+        toolCallId: 'call_scripted_large_0002',
+        toolName: 'Bash',
+        status: 'failed',
+        isError: true,
+        result: 'exit 2: deploy failed',
+        resultTruncated: false,
+      },
+    ]);
+  },
+  30000,
+);
+
+test(
+  'usage events: provider token counts are emitted when the frame carries them and never invented',
+  async () => {
+    const reported = startBridge({ scenario: 'reported-usage' });
+    await reported.ready();
+    await reported.api('POST', '/prompt', { text: 'Report the fixture usage' });
+    const result = await reported.waitForEvent((event) => event.type === 'prompt.result');
+    // prompt.result keeps its recorded usage payload (compatibility).
+    expect(pick(result, ['stopReason', 'usage'])).toEqual({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
+    });
+    const usage = await reported.waitForEvent((event) => event.type === 'usage');
+    expect(pick(usage, ['type', 'promptId', 'inputTokens', 'outputTokens', 'totalTokens', 'source'])).toEqual({
+      type: 'usage',
+      promptId: 4,
+      inputTokens: 12,
+      outputTokens: 7,
+      totalTokens: 19,
+      source: 'usage+quota',
+    });
+    // The usage event precedes the terminal prompt.result so a consumer that
+    // stops at prompt.result still observed it.
+    expect(usage.seq).toBeLessThan(result.seq);
+    expect(reported.events().filter((event) => event.type === 'usage')).toHaveLength(1);
+
+    const unknown = startBridge({ scenario: 'unknown-usage' });
+    await unknown.ready();
+    await unknown.api('POST', '/prompt', { text: 'Say nothing about usage' });
+    const unknownResult = await unknown.waitForEvent((event) => event.type === 'prompt.result');
+    expect(unknownResult.usage).toBeNull();
+    expect(unknown.events().filter((event) => event.type === 'usage')).toHaveLength(0);
+  },
+  40000,
 );

@@ -12,6 +12,7 @@ import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.security.CredentialRedactor;
 import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -196,8 +197,13 @@ public class ApprovalController {
     }
 
     private ApprovalDetail toDetail(Approval a, ToolCall tc) {
-        String toolName = tc != null ? tc.getToolName() : null;
-        String riskTier = toolName != null ? toolRiskResolver.resolve(toolName).name() : null;
+        // Same precedence as ApprovalQueryService: the linked tool call enriches a
+        // legacy gate approval, while an ACP ask carries its own payload (F7).
+        String toolName = tc != null ? tc.getToolName() : a.getToolName();
+        String arguments = CredentialRedactor.redact(tc != null ? tc.getArguments() : a.getArguments());
+        String riskTier = toolName != null
+                ? toolRiskResolver.resolve(toolName).name()
+                : a.getRiskTier();
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -205,7 +211,7 @@ public class ApprovalController {
                 a.getContent(),
                 a.getContentKind() != null ? a.getContentKind().name() : null,
                 a.getKnowledgeItemId(),
-                toolName, tc != null ? tc.getArguments() : null, riskTier,
+                toolName, arguments, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
                 a.getSource() == null ? null : a.getSource().name(),

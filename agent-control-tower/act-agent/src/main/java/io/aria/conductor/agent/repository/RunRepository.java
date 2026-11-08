@@ -92,7 +92,11 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE Run r SET r.status = :status, r.iterationCount = :iterationCount, "
-            + "r.totalTokensUsed = :totalTokensUsed, r.completedAt = :completedAt, "
+            // F9: a zero the engine carries means "it observed none", not "overwrite
+            // the provider usage the bridge already recorded". A positive engine total
+            // still wins; an observed provider total survives an engine zero.
+            + "r.totalTokensUsed = CASE WHEN :totalTokensUsed > 0 THEN :totalTokensUsed "
+            + "ELSE r.totalTokensUsed END, r.completedAt = :completedAt, "
             + "r.finalOutput = COALESCE(:finalOutput, r.finalOutput), "
             + "r.errorMessage = COALESCE(:errorMessage, r.errorMessage), "
             + "r.errorCode = COALESCE(:errorCode, r.errorCode), "
@@ -110,6 +114,29 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
                               @Param("errorSurface") String errorSurface,
                               @Param("updatedAt") Instant updatedAt,
                               @Param("terminal") List<RunStatus> terminal);
+
+    /**
+     * F9: writes provider usage without touching lifecycle state. A load-and-save of
+     * the whole entity would flush {@code status}/{@code completedAt} too, so an
+     * operator cancel committing between the read and the flush could be reverted
+     * to RUNNING; this single statement only writes the usage columns, and only
+     * while the run is still non-terminal.
+     *
+     * @return 1 when the usage was written, 0 when the run is already terminal or
+     *         missing (late usage is dropped, never resurrected)
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE Run r SET r.inputTokens = COALESCE(:inputTokens, r.inputTokens), "
+            + "r.outputTokens = COALESCE(:outputTokens, r.outputTokens), "
+            + "r.totalTokensUsed = :totalTokens, r.updatedAt = :updatedAt "
+            + "WHERE r.id = :id AND r.status NOT IN :terminal")
+    int updateUsageIfNotTerminal(@Param("id") UUID id,
+                                 @Param("inputTokens") Long inputTokens,
+                                 @Param("outputTokens") Long outputTokens,
+                                 @Param("totalTokens") long totalTokens,
+                                 @Param("updatedAt") Instant updatedAt,
+                                 @Param("terminal") List<RunStatus> terminal);
 
     /**
      * Persists the resolved iteration cap only while the run is still startable, so a

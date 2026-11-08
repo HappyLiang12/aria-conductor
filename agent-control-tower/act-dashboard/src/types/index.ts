@@ -64,7 +64,11 @@ export interface Run {
   status: RunStatus;
   promptSeed: string;
   maxIterations: number;
-  totalTokensUsed: number;
+  /**
+   * Provider-reported token total. Null when the core does not report usage
+   * (F9): the UI renders an explicit "not reported" state instead of a zero.
+   */
+  totalTokensUsed: number | null;
   iterationCount: number;
   errorMessage: string | null;
   /** Stable failure identity and repair surface served by the backend. */

@@ -33,7 +33,9 @@ import io.aria.conductor.execution.runtime.host.RunCoreLog;
 import io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackend;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLaunchRejectedException;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.telemetry.CoreEventTelemetry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.nio.file.Path;
@@ -85,8 +87,11 @@ import java.util.function.Consumer;
  * does not own has no session to receive it; it is reported and dropped, never
  * routed to another run.
  *
- * <p>The coordinator is constructed by the runtime cutover wiring (Task 18); it
- * takes no Spring annotation, so tests and callers use one explicit constructor.
+ * <p>The coordinator is constructed by the runtime cutover wiring (Task 18); tests and callers
+ * use one explicit constructor. Its one optional collaborator -- the bridge event telemetry
+ * sink ({@link #attachTelemetry}) -- is injected by the application context into the
+ * {@code @Bean}-constructed instance, so a wiring without that bean (unit tests) simply
+ * records no telemetry.
  */
 @Slf4j
 public class CoreExecutionService implements RuntimeActivity, PermissionReplySink {
@@ -159,6 +164,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * registry record.
      */
     private final RunStatusReader runStatusReader;
+
+    /**
+     * The bridge event telemetry sink (F17/F9), or null when this wiring serves no
+     * persistence. Volatile because it is injected by the application context after
+     * construction, while the event loop already reads it from a core session thread.
+     */
+    private volatile CoreEventTelemetry telemetry;
 
     /**
      * One monitor per run around the binding row's read-modify-write of the
@@ -355,6 +367,28 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.trajectories = trajectories;
         this.adapters = adapters;
         this.runStatusReader = runStatusReader;
+    }
+
+    /**
+     * Attaches the bridge event telemetry sink that persists {@code tool.call} /
+     * {@code tool.result} / {@code usage} (F17/F9). Optional on purpose: a wiring
+     * without persistence (unit tests, a trim deployment) records nothing, and the
+     * {@code required = false} injection into the {@code @Bean}-constructed
+     * coordinator keeps that wiring valid.
+     *
+     * <p>Every event is recorded inside the run's existing event loop
+     * ({@link #handleEvent}), never a second reader of the core stream, so a
+     * re-delivered bridge event is the only duplicate the persistence layer has to
+     * absorb -- and its deterministic ids make that an update of the same row.
+     */
+    @Autowired(required = false)
+    public void attachTelemetry(CoreEventTelemetry telemetry) {
+        this.telemetry = telemetry;
+    }
+
+    /** The attached telemetry sink, or null when this wiring serves none (wiring seam check). */
+    CoreEventTelemetry telemetry() {
+        return telemetry;
     }
 
     // ------------------------------------------------------------------ execute
@@ -1366,12 +1400,26 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         }
     }
 
+    /**
+     * The one consumer of this run's core events. Progress keeps its mapping
+     * ({@link #publishProgress}); a native permission ask keeps its owner
+     * ({@link #registerAsk}); the bridge's derived telemetry events
+     * ({@code tool.call} / {@code tool.result} / {@code usage}) are handed to the
+     * attached {@link CoreEventTelemetry}. The three sets are disjoint -- the
+     * bridge's {@code permission.request} names the same tool call as its
+     * {@code tool.call}, and only the latter may create the audit row -- so one
+     * delivered event is recorded at most once, and the adapter (never this loop)
+     * owns "malformed telemetry is logged and dropped".
+     */
     private void handleEvent(RunRuntimeRegistry.RunRuntime runtime, CoreEvent event) {
         runtimes.forward(runtime.spec().runId(), event);
-        if ("opencode.progress".equals(event.type())) {
+        String type = event.type() == null ? "" : event.type();
+        if ("opencode.progress".equals(type)) {
             publishProgress(runtime, event);
-        } else if ("permission.request".equals(event.type())) {
+        } else if ("permission.request".equals(type)) {
             registerAsk(runtime, event);
+        } else if (telemetry != null && CoreEventTelemetry.handles(type)) {
+            telemetry.record(runtime.spec().runId(), event);
         }
     }
 

@@ -157,6 +157,11 @@ public class RunKanbanAutoCreator {
         }
     }
 
+    /**
+     * F24 ordering: the card move is queued before the workflow chainer's settle
+     * job (which runs at order 100), so the settle always sees the card in REVIEW.
+     */
+    @org.springframework.core.annotation.Order(0)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRunCompleted(RunCompletedEvent event) {
         submitMirror(() -> {

@@ -51,7 +51,10 @@ class AriaSynthesisPromptTest {
     void setUp() {
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
                 intentClassifier,
-                knowledgeService, trajectoryRepository, toolCallRepository);
+                knowledgeService, trajectoryRepository, toolCallRepository,
+                new AriaSyncRunWaiter(
+                        org.mockito.Mockito.mock(io.aria.conductor.aria.repository.AriaRunStateRepository.class),
+                        AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L));
     }
 
     /** The template's fixed header and tail, verbatim from the plan. */

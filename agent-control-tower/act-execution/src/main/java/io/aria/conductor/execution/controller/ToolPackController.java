@@ -71,7 +71,7 @@ public class ToolPackController {
     }
 
     @PostMapping("/{id}/credentials")
-    public ResponseEntity<Map<String, String>> storeCredential(
+    public ResponseEntity<Map<String, Object>> storeCredential(
             @PathVariable String id,
             @RequestBody Map<String, String> body) {
         String credKey = body.get("key");
@@ -81,6 +81,11 @@ public class ToolPackController {
             return ResponseEntity.badRequest().body(Map.of("error", "key and value are required"));
         }
         credentialService.store(id, agentId, credKey, value);
-        return ResponseEntity.ok(Map.of("status", "stored", "key", credKey));
+        // F8: credentials are resolved per request (GitTokenSource), so a stored
+        // value takes effect on the next operation; no restart is required.
+        return ResponseEntity.ok(Map.of(
+                "status", "stored",
+                "key", credKey,
+                "restartRequired", false));
     }
 }

@@ -459,3 +459,52 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(screen.getByTestId('task-open').textContent).toBe('false');
   });
 });
+
+// ---------------------------------------------------------------------------
+// F9 (SDD hardening): the workspace's run rail must not paint an unreported
+// usage as zero tokens.
+// ---------------------------------------------------------------------------
+
+describe('ReviewWorkspace linked run usage (F9)', () => {
+  it('renders "usage not reported" when the run carries no token count', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ totalTokensUsed: null }));
+    renderWorkspace();
+    await openReview();
+
+    const runSection = (await screen.findByText('Run Result')).closest('.run-result') as HTMLElement;
+    expect(await within(runSection).findByText('usage not reported')).toBeInTheDocument();
+    expect(within(runSection).queryByText(/^0 tokens$/)).not.toBeInTheDocument();
+  });
+
+  it('still shows a reported zero as a real count', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ totalTokensUsed: 0 }));
+    renderWorkspace();
+    await openReview();
+
+    const runSection = (await screen.findByText('Run Result')).closest('.run-result') as HTMLElement;
+    expect(await within(runSection).findByText('0 tokens')).toBeInTheDocument();
+    expect(within(runSection).queryByText('usage not reported')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F24 (SDD hardening): the workspace's meta pill badges REVIEW only while an
+// ask is open.
+// ---------------------------------------------------------------------------
+
+describe('ReviewWorkspace REVIEW badge vs open asks (F24)', () => {
+  it('does not badge REVIEW for a finished card without open asks', async () => {
+    mockedGetKanbanItem.mockResolvedValue(
+      mkItem({ status: 'REVIEW', pendingAskCount: 0, runOutcome: 'COMPLETED' }),
+    );
+    renderWorkspace();
+    await openReview();
+
+    expect(await screen.findByText('Awaiting sign-off')).toBeInTheDocument();
+    expect(screen.queryByText('REVIEW')).not.toBeInTheDocument();
+    // The run outcome still describes the card.
+    expect(await screen.findByText('Run completed — quick decision')).toBeInTheDocument();
+  });
+});

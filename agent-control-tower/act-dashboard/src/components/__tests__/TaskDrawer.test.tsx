@@ -602,6 +602,70 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// F9 (SDD hardening): a core that reports no usage must not read as zero
+// tokens. Absent usage renders the explicit "not reported" state; a genuine 0
+// still shows as 0.
+// ---------------------------------------------------------------------------
+
+describe('TaskDrawer linked run usage (F9)', () => {
+  it('renders "usage not reported" when the run carries no token count', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ totalTokensUsed: null }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('Run Result')).toBeInTheDocument();
+    const runSection = document.querySelector('.run-result') as HTMLElement;
+    expect(await within(runSection).findByText('COMPLETED')).toBeInTheDocument();
+    expect(within(runSection).getByText('usage not reported')).toBeInTheDocument();
+    expect(within(runSection).queryByText(/^0 tokens$/)).not.toBeInTheDocument();
+  });
+
+  it('still shows a reported zero as a real count', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ totalTokensUsed: 0 }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    const runSection = (await screen.findByText('Run Result')).closest('.run-result') as HTMLElement;
+    expect(await within(runSection).findByText('0 tokens')).toBeInTheDocument();
+    expect(within(runSection).queryByText('usage not reported')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F24 (SDD hardening): a REVIEW card with no open ask is not waiting on a
+// human; badge Review only while pendingAskCount > 0.
+// ---------------------------------------------------------------------------
+
+describe('TaskDrawer REVIEW badge vs open asks (F24)', () => {
+  it('does not badge Review for a finished ask-less card, and names the sign-off state', async () => {
+    mockedGetKanbanItem.mockResolvedValue(
+      mkItem({ status: 'REVIEW', pendingAskCount: 0, runOutcome: 'COMPLETED' }),
+    );
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+    expect(screen.queryByText('Review')).not.toBeInTheDocument();
+    expect(screen.getByText('Awaiting sign-off')).toBeInTheDocument();
+  });
+
+  it('keeps the Review badge for a card with an open ask', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW', pendingAskCount: 1 }));
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
+    ]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    expect(screen.getByText('Review')).toHaveClass('pill', 'warn');
+    expect(screen.queryByText('Awaiting sign-off')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 7: opening moves focus to the card heading, closing returns it to the
 // opener, and Escape inside an editable draft never closes the drawer.
 // ---------------------------------------------------------------------------

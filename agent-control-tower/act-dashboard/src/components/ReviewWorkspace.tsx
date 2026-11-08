@@ -8,6 +8,8 @@ import { DecisionPanel, ShortApprovalView, runOutcomeFromStatus } from './Review
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { RunErrorNotice } from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
+import { tokenUsageText } from '../utils/tokenUsage';
+import { reviewNeedsHuman } from '../utils/reviewState';
 import type { KanbanItem } from '../types';
 
 /**
@@ -224,7 +226,13 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
       <div className="rw-body">
         <div className="rf-spec">
           <div className="rf-meta">
-            <span className="pill">{item.status}</span>
+            {/* F24: REVIEW badges an open ask only; a finished card parked here
+                is awaiting sign-off (the run outcome chip carries the result). */}
+            <span className={reviewNeedsHuman(item) ? 'pill warn' : 'pill'}>
+              {item.status === 'REVIEW' && !reviewNeedsHuman(item)
+                ? 'Awaiting sign-off'
+                : item.status}
+            </span>
             <span className={item.priority === 'CRITICAL' || item.priority === 'HIGH' ? 'pill warn' : 'pill'}>
               {item.priority}
             </span>
@@ -253,7 +261,7 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
                     <span className="pill">{linkedRun.status}</span>
                     <span className="owner cell-mono">Iter {linkedRun.iterationCount}</span>
                     <span className="owner cell-mono">
-                      {linkedRun.totalTokensUsed.toLocaleString()} tokens
+                      {tokenUsageText(linkedRun.totalTokensUsed)}
                     </span>
                     <span className="owner cell-mono">
                       {linkedRun.completedAt

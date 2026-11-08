@@ -28,4 +28,17 @@ public class AriaChatResponse {
     private String intent;
     private List<AriaAction> actionsTaken;
     private Instant timestamp;
+
+    /**
+     * Observed run status at the moment this reply was produced (F2). Present so
+     * a client can tell a completed turn from a still-running one instead of
+     * parsing the message. Additive: clients that ignore it keep working.
+     */
+    private String status;
+
+    /** Stable failure identity for FAILED/ABORTED runs (null otherwise). */
+    private String errorCode;
+
+    /** Human-readable failure reason for FAILED/ABORTED runs (null otherwise). */
+    private String errorMessage;
 }

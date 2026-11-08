@@ -159,7 +159,10 @@ public class KanbanReviewCardListener {
         if (permission.isPresent()) {
             title = "Review: tool call - " + permission.get().getToolName()
                     + " (run " + approval.getRunId().toString().substring(0, 8) + ")";
-            description = argumentExcerpt(permission.get().getArgumentsJson());
+            // F7: the card stores the whole (already redacted and bounded) argument
+            // document; the old 200-character excerpt cut the tool name out of the
+            // very payload the reviewer needed. The card face truncates for display.
+            description = permission.get().getArgumentsJson();
         } else {
             title = "Review: " + (approval.getApprovalType() != null
                     ? approval.getApprovalType().name().toLowerCase().replace('_', ' ')
@@ -221,9 +224,4 @@ public class KanbanReviewCardListener {
         }
     }
 
-    /** Card-face cap on the arguments document; a null document stays null. */
-    private static String argumentExcerpt(String arguments) {
-        if (arguments == null) return null;
-        return arguments.length() > 200 ? arguments.substring(0, 200) + "..." : arguments;
-    }
 }

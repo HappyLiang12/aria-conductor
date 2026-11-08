@@ -100,6 +100,37 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$[1].riskTier").isEmpty());
     }
 
+    /**
+     * F7: an ACP permission ask has no ToolCall row. The approval itself now
+     * carries the tool identity, arguments and risk tier, and the API must
+     * surface them; credential-shaped values are redacted even if a row was
+     * stored before the write-side redaction existed.
+     */
+    @Test
+    void listApprovals_exposesStoredToolPayloadForAcpAsksWithoutAToolCall() throws Exception {
+        String tool = "mcp__aria-conductor__instantiate_workflow_template";
+        String arguments = "{\"issueRef\":\"#81\",\"token\":\"ghp_abcdefghijklmnopqrstuvwxyz012345\"}";
+        Approval acpAsk = anApproval().withReason("native permission ask").build();
+        acpAsk.setToolName(tool);
+        acpAsk.setArguments(arguments);
+        acpAsk.setRiskTier("PUSH");
+
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(acpAsk)));
+        when(toolCallRepository.findAllById(List.of())).thenReturn(List.of());
+        when(toolRiskResolver.resolve(tool)).thenReturn(RiskTier.PUSH);
+
+        mvc.perform(get("/api/v1/approvals"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].toolName").value(tool))
+                .andExpect(jsonPath("$[0].arguments")
+                        .value(org.hamcrest.Matchers.containsString("[REDACTED]")))
+                .andExpect(jsonPath("$[0].arguments")
+                        .value(org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("ghp_abcdefghijklmnopqrstuvwxyz012345"))))
+                .andExpect(jsonPath("$[0].riskTier").value("PUSH"));
+    }
+
     @Test
     void listApprovals_batchLoadsDistinctToolCallIds_avoidingNPlusOne() throws Exception {
         UUID sharedToolCallId = UUID.randomUUID();

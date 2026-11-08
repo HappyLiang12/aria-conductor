@@ -56,7 +56,13 @@ public class CoreCredentialService {
                         "Qoder runtime credential is not configured (" + credentialRef + ")."
                                 + " Save a Qoder personal access token in Configure > LLM Providers"
                                 + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
-                                + " then re-dispatch the run.",
+                                + " then re-dispatch the run."
+                                // F1: a logged-in qoder CLI does not provision the platform,
+                                // and the operator needs to be told that once instead of
+                                // re-reading the hint while the run keeps failing.
+                                + " A qoder CLI login on this machine is not adopted automatically: the"
+                                + " platform sends the saved token itself, so save it once even when the CLI"
+                                + " already works here.",
                         "RUNTIME_CREDENTIAL_NOT_CONFIGURED", ErrorSurface.LLM_PROVIDERS));
         return new SecretBundle(credentialRef, Map.of(row.getEnvironmentVariable(), row.getValue()));
     }

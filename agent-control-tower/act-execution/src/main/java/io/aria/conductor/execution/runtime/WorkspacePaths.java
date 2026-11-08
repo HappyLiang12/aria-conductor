@@ -27,7 +27,82 @@ public final class WorkspacePaths {
      */
     private static final ReentrantLock COMMON_GIT_LOCK = new ReentrantLock();
 
+    /** A Windows-style {@code %NAME%} token (F21). */
+    private static final java.util.regex.Pattern PERCENT_TOKEN =
+            java.util.regex.Pattern.compile("%([^%\\s]+)%");
+
     private WorkspacePaths() {
+    }
+
+    // ----------------------------------------------------------- configured roots (F21)
+
+    /**
+     * A configured workspace root as an absolute normalized path, with Windows
+     * {@code %NAME%} tokens expanded from the environment (F21: a QA scratch gained
+     * a literal {@code %SystemDrive%} directory because an unexpanded token was
+     * used as a path segment).
+     *
+     * <p>A token that names no environment variable is <em>refused</em> and names
+     * the variable and the configuration property: taking it literally creates a
+     * directory with an impossible name that nobody owns, nobody cleans up, and
+     * that no operator can find. The lookup is case-insensitive, like the ambient
+     * lookup on Windows ({@code %SYSTEMDRIVE%} and {@code %SystemDrive%} are the
+     * same variable). A blank value is refused too: it would silently resolve to
+     * the process working directory.
+     *
+     * @param configured the configured value (property or its environment override)
+     * @param property the operator-facing property name, quoted in a refusal
+     */
+    public static Path configuredRoot(String configured, String property) {
+        return configuredRoot(configured, property, System.getenv());
+    }
+
+    /** The expansion with the environment as an explicit input (test seam). */
+    static Path configuredRoot(String configured, String property, java.util.Map<String, String> environment) {
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalArgumentException(property + " must not be blank: a blank run-owned root would"
+                    + " silently resolve to the process working directory");
+        }
+        java.util.regex.Matcher matcher = PERCENT_TOKEN.matcher(configured);
+        StringBuilder expanded = new StringBuilder();
+        java.util.List<String> unknown = new java.util.ArrayList<>();
+        int last = 0;
+        while (matcher.find()) {
+            expanded.append(configured, last, matcher.start());
+            String name = matcher.group(1);
+            String value = environmentValue(environment, name);
+            if (value == null) {
+                unknown.add(name);
+                expanded.append(matcher.group());
+            } else {
+                expanded.append(value);
+            }
+            last = matcher.end();
+        }
+        expanded.append(configured.substring(last));
+        if (!unknown.isEmpty()) {
+            throw new IllegalStateException(property + " carries an unexpanded Windows variable token: "
+                    + unknown + ". Set the variable in the environment that starts the backend, or replace the"
+                    + " token with its absolute path; a literal %NAME% directory is never created.");
+        }
+        return Path.of(expanded.toString()).toAbsolutePath().normalize();
+    }
+
+    /** Exact match first, then the case-insensitive match the ambient Windows lookup applies. */
+    private static String environmentValue(java.util.Map<String, String> environment, String name) {
+        if (environment == null || environment.isEmpty()) {
+            return null;
+        }
+        String exact = environment.get(name);
+        if (exact != null) {
+            return exact;
+        }
+        for (java.util.Map.Entry<String, String> entry : environment.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(name)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     /** Resolves real paths and checks whether one directory tree contains or is contained by the other. */

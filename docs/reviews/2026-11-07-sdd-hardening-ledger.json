@@ -1,0 +1,542 @@
+{
+  "program": "sdd-runtime-hardening",
+  "date": "2026-11-07",
+  "base": "origin/main@3975da6b",
+  "integration_branch": "fix/sdd-runtime-hardening",
+  "source_findings": "docs/reviews/2026-11-06-live-sdd-qa-findings.md",
+  "plan": "docs/reviews/2026-11-07-sdd-hardening-plan.md",
+  "lanes": [
+    {
+      "lane": "bridge",
+      "branch": "lane/sdd-bridge",
+      "worktree": "D:/project/aria-sdd-lane-bridge",
+      "status": "HANDOFF",
+      "commits": ["32fbcb70", "75e26449", "4d1f4043", "7e7ab284", "4c7c23af"],
+      "scope_verified": true,
+      "findings": ["F7", "F9", "F17", "F13-env-contract", "F14-contract"],
+      "evidence": {
+        "tests": "pnpm --dir packages/qoder-acp-bridge test -> 53 passed / 4 files",
+        "build": "pnpm --dir packages/qoder-acp-bridge build -> exit 0",
+        "baseline": "30 passed / 2 files"
+      },
+      "open_risks": [
+        "runtime lane must set ARIA_CORE_EXTRA_PATH on the bridge process env, not --child-env",
+        "qoder CLI fixed internal PATH still needs a live probe",
+        "input payload may be a string when truncated; consumers must accept both"
+      ]
+    },
+    {
+      "lane": "runtime",
+      "branch": "lane/sdd-runtime",
+      "worktree": "D:/project/aria-sdd-lane-runtime",
+      "status": "HANDOFF_RECOVERED",
+      "note": "implementer hit the 150-turn cap while editing scripts; Lead reviewed, finished the two remaining edits, ran the focused tests and committed them",
+      "commits": ["6da16a75", "bcf866e3", "a0ba93c5", "3fdfb965", "67114b89", "adce2f82", "7e4d98a9"],
+      "findings": ["F3", "F4", "F8-backend", "F12", "F13", "F14", "F20", "F21", "F1-hint", "F15-seam"],
+      "evidence": {
+        "focused_tests": "mvn -pl act-execution -Dtest=CoreLaunchEnvironmentTest,GitBranchConfigTest,GitBranchServiceTest,WorkspacePathsConfiguredRootTest,RunWorkspaceServiceTest,QoderLaunchProfileTest,CoreCredentialServiceTest test -> 99 tests, 0 failures/errors",
+        "coverage_note": "subset run trips the JaCoCo check; the counts above are the test result (jacoco.skip does not skip check on this project)"
+      },
+      "open_risks": [
+        "F19: no GitHub compare/tree read API was added; the workflow ReportStepTreeGuard is still unwired",
+        "F15: ScratchWorkspaceProvisioner interface exists but no workflow bean supplies the repository binding yet",
+        "F13 live proof still pending: unit tests only prove env construction; a real core must run gh/mvn/java",
+        "F8 UI copy now stale: the credential is per-operation, so the dashboard's restart-required message must be revised",
+        "F11 per-run absolute workspace root still resolves from aria.workflows.workspace-root, not the live run root"
+      ]
+    },
+    {
+      "lane": "api",
+      "branch": "lane/sdd-api",
+      "worktree": "D:/project/aria-sdd-lane-api",
+      "status": "HANDOFF",
+      "note": "merged as b5394ff6; the original handoff message was lost to a session compaction, the wave gate re-runs these tests",
+      "commits": ["81e19525", "537f5f2c", "d92cabf1", "bd867ff5", "262abb05"],
+      "findings": ["F2", "F5", "F6", "F7-backend", "F9-schema", "F16", "F17-persistence"],
+      "scope_check": "git diff --name-only origin/main...lane/sdd-api -> act-app migration V76, act-aria, act-common exception handler/Approval/Run/TrajectoryResponse, act-execution approval/controller/security/telemetry"
+    },
+    {
+      "lane": "workflow",
+      "branch": "lane/sdd-workflow",
+      "worktree": "D:/project/aria-sdd-lane-workflow",
+      "status": "HANDOFF",
+      "commits": ["12f4a683", "bcdefb87", "435c8ac5", "2f6a6a6f", "8eec3200"],
+      "scope_verified": true,
+      "findings": ["F11", "F15-prompt", "F18", "F19-policy", "F22", "F23", "F24-backend"],
+      "evidence": {
+        "act_agent": "mvn -pl act-agent test -> 305 tests, 0 failures/errors, coverage met",
+        "act_agent_act_execution": "mvn -pl act-agent,act-execution test -> 1148 act-execution tests, 0 failures/errors",
+        "v77_seed": "V43SeedConfigTest -> 10 tests, 0 failures",
+        "gate_fixture": "8c51fa8f fixture now fails the step naming AC4"
+      },
+      "open_risks": [
+        "F19 tree guard is a policy class only; GitBranchService has no compare/tree read API - runtime/git lane or a follow-up must add it and wire violation()",
+        "F11 workspace root resolves from aria.workflows.workspace-root; per-run absolute root needs a runtime seam",
+        "{workspaceRoot} is not yet in act-knowledge SYSTEM_PLACEHOLDERS (outside lane)",
+        "single-module act-execution tests hit a stale ~/.m2 act-agent SNAPSHOT; use the two-module reactor until install"
+      ]
+    },
+    {
+      "lane": "ui",
+      "branch": "fix/sdd-runtime-hardening",
+      "worktree": "D:/project/aria-sdd-fixes",
+      "status": "HANDOFF",
+      "commits": ["65bed70d", "c34a3b57", "8dbef6eb", "f9129146", "775b5ccb", "9a5ab6db"],
+      "scope_verified": true,
+      "scope_check": "git diff --name-only origin/main..HEAD -> only agent-control-tower/act-dashboard",
+      "findings": ["F7-ui", "F8-ui", "F9-ui", "F24-ui", "F2-copy"],
+      "evidence": {
+        "tests": "pnpm --dir agent-control-tower/act-dashboard test -- --run -> 68 files / 564 tests passed",
+        "build": "tsc -b + vite build -> success (226 modules, 1.93 s)",
+        "coverage": "71.45% lines / 80.47% branches / 59.8% functions (threshold 5/60/40)"
+      },
+      "open_risks": [
+        "wire names still assumed until api lane lands: Approval.arguments (JSON string), totalTokensUsed null, chat status/error/errorCode, pack restartRequired",
+        "no live backend / Playwright pass in this lane"
+      ]
+    },
+    {
+      "lane": "guard",
+      "branch": "lane/sdd-guard",
+      "worktree": "D:/project/aria-sdd-lane-guard",
+      "status": "HANDOFF",
+      "merged": "d6d73711",
+      "commits": ["eadab3a4", "c23894fd", "e158a463", "239c6e32"],
+      "findings": ["F19-wiring"],
+      "evidence": {
+        "focused": "mvn -pl act-execution -am test-compile surefire:test -Dtest=GitBranchServiceTest,GitTreeDiffSupplierTest,ReportStepTreeGuardTest,WorkflowAutoChainerQaTreeGuardTest,WorkflowAutoChainerQaVerdictGateTest,WorkflowAutoChainerSddTest,WorkflowAutoChainerTest -> 75 run, 0 failures, 0 errors",
+        "module": "mvn -pl act-execution -am test -Dspring.profiles.active=h2 -Djacoco.skip=true -> act-execution 1226 run, 1 failure, 0 errors",
+        "known_red": "CoreCredentialControllerTest.deleteRevokesFutureResolution expected the pre-F1 message; fixed by the Lead in bf5dda9a (12/0 on re-run)"
+      },
+      "open_risks": [
+        "guard compares the branch HEAD against its first parent; a QA run that pushes nothing would judge the previous Dev commit",
+        "GitHub truncates commit files[] at 300 entries (INFERRED); removals beyond the window go unguarded",
+        "an unreadable branch/credential degrades to unguarded by design (debug log only)",
+        "act-app tier not run in this lane; SddWorkflowIntegrationTest/GitPipelineIntegrationTest mock GitBranchService and were left to the wave gate"
+      ]
+    },
+    {
+      "lane": "telemetry",
+      "branch": "lane/sdd-telemetry",
+      "worktree": "D:/project/aria-sdd-lane-telemetry",
+      "status": "HANDOFF",
+      "merged": "21e127a5",
+      "commits": ["5285be2f", "fe5ff88b"],
+      "findings": ["F17-wiring", "F9-exposure"],
+      "evidence": {
+        "focused_execution": "mvn -pl act-execution -am ... -Dtest=CoreEventTelemetry*,RunTelemetryServiceSliceTest,*CoreExecution*,*RunResponse* -> 75 run, 0 failures",
+        "focused_agent": "mvn -pl act-agent ... -Dtest=RunServiceTest,*RunController* -> 105 run, 0 failures",
+        "reactor": "act-common 131 + act-agent 306 + act-execution 1231 -> 1 failure, the pre-existing CoreCredentialControllerTest (fixed by the Lead)"
+      },
+      "open_risks": [
+        "F9 end-to-end: completeIfNotTerminal zeroed the bridge-recorded total - fixed by the Lead in bf5dda9a (CASE keeps a stored total when the engine reports 0)",
+        "recordUsage replaces rather than accumulates; the qoder prompt emits one usage event per run, so this is low risk today",
+        "telemetry is wired through an @Autowired(required=false) setter on the bean-constructed coordinator; pinned by CoreExecutionServiceTelemetryInjectionTest",
+        "a tool.call without toolCallId is stored under a random id (not idempotent); the bridge always sets it",
+        "no live backend/bridge run in this lane; the seam is proven by payload-shaped tests"
+      ]
+    }
+  ],
+  "lead_glue": [
+    {
+      "finding": "F8",
+      "change": "ToolPackController.storeCredential answers restartRequired=false; the runtime resolves the token per request",
+      "verified": true,
+      "evidence": "ToolPackControllerTest 14/0"
+    },
+    {
+      "finding": "F15",
+      "change": "new WorkflowScratchBinding bean binds a BA step's scratch workspace to a shallow checkout of the chain's repoUrl",
+      "verified": true,
+      "evidence": "WorkflowScratchBindingTest 4/0"
+    },
+    {
+      "finding": "F9 completion seam",
+      "change": "RunRepository.completeIfNotTerminal keeps a stored provider total when the engine reports 0; a positive engine total still wins",
+      "verified": true,
+      "evidence": "RunRepositoryCancellationIntegrationTest 9/0 (two new tests)"
+    },
+    {
+      "finding": "F8/F19/F17 docs",
+      "change": "GitCredentialGuidance no longer claims a restart is required; ReportStepTreeGuard and RunTelemetryService javadocs describe the wired paths",
+      "verified": true
+    },
+    {
+      "finding": "guard lane red",
+      "change": "CoreCredentialControllerTest.deleteRevokesFutureResolution expects the post-F1 message",
+      "verified": true,
+      "evidence": "CoreCredentialControllerTest 12/0"
+    },
+    {
+      "finding": "F11 wiring regression",
+      "change": "WorkflowService has two constructors; the 5-arg @Value constructor is now @Autowired, so the act-app context boots",
+      "verified": true,
+      "evidence": "mvn -pl act-app -am test -Dspring.profiles.active=h2 -> act-app 75/0; full wave BUILD SUCCESS"
+    },
+    {
+      "finding": "R4 existing installs",
+      "change": "V80 drops the decide_approval claim from an existing Aria row's config.systemPrompt (the sync chat path reads that row; the initializer is create-only) and appends the operator-only sentence; fresh installs are seeded correctly by the initializer constant",
+      "verified": true,
+      "evidence": "V43SeedConfigTest 12/0/0/0; Flyway applied 77 migrations, now at v80",
+      "note": "the MCP policy (decide_approval OPERATOR_ONLY, worker tokens refused) remains the enforcement layer; whether the assistant should ever hold the tool is a separate governance ruling"
+    }
+  ],
+  "wave_gate": {
+    "commit": "152b93e1",
+    "command": "mvn -pl act-execution,act-agent,act-aria,act-app -am test -Dspring.profiles.active=h2",
+    "result": "BUILD SUCCESS",
+    "totals": "act-common 131, act-agent 306, act-execution 1268, act-knowledge 263, act-dashboard-api 90, act-aria 187, act-mcp 172, act-app 75 -> 2492 tests, 0 failures, 0 errors, 8 skipped",
+    "bridge": "pnpm --dir packages/qoder-acp-bridge test -> 60 passed / 5 files (after the review fixes)",
+    "dashboard": "pnpm --dir agent-control-tower/act-dashboard test -- --run -> 564 passed / 68 files",
+    "environment_note": "-pl without -am resolves stale ~/.m2 SNAPSHOTs (NoSuchMethodError Run.getInputTokens); always build the reactor with -am on this branch. The per-module totals are summed from each module's surefire-reports; the earlier ledger's 2105 was a partial grep."
+  },
+  "independent_review": {
+    "date": "2026-11-07",
+    "reviewers": [
+      {
+        "area": "runtime/git/telemetry",
+        "read": "origin/main...HEAD (ca7b348b)",
+        "verdict": "block",
+        "high": [
+          "the resolved git token was rendered into the bridge argv as --child-env GH_TOKEN=...",
+          "ARIA_CORE_EXTRA_PATH was published to the CLI child while the bridge reads it from its own process env — the F13 add-on was inert"
+        ]
+      },
+      {
+        "area": "workflow/api",
+        "read": "origin/main...HEAD (ca7b348b)",
+        "verdict": "approve with fixes",
+        "high": ["a tool-submitted PASS was gated on finalOutput only; a comment/evidence-only NOT VERIFIED bypassed F22"]
+      },
+      {
+        "area": "bridge/dashboard",
+        "read": "origin/main...HEAD (ca7b348b)",
+        "verdict": "approve with fixes",
+        "high": [
+          "permission input was persisted unbounded (a Write ask carries whole file content; TEXT overflow)",
+          "the F2 sync-chat copy read response.error while the backend serves errorMessage, and sendMessage has no caller (the panel streams)"
+        ]
+      }
+    ],
+    "fixed_in": ["425e8e37", "152b93e1"],
+    "fixed": [
+      "F14: the git credential travels in a run-owned --child-env-file; no secret value in argv",
+      "F13: ARIA_CORE_EXTRA_PATH moved to bridgeEnvironment; CoreLaunchEnvironmentTest asserts the child does not receive it",
+      "F13/F14/F20 are HOST-only: a SANDBOX launch receives no host-derived PATH/credential/ceiling",
+      "F22: the gate reads output + review comment + review evidence; not-yet-verified, reversed, ACs-range and two-line status variants are covered; a later-resolved note does not block",
+      "F7 bound: permission input is capped in the bridge and the persisted argument document is redacted and bounded (60k UTF-8 bytes, cut on a character boundary) while the write-grant digest keeps matching the exact payload",
+      "F7 card: the review card stores the whole (redacted/bounded) argument document instead of a 200-char excerpt",
+      "F9: usage is a single conditional UPDATE that cannot revert status; a placeholder total of 0 is summed from real parts; a terminal run drops late usage",
+      "F24: the single-card GET is enriched like the list; failed/cancelled chains settle ask-less REVIEW cards to CANCELLED; the kanban mirror is ordered before the chainer",
+      "F2: the dashboard reads errorMessage (legacy error kept as an alias)",
+      "F15/BA: the prompt names the bound shallow checkout at {workspaceRoot}/; V43SeedConfigTest pins the wording",
+      "F19: commitFileChanges degrades on a malformed URL too and no longer logs the URL; an unreadable diff is a WARN",
+      "{workspaceRoot} is a system placeholder, not an instantiation parameter",
+      "review 2: V77 restored byte-for-byte (immutable once recorded) and the BA prompt REPLACE moved to V78",
+      "review 2: the F22 marker path reads the latest qa review and gates on its comment/evidence only when its verdict agrees with the marker; a stale DEFECT does not block a fresh PASS",
+      "review 2: the run-owned credential, MCP token and child-environment files are chmod 0600 where POSIX modes exist",
+      "review 2: --child-env-file routing is HOST-only; a SANDBOX bridge keeps reviewed token pairs inline (it cannot read a host-owned path)"
+    ],
+    "accepted_residuals": [
+      "OpenCodeCoreAdapter still receives no F13/F14/F20 launch environment. opencode is the DEFAULT core id (DefaultAgentExecutionPolicy.DEFAULT_CORE_ID = \"opencode\"), so this is a live gap for default HOST runs, not a legacy-only one; deferred to a follow-up beyond this wave",
+      "F9 usage replace-not-accumulate: qoder emits one usage event per run; a multi-prompt run would keep the last event only",
+      "F9: a total-only zero event is indistinguishable from unobserved usage and is reported as null",
+      "F19 compares the branch HEAD against its first parent; a QA that pushes nothing judges the previous Dev commit; GitHub files[] truncates at 300 entries (INFERRED); an unreadable branch/credential degrades to unguarded with a WARN",
+      "F24 @Order ordering is framework-guaranteed but not integration-tested; KanbanBoard still groups the REVIEW column by status (finished cards now leave it)",
+      "ToolPackController's credential store route has no operator gate (pre-existing route; per-operation resolution raises its impact)",
+      "405 responses omit the RFC Allow header",
+      "start-backend.ps1 preflight sorts CLI candidates by name, not numeric version",
+      "V76/V77 executed on H2 only; the MariaDB tier was not run",
+      "the 'repo' literal is duplicated between act-agent (WorkflowService) and act-execution (RunWorkspaceService); no shared constant test",
+      "aria.workflows.workspace-root, when set to an absolute path, is one global root for every chain (default unset/relative)"
+    ]
+  },
+  "review_2": {
+    "date": "2026-11-07",
+    "trigger": "fix-verification re-review verdict: approve with fixes; do not record the gate as PASS yet",
+    "fixed_in": ["74e568eb"],
+    "fixed": [
+      "GitTreeDiffSupplier and GitBranchService no longer log or echo the repository URL (it may carry userinfo)",
+      "V77 restored byte-for-byte and the BA prompt correction shipped as V78",
+      "the F22 marker path reads the latest qa review and gates on its comment/evidence only when its verdict agrees with the marker",
+      "RESOLVED_AFTER narrowed to a first-attempt/earlier/re-run note",
+      "the argument bound is UTF-8 bytes (60k) cut on a character boundary",
+      "the run-owned credential, MCP token and child-environment files are chmod 0600 where POSIX modes exist",
+      "--child-env-file is HOST-only; a SANDBOX bridge keeps reviewed token pairs inline",
+      "ReviewAskRepairMigrationIntegrationTest applies V72 and V76 after its pinned V65 migration"
+    ],
+    "verified": {
+      "commit": "74e568eb",
+      "focused": "act-execution 113/0/0 (QoderLaunchProfileTest 19, WorkflowAutoChainerQaVerdictGateTest 14, PermissionCoordinatorTest 44, GitBranchServiceTest 19, GitTreeDiffSupplierTest 9, WorkflowCompletionCardListenerTest 8); act-app V43SeedConfigTest 10/0/0",
+      "integration": "ReviewAskRepairMigrationIntegrationTest 1/0/0",
+      "full_gate": "mvn -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2 -> BUILD SUCCESS; act-common 131, act-agent 306+13, act-execution 1273+66 (6 skipped), act-knowledge 263 (4 skipped), act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172, act-app 75+106 -> 2712 tests, 0 failures, 0 errors, 14 skipped",
+      "bridge": "pnpm --dir packages/qoder-acp-bridge test -> 60 passed / 5 files",
+      "dashboard": "pnpm --dir agent-control-tower/act-dashboard test -> 564 passed / 68 files"
+    },
+    "release_qa_at_152b93e1": {
+      "clean_room_unit": "BUILD SUCCESS (act-app 75/0/0; bridge 60/60; dashboard 564/564)",
+      "package": "BUILD SUCCESS",
+      "verify": "RED: ReviewAskRepairMigrationIntegrationTest booted the V65-pinned schema after the Run entity gained the V76 usage columns; fixed and re-run green at 74e568eb",
+      "note": "clean-room and hosted CI must be re-run at the eventual push HEAD; this wave is not pushed"
+    }
+  },
+  "live_rerun": {
+    "date": "2026-11-07",
+    "base_commit": "74e568eb",
+    "stack": "H2 copy of the dev DB, Flyway applied V76-V78, backend :8080, dashboard :5173, qoder HOST, model efficient, qodercli 1.1.61, 4 agents all qoder/HOST",
+    "exercise": "Aria picks an open issue in HappyLiang12/aria-conductor and runs development-workflow d0000001-0000-0000-0000-000000000001",
+    "issue": "#60 (git push exit 128; GH_TOKEN not used by HTTPS git)",
+    "chain": "6dfb895c-e155-42b9-b753-a4752599faa9",
+    "branch": "sdd/6dfb895c-e155-42b9-b753-a4752599faa9",
+    "branch_commits": [
+      "12f0f3f6 sdd: approve spec",
+      "7fc325e9 sdd dev",
+      "7536c33d sdd qa report",
+      "95aec569 sdd dev",
+      "546018ca sdd qa report"
+    ],
+    "runs": {
+      "aria": "356e3f40 COMPLETED (3 iterations)",
+      "ba": "704137d7 COMPLETED",
+      "dev1": "d6e5db2e COMPLETED",
+      "qa1": "bb326051 COMPLETED",
+      "dev2": "9ded065f COMPLETED",
+      "qa2": "22fc1f0c COMPLETED",
+      "dev3": "e217f2bd FAILED on an unverifiable stop proof"
+    },
+    "verdicts": [
+      "QA round 1 VERDICT=DEFECT: AC-8 NOT VERIFIED (pre-existing INPUT_TOKENS schema error plus Windows temp-directory errors in three test classes)",
+      "QA round 2 VERDICT=DEFECT: same pre-existing failures; the git-related suites pass (GitBranchConfigTest 5/5, RunWorkspaceServiceTest 40/40)"
+    ],
+    "end": "chain cancelled by the operator at 14:01 local to stop an unbounded DEFECT loop; the active run was finalized FAILED with StopProof[allWritersStopped=false]",
+    "confirmations": [
+      "F2: sync chat returned status RUNNING with the run id and an honest message, not a false completed",
+      "F7: the native ask persisted toolName=Bash, riskTier=READ, the redacted/bounded argument document, optionsJson, expiresAt and the linked card",
+      "F11: DEV and QA prompts clone into repo under the cwd; no /workspace literal",
+      "F13: gh and mvn resolved and ran in the core's Bash with the old shims removed from the backend PATH",
+      "F14: the BA checkout cloned 142 MB; four sdd commits were pushed to the remote branch",
+      "F15: the BA read the bound checkout at scratch/<runId>/repo",
+      "F17: tool-calls and trajectory endpoints exposed live data for every run",
+      "F19: the QA report commits changed one file each; no tree deletion",
+      "F20: scratch under act-app/data/workspaces/runs/scratch/<runId>",
+      "F21: no literal %SystemDrive% directory",
+      "F22: the QA refused a PASS while AC-8 was NOT VERIFIED in both rounds",
+      "F24: manual cancel did not settle the cards (R6)"
+    ],
+    "new_findings": [
+      "R1 (critical): the core-side clone still dies on Windows long paths; the failed checkout left 265 files missing and an empty index, which the operator restored before the DEV commit",
+      "R2 (high): Maven cannot create a temp directory in the core's Bash (C:\\WINDOWS\\surefire-User)",
+      "R3 (medium): every run reports totalTokensUsed 0",
+      "R4 (high, governance): Aria called decide_approval to approve a subagent's Write ask; the operator denied it",
+      "R5 (high): the DEFECT retry feedback was the routing placeholder only",
+      "R6 (medium): a manual chain cancel leaves its step cards in REVIEW",
+      "R7 (medium): the cancel path finalizes the active run FAILED on an unverifiable stop proof",
+      "R8 (medium): no convergence path for a pre-existing failure; the chain loops until cancelled"
+    ],
+    "evidence": "docs/reviews/2026-11-07-live-sdd-rerun-findings.md; live-rerun-*.log/json in the integration worktree (untracked)"
+  },
+  "rerun_fixes": {
+    "commit": "2420e259",
+    "fixed": [
+      "R5: a marker DEFECT/SPEC_GAP reschedule hands the next DEV/BA run up to 6,000 characters of the QA output",
+      "R2: a Windows HOST launch passes TEMP/TMP through to the CLI child"
+    ],
+    "verified": "mvn -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2 -> BUILD SUCCESS; act-common 131, act-agent 306+13, act-execution 1275+66 (6 skipped), act-knowledge 263 (4 skipped), act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172, act-app 75+106 -> 2714 tests, 0 failures, 0 errors, 14 skipped",
+    "focused": "CoreLaunchEnvironmentTest 15/0, WorkflowAutoChainerQaVerdictGateTest 14/0",
+    "not_reverified_live": "R1/R4/R6/R7/R8 remain open; the live rerun predates 2420e259"
+  },
+  "next_wave": {
+    "date": "2026-11-07",
+    "base": "515a71d2",
+    "lanes": [
+      {
+        "id": "A",
+        "finding": "R1",
+        "scope": "V79 migration prefixes the DEV/QA clone with -c core.longpaths=true; V43SeedConfigTest pins it",
+        "files": ["db/migration/V79__sdd_prompt_longpaths_clone.sql", "V43SeedConfigTest.java"]
+      },
+      {
+        "id": "B",
+        "finding": "R6 + R8",
+        "scope": "settle IN_PROGRESS/REVIEW cards on WorkflowCancelledEvent; publish a FAILED event when rescheduleStep exhausts its attempts",
+        "files": ["WorkflowCompletionCardListener.java", "WorkflowService.java", "WorkflowCompletionCardListenerTest.java", "WorkflowServiceSddTest.java"]
+      },
+      {
+        "id": "C",
+        "finding": "R4",
+        "scope": "remove the assistant's decide_approval claim from both Aria prompt constants; approval decisions are operator-only",
+        "files": ["AriaDefaultAgentInitializer.java", "AriaService.java"]
+      }
+    ],
+    "investigate_only": [
+      "R3: token usage 0 stays an accepted residual"
+    ],
+    "found_during_wave": [
+      {
+        "id": "R9",
+        "severity": "medium",
+        "finding": "rescheduleStep appends each round's feedback to the mutated prompt template; with R5's 6,000-character feedback the second retry exceeds startStep's 10,000-character head truncation, so the newest QA findings are cut off in exactly the round that needs them",
+        "candidate": "strip the previous 'Feedback from the previous round:' section before appending the current round's feedback, and pin it with a two-round test whose second feedback is still present",
+        "status": "fixed in e03efffc (WorkflowServiceSddTest 13/0)"
+      },
+      {
+        "id": "R10",
+        "severity": "medium",
+        "finding": "a default HOST launch died with the misleading 'runtime endpoint did not authenticate the control secret' after 30s because QoderCoreAdapter.resolveExecutable resolved the bare name 'qoder' to D:\\Qoder\\bin\\qoder (a Unix shim on PATH) before the PATHEXT variants; the bridge then failed with spawn ENOENT",
+        "candidate": "on Windows (PATHEXT present) skip the bare name and accept only spawnable .exe/.com candidates, then fall through to the versioned discovery roots; refuse a shell-script candidate by property name instead of letting the bridge fail",
+        "status": "fixed in e3dabe23 (QoderLaunchProfileTest 22/0; module 1726/0); live-confirmed: a backend started without ARIA_CORES_QODER_EXECUTABLE launched the versioned CLI and completed two Aria runs"
+      },
+      {
+        "id": "R7",
+        "severity": "medium",
+        "finding": "the Windows stop proof failed closed when a job member was no longer reachable from the run's root: a child that outlives its root (the bridge exits first) is unaccounted, so finalization refused with StopProof[allWritersStopped=false] (observed on the cancel path e217f2bd and the assistant run b0ce0266)",
+        "candidate": "sample each live run's enumerated tree while it is alive, so an outliving child is one of this run's known records at stop and is killed by identity; keep a job-inventory WARN for the next failure",
+        "status": "fixed in eed484e4 (OwnedProcessControllerTest 7/0; module 1284/0); three post-fix live runs finalized cleanly and the WARN did not fire, so the original failure is a transient race"
+      },
+      {
+        "id": "env-note",
+        "severity": "none",
+        "finding": "the copied live DB's pack credential is Base64 (56 chars, dev-mode storage), so the worktree backend must start WITHOUT PACK_CREDENTIAL_KEY; supplying a key makes PackCredentialCipher try AES-GCM and the resolution fails with 'Credential decryption failed'",
+        "candidate": "keep the live recipe explicit; a key-encrypted store needs the matching key at the time the credential is stored"
+      }
+    ],
+    "acceptance": "focused tests green per lane; full verify at the merged HEAD; live SDD rerun with the long-path clone",
+    "gate": {
+      "commit": "e03efffc",
+      "command": "mvn -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2",
+      "result": "BUILD SUCCESS (total time 05:57)",
+      "totals": "act-common 131, act-agent 324, act-execution 1347 (6 skipped), act-knowledge 275 (4 skipped), act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 190, act-app 182 -> 2726 tests, 0 failures, 0 errors, 14 skipped",
+      "bridge": "pnpm --dir packages/qoder-acp-bridge test -> 60 passed / 5 files",
+      "dashboard": "pnpm --dir agent-control-tower/act-dashboard test -- --run -> 564 passed / 68 files",
+      "delta": "+12 tests over the 2714 rerun-fix head (lane A 1, lane B 5, lane D 6)"
+    },
+    "progress": [
+      {
+        "lane": "A",
+        "status": "INTEGRATED",
+        "commits": ["6826593f (lane worktree, based on origin/main 3975da6b)", "2eace022 (cherry-picked onto fix/sdd-runtime-hardening)"],
+        "evidence": "mvn -pl act-app -am test -Dtest=V43SeedConfigTest -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true -> Tests run: 11, Failures: 0, Errors: 0, Skipped: 0; Flyway applied 76 migrations, now at v79",
+        "note": "the lane base lacked V76-V78, so its two clone assertions were reconciled with the {workspaceRoot} wording on the integration base; V79 replaces both DEV and QA clone commands exactly once each"
+      },
+      {
+        "lane": "C",
+        "status": "INTEGRATED",
+        "commits": ["20f6ea03"],
+        "change": "both Aria prompt constants now say approval decisions are operator-only and no tool lets the assistant decide them",
+        "note": "prompt text only; ToolPolicyRegistry's OPERATOR_ONLY entry remains the backstop. Whether the assistant should hold decide_approval at all is a separate governance ruling, not taken here"
+      },
+      {
+        "lane": "B",
+        "status": "INTEGRATED",
+        "commits": ["d26a87d1"],
+        "evidence": "WorkflowCompletionCardListenerTest 12/0/0/0; WorkflowServiceSddTest 9/0/0/0; mvn -pl act-execution -am test -Djacoco.skip=true -> act-common 131, act-agent 307, act-execution 1279, 1717 tests, 0 failures, 0 errors, 0 skipped",
+        "change": "WorkflowCancelledEvent settles IN_PROGRESS/REVIEW step cards to CANCELLED (the transition denies asks and stops the live run); an exhausted reschedule publishes WorkflowAdvancedEvent(FAILED)"
+      },
+      {
+        "lane": "D",
+        "status": "INTEGRATED",
+        "commits": ["e03efffc"],
+        "finding": "R6 residual + R9",
+        "change": "WorkflowStep.previousRunIds persists superseded attempts; WorkflowService.stepRunIds feeds the listener so every attempt's card settles; reschedule replaces the previous round's feedback instead of accumulating it",
+        "evidence": "WorkflowServiceSddTest 13/0/0/0; WorkflowCompletionCardListenerTest 14/0/0/0; mvn -pl act-execution -am test -Djacoco.skip=true -> act-common 131, act-agent 311, act-execution 1281, 1723 tests, 0 failures, 0 errors, 0 skipped",
+        "confirmed_live": "chain 6dfb895c (CANCELLED) holds one run per step (BA 704137d7, DEV e217f2bd, QA 22fc1f0c) while the board holds six REVIEW cards (704137d7, d6e5db2e, bb326051, 9ded065f, e217f2bd, 22fc1f0c); the three superseded cards were unreachable through step.runId",
+        "residual": "history is fix-forward only: rows serialized before the field have previousRunIds=null, so chain 6dfb895c's superseded cards are not retroactively reachable; retryStep still clears runId without recording history (no observed case)"
+      }
+    ]
+  },
+  "live_rerun_2": {
+    "date": "2026-11-07",
+    "base_commit": "c1202a72",
+    "doc": "docs/reviews/2026-11-07-live-sdd-rerun-2-findings.md",
+    "stack": "H2 dev DB migrated to v80; backend :8080; dashboard :5173; qoder HOST; ARIA_CORES_QODER_EXECUTABLE pinned; no PACK_CREDENTIAL_KEY (Base64 dev-mode pack credential); model efficient",
+    "exercise": "Aria instantiated development-workflow d0000001-0000-0000-0000-000000000001 for issue #56 (cancelWorkflow must cancel the in-flight run)",
+    "chain": "30c6788f-da6b-4c32-a9f1-f352c8acff83 COMPLETED",
+    "runs": {
+      "aria": "b0ce0266 FAILED on an unverifiable stop proof (R7)",
+      "ba": "d4ca40d4 COMPLETED",
+      "dev": "48fb43c0 COMPLETED",
+      "qa": "8b786e2c COMPLETED"
+    },
+    "branch": "sdd/30c6788f-da6b-4c32-a9f1-f352c8acff83: a8bd4c1d sdd dev, 05342043 sdd qa report",
+    "verdict": "VERDICT=PASS; REPORT_ID=7a9c2f8e-4b3d-4e1a-9f5c-8d2e6b4a1c3f",
+    "cards": "step cards dd75d2f1 / 06e3297c / 02547d13 all DONE after the chain completed",
+    "confirmations": [
+      "R1: DEV and QA clones ran with -c core.longpaths=true and succeeded; no long-path failure, no empty-index checkout",
+      "R2: mvn test -pl act-agent in the core's Bash finished BUILD SUCCESS without a TEMP workaround",
+      "R4: zero decide_approval asks (200 approvals) and zero such Aria tool calls",
+      "F14: the stored pack credential resolved; DEV and QA pushes succeeded",
+      "F19: the QA report commit changed exactly qa_report.md (213 insertions)",
+      "F2: sync chat returned RUNNING with the run id",
+      "R6 completion path: the three ask-less step cards settled to DONE"
+    ],
+    "not_exercised": [
+      "R5/R9: no DEFECT round (QA passed first time), so the feedback path was not live-exercised",
+      "R8: no attempt exhaustion, so the exhaustion event was not live-exercised",
+      "R6 cancel path: no chain was cancelled in this rerun (unit-pinned by four listener tests)"
+    ],
+    "new_observations": [
+      "R7 reproduced on the assistant run b0ce0266: the instantiate result was delivered, then finalization failed closed with StopProof[allWritersStopped=false]; BA/DEV/QA finalized normally in the same chain",
+      "R10: the bare 'qoder' resolved to the D:\\Qoder\\bin\\qoder Unix shim before PATHEXT, so the bridge failed with spawn ENOENT and the run reported the misleading control-secret error; the pinned ARIA_CORES_QODER_EXECUTABLE worked around it",
+      "QA command hygiene: filtered Maven runs tripped the jacoco ratchet and a 'no tests matching pattern' error before the QA settled on targeted suites; the prompt could name the repository's test command and -Djacoco.skip=true for filtered runs"
+    ]
+  },
+  "live_rerun_3": {
+    "date": "2026-11-08",
+    "head": "b7da3218",
+    "attempt": "Aria instantiate the development workflow for issue #113 (Aria run 3630e332-11f2-4a80-ac0e-d1aefa16571b)",
+    "outcome": "aborted before instantiation; no chain",
+    "observation": "the assistant run stayed RUNNING for ~44 minutes with no chain; qoder efficient turns were ~10 minutes apart (platform MCP read tools auto-approved at 00:27 and 00:37), which is assistant latency, not a workflow failure",
+    "cancel": "the first POST /runs/{id}/cancel returned 500 NoClassDefFoundError: ActorTokenService$InvalidReason because concurrent Maven runs were rewriting act-execution/target/classes under the live JVM; the retry after the class file existed returned 200 and the run settled CANCELLED with completedAt set and no StopProof failure; the usual benign 'Refusing to update ... terminal' WARN followed",
+    "classification": "environment (build-under-live-JVM) plus assistant latency; not a product regression; no SDD-scenario evidence from this run",
+    "lesson": "never run Maven against the worktree while the live backend is up; start the backend from a settled build (or the packaged jar) and keep builds away from the live classpath"
+  },
+  "release_gate": {
+    "commit": "a46fc109",
+    "date": "2026-11-08",
+    "command": "mvn -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2",
+    "result": "BUILD SUCCESS (total time 06:40), exit 0",
+    "totals": "act-common 131, act-agent 311+13, act-execution 1290+92 (6 skipped), act-knowledge 263 (4 skipped) +12, act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172+18, act-app 77+106 -> 2762 tests, 0 failures, 0 errors, 14 skipped",
+    "lane_tests": "HostExecutionBackendIntegrationTest 47/0 (sampler attribution/over-cap/unverifiable/last-window/real-script/dead-root/recycled-root), OwnedProcessControllerTest 7/0, QoderLaunchProfileTest 28/0, WorkflowCompletionCardListenerTest 14/0, WorkflowServiceSddTest 13/0",
+    "review_rounds": [
+      {"round": 1, "verdict": "block", "scope": "sampler zero coverage; supervisor recreation; unbounded known/deadline; .cmd discovery; WARN wording", "fixed_in": ["39045ef7"]},
+      {"round": 2, "verdict": "approve with fixes", "scope": "arbitrary eviction could shed a live record (P2); four P3s", "fixed_in": ["92c0b763"]},
+      {"round": 3, "verdict": "approve with fixes", "scope": "prune probe starvation; unverifiable folded into gone; vacuous rollback test; one-shot observed snapshot", "fixed_in": ["6858dce4"]},
+      {"round": 4, "verdict": "approve with fixes", "scope": "last-window observed race (P2); PowerShell unverifiable untested", "fixed_in": ["23cef4ac"]},
+      {"round": 5, "verdict": "approve", "scope": "targeted final review; no P0-P3 correctness/safety/test-integrity finding remains", "fixed_in": []},
+      {"round": 6, "verdict": "approve with fixes (non-blocking)", "scope": "dead-root fix: live shape fixed; orphan-tree claim and refused() javadoc corrected, residual documented", "fixed_in": ["a46fc109"]}
+    ],
+    "hosted": "run 42420975810 at 420dbb7e -> 15/15 jobs success (final head after R11)",
+    "log": "final-gate-review4.log (untracked local evidence)"
+  },
+  "live_final_head": {
+    "date": "2026-11-08",
+    "head": "23cef4ac",
+    "backend": "started from a settled build (mvn install -DskipTests, then spring-boot:run); no Maven ran under the live JVM",
+    "ping": "Aria run 3d87ad32 COMPLETED; CoreExecutionService finalized complete=true (no StopProof failure); qoder CLI resolved to C:\\Users\\User\\.qoder\\bin\\qodercli\\qodercli.exe (1.1.61) without ARIA_CORES_QODER_EXECUTABLE",
+    "chain_attempt": "Aria run 8af5e2a6: the mutating instantiate_workflow_template MCP tool was denied by the approval policy (no operator), the assistant asked a clarification question, and the run stayed WAITING_INPUT; cancelling it reproduced R11 (dead-root stop proof failure)",
+    "note": "the full SDD chain at this head was not created; rerun 2 remains the last completed full-chain evidence; the dead-root live re-check (run 54d94c47) passed on the fixed build"
+  },
+  "r11_dead_root": {
+    "date": "2026-11-08",
+    "head": "23cef4ac",
+    "finding": "a WAITING_INPUT run's core bridge exited on its own; cancelling the run returned StopProof(false) in 163 ms at the !owns live-root gate, never attempted the sampler's observed children, logged nothing, and failed finalization",
+    "fix": "bound() (binding) vs owns() (live root); stop proceeds on a matching binding with a dead or recycled root via an identity-only proof over the observed records and the job inventory; only a live match root anchors the tree sweep; every false path logs its identity-only reason",
+    "commits": ["6f6270e7", "835f095e", "a46fc109"],
+    "tests": "HostExecutionBackendIntegrationTest 47/0 (dead-root child/none/unverifiable/binding + recycled-root pin); 4 of the new tests were RED pre-fix",
+    "live_recheck": "run 54d94c47: WAITING_INPUT -> bridge 29192 terminated to reproduce the natural core exit -> cancel 200 -> CANCELLED with completedAt set and finalized complete=true; INFO 'the root ... answered gone -- its binding still matches ... stopping this run's observed records by identity'; no StopProof failure",
+    "review": "round 6 approve with fixes (non-blocking comment P2/P3), fixed in a46fc109"
+  },
+  "decisions": [
+    {
+      "finding": "F7 allow-for-session option",
+      "ruling": "not implemented; PermissionChoice deliberately has no session value (spec 6.3: an allow-always offer is never used as an allow-once substitute). Needs an operator decision, not a silent change."
+    }
+  ],
+  "next": [
+    "released at 420dbb7e: hosted CI green (run 42420975810); live dead-root cancel verified; PR #115 untouched",
+    "R8 remaining: an operator accept-known-failure decision on the DoD review (the bounded retry count and the exhaustion event are in place)",
+    "QA prompt: name the repository's real test command and the -Djacoco.skip=true rule for filtered Maven runs",
+    "exercise R5/R9 live on the next DEFECT round",
+    "follow-up: act-app's CoreE2eQoderAdapter keeps an older copy of the CLI path resolution (flagged by the R10 lane)"
+  ]
+}

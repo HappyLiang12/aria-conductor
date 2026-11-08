@@ -178,6 +178,36 @@ export function redactValue(value: unknown, secrets: readonly string[]): unknown
   return value;
 }
 
+/**
+ * Recursively replace the *value* of every credential-shaped key with
+ * `REDACTED`. This is key-name based and independent of the known launch
+ * secrets: an ACP tool argument can name a credential the bridge never saw
+ * (a token the agent discovered itself), and an approval row must not publish
+ * it. Matching is on the normalized key (case and separators removed), so
+ * `api_key`, `apiKey`, `GH_TOKEN`, `access-token`, `Authorization` and
+ * `client_secret` all match while `tokenizer`, `monkey` and `secret_santa`
+ * do not.
+ */
+export function redactCredentialFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => redactCredentialFields(entry));
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = isCredentialKey(key) ? REDACTED : redactCredentialFields(entry);
+    }
+    return result;
+  }
+  return value;
+}
+
+const CREDENTIAL_KEY_PATTERN = /(?:token|apikey|secret|password|passwd|authorization|credential|credentials|privatekey)$/;
+
+function isCredentialKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (normalized.length === 0) return false;
+  return CREDENTIAL_KEY_PATTERN.test(normalized);
+}
+
 function orderedSecrets(secrets: readonly string[]): string[] {
   return secrets.filter((secret) => typeof secret === 'string' && secret.length > 0).sort((a, b) => b.length - a.length);
 }

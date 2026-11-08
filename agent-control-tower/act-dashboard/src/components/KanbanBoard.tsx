@@ -15,6 +15,7 @@ import type {
 } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+import { reviewNeedsHuman } from '../utils/reviewState';
 import { queryPhase } from '../utils/queryState';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { StateNotice } from './StateNotice';
@@ -559,6 +560,15 @@ export default function KanbanBoard() {
                       <div className="gateline" />
                       <div className="id">{item.id.slice(0, 8)}</div>
                       <div className="t">{item.title}</div>
+                      {/* F24: REVIEW is a badge only while an ask is open; a
+                          finished card in the Review column says so instead of
+                          reading as "needs you" (runOutcome carries the rest). */}
+                      {item.status === 'REVIEW' && reviewNeedsHuman(item) && (
+                        <span className="pill warn">Review</span>
+                      )}
+                      {item.status === 'REVIEW' && !reviewNeedsHuman(item) && (
+                        <span className="owner">awaiting sign-off · no open asks</span>
+                      )}
                       {!!item.pendingAskCount && (
                         <span className="pill warn">{item.pendingAskCount} asks</span>
                       )}

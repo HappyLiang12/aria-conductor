@@ -134,16 +134,16 @@ class ExecutionControllerTest extends WebMvcTestBase {
     }
 
     /**
-     * Malformed run ids never reach the engine. The shared advice has no dedicated
-     * type-mismatch handler, so the catch-all maps this to 500 — pinned here so a
-     * future (intentional) remap to 400 shows up as a conscious test change.
+     * Malformed run ids never reach the engine. F5 remapped the shared advice's
+     * type-mismatch path from the catch-all's 500 to a client-facing 400; this was
+     * the conscious test change the previous pin asked for.
      */
     @ParameterizedTest
     @ValueSource(strings = {"start", "pause", "resume"})
     void lifecycleEndpoints_malformedRunId_neverReachEngine(String action) throws Exception {
         mvc.perform(post("/api/v1/execution/" + action + "/not-a-uuid"))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.status").value(500));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400));
         verifyNoInteractions(loopEngine);
     }
 }

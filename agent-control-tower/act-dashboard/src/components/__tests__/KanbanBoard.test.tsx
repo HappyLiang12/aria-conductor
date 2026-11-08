@@ -1068,6 +1068,51 @@ describe('KanbanBoard board-card outcome chip (R-RFUX4)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// F24 (SDD hardening): a REVIEW card that finished with no open ask is not
+// waiting on a human. Badge REVIEW only while pendingAskCount > 0 and always
+// carry the linked run's outcome, so finished work cannot read as "needs you".
+// ---------------------------------------------------------------------------
+
+describe('KanbanBoard REVIEW badge vs open asks (F24)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  const renderBoard = async (data: KanbanItem[]) => {
+    kanbanData = data;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const utils = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return utils;
+  };
+
+  it('badges Review only while an ask is open, and still shows the run outcome', async () => {
+    await renderBoard([
+      baseItem({ id: 'k-open', status: 'REVIEW', pendingAskCount: 2, runOutcome: 'ACTIVE' }),
+      baseItem({ id: 'k-finished', status: 'REVIEW', pendingAskCount: 0, runOutcome: 'COMPLETED' }),
+    ]);
+
+    const lane = screen.getByTestId('lane-REVIEW');
+    const openCard = lane.querySelector('[data-card="k-open"]') as HTMLElement;
+    const finishedCard = lane.querySelector('[data-card="k-finished"]') as HTMLElement;
+
+    // Ask-ful card: the REVIEW badge (warn pill) plus the linked run's outcome.
+    expect(openCard.textContent).toContain('Review');
+    expect(openCard.textContent).toContain('ACTIVE');
+    expect(openCard.textContent).toContain('2 asks');
+
+    // Finished card: no REVIEW badge, no fabricated ask count; the outcome and
+    // an explicit "no open asks" line carry the state instead.
+    expect(finishedCard.textContent).not.toContain('Review');
+    expect(finishedCard.textContent).not.toMatch(/\d+ asks/);
+    expect(finishedCard.textContent).toContain('COMPLETED');
+    expect(finishedCard.textContent).toContain('no open asks');
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('KanbanBoard honest query states and mobile lane selector', () => {
   const mockedList = vi.mocked(listKanbanItems);
   const mockedMedia = vi.mocked(useMediaQuery);

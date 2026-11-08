@@ -8,6 +8,84 @@ export interface AriaChatResponse {
   intent: string;
   actionsTaken: Array<{ type: string; description: string; result: string }>;
   timestamp: string;
+  /**
+   * F2: the underlying run's status, served by the api lane. Absent on an older
+   * backend — treated as "not reported", never as completion.
+   */
+  status?: string | null;
+  /** The run's failure detail when it ended non-successfully (backend field). */
+  errorMessage?: string | null;
+  /** Legacy alias kept for older payloads; `errorMessage` wins. */
+  error?: string | null;
+  /** Stable failure identity (e.g. RUNTIME_CREDENTIAL_NOT_CONFIGURED). */
+  errorCode?: string | null;
+}
+
+/** Run statuses after which the turn is over. */
+const TERMINAL_RUN_STATUS = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'ABORTED']);
+/** Terminal statuses that did not succeed. */
+const FAILED_RUN_STATUS = new Set(['FAILED', 'CANCELLED', 'ABORTED']);
+
+function runRef(runId: string | null | undefined): string | null {
+  if (typeof runId !== 'string' || !runId.trim()) return null;
+  return `Run ${runId.trim().slice(0, 8)}`;
+}
+
+/**
+ * F2 (SDD hardening): the sync chat's assistant copy, aligned with the run's
+ * status instead of the backend's prose.
+ *
+ * The backend used to answer "I've completed your request…" while the run was
+ * still RUNNING, and to say nothing useful when it failed. The api lane adds
+ * `status`/`errorMessage`; this function never repeats a completion claim the
+ * status does not support:
+ * - FAILED/CANCELLED/ABORTED → the failure, its run, and where to look;
+ * - a non-terminal status → "still <status>", with the run id;
+ * - COMPLETED → the backend answer plus the run citation (the only case that
+ *   may claim completion);
+ * - an absent/unknown status → the answer plus an explicit "not reported"
+ *   caveat (an older backend is not evidence of completion).
+ */
+export function buildSyncChatContent(response: AriaChatResponse): string {
+  const run = runRef(response.runId);
+  const status = typeof response.status === 'string' ? response.status.trim().toUpperCase() : '';
+  const backendMessage = response.message?.trim() || '';
+
+  if (status && FAILED_RUN_STATUS.has(status)) {
+    const reason = response.errorMessage?.trim()
+      || response.error?.trim()
+      || response.errorCode?.trim()
+      || null;
+    return [
+      `⚠ ${run ?? 'The run'} ${status}.`,
+      reason ?? 'The run reported no error detail.',
+      'Open the Runs page for the full trajectory.',
+    ].join('\n\n');
+  }
+
+  if (status && !TERMINAL_RUN_STATUS.has(status)) {
+    const waiting = status === 'WAITING_INPUT'
+      ? ' The run is waiting for your input.'
+      : '';
+    return `${run ?? 'The run'} is still ${status} — not finished.${waiting} Track it on the Runs page.`;
+  }
+
+  if (status === 'COMPLETED') {
+    return [
+      backendMessage || 'The run completed.',
+      `${run ?? 'The run'} · COMPLETED`,
+    ].join('\n\n');
+  }
+
+  const caveat = run
+    ? `${run}: status not reported by this backend — verify on the Runs page before relying on this result.`
+    : 'Run status not reported by this backend — verify on the Runs page before relying on this result.';
+  // The caveat leads: a legacy backend's prose may itself claim completion, so
+  // it is quoted as an unverified reply rather than repeated as the answer.
+  return [
+    caveat,
+    backendMessage ? `Backend reply (unverified): ${backendMessage}` : '',
+  ].filter(Boolean).join('\n\n');
 }
 
 export async function sendMessage(
@@ -23,7 +101,7 @@ export async function sendMessage(
   return {
     id: crypto.randomUUID(),
     role: 'assistant',
-    content: data.message || 'No response received.',
+    content: buildSyncChatContent(data),
     timestamp: data.timestamp || new Date().toISOString(),
   } as AriaMessage;
 }

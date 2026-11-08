@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SettingsPage } from '../pages/SettingsPage';
 import { SystemConfigPanel } from './SystemConfigPanel';
 import { RuntimeCredentialsCard } from './RuntimeCredentialsCard';
+import { GitCredentialCard } from './GitCredentialCard';
 import { ConfirmDialog } from './ConfirmDialog';
 import { listSkills } from '../api/skills';
 import { applyFleetRuntime, listAgents } from '../api/agents';
@@ -208,7 +209,12 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
             <SystemConfigPanel />
           )}
           {activeTab === 'runtime' && (
-            <RuntimePane />
+            <div style={{ padding: '0', margin: '0' }}>
+              <RuntimePane />
+              {/* F8: the workflow git handoff credential (pack-git-0001) had no
+                  editor; it lives with the other runtime credentials. */}
+              <GitCredentialCard />
+            </div>
           )}
         </div>
 

@@ -1,5 +1,9 @@
 package io.aria.conductor.execution.runtime.host;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -20,10 +24,12 @@ import io.aria.conductor.execution.runtime.RuntimeRecoveryCoordinator;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -639,6 +645,1000 @@ class HostExecutionBackendIntegrationTest {
         assertThat(resumed.verified()).isTrue();
     }
 
+    /**
+     * R7 (review round 2): the sampler is what attributes a child that outlives
+     * its root. The fake supervisor reports the grandchild {@code 7001@7001}
+     * exactly once -- to the sampler's enumeration -- and never from the root's
+     * tree again, while {@code pids} keeps listing it as a live job member. A stop
+     * that trusted the enumeration alone would leave a live writer behind and fail
+     * closed; the proof must instead kill the observed identity and be satisfied.
+     * Reverting the sampler makes this test fail (the grandchild is never killed
+     * and the job inventory fails the proof closed).
+     */
+    @Test
+    void theStopProofKillsAGrandchildTheSamplerSawBeforeTheRootDroppedIt() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-attribution"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+
+        // Two enumerations prove the sampler completed one pass: the first carries
+        // the grandchild, the second does not (the intermediate is gone).
+        awaitProtocolLines(protocolLog, "tree: ", 2, 30_000);
+        String sampledTree = firstProtocolLine(protocolLog, "sampled: ");
+        assertThat(sampledTree).isEqualTo("sampled: 7001@7001");
+        assertThat(protocolLogLines(protocolLog))
+                .as("the root's enumeration must stop reaching the grandchild, or the test is vacuous")
+                .anyMatch(line -> line.startsWith("tree: ") && !line.contains("7001@7001"));
+        assertThat(protocolLogLines(protocolLog))
+                .as("the grandchild must not have been signalled before the stop")
+                .noneMatch(line -> line.equals("killed: 7001@7001"));
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.runId()).isEqualTo(owned.runId());
+        assertThat(proof.allWritersStopped())
+                .as("the grandchild the sampler saw is this run's writer: the proof must kill it by"
+                        + " identity instead of failing closed on an unreachable job member")
+                .isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the stop must signal the observed grandchild identity")
+                .contains("killed: 7001@7001");
+        assertThat(protocolLogLines(protocolLog))
+                .as("the stop must never signal an identity it cannot verify")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+    }
+
+    /**
+     * Release-blocking live finding (run 8af5e2a6): a WAITING_INPUT run's core
+     * exits on its own -- the assistant's clarification question was delivered and
+     * the bridge is gone -- and the operator's later cancel must still finalize.
+     * The controller's binding is intact (nonce, root pid and creation identity all
+     * match the launch it performed); only the root's OS identity is gone. The
+     * {@code owns} assertion is the control: it is exactly the gate the pre-fix
+     * stop returned {@code false} at, in ~160 ms, without killing or
+     * verdict-checking the sampler's records -- and pause/resume must keep
+     * requiring a live root. The stop itself must sweep the (now empty) root tree,
+     * kill the observed child by identity and prove the run stopped.
+     */
+    @Test
+    void aStopProofKillsTheObservedChildWhenTheRootExitedOnItsOwn() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-dead-root-child"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "dead-root-child"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        assertThat(awaitObservedRecord(controller, owned.runId(), "7001@7001", 30_000))
+                .as("the sampler must have observed the child, or the test is vacuous").isTrue();
+        assertThat(controller.owns(owned))
+                .as("control: the root no longer re-verifies through the OS, so the pre-fix ownership gate"
+                        + " refused this stop outright -- and pause/resume keep refusing it")
+                .isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.runId()).isEqualTo(owned.runId());
+        assertThat(proof.allWritersStopped())
+                .as("a bound run whose root exited on its own still has a writer: the observed child is"
+                        + " killed by identity and the proof over it is true")
+                .isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the observed child is signalled only after the OS verified its identity")
+                .contains("killed: 7001@7001")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+    }
+
+    /**
+     * The same dead-root shape with nothing left behind: the root answered "gone"
+     * before the stop, no child was ever observed and the job lists no member. The
+     * proof has nothing to kill and must still be able to verify that instead of
+     * refusing at the ownership gate.
+     */
+    @Test
+    void aStopProofHoldsWhenTheRootExitedOnItsOwnAndNoChildRemains() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-dead-root-empty"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "dead-root-no-children"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "root-dead: ", 30_000);
+        assertThat(controller.owns(owned))
+                .as("control: the root is gone, so only the binding still identifies this run").isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.allWritersStopped())
+                .as("a bound run whose root exited leaves nothing to stop: the proof is true")
+                .isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("nothing is signalled when nothing is left")
+                .noneMatch(line -> line.startsWith("killed: ") || line.startsWith("kill-refused: "));
+    }
+
+    /**
+     * Fail-closed control for the dead-root path: the sampler's observed child is
+     * a breakaway writer (the job never listed it) whose identity the OS cannot
+     * read at stop time. Unknown is not absent -- the proof must fail closed,
+     * name the identity it could not verify and never signal it, even though the
+     * root being gone is no longer a reason to refuse the proof.
+     */
+    @Test
+    void anUnverifiableObservedChildFailsTheStopProofClosedWhenTheRootIsGone() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-dead-root-unverifiable"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller = new WindowsProcessController(
+                fakeSupervisorHost(dir, protocolLog, "dead-root-unverifiable-child"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        assertThat(awaitObservedRecord(controller, owned.runId(), "7001@7001", 30_000))
+                .as("the sampler must have observed the child, or the test is vacuous").isTrue();
+        ListAppender<ILoggingEvent> logs = captureControllerLogs();
+        try {
+            StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+            assertThat(proof.allWritersStopped())
+                    .as("an observed identity the OS cannot verify may be a live writer: the proof"
+                            + " fails closed even when the root is gone")
+                    .isFalse();
+            assertThat(protocolLogLines(protocolLog))
+                    .as("no signal is sent to a record whose identity was never verified")
+                    .noneMatch(line -> line.startsWith("killed: ") || line.startsWith("kill-refused: ")
+                            || line.startsWith("applied: "));
+            List<String> warnings = logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertThat(warnings)
+                    .as("a dead-root refusal must say why it failed: the unverifiable identity is named")
+                    .isNotEmpty()
+                    .allSatisfy(message -> assertThat(message)
+                            .contains(owned.runId().toString())
+                            .contains("unverifiable")
+                            .contains("7001@7001"));
+        } finally {
+            detachControllerLogs(logs);
+        }
+    }
+
+    /**
+     * Safety pin for the dead-root path: the recorded root's pid was recycled by an
+     * unrelated process. The binding still matches, so the proof must proceed on
+     * identity evidence alone -- but a tree sweep anchored on that pid would
+     * enumerate the stranger's tree and kill its child by identity. Only a live,
+     * identity-validated root may anchor the sweep; a recycled or gone root
+     * contributes no tree, and the proof over this run's own records is still true.
+     */
+    @Test
+    void aRecycledRootPidIsNeverAnchoredForTheTreeSweep() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-recycled-root"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "recycled-root"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "root-recycled: ", 30_000);
+        assertThat(controller.owns(owned))
+                .as("control: the pid now carries another process's identity, so the run is not owned")
+                .isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(protocolLogLines(protocolLog))
+                .as("a sweep anchored on a recycled pid would enumerate a stranger's tree: it is never"
+                        + " read, so the stranger's child is never killed")
+                .noneMatch(line -> line.startsWith("tree-of-recycled: "))
+                .noneMatch(line -> line.startsWith("killed: ") || line.startsWith("kill-refused: "));
+        assertThat(proof.allWritersStopped())
+                .as("the run's own records are gone or recycled and the job has no member: the proof is true")
+                .isTrue();
+    }
+
+    /**
+     * The other side of the distinction: a record that is not this controller's
+     * binding (a foreign ownership nonce, or a controller that never bound the run)
+     * is refused without touching anything, and the refusal is diagnosable. The
+     * live failure had no diagnostic at all, so a silent false proof is the
+     * regression this test pins; the WARN must name the path (binding mismatch) and
+     * distinguish it from a bound run whose root is gone.
+     */
+    @Test
+    void aStopWithoutABindingIsRefusedWithoutASignalAndIsLogged() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-stop-binding-mismatch"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+        String rootRecord = owned.rootPid() + "@" + owned.rootCreationIdentity();
+        OwnedProcess foreignNonce = new OwnedProcess(owned.runId(), UUID.randomUUID().toString(),
+                owned.rootPid(), owned.rootCreationIdentity(), owned.supervisorIdentity(), owned.technique(), null);
+        WindowsProcessController unbound =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(unbound::close);
+        ListAppender<ILoggingEvent> logs = captureControllerLogs();
+        try {
+            assertThat(controller.stop(foreignNonce, Instant.now().plusSeconds(30)).allWritersStopped())
+                    .as("a foreign ownership nonce is never this controller's binding").isFalse();
+            assertThat(unbound.stop(owned, Instant.now().plusSeconds(30)).allWritersStopped())
+                    .as("a record no launch bound is refused even when its pid and creation identity match")
+                    .isFalse();
+
+            assertThat(protocolLogLines(protocolLog))
+                    .as("neither refusal may signal anything: the record is not this controller's run")
+                    .noneMatch(line -> line.startsWith("killed: ") || line.startsWith("kill-refused: ")
+                            || line.startsWith("applied: "));
+            assertThat(protocolLogLines(protocolLog).stream().filter(line -> line.startsWith("ready: ")).count())
+                    .as("the unbound controller must not build a supervision channel to refuse a foreign record")
+                    .isEqualTo(1);
+            List<String> warnings = logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertThat(warnings)
+                    .as("every refused binding is logged, and the path is named")
+                    .hasSize(2)
+                    .allSatisfy(message -> assertThat(message)
+                            .contains(owned.runId().toString())
+                            .contains("binding mismatch")
+                            .contains(rootRecord));
+        } finally {
+            detachControllerLogs(logs);
+        }
+    }
+
+    /**
+     * R7 (review round 2): a job member that no enumerated tree of any run
+     * contains still fails the proof closed, and the failure is diagnosable: the
+     * WARN must name the run, the inventory and the unaccounted identities, and it
+     * must describe them accurately -- a member of another supervised run whose
+     * own root no longer matches is not "reachable from no live run", it is simply
+     * not enumerable at proof time.
+     */
+    @Test
+    void anUnaccountedJobMemberFailsTheProofClosedAndIsLogged() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-unaccounted-member"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "unaccounted-member"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        ListAppender<ILoggingEvent> logs = captureControllerLogs();
+        try {
+            StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+            assertThat(proof.allWritersStopped())
+                    .as("a live job member no run can account for must fail the proof closed")
+                    .isFalse();
+            assertThat(protocolLogLines(protocolLog))
+                    .as("an unaccounted member may belong to another run: it is never signalled")
+                    .noneMatch(line -> line.equals("killed: 6001@666"));
+            List<String> warnings = logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertThat(warnings)
+                    .as("a failed proof must be diagnosable from the inventory it logs")
+                    .isNotEmpty()
+                    .allSatisfy(message -> assertThat(message)
+                            .contains(owned.runId().toString())
+                            .contains("unaccounted")
+                            .contains("6001@666")
+                            .doesNotContain("reachable from no live run"));
+        } finally {
+            detachControllerLogs(logs);
+        }
+    }
+
+    /**
+     * R7 (review round 2): the completeness net's other side. A member that
+     * belongs to another supervised run is only excludable while that run's root
+     * still re-verifies. Once it does not, the member is an unaccounted identity
+     * and this run's proof must fail closed rather than assume it away -- the WARN
+     * text must not claim it is unreachable from any live run.
+     */
+    @Test
+    void aForeignRunsUnverifiableJobMemberFailsTheProofClosed() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-foreign-member"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "foreign-member"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess first = startOnFakeSupervisor(controller, workspace);
+        OwnedProcess second = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "foreign-root-dead: ", 30_000);
+
+        ListAppender<ILoggingEvent> logs = captureControllerLogs();
+        try {
+            StopProof proof = controller.stop(first, Instant.now().plusSeconds(30));
+
+            assertThat(proof.runId()).isEqualTo(first.runId());
+            assertThat(proof.allWritersStopped())
+                    .as("a member of a supervised run whose root no longer re-verifies cannot be"
+                            + " excluded, so this run's proof must fail closed")
+                    .isFalse();
+            assertThat(protocolLogLines(protocolLog))
+                    .as("the other run's child is never signalled by this run's stop")
+                    .noneMatch(line -> line.equals("killed: 7002@7002"));
+            List<String> warnings = logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertThat(warnings).isNotEmpty()
+                    .allSatisfy(message -> assertThat(message).contains("7002@7002"));
+            assertThat(second.runId()).isNotEqualTo(first.runId());
+        } finally {
+            detachControllerLogs(logs);
+        }
+    }
+
+    /**
+     * R7 (review round 2): the straggler scan and the job-inventory phases are
+     * round trips too, so an elapsed window must be re-checked there and not only
+     * in the tree sweep. The fake delays the grandchild's straggler verdict past
+     * the caller's window: the stop must refuse instead of signalling on after the
+     * window elapsed.
+     */
+    @Test
+    void theStopProofRechecksItsDeadlineAfterTheStragglerScan() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-deadline-stragglers"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "deadline-stragglers"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 2, 30_000);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusMillis(1500));
+
+        assertThat(proof.allWritersStopped())
+                .as("an elapsed window cannot support a stop proof, not even after the tree sweep finished")
+                .isFalse();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the straggler scan must have been reached, or the test is vacuous")
+                .contains("straggler-probe: 7001@7001");
+        assertThat(protocolLogLines(protocolLog))
+                .as("nothing may be signalled after the window elapsed")
+                .noneMatch(line -> line.equals("killed: 7001@7001"));
+    }
+
+    /**
+     * R7 (review round 3, P3): the final job inventory and its unaccounted-member
+     * classification are round trips too, and they issue no signal, so an elapsed
+     * window must be re-checked around them as every earlier phase does. The fake
+     * delays only the second "pids" (the final inventory) past the caller's
+     * window; the tree is already empty, so without the re-check the stop would
+     * return a true proof after the window elapsed.
+     */
+    @Test
+    void theStopProofRechecksItsDeadlineAfterTheFinalJobInventory() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-deadline-inventory"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "deadline-inventory"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusMillis(1500));
+
+        assertThat(protocolLogLines(protocolLog))
+                .as("the final job inventory must have been reached, or the test is vacuous")
+                .anyMatch(line -> line.startsWith("inventory-probe: "));
+        assertThat(proof.allWritersStopped())
+                .as("an inventory round trip that outlived the window cannot support a true proof")
+                .isFalse();
+    }
+
+    /**
+     * R7 (review round 2): the sampler runs off the controller's scheduled thread,
+     * so it must snapshot a live supervisor and never build one. A supervisor
+     * constructed from the sampler after {@code release()}/{@code close()} is
+     * never closed (it leaks its process, job handle and temp script), and the
+     * construction can block for the whole start window inside the supervisor
+     * lock. The fake exits after its first sampled tree; the next tick must find
+     * nothing to sample, not a replacement channel.
+     */
+    @Test
+    void theSamplerNeverRecreatesADeadSupervisor() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-dead-channel"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "dead-after-first-sample"));
+        cleanups.add(() -> deleteTree(dir));
+        startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+
+        Thread.sleep(2000); // four sampler ticks: the fake is gone after ~300 ms
+
+        assertThat(protocolLogLines(protocolLog).stream().filter(line -> line.startsWith("ready: ")).toList())
+                .as("the sampler must never recreate the supervision channel")
+                .hasSize(1);
+    }
+
+    /**
+     * R7 (review round 2): {@code close()} ends supervision for good. A later
+     * {@code start} is refused, and neither {@code owns} nor {@code stop} may
+     * recreate a supervisor from the closed state -- a channel created after the
+     * close is never closed by anyone.
+     */
+    @Test
+    void aClosedControllerRefusesANewStartAndCreatesNoSupervisor() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-closed-controller"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        cleanups.add(controller::close);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+        controller.close();
+
+        assertThat(controller.owns(owned)).as("a closed controller holds no binding").isFalse();
+        assertThat(controller.stop(owned, Instant.now().plusSeconds(30)).allWritersStopped()).isFalse();
+        Thread.sleep(1200);
+
+        assertThat(protocolLogLines(protocolLog).stream().filter(line -> line.startsWith("ready: ")).toList())
+                .as("neither owns nor stop may build a supervision channel after close")
+                .hasSize(1);
+        assertThatThrownBy(() -> controller.start(UUID.randomUUID(), new LaunchProfile(
+                List.of(nodeExecutable(), "-e", "setInterval(() => {}, 1000);"), Map.of(), workspace.toString())))
+                .as("a closed controller must not supervise a new run")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("closed");
+    }
+
+    /**
+     * R7 (review round 3, P3): the closed check is not atomic with the bind. A
+     * start that passed the check before {@code close()} must not return success
+     * for a run the kill-on-close job then terminates, and it must not leave a
+     * binding, a remembered population or a live process behind. The seam fires
+     * exactly in that window: the run is bound and {@code close()} has already
+     * cleared the maps when the terminal state is re-checked.
+     */
+    @Test
+    void aStartThatRacesCloseRollsBackInsteadOfBindingIntoAClosedController() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-start-races-close"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        cleanups.add(controller::close);
+        controller.afterBind = owned -> controller.close();
+
+        UUID runId = UUID.randomUUID();
+        LaunchProfile profile = new LaunchProfile(
+                List.of(nodeExecutable(), "-e", "setInterval(() => {}, 1000);"), Map.of(), workspace.toString());
+
+        assertThatThrownBy(() -> controller.start(runId, profile))
+                .as("a run bound after the controller closed must be refused, not reported as supervised")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("closed");
+
+        assertThat(controller.observedRecordCount(runId))
+                .as("the refused start must roll its binding back").isZero();
+        assertThat(controller.observedPeak(runId)).isZero();
+
+        // The launched runtime is terminated with the rollback: a refused start
+        // never leaves an unsupervised core behind.
+        long launchedPid = Long.parseLong(awaitProtocolLine(protocolLog, "assigned: ", 30_000)
+                .substring("assigned: ".length()).trim());
+        cleanups.add(() -> destroyPid(launchedPid));
+        awaitDead(launchedPid);
+        assertThat(isAlive(launchedPid))
+                .as("a refused start must terminate the process it already launched")
+                .isFalse();
+    }
+
+    /**
+     * R7 (review round 3, P3): {@code close()} is terminal for channel creation
+     * too. {@code close()} clears {@code started} first, so {@code owns()} and
+     * {@code stop()} return at the binding look-up and never reach the guard; it
+     * is therefore asserted directly through the seam. A supervisor created after
+     * the close would be closed by nobody, leaking its process, job handle and
+     * temp script.
+     */
+    @Test
+    void aClosedControllerRefusesToCreateASupervisionChannel() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-closed-channel-guard"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        cleanups.add(controller::close);
+        controller.close();
+
+        assertThatThrownBy(controller::supervisorSelfIdentity)
+                .as("no supervision channel may be created after close")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("closed");
+        assertThat(protocolLogLines(protocolLog))
+                .as("the refused creation must not have started a supervisor")
+                .noneMatch(line -> line.startsWith("ready: "));
+    }
+
+    /**
+     * R7 (review round 2): the remembered population is attribution evidence, and
+     * it must not grow without bound across a run. The fake reports 700 one-off
+     * grandchildren that all answer "gone"; the sampler's population must stay
+     * within its documented bound while the live root stays attributable.
+     *
+     * <p>Review round 3, P3: the bound is asserted by a bounded poll, never a fixed
+     * sleep -- the probe budget is per pass, so a slow runner needs several passes
+     * and a fixed 1.5 s window could observe 513 records. The pre-prune peak is
+     * asserted too, so the bound is exercised rather than merely never reached.
+     */
+    @Test
+    void theSamplersRememberedPopulationIsBounded() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-memory-bound"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "many-exited-records"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-many: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the 700 one-off children plus the live root must have been observed before pruning")
+                .isGreaterThanOrEqualTo(701);
+
+        int settled = awaitObservedCountAtMost(controller, owned.runId(),
+                WindowsProcessController.MAX_OBSERVED_RECORDS, 30_000);
+        assertThat(settled)
+                .as("exited identities must be pruned, not accumulated for the life of the run")
+                .isLessThanOrEqualTo(WindowsProcessController.MAX_OBSERVED_RECORDS);
+        assertThat(controller.observedRecordContains(owned.runId(),
+                owned.rootPid() + "@" + owned.rootCreationIdentity()))
+                .as("the live root is never shed: pruning only removes identities the OS reports gone")
+                .isTrue();
+        assertThat(controller.owns(owned)).as("the live root stays attributable").isTrue();
+    }
+
+    /**
+     * R7 (review round 3, P2): the cap is a bound on dead records only. The fake
+     * reports 700 synthetic grandchildren that all answer "match" -- live, and
+     * unreachable from the root's tree afterwards -- while "pids" never lists them
+     * (the documented best-effort job configuration: the assignment refused and
+     * breakaway children invisible). A sampler that shed them to honour the cap
+     * would destroy the only attribution evidence for a live writer, and the stop
+     * proof could then return {@code allWritersStopped=true} over a live writer.
+     * The proof may only be true because the retained population was killed by
+     * identity.
+     */
+    @Test
+    void anOverCapLivePopulationIsNeverShedAndTheProofKillsItByIdentity() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-over-cap-live"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "over-cap-live-records"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-over-cap: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the fixture must have served an over-cap population, or the test is vacuous")
+                .isGreaterThanOrEqualTo(701);
+        assertThat(awaitObservedCount(controller, owned.runId(), 701, 10_000))
+                .as("a record the OS reports live is the only attribution evidence for a child"
+                        + " unreachable from the root; it must be retained over the cap, never shed")
+                .isEqualTo(701);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
+
+        assertThat(protocolLogLines(protocolLog).stream()
+                .filter(line -> line.equals("killed: 10000@5001")).count())
+                .as("the retained live record must be signalled by identity before the proof")
+                .isEqualTo(1);
+        assertThat(protocolLogLines(protocolLog).stream()
+                .filter(line -> line.startsWith("killed: ")).count())
+                .as("every retained live identity and the root must be killed, so no true proof covers"
+                        + " a live writer")
+                .isGreaterThanOrEqualTo(701);
+        assertThat(protocolLogLines(protocolLog))
+                .as("every retained identity is verified by the OS before it is signalled")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+        assertThat(proof.allWritersStopped())
+                .as("the retained population is this run's own writers: the proof may hold after killing them")
+                .isTrue();
+    }
+
+    /**
+     * R7 (review round 3, P3-c): the rollback in {@code start}'s catch is what
+     * removes the binding, so the test must not also close the controller -- the
+     * round-2 test closes inside the seam, and {@code close()} clears the same
+     * maps, so deleting the rollback block left it green. Here the seam throws
+     * <em>without</em> closing: the catch block is the only cleaner left, and the
+     * launched runtime is left with no supervision at all.
+     */
+    @Test
+    void aStartWhoseBindFailsRollsBackTheMapsAndTheLaunchedProcess() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-start-bind-fails"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "sampler-attribution"));
+        cleanups.add(() -> deleteTree(dir));
+        cleanups.add(controller::close);
+        AtomicReference<OwnedProcess> bound = new AtomicReference<>();
+        controller.afterBind = owned -> {
+            bound.set(owned);
+            throw new IllegalStateException("bind seam failure");
+        };
+
+        UUID runId = UUID.randomUUID();
+        LaunchProfile profile = new LaunchProfile(
+                List.of(nodeExecutable(), "-e", "setInterval(() => {}, 1000);"), Map.of(), workspace.toString());
+
+        assertThatThrownBy(() -> controller.start(runId, profile))
+                .as("a bind step that fails never reports the run as supervised")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("bind seam failure");
+
+        assertThat(bound.get()).as("the run was bound before the failure, or the test is vacuous").isNotNull();
+        assertThat(controller.observedRecordCount(runId))
+                .as("the catch rollback -- not a concurrent close -- must clear the remembered population")
+                .isZero();
+        assertThat(controller.observedPeak(runId)).isZero();
+        assertThat(controller.owns(bound.get()))
+                .as("a start that rolled back leaves no binding: owns must not re-verify the record")
+                .isFalse();
+
+        long launchedPid = Long.parseLong(awaitProtocolLine(protocolLog, "assigned: ", 30_000)
+                .substring("assigned: ".length()).trim());
+        cleanups.add(() -> destroyPid(launchedPid));
+        awaitDead(launchedPid);
+        assertThat(isAlive(launchedPid))
+                .as("a failed start must terminate the process it already launched")
+                .isFalse();
+    }
+
+    /**
+     * R7 (review round 3, P3-a): the prune budget is per pass, and a pass must not
+     * always spend it on the same head of the population. The fake declares the
+     * first 32 distinct identities it is probed about live and every later one
+     * gone -- 32+ live records at the iteration head with the dead ones queued
+     * behind them. A fixed-head pass probes the same 32 live records forever and
+     * leaves every dead one in place; a rotating cursor reaches the tail, evicts
+     * the dead records and the population falls back under the cap.
+     */
+    @Test
+    void theSamplerRotatesItsProbeBudgetPastAWallOfLiveRecords() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-probe-rotation"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "head-live-tail-gone"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-head-live-tail-gone: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the fixture must have served an over-cap population, or the test is vacuous")
+                .isGreaterThanOrEqualTo(701);
+        int settled = awaitObservedCountAtMost(controller, owned.runId(),
+                WindowsProcessController.MAX_OBSERVED_RECORDS, 30_000);
+        assertThat(settled)
+                .as("a dead record behind a wall of live ones must be reached and evicted across"
+                        + " passes; a fixed-head probe budget never leaves the head")
+                .isLessThanOrEqualTo(WindowsProcessController.MAX_OBSERVED_RECORDS);
+
+        List<String> declaredLive = protocolLogLines(protocolLog).stream()
+                .filter(line -> line.startsWith("declared-live: "))
+                .map(line -> line.substring("declared-live: ".length()))
+                .toList();
+        assertThat(declaredLive)
+                .as("the fixture's premise is 32 live records at the head before any dead one")
+                .hasSize(32);
+        assertThat(declaredLive)
+                .as("a live record is never shed, however deep the population")
+                .allSatisfy(record -> assertThat(controller.observedRecordContains(owned.runId(), record)).isTrue());
+        String evicted = protocolLogLines(protocolLog).stream()
+                .filter(line -> line.startsWith("verdict: ") && line.endsWith(":gone"))
+                .map(line -> line.substring("verdict: ".length(), line.lastIndexOf(":gone")))
+                .findFirst()
+                .orElse(null);
+        assertThat(evicted)
+                .as("an identity beyond the live head must have been probed and reported gone")
+                .isNotNull();
+        assertThat(controller.observedRecordContains(owned.runId(), evicted))
+                .as("the probed dead identity is evicted: a gone identity accounts for no live writer")
+                .isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
+
+        assertThat(protocolLogLines(protocolLog).stream().filter(line -> line.startsWith("killed: ")).count())
+                .as("every retained live identity and the root are killed by identity")
+                .isGreaterThanOrEqualTo(33);
+        assertThat(proof.allWritersStopped())
+                .as("the retained population is this run's own writers: the proof holds after killing them")
+                .isTrue();
+    }
+
+    /**
+     * R7 (review round 4, P3-b): "unverifiable" is not "gone". The fake reports the
+     * grandchild the sampler saw as unverifiable -- the OS query failed for a reason
+     * other than a definite absence -- and "pids" never lists it, so the inventory
+     * cannot decide it either. The proof must fail closed: no signal without a
+     * verified identity, and the identity stays in the remembered population as the
+     * only attribution evidence there is.
+     */
+    @Test
+    void anUnverifiableRecordIsRetainedAndFailsTheStopProofClosed() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-unverifiable-record"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "unverifiable-record"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 2, 30_000);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.allWritersStopped())
+                .as("a record the OS cannot verify may be a live writer: the proof must fail closed")
+                .isFalse();
+        String rootRecord = owned.rootPid() + "@" + owned.rootCreationIdentity();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the root's own verified tree is still killed: the refusal is about the one identity")
+                .contains("killed: " + rootRecord)
+                .noneMatch(line -> line.equals("killed: 7001@7001"));
+        assertThat(protocolLogLines(protocolLog))
+                .as("no kill is attempted without a verified identity")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+        assertThat(controller.observedRecordContains(owned.runId(), "7001@7001"))
+                .as("an unverifiable identity is retained: it is the only attribution evidence for it")
+                .isTrue();
+    }
+
+    /**
+     * R7 (review round 3, P3-b): the cap is a bound on dead evidence only, and an
+     * unverifiable record is not dead. The fake answers every one of 700 over-cap
+     * identities with "unverifiable": a sampler that folded unknown into gone would
+     * shed 32 of them per pass and destroy the only attribution evidence for the
+     * children behind them.
+     */
+    @Test
+    void anOverCapPopulationOfUnverifiableRecordsIsRetained() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-over-cap-unverifiable"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "over-cap-unverifiable"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-over-cap-unverifiable: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the fixture must have served an over-cap population, or the test is vacuous")
+                .isGreaterThanOrEqualTo(701);
+        // Several sampler passes must have spent their probe budget before the count is read.
+        awaitProtocolLines(protocolLog, "tree: ", 4, 30_000);
+
+        assertThat(controller.observedRecordCount(owned.runId()))
+                .as("unknown is not absent: an unverifiable record is never shed to honour the cap")
+                .isEqualTo(701);
+    }
+
+    /**
+     * R7 (review round 3, P3-b): the job inventory has the same rule. "pids" reports
+     * {@code unverifiable:5002}, a live job member whose identity the OS could not
+     * read. Reading that as absence would drop it from the inventory and let the
+     * proof certify a workspace the member can still mutate; it is an unaccounted
+     * identity and the proof fails closed.
+     */
+    @Test
+    void aJobMemberWithAnUnverifiableIdentityFailsTheProofClosed() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-unverifiable-member"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "unverifiable-member"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        ListAppender<ILoggingEvent> logs = captureControllerLogs();
+        try {
+            StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+            assertThat(proof.allWritersStopped())
+                    .as("an inventory member whose identity is unknown cannot be dismissed: fail closed")
+                    .isFalse();
+            assertThat(protocolLogLines(protocolLog))
+                    .as("an unverifiable member is never signalled")
+                    .noneMatch(line -> line.startsWith("killed: unverifiable"));
+            List<String> warnings = logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            assertThat(warnings)
+                    .as("the failed proof names the identity it could not classify")
+                    .isNotEmpty()
+                    .allSatisfy(message -> assertThat(message).contains("unverifiable:5002"));
+        } finally {
+            detachControllerLogs(logs);
+        }
+    }
+
+    /**
+     * R7 (review round 3, P3-d): {@code stop} copies the run's observed set before
+     * its root sweep, and the sampler can add a record in that window. The fake's
+     * {@code 12001@5001} is a live breakaway writer -- never in the root's tree and
+     * never in the job inventory -- so the sampler's record is its only attribution
+     * evidence. A proof that scans only its first copy never probes it, never kills
+     * it, and still returns true; the seam adds it exactly at that point, and the
+     * re-read is what makes the straggler scan reach it.
+     */
+    @Test
+    void theStopProofRereadsTheSamplersPopulationAfterTheRootSweep() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-late-sampled-record"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "late-sampled-record"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+        controller.afterRootSweep = records -> records.add("12001@5001");
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(protocolLogLines(protocolLog).stream()
+                .filter(line -> line.equals("killed: 12001@5001")).count())
+                .as("a record the sampler remembered mid-proof is a writer of this run: it is killed"
+                        + " by identity instead of surviving behind a proof that never probed it")
+                .isEqualTo(1);
+        assertThat(protocolLogLines(protocolLog))
+                .as("the late record is signalled only after the OS verified its identity")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+        assertThat(proof.allWritersStopped())
+                .as("the writer was killed, so the proof over it is true")
+                .isTrue();
+    }
+
+    /**
+     * R7 (review round 4, P2): the population re-read before the straggler scan is not
+     * the proof's last word -- the per-record verdicts, the own-survivor kill and the
+     * final job inventory are round trips after it, and the inventory cannot see a
+     * breakaway writer. A record the sampler adds in that last window was never
+     * scanned, killed or verdict-checked, so a proof that returns true after it
+     * certifies a live writer as stopped. The seam adds the fixture's live breakaway
+     * writer exactly after the final inventory and the proof must fail closed. The
+     * control run of the same fixture, without the injection, proves true: the false
+     * below is the last-window record, not the fixture.
+     */
+    @Test
+    void theStopProofFailsClosedWhenARecordIsSampledAfterTheFinalInventory() throws Exception {
+        Path controlDir = canonical(Files.createTempDirectory("host-last-window-control"));
+        Path controlWorkspace = Files.createDirectories(controlDir.resolve("workspace"));
+        Path controlLog = controlDir.resolve("supervisor-protocol.log");
+        WindowsProcessController control = new WindowsProcessController(
+                fakeSupervisorHost(controlDir, controlLog, "late-sampled-record"));
+        cleanups.add(() -> deleteTree(controlDir));
+        OwnedProcess controlOwned = startOnFakeSupervisor(control, controlWorkspace);
+        awaitProtocolLines(controlLog, "tree: ", 1, 30_000);
+        assertThat(control.stop(controlOwned, Instant.now().plusSeconds(30)).allWritersStopped())
+                .as("control: the same fixture without a record in the last window proves true")
+                .isTrue();
+
+        Path dir = canonical(Files.createTempDirectory("host-last-window-record"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "late-sampled-record"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+        controller.afterFinalInventory = records -> records.add("12001@5001");
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(controller.observedRecordContains(owned.runId(), "12001@5001"))
+                .as("the sampler's population gained the record inside the proof's last window")
+                .isTrue();
+        assertThat(proof.allWritersStopped())
+                .as("a record first seen after the final inventory was never scanned, killed or"
+                        + " verdict-checked, and the inventory cannot see a breakaway writer: the"
+                        + " proof must fail closed instead of certifying a live writer as stopped")
+                .isFalse();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the proof fails closed without signalling a record it never verified")
+                .noneMatch(line -> line.equals("killed: 12001@5001"));
+    }
+
+    /**
+     * R7 (review round 3): a mismatched identity is a recycled PID -- it can never
+     * account for a live writer -- so the sampler evicts it. The fake answers every
+     * over-cap identity with a mismatch: an eviction branch that ignored mismatch
+     * would hold all 700 recycled identities for the life of the run.
+     */
+    @Test
+    void mismatchedIdentitiesAreEvictedFromTheSamplersPopulation() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-mismatch"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "mismatch-records"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-mismatch-records: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the fixture must have served an over-cap population, or the test is vacuous")
+                .isGreaterThanOrEqualTo(701);
+        int settled = awaitObservedCountAtMost(controller, owned.runId(),
+                WindowsProcessController.MAX_OBSERVED_RECORDS, 30_000);
+        assertThat(settled)
+                .as("recycled identities must be pruned, not accumulated for the life of the run")
+                .isLessThanOrEqualTo(WindowsProcessController.MAX_OBSERVED_RECORDS);
+
+        String probed = protocolLogLines(protocolLog).stream()
+                .filter(line -> line.startsWith("verdict: ") && line.contains(":mismatch:"))
+                .map(line -> line.substring("verdict: ".length(), line.indexOf(":mismatch:")))
+                .findFirst()
+                .orElse(null);
+        assertThat(probed).as("a mismatched identity must have been probed").isNotNull();
+        assertThat(controller.observedRecordContains(owned.runId(), probed))
+                .as("the probed mismatched identity is evicted")
+                .isFalse();
+    }
+
+    /**
+     * R7 (review round 3): the mixed population the review asked for -- 700
+     * over-cap identities of which every tenth is gone and the rest are live. The
+     * sampler may only drain the 70 dead ones; the 630 live ones plus the root stay
+     * attributable and the stop kills exactly them.
+     */
+    @Test
+    void aMixedLiveAndDeadOverCapPopulationDrainsOnlyTheDeadRecords() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-sampler-mixed"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "over-cap-mixed"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLine(protocolLog, "sampled-mixed: ", 30_000);
+
+        assertThat(awaitObservedPeak(controller, owned.runId(), 701, 30_000))
+                .as("the fixture must have served an over-cap population, or the test is vacuous")
+                .isGreaterThanOrEqualTo(701);
+        assertThat(awaitObservedCountEquals(controller, owned.runId(), 631, 30_000))
+                .as("the 70 gone identities drain across passes while the 630 live ones (plus the"
+                        + " root) survive over the cap")
+                .isEqualTo(631);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
+
+        assertThat(protocolLogLines(protocolLog).stream().filter(line -> line.startsWith("killed: ")).count())
+                .as("every retained live identity and the root are killed by identity")
+                .isGreaterThanOrEqualTo(631);
+        assertThat(protocolLogLines(protocolLog))
+                .as("no identity is signalled unchecked")
+                .noneMatch(line -> line.startsWith("kill-refused: "));
+        assertThat(proof.allWritersStopped())
+                .as("the retained population is this run's own writers: the proof holds after killing them")
+                .isTrue();
+    }
+
     @Test
     void exportRequiresAVerifiedStopAndDestroyRemovesOnlyGeneratedConfiguration() throws Exception {
         PeerRun run = new PeerRun("background-writer");
@@ -829,6 +1829,60 @@ class HostExecutionBackendIntegrationTest {
                 .as("kill-on-close must take a surviving member down with the last supervision channel"
                         + " (the backstop for a hard JVM death)")
                 .isTrue();
+    }
+
+    /**
+     * R7 (review round 4, P3-b): the fake supervisor can only prove what the Java
+     * proof does with an {@code unverifiable} verdict, not that the embedded script
+     * produces one -- so a revert of the script's classification left the suite
+     * green and restored the fail-open reading of an unreadable query. This drives
+     * the real script over its real line protocol (the same PowerShell process,
+     * staged script and command channel every control action uses). PID 4 (System)
+     * is a live process whose {@code PROCESS_QUERY_LIMITED_INFORMATION} open is
+     * refused with access denied (5), not with the definite absence of a dead PID
+     * (87), so the script must answer {@code unverifiable:open:5} -- never
+     * {@code gone}. The positive controls pin both sides of the distinction: a live
+     * identity the OS can read is verified and matches, and a real absence is still
+     * gone, so a script that always answers either way fails here.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void theEmbeddedSupervisorClassifiesARefusedOpenAsUnverifiableNotGone() throws Exception {
+        WindowsProcessController controller = new WindowsProcessController();
+        cleanups.add(controller::close);
+
+        String self = controller.supervisorCommand("self");
+        assertThat(self)
+                .as("the supervisor's own live identity is readable")
+                .matches("\\d+@\\d+");
+        assertThat(controller.supervisorCommand("record " + self))
+                .as("a readable identity still compares as a match")
+                .isEqualTo("match");
+
+        Process exited = new ProcessBuilder("cmd.exe", "/d", "/c", "exit", "0").start();
+        assertThat(exited.waitFor(30, TimeUnit.SECONDS)).isTrue();
+        // The exited Process object keeps its pid reserved, so this record names a
+        // definite absence rather than a recycled live process.
+        assertThat(controller.supervisorCommand("record " + exited.pid() + "@1"))
+                .as("a definite absence is still classified gone")
+                .isEqualTo("gone");
+
+        String refused = controller.supervisorCommand("record 4@1");
+        // A readable PID 4 (e.g. this JVM running as LocalSystem) answers with the
+        // creation identity, which differs from the record's expected one: the
+        // access-denied branch cannot be exercised there. A "gone" answer is NOT an
+        // environment limit -- it is exactly the regression this test exists for.
+        Assumptions.assumeFalse(refused.startsWith("mismatch"),
+                "pid 4 (System) is readable by this test identity (" + refused + "):"
+                        + " the access-denied classification cannot be exercised here");
+        assertThat(refused)
+                .as("a refused OS query is not a definite absence: reading it as gone is the"
+                        + " fail-open classification the stop proof must never inherit")
+                .startsWith("unverifiable:open:")
+                .isNotEqualTo("gone");
+        assertThat(Integer.parseInt(refused.substring("unverifiable:open:".length())))
+                .as("the failure under test is a non-87 OpenProcess error (access denied)")
+                .isNotEqualTo(87);
     }
 
     /**
@@ -1445,23 +2499,172 @@ class HostExecutionBackendIntegrationTest {
 
     /**
      * The fake supervisor host for
-     * {@link #aVerifiedResumeCoversEverySuspensionAPartialPauseBatchApplied}:
-     * the controller starts it exactly like PowerShell, and the fixture speaks
-     * the same line protocol deterministically.
+     * {@link #aVerifiedResumeCoversEverySuspensionAPartialPauseBatchApplied}
+     * (its default scenario): the controller starts it exactly like PowerShell,
+     * and the fixture speaks the same line protocol deterministically.
      */
     private static Path fakeSupervisorHost(Path dir, Path protocolLog) throws IOException {
+        return fakeSupervisorHost(dir, protocolLog, "partial-suspend");
+    }
+
+    /**
+     * The fake supervisor host in a named scenario (see the fixture's own
+     * documentation): the controller starts it exactly like PowerShell and the
+     * fixture speaks the line protocol deterministically.
+     */
+    private static Path fakeSupervisorHost(Path dir, Path protocolLog, String scenario) throws IOException {
         Path script = hostTestResource("fake-host-supervisor.mjs");
         if (isWindows()) {
             Path cmd = dir.resolve("fake-host-supervisor.cmd");
             Files.writeString(cmd, "@echo off\r\n" + nodeCommand() + " \"" + script + "\" --log \""
-                    + protocolLog + "\" %*\r\n");
+                    + protocolLog + "\" --scenario " + scenario + " %*\r\n");
             return cmd;
         }
         Path sh = dir.resolve("fake-host-supervisor.sh");
         Files.writeString(sh, "#!/bin/sh\nexec " + nodeCommand() + " \"" + script + "\" --log \""
-                + protocolLog + "\" \"$@\"\n");
+                + protocolLog + "\" --scenario " + scenario + " \"$@\"\n");
         Files.setPosixFilePermissions(sh, PosixFilePermissions.fromString("rwxr-xr-x"));
         return sh;
+    }
+
+    /** Starts one owned runtime through a fake-supervisor controller and registers its cleanup. */
+    private OwnedProcess startOnFakeSupervisor(WindowsProcessController controller, Path workspace) {
+        LaunchProfile profile = new LaunchProfile(
+                List.of(nodeExecutable(), "-e", "setInterval(() => {}, 1000);"), Map.of(), workspace.toString());
+        OwnedProcess owned = controller.start(UUID.randomUUID(), profile);
+        cleanups.add(() -> {
+            Process live = owned.liveProcess();
+            if (live != null && live.isAlive()) {
+                live.destroyForcibly();
+                live.waitFor(10, TimeUnit.SECONDS);
+            }
+            controller.release(owned);
+            controller.close();
+        });
+        return owned;
+    }
+
+    /** Every line the fake supervisor wrote so far (empty while the log does not exist yet). */
+    private static List<String> protocolLogLines(Path protocolLog) {
+        try {
+            return Files.isRegularFile(protocolLog) ? Files.readAllLines(protocolLog) : List.of();
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
+    private static String firstProtocolLine(Path protocolLog, String prefix) {
+        return protocolLogLines(protocolLog).stream()
+                .filter(line -> line.startsWith(prefix))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Waits (bounded) for the first protocol log line with this prefix. */
+    private static String awaitProtocolLine(Path protocolLog, String prefix, long timeoutMillis)
+            throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        while (Instant.now().isBefore(limit)) {
+            String found = firstProtocolLine(protocolLog, prefix);
+            if (found != null) {
+                return found;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("no protocol log line '" + prefix + "' arrived; recorded: "
+                + protocolLogLines(protocolLog));
+    }
+
+    /** Waits (bounded) for {@code count} protocol log lines with this prefix. */
+    private static void awaitProtocolLines(Path protocolLog, String prefix, int count, long timeoutMillis)
+            throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        while (Instant.now().isBefore(limit)) {
+            if (protocolLogLines(protocolLog).stream().filter(line -> line.startsWith(prefix)).count() >= count) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("fewer than " + count + " protocol log lines '" + prefix + "' arrived; recorded: "
+                + protocolLogLines(protocolLog));
+    }
+
+    /** Bounded poll of the sampler's remembered population for one identity. */
+    private static boolean awaitObservedRecord(WindowsProcessController controller, UUID runId, String record,
+            long timeoutMillis) throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        while (Instant.now().isBefore(limit)) {
+            if (controller.observedRecordContains(runId, record)) {
+                return true;
+            }
+            Thread.sleep(25);
+        }
+        return controller.observedRecordContains(runId, record);
+    }
+
+    /**
+     * Bounded poll of the sampler's remembered population: waits until it reaches
+     * {@code atLeast} and returns the last observed count. Never a fixed sleep --
+     * the sampler's per-pass probe budget makes the number of passes a slow runner
+     * needs nondeterministic.
+     */
+    private static int awaitObservedCount(WindowsProcessController controller, UUID runId, int atLeast,
+            long timeoutMillis) throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        int count = controller.observedRecordCount(runId);
+        while (count < atLeast && Instant.now().isBefore(limit)) {
+            Thread.sleep(25);
+            count = controller.observedRecordCount(runId);
+        }
+        return count;
+    }
+
+    /** Bounded poll of the sampler's remembered population: waits until it falls to {@code atMost}. */
+    private static int awaitObservedCountAtMost(WindowsProcessController controller, UUID runId, int atMost,
+            long timeoutMillis) throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        int count = controller.observedRecordCount(runId);
+        while (count > atMost && Instant.now().isBefore(limit)) {
+            Thread.sleep(25);
+            count = controller.observedRecordCount(runId);
+        }
+        return count;
+    }
+
+    /** Bounded poll of the sampler's remembered population: waits until it equals {@code expected}. */
+    private static int awaitObservedCountEquals(WindowsProcessController controller, UUID runId, int expected,
+            long timeoutMillis) throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        int count = controller.observedRecordCount(runId);
+        while (count != expected && Instant.now().isBefore(limit)) {
+            Thread.sleep(25);
+            count = controller.observedRecordCount(runId);
+        }
+        return count;
+    }
+
+    /** Bounded poll of the size the sampler held before pruning: waits until the peak reaches the bound. */
+    private static int awaitObservedPeak(WindowsProcessController controller, UUID runId, int atLeast,
+            long timeoutMillis) throws InterruptedException {
+        Instant limit = Instant.now().plusMillis(timeoutMillis);
+        int peak = controller.observedPeak(runId);
+        while (peak < atLeast && Instant.now().isBefore(limit)) {
+            Thread.sleep(25);
+            peak = controller.observedPeak(runId);
+        }
+        return peak;
+    }
+
+    /** Captures what {@link WindowsProcessController} logs for the duration of one test. */
+    private static ListAppender<ILoggingEvent> captureControllerLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(WindowsProcessController.class)).addAppender(appender);
+        return appender;
+    }
+
+    private static void detachControllerLogs(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(WindowsProcessController.class)).detachAppender(appender);
     }
 
     /** The pinned node executable as a shell-safe command word for the fixtures. */

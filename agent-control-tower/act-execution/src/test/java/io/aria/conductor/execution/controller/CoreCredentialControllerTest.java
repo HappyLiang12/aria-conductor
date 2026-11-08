@@ -196,7 +196,11 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
                 .hasMessage("Qoder runtime credential is not configured (qoder:operator)."
                         + " Save a Qoder personal access token in Configure > LLM Providers"
                         + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
-                        + " then re-dispatch the run.");
+                        + " then re-dispatch the run."
+                        // F1: the message now also rules out adopting the CLI login.
+                        + " A qoder CLI login on this machine is not adopted automatically: the"
+                        + " platform sends the saved token itself, so save it once even when the CLI"
+                        + " already works here.");
         verifyNoInteractions(probe);
     }
 

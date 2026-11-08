@@ -14,6 +14,8 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,19 +33,59 @@ public class WorkflowService {
     /** Max re-schedule attempts per step before the SDD loop is considered exhausted. */
     private static final int DEFAULT_MAX_ATTEMPTS = 3;
 
+    /**
+     * R9: separates the step's own template from the latest round's findings. Only one
+     * round is carried: startStep truncates the prompt at 10,000 chars, so appending
+     * every round would push the newest findings past the cut.
+     */
+    static final String PREVIOUS_ROUND_FEEDBACK_MARKER = "\n\nFeedback from the previous round:\n";
+
+    /**
+     * F11: the checkout-root placeholder the SDD prompt templates carry. It is
+     * resolved per step from the configured run workspace root and never hardcoded,
+     * because the sandbox {@code /workspace} path does not exist in HOST mode.
+     */
+    static final String WORKSPACE_ROOT_PLACEHOLDER = "{workspaceRoot}";
+
+    /**
+     * F11 fallback: the checkout directory relative to the step working directory
+     * when no workspace root is configured. A relative path is correct in both
+     * execution modes; an absolute one is only correct in one of them.
+     */
+    static final String DEFAULT_WORKSPACE_ROOT = "repo";
+
     private final WorkflowChainRepository workflowChainRepository;
     private final RunService runService;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    /** Configured run workspace root; blank means "unknown, use the relative fallback". */
+    private final String workspaceRoot;
 
+    /** Test/legacy wiring: no configured workspace root, so {@code {workspaceRoot}} resolves relatively. */
     public WorkflowService(WorkflowChainRepository workflowChainRepository,
                            RunService runService,
                            ObjectMapper objectMapper,
                            ApplicationEventPublisher eventPublisher) {
+        this(workflowChainRepository, runService, objectMapper, eventPublisher, "");
+    }
+
+    /**
+     * Production wiring. The class has two constructors (the 4-arg one is the
+     * test/legacy seam), so Spring must be told which one to autowire; without
+     * this annotation the whole context fails with "No default constructor
+     * found" under act-app.
+     */
+    @Autowired
+    public WorkflowService(WorkflowChainRepository workflowChainRepository,
+                           RunService runService,
+                           ObjectMapper objectMapper,
+                           ApplicationEventPublisher eventPublisher,
+                           @Value("${aria.workflows.workspace-root:}") String workspaceRoot) {
         this.workflowChainRepository = workflowChainRepository;
         this.runService = runService;
         this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
+        this.workspaceRoot = workspaceRoot;
     }
 
     /**
@@ -148,6 +190,11 @@ public class WorkflowService {
         chain.setStepsJson(serializeSteps(steps));
         workflowChainRepository.save(chain);
         log.info("Workflow chain failed: id={}, step={}", chain.getId(), stepIndex);
+        // F24: the completion listener settles ask-less REVIEW cards out of the
+        // column when a chain dies; without this event a failed chain left them
+        // in REVIEW forever. The auto-capture listener ignores non-COMPLETED.
+        eventPublisher.publishEvent(new WorkflowAdvancedEvent(this, chain.getId(), chain.getName(),
+                stepIndex, -1, chain.getStatus()));
     }
 
     @Transactional(readOnly = true)
@@ -162,6 +209,35 @@ public class WorkflowService {
         return workflowChainRepository.findAll().stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * R6: every run id a chain's steps were dispatched with, in step order — the
+     * superseded attempts of a step first, its current run last, nulls skipped.
+     * {@code startStep} overwrites {@code step.runId} on each DEFECT/SPEC_GAP
+     * reschedule, so {@link #getWorkflow(UUID)} alone cannot reach a superseded
+     * attempt's card; this is the read-only view of that history.
+     *
+     * @throws ResourceNotFoundException when the chain does not exist
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> stepRunIds(UUID chainId) {
+        WorkflowChain chain = workflowChainRepository.findById(chainId)
+                .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
+        List<UUID> runIds = new ArrayList<>();
+        for (WorkflowStep step : deserializeSteps(chain.getStepsJson())) {
+            if (step.getPreviousRunIds() != null) {
+                for (UUID previousRunId : step.getPreviousRunIds()) {
+                    if (previousRunId != null) {
+                        runIds.add(previousRunId);
+                    }
+                }
+            }
+            if (step.getRunId() != null) {
+                runIds.add(step.getRunId());
+            }
+        }
+        return runIds;
     }
 
     /**
@@ -184,6 +260,30 @@ public class WorkflowService {
             }
         }
         return null;
+    }
+
+    /**
+     * F18: true when the run is a step of ANY workflow chain, whatever the chain's
+     * status. The auto-chainer owns a chain step's progression, so its card must not
+     * be given a legacy review gate that nobody will ever decide.
+     *
+     * <p>Unlike {@link #findChainByRunId(UUID)} this scans every status on purpose:
+     * the QA step's chain is already COMPLETED by the time its card settles to
+     * REVIEW, and a completed chain still owns the step.
+     */
+    @Transactional(readOnly = true)
+    public boolean isRunPartOfWorkflowChain(UUID runId) {
+        if (runId == null) {
+            return false;
+        }
+        for (WorkflowChain chain : workflowChainRepository.findAll()) {
+            for (WorkflowStep step : deserializeSteps(chain.getStepsJson())) {
+                if (runId.equals(step.getRunId())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -315,15 +415,36 @@ public class WorkflowService {
             chain.setStepsJson(serializeSteps(steps));
             workflowChainRepository.save(chain);
             log.info("SDD loop exhausted: chain={} step={} attempts={}", chainId, stepIndex, step.getAttemptCount());
+            // R8: same contract as markStepFailed - the completion listener settles the
+            // dead chain's cards and other listeners learn the chain died. Without it an
+            // exhausted SDD loop left its step cards in REVIEW forever.
+            eventPublisher.publishEvent(new WorkflowAdvancedEvent(this, chain.getId(), chain.getName(),
+                    stepIndex, -1, chain.getStatus()));
             return toResponse(chain);
         }
         step.setAttemptCount(step.getAttemptCount() + 1);
         step.setStatus(WorkflowStep.Status.PENDING);
+        // R6: startStep is about to overwrite step.runId; keep the attempt it replaces
+        // so the completion listener can still settle that attempt's card.
+        if (step.getRunId() != null) {
+            List<UUID> history = step.getPreviousRunIds() == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(step.getPreviousRunIds());
+            history.add(step.getRunId());
+            step.setPreviousRunIds(history);
+        }
+        // R9: carry only the latest round's findings. The stale ones are dropped before
+        // the new section is appended, because startStep truncates the prompt at 10,000
+        // chars and accumulated rounds would cut the newest findings out of the head.
         String base = step.getPromptTemplate() != null ? step.getPromptTemplate() : "";
+        int staleFeedback = base.indexOf(PREVIOUS_ROUND_FEEDBACK_MARKER);
+        if (staleFeedback >= 0) {
+            base = base.substring(0, staleFeedback);
+        }
         String augmented = feedback != null && !feedback.isBlank()
-                ? base + "\n\nFeedback from the previous round:\n" + feedback
+                ? base + PREVIOUS_ROUND_FEEDBACK_MARKER + feedback
                 : base;
-        step.setPromptTemplate(augmented); // note: startStep truncates at 10,000 chars; reschedules are bounded by DEFAULT_MAX_ATTEMPTS so the latest feedback stays visible in practice
+        step.setPromptTemplate(augmented);
         chain.setStepsJson(serializeSteps(steps));
         workflowChainRepository.save(chain);
         startStep(chain, stepIndex, null);
@@ -517,6 +638,10 @@ public class WorkflowService {
             prompt = prompt.replace("{previousOutput}", previousOutput);
         }
 
+        // F11: resolve the checkout root for THIS run. The prompt templates must not
+        // carry a fixed absolute path — /workspace exists only inside the sandbox.
+        prompt = applyWorkspaceRoot(prompt);
+
         // Truncate very long prompts (H2 TEXT column limit)
         if (prompt.length() > 10_000) {
             prompt = prompt.substring(0, 10_000) + "\n\n[truncated]";
@@ -553,6 +678,43 @@ public class WorkflowService {
                     chain.getId(), stepIndex, e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * Resolve the configured run workspace root, or the relative fallback when it is
+     * unknown. Callers never see a blank value.
+     */
+    public String resolveWorkspaceRoot() {
+        return (workspaceRoot == null || workspaceRoot.isBlank())
+                ? DEFAULT_WORKSPACE_ROOT
+                : workspaceRoot.trim();
+    }
+
+    /**
+     * F11: replace every {@code {workspaceRoot}} with the resolved checkout root.
+     * When the root is relative (the configured value is unknown), the prompt gains
+     * one explicit sentence naming the relationship to the working directory — the
+     * live HOST run otherwise guessed an absolute path and lost the clone to
+     * {@code Permission denied}.
+     */
+    String applyWorkspaceRoot(String prompt) {
+        if (prompt == null || !prompt.contains(WORKSPACE_ROOT_PLACEHOLDER)) {
+            return prompt;
+        }
+        String root = resolveWorkspaceRoot();
+        String resolved = prompt.replace(WORKSPACE_ROOT_PLACEHOLDER, root);
+        if (isAbsolutePath(root)) {
+            return resolved;
+        }
+        return resolved + "\n\nWorkspace note: the checkout root resolved to the relative"
+                + " directory '" + root + "' under your current working directory (the"
+                + " configured aria.workflows.workspace-root is unset or relative). Do not"
+                + " create or use an absolute checkout directory.";
+    }
+
+    private static boolean isAbsolutePath(String path) {
+        return path.startsWith("/") || path.startsWith("\\")
+                || (path.length() >= 2 && path.charAt(1) == ':');
     }
 
     public String serializeSteps(List<WorkflowStep> steps) {

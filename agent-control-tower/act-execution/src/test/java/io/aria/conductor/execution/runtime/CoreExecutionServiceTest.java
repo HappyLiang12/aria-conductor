@@ -24,6 +24,8 @@ import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.runtime.host.RunCoreLog;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.telemetry.CoreEventTelemetry;
+import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1289,6 +1291,69 @@ class CoreExecutionServiceTest {
         assertThat(observed).containsExactly(
                 new CoreEvent("session.update", RUN, "session-1", "1", "{\"seq\":1}"),
                 new CoreEvent("prompt.result", RUN, "session-1", "1", "{\"stopReason\":\"end\"}"));
+    }
+
+    @Test
+    void theBridgeToolAndUsageEventsAreRecordedThroughTelemetryOnTheSameEventLoop() {
+        RunTelemetryService telemetry = mock(RunTelemetryService.class);
+        service.attachTelemetry(new CoreEventTelemetry(telemetry));
+        // The exact payload shapes the qoder bridge emits (packages/qoder-acp-bridge/src/tool-events.ts
+        // and usage.ts): object input, object-less result, and a usage frame whose total is absent.
+        session.events.add(new CoreEvent("tool.call", RUN, "session-1", null,
+                "{\"toolCallId\":\"tc-1\",\"toolName\":\"Bash\",\"kind\":\"bash\",\"title\":\"git status\","
+                        + "\"input\":{\"command\":\"git status\"},\"inputBytes\":22,\"inputTruncated\":false}"));
+        session.events.add(new CoreEvent("tool.result", RUN, "session-1", null,
+                "{\"toolCallId\":\"tc-1\",\"toolName\":\"Bash\",\"status\":\"completed\",\"isError\":false,"
+                        + "\"result\":\"clean\",\"resultBytes\":5,\"resultTruncated\":false}"));
+        session.events.add(new CoreEvent("usage", RUN, "session-1", "1",
+                "{\"promptId\":1,\"inputTokens\":120,\"outputTokens\":30,\"totalTokens\":null,"
+                        + "\"source\":\"usage\"}"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        verify(telemetry).recordToolCall(RUN, new RunTelemetryService.ToolCallEvent(
+                "tc-1", "Bash", "{\"command\":\"git status\"}", false));
+        verify(telemetry).recordToolResult(RUN, new RunTelemetryService.ToolResultEvent(
+                "tc-1", "Bash", "clean", false));
+        verify(telemetry).recordUsage(RUN, new RunTelemetryService.UsageEvent(120L, 30L, null));
+    }
+
+    @Test
+    void malformedTelemetryPayloadsAreSkippedAndNeverFailTheRun() {
+        RunTelemetryService telemetry = mock(RunTelemetryService.class);
+        service.attachTelemetry(new CoreEventTelemetry(telemetry));
+        session.events.add(new CoreEvent("tool.call", RUN, "session-1", null, "{broken"));
+        session.events.add(new CoreEvent("usage", RUN, "session-1", null, "[]"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+        verifyNoInteractions(telemetry);
+    }
+
+    @Test
+    void aPermissionRequestForTheSameToolCallIsNotRecordedASecondTime() {
+        // The bridge emits permission.request AND tool.call for one call (same toolCallId). The
+        // approval path owns the permission event; only tool.call may create the audit row.
+        RunTelemetryService telemetry = mock(RunTelemetryService.class);
+        service.attachTelemetry(new CoreEventTelemetry(telemetry));
+        when(permissions.register(any())).thenReturn(APPROVAL);
+        session.events.add(new CoreEvent("permission.request", RUN, "session-1", "7",
+                "{\"requestId\":7,\"toolCallId\":\"tc-1\",\"toolName\":\"Bash\",\"input\":"
+                        + "{\"command\":\"git status\"},\"options\":"
+                        + "[{\"optionId\":\"proceed_once\",\"kind\":\"allow_once\"},"
+                        + "{\"optionId\":\"cancel\",\"kind\":\"reject_once\"}]}"));
+        session.events.add(new CoreEvent("tool.call", RUN, "session-1", null,
+                "{\"toolCallId\":\"tc-1\",\"toolName\":\"Bash\",\"input\":{\"command\":\"git status\"},"
+                        + "\"inputTruncated\":false}"));
+
+        service.execute(spec(), adapter, task());
+
+        verify(permissions).register(any());
+        verify(telemetry, times(1)).recordToolCall(RUN, new RunTelemetryService.ToolCallEvent(
+                "tc-1", "Bash", "{\"command\":\"git status\"}", false));
     }
 
     @Test

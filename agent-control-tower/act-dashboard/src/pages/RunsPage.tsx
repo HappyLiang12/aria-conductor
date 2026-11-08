@@ -9,6 +9,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { RuntimeBadge } from '../components/RuntimeBadge';
 import { RunErrorNotice, ErrorNotice } from '../components/ErrorNotice';
 import { presentError, type PresentedError } from '../api/errorPresentation';
+import { tokenUsageCell, tokenUsageText } from '../utils/tokenUsage';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
 export function RunsPage() {
@@ -234,7 +235,7 @@ export function RunsPage() {
                     <td><RuntimeBadge core={run.coreId} mode={run.executionMode} /></td>
                     <td><StatusBadge status={run.status} /></td>
                     <td>{run.iterationCount}/{run.maxIterations}</td>
-                    <td>{run.totalTokensUsed.toLocaleString()}</td>
+                    <td>{tokenUsageCell(run.totalTokensUsed)}</td>
                     <td>{formatTimestamp(run.createdAt)}</td>
                     <td>{getDuration(run)}</td>
                     <td className="action-cell">
@@ -269,7 +270,7 @@ export function RunsPage() {
   );
 }
 
-function RunDetailView({ runId, run, agentName }: { runId: string; run: { status: string; totalTokensUsed: number; errorMessage: string | null; errorSurface?: string | null; errorCode?: string | null }; agentName: string }) {
+function RunDetailView({ runId, run, agentName }: { runId: string; run: { status: string; totalTokensUsed: number | null; errorMessage: string | null; errorSurface?: string | null; errorCode?: string | null }; agentName: string }) {
   // S3: live while RUNNING (5s), stops at terminal status.
   const live = run.status === 'RUNNING';
   const [trajCollapsed, setTrajCollapsed] = useState(false);
@@ -297,7 +298,7 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
           <div className="detail-info-list">
             <div className="detail-info-item"><span>Agent</span><strong>{agentName}</strong></div>
             <div className="detail-info-item"><span>Status</span><StatusBadge status={run.status} /></div>
-            <div className="detail-info-item"><span>Tokens Used</span><strong>{run.totalTokensUsed.toLocaleString()}</strong></div>
+            <div className="detail-info-item"><span>Tokens Used</span><strong>{tokenUsageText(run.totalTokensUsed)}</strong></div>
             {run.errorMessage && (
               <div className="detail-info-item error-detail" style={{ display: 'block' }}>
                 <span>Error</span>

@@ -506,7 +506,7 @@
       {"round": 6, "verdict": "approve with fixes (non-blocking)", "scope": "dead-root fix: live shape fixed; orphan-tree claim and refused() javadoc corrected, residual documented", "fixed_in": ["a46fc109"]}
     ],
     "hosted": "run 42420975810 at 420dbb7e -> 15/15 jobs success (final head after R11)",
-    "log": "final-gate-review4.log (untracked local evidence)"
+    "log": "not committed; the command, totals and per-class results above are the committed evidence"
   },
   "live_final_head": {
     "date": "2026-11-08",
@@ -600,7 +600,7 @@
       "totals": "2573 unit + 243 failsafe = 2816 tests, 0 failures, 0 errors, 14 skipped",
       "per_module": "act-common 136, act-agent 312+13, act-execution 1336+94 (6 skipped), act-knowledge 263 (4 skipped)+12, act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172+18, act-app 77+106",
       "focused": "F25 12/0/0/0; flipped IT 1/0/0/0; F26-F29 89/0 + act-common 36/0; scripts 15 passed + 38 assertions",
-      "log": "/tmp/round2-review-full-gate.log (untracked local evidence)"
+      "log": "not committed; the command, totals and per-module counts above are the committed evidence"
     },
     "residuals": [
       "F25: a job-invisible writer (assign refused, breakaway child) remains outside the proof; the second inventory fails closed rather than re-killing a member it never decided; one extra job round trip per stop",

@@ -95,6 +95,22 @@ class ReportStepTreeGuardTest {
     }
 
     @Test
+    void aFullFileListWithoutTheReport_failsClosedAsTruncated() {
+        // GitHub caps a commit's file list at 300. The F19 commit had 300 removals
+        // plus the report add; the truncated page can omit qa_report.md.
+        List<ChangedFile> truncated = IntStream.range(0, ReportStepTreeGuard.GITHUB_FILE_LIST_LIMIT)
+                .mapToObj(i -> new ChangedFile("agent-control-tower/src/main/File" + i + ".java",
+                        ChangeType.REMOVED))
+                .toList();
+
+        Optional<String> violation = guard.violation(
+                new TreeDiff("sdd/chain-1", "parent", "truncated-head", truncated));
+
+        assertThat(violation).isPresent();
+        assertThat(violation.get()).contains("may be truncated");
+    }
+
+    @Test
     void noTreeToJudge_isAccepted() {
         assertThat(guard.violation(null)).isEmpty();
         assertThat(guard.violation(new TreeDiff("sdd/chain-1", "parent", "head", List.of()))).isEmpty();

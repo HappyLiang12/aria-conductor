@@ -33,6 +33,9 @@ public final class ReportStepTreeGuard {
     /** Removals tolerated for any path; the observed bad commit removed 300. */
     public static final int MAX_REMOVALS = 5;
 
+    /** GitHub returns at most this many files for one commit; a full page may be truncated. */
+    public static final int GITHUB_FILE_LIST_LIMIT = 300;
+
     /** Change classes a tree diff entry can carry. */
     public enum ChangeType { ADDED, MODIFIED, REMOVED }
 
@@ -77,6 +80,17 @@ public final class ReportStepTreeGuard {
         boolean reportTouched = diff.files().stream()
                 .anyMatch(file -> REPORT_PATH.equals(normalize(file.path())));
         if (!reportTouched) {
+            if (diff.files().size() >= GITHUB_FILE_LIST_LIMIT) {
+                // GitHub caps a commit's file list at 300. The incident commit had
+                // 300 removals plus the report add; a truncated list can omit
+                // qa_report.md entirely. A full, report-less list is ambiguous, so
+                // the report-only guard fails closed rather than waving it through.
+                return Optional.of("QA report commit on branch '" + diff.branchName()
+                        + "' lists " + diff.files().size() + " changed files but not "
+                        + REPORT_PATH + "; the file list may be truncated (GitHub caps it at "
+                        + GITHUB_FILE_LIST_LIMIT + "). Restore the removed files and retry the"
+                        + " step with an explicit pathspec.");
+            }
             return Optional.empty();
         }
         List<String> removals = diff.files().stream()

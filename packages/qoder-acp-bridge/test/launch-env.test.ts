@@ -62,6 +62,12 @@ test('composeChildPath joins the launcher POSIX PATH with the POSIX delimiter on
   );
 });
 
+test('composeChildPath treats a forward-slash drive path as native Windows', () => {
+  expect(composeChildPath('C:/Windows', 'C:\\b;C:\\c', 'win32')).toBe(
+    'C:\\b;C:\\c;C:/Windows',
+  );
+});
+
 test('composeChildPath prepends POSIX entries without dropping the inherited PATH', () => {
   expect(composeChildPath('/usr/local/bin:/usr/bin:/bin', '/opt/gh/bin:/opt/maven/bin', 'linux')).toBe(
     '/opt/gh/bin:/opt/maven/bin:/usr/local/bin:/usr/bin:/bin',

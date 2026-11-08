@@ -83,6 +83,16 @@ class CredentialRedactorTest {
     }
 
     @Test
+    void masksNamedSecretValuesThatContainJsonEscapes() {
+        String arguments = "{\"password\":\"C:\\\\x\"}";
+        String redacted = CredentialRedactor.redact(arguments);
+        assertThat(redacted)
+                .doesNotContain("C:\\\\x")
+                .contains("[REDACTED]");
+        assertThat(CredentialRedactor.redact(redacted)).isEqualTo(redacted);
+    }
+
+    @Test
     void redactionIsIdempotent() {
         String once = CredentialRedactor.redact("{\"token\":\"ghp_abcdefghijklmnopqrstuvwxyz012345\"}");
         assertThat(CredentialRedactor.redact(once)).isEqualTo(once);

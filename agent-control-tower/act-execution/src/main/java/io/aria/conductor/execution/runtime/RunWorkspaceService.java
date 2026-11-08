@@ -79,6 +79,16 @@ public class RunWorkspaceService implements WorkspaceService {
      */
     private static final Pattern COMMIT_SHA = Pattern.compile("[0-9a-f]{40}(?:[0-9a-f]{24})?");
 
+    /**
+     * A malformed scheme with a single slash and a password-bearing authority,
+     * e.g. {@code https:/user:token@host/repo}. The normal {@code ://} branch
+     * cannot see it; the scheme needs at least two characters so a Windows drive
+     * path ({@code C:/...}) is not mistaken for one.
+     */
+    private static final Pattern MALFORMED_URL_USERINFO =
+            Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]+:/[^/]*:[^/]*@.*");
+
+
     private static final long GIT_TIMEOUT_SECONDS = 60;
 
     /**
@@ -262,8 +272,8 @@ public class RunWorkspaceService implements WorkspaceService {
      * (an {@code http.extraheader}), never the argv or the persisted remote URL; no
      * resolved credential means an anonymous clone of a public repository.
      */
-    private void provisionScratchCheckout(Path localRoot, String repository, String baseRef) {
-        requireSafeCloneArguments(repository, baseRef);
+    private void provisionScratchCheckout(Path localRoot, String rawRepository, String baseRef) {
+        String repository = requireSafeCloneArguments(rawRepository, baseRef);
         Path target = localRoot.resolve(SCRATCH_CHECKOUT_DIRECTORY);
         List<String> argv = new ArrayList<>(gitCommand);
         argv.add("-c");
@@ -319,34 +329,42 @@ public class RunWorkspaceService implements WorkspaceService {
     /**
      * Gate the values that reach {@code git clone} argv. A URL with userinfo would
      * put a credential in the process table and in any failure message; a
-     * leading-dash value would be parsed as an option. The git-pack credential is
-     * supplied through the environment, so userinfo is never an accepted input.
+     * leading-dash value would be parsed as an option. HTTP(S) userinfo is always
+     * refused; any scheme with a password-bearing authority is refused too, while
+     * the ordinary SSH form ({@code ssh://git@host}) stays valid. The returned
+     * value is the trimmed repository the caller must pass to git.
      */
-    static void requireSafeCloneArguments(String repository, String baseRef) {
+    static String requireSafeCloneArguments(String repository, String baseRef) {
         if (repository == null || repository.isBlank()) {
             throw new IllegalStateException("The run workspace repository is empty.");
         }
-        if (repository.startsWith("-")) {
+        String candidate = repository.trim();
+        if (candidate.startsWith("-")) {
             throw new IllegalStateException("The run workspace repository cannot begin with '-'.");
         }
-        int scheme = repository.indexOf("://");
+        int scheme = candidate.indexOf("://");
         if (scheme >= 0) {
-            String schemeName = repository.substring(0, scheme);
-            // HTTP(S) userinfo is either a username or a token that git would put in
-            // argv and any error message. SSH userinfo (ssh://git@host/...) is the
-            // normal SSH form and is not a credential in the URL.
-            boolean httpScheme = schemeName.equalsIgnoreCase("http") || schemeName.equalsIgnoreCase("https");
+            String schemeName = candidate.substring(0, scheme);
+            boolean httpScheme = schemeName.toLowerCase().endsWith("http")
+                    || schemeName.toLowerCase().endsWith("https");
             int authorityStart = scheme + 3;
-            int slash = repository.indexOf('/', authorityStart);
-            int at = repository.indexOf('@', authorityStart);
-            if (httpScheme && at >= 0 && (slash < 0 || at < slash)) {
-                throw new IllegalStateException("The run workspace repository URL must not include"
-                        + " userinfo; the git credential is supplied separately.");
+            int slash = candidate.indexOf('/', authorityStart);
+            int at = candidate.indexOf('@', authorityStart);
+            if (at >= 0 && (slash < 0 || at < slash)) {
+                String userInfo = candidate.substring(authorityStart, at);
+                if (httpScheme || userInfo.indexOf(':') >= 0) {
+                    throw new IllegalStateException("The run workspace repository URL must not include"
+                            + " userinfo; the git credential is supplied separately.");
+                }
             }
+        } else if (MALFORMED_URL_USERINFO.matcher(candidate).matches()) {
+            throw new IllegalStateException("The run workspace repository URL must not include"
+                    + " userinfo; the git credential is supplied separately.");
         }
         if (baseRef != null && baseRef.startsWith("-")) {
             throw new IllegalStateException("The run workspace base ref cannot begin with '-'.");
         }
+        return candidate;
     }
 
     private static String refSuffix(String baseRef) {

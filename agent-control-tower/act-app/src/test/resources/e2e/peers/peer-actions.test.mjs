@@ -405,6 +405,7 @@ test('scenarios.json declares every scenario both peers implement', async () => 
       'non-cooperative',
       'pause-resume',
       'permission-expiry',
+      'quota-usage',
       'reported-usage',
       'sdd-qa-pass',
       'self-exit',
@@ -1694,6 +1695,24 @@ test('qoder peer reports the fixture usage counters and the observed model exact
       token_count: { input_tokens: 12, output_tokens: 7 },
       model_usage: [{ model: 'efficient', token_count: { input_tokens: 12, output_tokens: 7 } }],
     });
+    const chunks = peer.frames.filter(
+      (frame) => frame.params?.update?.sessionUpdate === 'agent_message_chunk',
+    );
+    assert.deepEqual(chunks.map((frame) => frame.params.update.content.text), ['fixture-complete']);
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
+  });
+});
+
+test('qoder peer reports the placeholder usage block beside the real quota counters', async () => {
+  await withQoder('quota-usage', async (peer, workspace) => {
+    const { promptId } = await qoderSession(peer, { promptText: 'Reply with the fixture completion' });
+    const result = await peer.waitFor((p) => p.frames.find((frame) => frame.id === promptId && frame.result), {
+      label: 'prompt result',
+    });
+
+    assert.equal(result.result.stopReason, 'end_turn');
+    assert.deepEqual(result.result.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+    assert.deepEqual(result.result._meta.quota, { token_count: { input_tokens: 12, output_tokens: 7 } });
     const chunks = peer.frames.filter(
       (frame) => frame.params?.update?.sessionUpdate === 'agent_message_chunk',
     );

@@ -39,11 +39,14 @@ import java.util.function.Consumer;
  *   <li>The final output is the ordered concatenation of
  *       {@code agent_message_chunk} text; thought chunks are forwarded as
  *       progress but are not the answer.</li>
- *   <li>Usage is what the core reported. A reported counter passes through
- *       exactly -- including a reported zero -- while an unreported counter
- *       stays {@code null}; {@code credits} is never reported natively. The
- *       observed model comes from the core's own quota member and is never the
- *       requested pin.</li>
+ *   <li>Usage is what the core reported. The bridge's separate {@code usage}
+ *       event carries the counts the pinned CLI hides in {@code _meta.quota}
+ *       beside a placeholder ACP {@code usage} block, so a count reported there
+ *       takes precedence over the {@code prompt.result} counter (per counter: a
+ *       reported zero stays zero, an absent one stays {@code null}). The event
+ *       belongs to the current prompt only and is never carried to another.
+ *       {@code credits} is never reported natively. The observed model comes
+ *       from the core's own quota member and is never the requested pin.</li>
  *   <li>Events are forwarded with the bridge's own sequence and payload, so the
  *       governance layer sees exactly what the runtime emitted.</li>
  *   <li>Control acknowledgements are the bridge's truthful ones. Native pause
@@ -93,6 +96,16 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
     private volatile StringBuilder output;
     private volatile QoderBridgeClient.EventStream stream;
     private volatile Thread reader;
+
+    /**
+     * Counters the bridge's separate {@code usage} event reported for the
+     * current prompt. Reset whenever a prompt starts or is cleared, so a report
+     * can never be carried to another prompt. {@code totalTokens} is recorded
+     * for completeness; the shared {@link UsageSnapshot} carries only the parts.
+     */
+    private volatile Long reportedInputTokens;
+    private volatile Long reportedOutputTokens;
+    private volatile Long reportedTotalTokens;
 
     /** One offered native permission option, as the core offered it. */
     private record OfferedOption(String optionId, String kind) {
@@ -146,6 +159,9 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             }
             promptInFlight = true;
             currentPromptId = -1;
+            reportedInputTokens = null;
+            reportedOutputTokens = null;
+            reportedTotalTokens = null;
             promptFuture = new CompletableFuture<>();
             pending = promptFuture;
             consumer = events;
@@ -353,6 +369,9 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         if (promptInFlight && "session.update".equals(type)) {
             accumulate(payload);
         }
+        if (promptInFlight && "usage".equals(type) && isCurrentPrompt(payload)) {
+            recordReportedUsage(payload);
+        }
         if (promptInFlight && isTerminal(type) && isCurrentPrompt(payload)) {
             if ("prompt.result".equals(type)) {
                 completeResult(payload);
@@ -386,6 +405,24 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         text.append(update.path("content").path("text").asText());
     }
 
+    /**
+     * The bridge's separate usage report for the current prompt. The pinned CLI
+     * (1.1.61) repeats a placeholder {@code {0,0,0}} in {@code prompt.result}
+     * while the real counts sit in {@code _meta.quota}; the bridge extracts
+     * those into this event, emitted before the terminal frame. An absent or
+     * non-numeric member stays {@code null} instead of becoming zero.
+     */
+    private void recordReportedUsage(JsonNode payload) {
+        reportedInputTokens = reportedCounter(payload, "inputTokens");
+        reportedOutputTokens = reportedCounter(payload, "outputTokens");
+        reportedTotalTokens = reportedCounter(payload, "totalTokens");
+    }
+
+    private static Long reportedCounter(JsonNode payload, String member) {
+        JsonNode value = payload.path(member);
+        return value.isNumber() ? value.asLong() : null;
+    }
+
     private boolean isCurrentPrompt(JsonNode payload) {
         if (currentPromptId < 0) {
             return true;
@@ -408,24 +445,33 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
     }
 
     /**
-     * The terminal result. A reported counter is preserved exactly (a reported
-     * zero is a zero); an unreported one stays null, and the observed model is
-     * the core's own report -- never the requested pin.
+     * The terminal result. A counter the bridge's {@code usage} event reported
+     * is preferred over the terminal frame's own counter (the pinned CLI repeats
+     * a placeholder zero there); a counter only the terminal frame carries is
+     * preserved exactly (a reported zero is a zero), an unreported one stays
+     * null, and the observed model is the core's own report -- never the
+     * requested pin.
      */
     private void completeResult(JsonNode payload) {
         CompletableFuture<CoreResult> future;
         StringBuilder text;
+        Long reportedInput;
+        Long reportedOutput;
         synchronized (promptLock) {
             future = pending;
             text = output;
+            reportedInput = reportedInputTokens;
+            reportedOutput = reportedOutputTokens;
             clearPromptLocked();
         }
         if (future == null) {
             return;
         }
         JsonNode usage = payload.path("usage");
-        Long inputTokens = usage.has("inputTokens") ? usage.path("inputTokens").asLong() : null;
-        Long outputTokens = usage.has("outputTokens") ? usage.path("outputTokens").asLong() : null;
+        Long inputTokens = reportedInput != null ? reportedInput
+                : (usage.has("inputTokens") ? usage.path("inputTokens").asLong() : null);
+        Long outputTokens = reportedOutput != null ? reportedOutput
+                : (usage.has("outputTokens") ? usage.path("outputTokens").asLong() : null);
         String observedModel = payload.path("observedModel").isTextual()
                 ? payload.path("observedModel").asText()
                 : null;
@@ -459,6 +505,9 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         pending = null;
         consumer = null;
         output = null;
+        reportedInputTokens = null;
+        reportedOutputTokens = null;
+        reportedTotalTokens = null;
     }
 
     private void scheduleDeadline(CompletableFuture<CoreResult> future, Instant deadline) {

@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>The query returns the raw DMTF/ISO-8601 creation string and converts it here with
  * the offset it carries, so the fixture does not reuse the supervisor's own conversion
- * path. Millisecond precision is well inside the supervisor's 100 ms comparison
+ * path. Millisecond precision is well inside the supervisor's 10 ms comparison
  * tolerance.
  */
 final class ProtectedProcessFixture {

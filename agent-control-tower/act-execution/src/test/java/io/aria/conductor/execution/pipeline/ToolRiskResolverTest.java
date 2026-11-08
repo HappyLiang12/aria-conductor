@@ -128,6 +128,24 @@ class ToolRiskResolverTest {
         assertThat(resolver.resolve("bash")).isEqualTo(RiskTier.READ);
     }
 
+    /**
+     * F28: the configured row wins over the native map even when its tier is null (the documented
+     * legacy-row READ). Only an absent row may consult the native map, so a null-tier {@code bash}
+     * row must not be re-classified DESTRUCTIVE by the fallback.
+     */
+    @Test
+    void aConfiguredNullTierRowWinsOverTheNativeTier() {
+        ToolDefinition legacy = ToolDefinition.builder().name("bash").build();
+        when(toolRepo.findByName("bash")).thenReturn(Optional.of(legacy));
+
+        assertThat(resolver.resolve("bash"))
+                .as("a configured null-tier row resolves READ; the native map is only for absent rows")
+                .isEqualTo(RiskTier.READ);
+        assertThat(resolver.requiresApproval("bash"))
+                .as("the null-tier row never inherits the native DESTRUCTIVE approval requirement")
+                .isFalse();
+    }
+
     @Test
     void requiresApprovalTrueForNativeDestructiveAndPushTools() {
         when(toolRepo.findByName("Bash")).thenReturn(Optional.empty());

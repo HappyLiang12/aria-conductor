@@ -32,10 +32,12 @@ public final class CredentialRedactor {
      * document), so it accepts {@code \\.} as well as ordinary characters; the
      * closing quote is a backreference to the opening quote so an escaped
      * ({@code \"}) value cannot run past its own string boundary into the rest of
-     * an embedded document.
+     * an embedded document. The closing quote must be followed by a structural
+     * delimiter or the end of the input, so an escaped quote inside the value is
+     * not mistaken for the end of it.
      */
     private static final Pattern NAMED_SECRET_JSON_VALUE = Pattern.compile(
-            "(?i)(\\\\?\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\\\\?\"\\s*:\\s*)(\\\\?\")((?:[^\"\\\\]|\\\\.)*?)\\2");
+            "(?i)(\\\\?\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\\\\?\"\\s*:\\s*)(\\\\?\")((?:[^\"\\\\]|\\\\.)*?)\\2(?=[\\s,}\\]]|$)");
 
     private CredentialRedactor() {
     }

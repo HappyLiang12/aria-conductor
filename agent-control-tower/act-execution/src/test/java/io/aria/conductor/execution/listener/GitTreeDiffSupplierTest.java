@@ -70,9 +70,16 @@ class GitTreeDiffSupplierTest {
 
         assertThat(diff).isPresent();
         assertThat(diff.get().parentSha()).isEqualTo("451c4867");
+        assertThat(diff.get().files()).hasSize(301);
+        assertThat(diff.get().files()).filteredOn(file -> file.type() == ChangeType.REMOVED)
+                .hasSize(300);
         Optional<String> violation = new ReportStepTreeGuard().violation(diff.get());
         assertThat(violation).isPresent();
-        assertThat(violation.get()).contains("removed 300");
+        // 301 entries is what the commit contains; GitHub would return only the
+        // first 300, so the guard rejects the page as unverifiable.
+        assertThat(violation.get())
+                .contains("may be truncated")
+                .contains("including qa_report.md");
     }
 
     @Test

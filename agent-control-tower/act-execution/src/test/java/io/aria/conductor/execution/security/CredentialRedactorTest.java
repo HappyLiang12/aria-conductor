@@ -89,6 +89,19 @@ class CredentialRedactorTest {
     }
 
     @Test
+    void anEscapedQuoteInsideTheValueDoesNotLeakItsSuffix() {
+        // The value itself contains an escaped quote. A lazy match without the
+        // structural lookahead ended at that inner quote and left the suffix
+        // (LONGSECRET) in the persisted approval arguments.
+        String embedded = "{\"password\":\"a\\\"LONGSECRET\"}";
+        String arguments = "{\"outer\":\"" + escapedForOuterString(embedded) + "\"}";
+        String expectedEmbedded = "{\"password\":\"[REDACTED]\"}";
+
+        assertThat(CredentialRedactor.redact(arguments))
+                .isEqualTo("{\"outer\":\"" + escapedForOuterString(expectedEmbedded) + "\"}");
+    }
+
+    @Test
     void masksNamedSecretValuesThatContainJsonEscapes() {
         String arguments = "{\"password\":\"C:\\\\x\"}";
         assertThat(CredentialRedactor.redact(arguments))
@@ -101,5 +114,9 @@ class CredentialRedactorTest {
     void redactionIsIdempotent() {
         String once = CredentialRedactor.redact("{\"token\":\"ghp_abcdefghijklmnopqrstuvwxyz012345\"}");
         assertThat(CredentialRedactor.redact(once)).isEqualTo(once);
+    }
+
+    private static String escapedForOuterString(String document) {
+        return document.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

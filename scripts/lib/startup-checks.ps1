@@ -51,15 +51,6 @@ function Resolve-WorkspaceRoots {
 <#
 .SYNOPSIS
 Returns a reason string when packages/qoder-acp-bridge/dist is missing or stale (F31),
-or $null when dist/main.js exists and nothing that feeds it is newer.
-
-Stale means any file under src/ (recursively), or package.json, tsconfig.json or
-pnpm-lock.yaml when present, has a newer LastWriteTimeUtc than dist/main.js. A bridge
-directory without a src/ tree is not an error (the check stays quiet the moment dist
-exists). The caller decides whether to rebuild or to fail with a actionable message.
-<#
-.SYNOPSIS
-Returns a reason string when packages/qoder-acp-bridge/dist is missing or stale (F31),
 or $null when dist/main.js exists and matches its build inputs.
 
 Freshness is decided by scripts/lib/bridge-freshness.mjs when node is available: it

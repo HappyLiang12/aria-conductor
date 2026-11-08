@@ -704,7 +704,11 @@ describe('TaskDrawer focus contract (Task 7)', () => {
     const user = userEvent.setup();
     renderDrawer();
     openTaskDrawerEvent();
-    await screen.findByText('Spec task');
+    // Wait for the drawer's opening focus move to settle before typing: the
+    // heading focus runs in a requestAnimationFrame, and a keystroke that wins
+    // that race sends the rest of the text to the heading instead of the draft.
+    const heading = await screen.findByRole('heading', { name: 'Spec task' });
+    await waitFor(() => expect(heading).toHaveFocus());
 
     const note = screen.getByPlaceholderText(/Add a comment/);
     await user.type(note, 'keep this draft');

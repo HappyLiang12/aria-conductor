@@ -1724,14 +1724,17 @@ final class WindowsProcessController implements OwnedProcessController {
             }
             # Handle-free creation time of the process now holding a pid (F32). WMI exposes
             # CreationDate for protected processes, whose OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
-            # is refused with access denied (5), and the conversion matches the kernel FILETIME ticks
-            # exactly on the measured host. The three outcomes are deliberate: "<ticks>" when WMI read
-            # the identity, "absent" only when WMI definitively lists no process holding the pid, and
-            # "error" when the query itself failed -- unknown is never absence.
+            # is refused with access denied (5). Across 225 readable processes the WMI and kernel
+            # creation times differed by at most 0.8 microseconds. The three outcomes are deliberate:
+            # "<ticks>" when WMI read the identity, "absent" only when WMI lists no process holding the
+            # pid, and "error" when the query failed or the listed instance carries no readable creation
+            # time -- unknown is never absence. The operation timeout stops a hung WMI provider from
+            # consuming the caller's cleanup window.
             function Get-CreationTicksWithoutHandle([int]$targetPid) {
               try {
-                $p = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction Stop
-                if ($null -eq $p -or $null -eq $p.CreationDate) { return 'absent' }
+                $p = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -OperationTimeoutSec 5 -ErrorAction Stop
+                if ($null -eq $p) { return 'absent' }
+                if ($null -eq $p.CreationDate) { return 'error' }
                 return $p.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString()
               } catch { return 'error' }
             }
@@ -1749,16 +1752,22 @@ final class WindowsProcessController implements OwnedProcessController {
                 # expected identity keeps the original unverifiable verdict. The probe is used only
                 # on this branch and is deliberately not cached.
                 $expectedTicks = 0L
-                if (-not [long]::TryParse($expected, [ref]$expectedTicks)) { return $identity }
+                # A record names exactly pid@ticks with a positive creation identity. Anything else
+                # is malformed and keeps the original verdict instead of being reclassified.
+                if ($parts.Count -ne 2) { return $identity }
+                if (-not [long]::TryParse($expected, [ref]$expectedTicks) -or $expectedTicks -le 0L) { return $identity }
                 $probe = Get-CreationTicksWithoutHandle $targetPid
                 if ($probe -eq 'absent') { return 'gone' }
                 if ($probe -eq 'error') { return $identity }
-                # WMI's CreationDate and the kernel FILETIME agree exactly on the measured host, so
-                # the tolerance only absorbs cross-host DateTime conversion jitter. A recycled pid
-                # differs by at least the original process's lifetime (the F32 helper lived ~1.2 s);
-                # a read of the same process cannot differ by 100 ms.
-                $observedTicks = [long]$probe
-                if ([Math]::Abs($observedTicks - $expectedTicks) -le 1000000L) { return $identity }
+                # Compare local wall-clock times, not UTC: ToUniversalTime() resolves the DST
+                # fall-back repeated hour with the standard offset and can shift a same-process read
+                # by an hour, which would turn a fail-closed verdict into a false mismatch. A wall-clock
+                # comparison can only err toward "same", which stays fail-closed. The 10 ms tolerance
+                # is over 10x the fixture's millisecond truncation and over 10,000x the measured
+                # WMI/kernel difference; only a helper that lived under 10 ms can remain a false red.
+                $observedLocal = [DateTime]::FromFileTimeUtc([long]$probe).ToLocalTime()
+                $expectedLocal = [DateTime]::FromFileTimeUtc($expectedTicks).ToLocalTime()
+                if ([Math]::Abs($observedLocal.Ticks - $expectedLocal.Ticks) -le 100000L) { return $identity }
                 return ('mismatch:' + $targetPid + '@' + $probe)
               }
               if ($expected -eq '' -or $identity -eq $expected) { return 'match' }

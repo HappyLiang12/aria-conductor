@@ -543,6 +543,36 @@ class WindowsProcessControllerOrphanAttributionTest {
                     .as("a record that still names the protected process is a live writer the OS"
                             + " cannot open: unknown is not absence, so the verdict must stay unverifiable")
                     .startsWith("unverifiable:");
+            assertThat(controller.supervisorCommand("record 4@" + (ticks - 20_000L)))
+                    .as("a 2 ms difference is inside the 10 ms tolerance: the same-process verdict"
+                            + " must stay unverifiable")
+                    .startsWith("unverifiable:");
+            assertThat(controller.supervisorCommand("record 4@" + (ticks - 200_000L)))
+                    .as("a 20 ms difference is outside the 10 ms tolerance: the record names a"
+                            + " different creation time and must resolve to mismatch")
+                    .startsWith("mismatch:");
+        } finally {
+            controller.close();
+        }
+    }
+
+    /**
+     * F32 defense-in-depth: only a well-formed {@code pid@ticks} record with a positive
+     * creation identity may be reclassified. A zero, negative, multi-field or
+     * non-numeric expected identity keeps the original unverifiable verdict, so a
+     * malformed record can never be read as a recycled pid.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aMalformedExpectedIdentityKeepsTheUnverifiableVerdict() {
+        WindowsProcessController controller = new WindowsProcessController();
+        try {
+            for (String expected : List.of("0", "-1", "1@2", "not-a-number", "")) {
+                assertThat(controller.supervisorCommand("record 4@" + expected))
+                        .as("expected identity '" + expected + "' is not a positive pid@ticks record,"
+                                + " so the protected process must stay unverifiable")
+                        .startsWith("unverifiable:");
+            }
         } finally {
             controller.close();
         }

@@ -16,7 +16,9 @@ import java.util.Optional;
  * <ul>
  *   <li>any removal outside {@link #REPORT_PATH} is a violation (the observed commit);</li>
  *   <li>more than {@link #MAX_REMOVALS} removals is a violation regardless of path,
- *       so a mass rewrite of the report history is not waved through.</li>
+ *       so a mass rewrite of the report history is not waved through;</li>
+ *   <li>a page at GitHub's {@link #GITHUB_FILE_LIST_LIMIT}-file cap is a violation,
+ *       because a truncated page can hide either the report or the removals.</li>
  * </ul>
  *
  * <p>Wiring: {@code GitBranchService.commitFileChanges} reads the pushed commit
@@ -33,7 +35,13 @@ public final class ReportStepTreeGuard {
     /** Removals tolerated for any path; the observed bad commit removed 300. */
     public static final int MAX_REMOVALS = 5;
 
-    /** GitHub returns at most this many files for one commit; a full page may be truncated. */
+    /**
+     * GitHub returns at most this many files for one commit page. The supplier
+     * ({@code GitBranchService.commitFileChanges}) reads a single page and cannot
+     * tell a complete 300-file list from a truncated one, so the guard treats the
+     * cap as unverifiable. Following the Link header in the supplier would change
+     * this rule.
+     */
     public static final int GITHUB_FILE_LIST_LIMIT = 300;
 
     /** Change classes a tree diff entry can carry. */
@@ -79,18 +87,21 @@ public final class ReportStepTreeGuard {
         // PASS for removals the report step never made. No report move, no guard.
         boolean reportTouched = diff.files().stream()
                 .anyMatch(file -> REPORT_PATH.equals(normalize(file.path())));
+        if (diff.files().size() >= GITHUB_FILE_LIST_LIMIT) {
+            // GitHub returns at most 300 files for one commit. The incident commit
+            // removed 300 files and added the report; the page held the removals but
+            // not qa_report.md, so the report-touched branch never ran. The same cap
+            // can hide removals when the report is present. A full page is therefore
+            // ambiguous in both directions and the guard fails closed.
+            return Optional.of("QA report commit on branch '" + diff.branchName() + "' lists "
+                    + diff.files().size() + " changed files "
+                    + (reportTouched ? "including " : "but not ") + REPORT_PATH
+                    + "; GitHub caps a commit's file list at " + GITHUB_FILE_LIST_LIMIT
+                    + ", so this page may be truncated and its removals cannot be verified."
+                    + " Restore any files the step removed and commit ONLY " + REPORT_PATH
+                    + " with an explicit pathspec, then retry the step.");
+        }
         if (!reportTouched) {
-            if (diff.files().size() >= GITHUB_FILE_LIST_LIMIT) {
-                // GitHub caps a commit's file list at 300. The incident commit had
-                // 300 removals plus the report add; a truncated list can omit
-                // qa_report.md entirely. A full, report-less list is ambiguous, so
-                // the report-only guard fails closed rather than waving it through.
-                return Optional.of("QA report commit on branch '" + diff.branchName()
-                        + "' lists " + diff.files().size() + " changed files but not "
-                        + REPORT_PATH + "; the file list may be truncated (GitHub caps it at "
-                        + GITHUB_FILE_LIST_LIMIT + "). Restore the removed files and retry the"
-                        + " step with an explicit pathspec.");
-            }
             return Optional.empty();
         }
         List<String> removals = diff.files().stream()

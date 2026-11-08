@@ -27,8 +27,15 @@ public final class CredentialRedactor {
             Pattern.compile("\\bAKIA[0-9A-Z]{16}\\b");
     private static final Pattern BEARER =
             Pattern.compile("(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]{8,}");
+    /**
+     * The value may contain escaped pairs (a Windows path, an escaped inner JSON
+     * document), so it accepts {@code \\.} as well as ordinary characters; the
+     * closing quote is a backreference to the opening quote so an escaped
+     * ({@code \"}) value cannot run past its own string boundary into the rest of
+     * an embedded document.
+     */
     private static final Pattern NAMED_SECRET_JSON_VALUE = Pattern.compile(
-            "(?i)(\\\\?\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\\\\?\"\\s*:\\s*\\\\?\")((?:[^\"\\\\]|\\\\.)*)(\\\\?\")");
+            "(?i)(\\\\?\"(?:token|access[_-]?token|api[_-]?key|secret|password|authorization)\\\\?\"\\s*:\\s*)(\\\\?\")((?:[^\"\\\\]|\\\\.)*?)\\2");
 
     private CredentialRedactor() {
     }
@@ -44,7 +51,7 @@ public final class CredentialRedactor {
         redacted = PROVIDER_KEY.matcher(redacted).replaceAll(MASK);
         redacted = AWS_ACCESS_KEY.matcher(redacted).replaceAll(MASK);
         redacted = BEARER.matcher(redacted).replaceAll("$1" + MASK);
-        redacted = NAMED_SECRET_JSON_VALUE.matcher(redacted).replaceAll("$1" + MASK + "$3");
+        redacted = NAMED_SECRET_JSON_VALUE.matcher(redacted).replaceAll("$1$2" + MASK + "$2");
         return redacted;
     }
 }

@@ -82,6 +82,10 @@ jobs:
         # The harness packaging profile rebuilds dist/ itself (antrun + tsc); the
         # node_modules install is the CI-side prerequisite for that build.
         run: cd packages/qoder-acp-bridge && pnpm install --frozen-lockfile && pnpm build
+      - name: Run the Qoder ACP bridge unit tests
+        # The bridge owns launch-environment and framing contracts the Java side
+        # depends on; without this step its suite is never gated on a PR.
+        run: cd packages/qoder-acp-bridge && pnpm test
       - name: Build all modules and the harness distribution (skip tests)
         run: mvn -q -T 1C -f agent-control-tower/pom.xml -Pcore-e2e-harness install -DskipTests
       - name: Run the harness packaging IT (profile lane, tests enabled)

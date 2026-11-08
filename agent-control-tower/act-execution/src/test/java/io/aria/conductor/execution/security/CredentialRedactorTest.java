@@ -74,22 +74,27 @@ class CredentialRedactorTest {
         // A tool can pass a JSON document as a string argument; its inner quotes
         // are escaped. The named-secret rule must still reach the value.
         String arguments = "{\"outer\":\"{\\\"token\\\":\\\"hunter2\\\"}\"}";
-        String redacted = CredentialRedactor.redact(arguments);
-        assertThat(redacted)
-                .doesNotContain("hunter2")
-                .contains("[REDACTED]")
-                .contains("\"outer\"");
-        assertThat(CredentialRedactor.redact(redacted)).isEqualTo(redacted);
+        assertThat(CredentialRedactor.redact(arguments))
+                .isEqualTo("{\"outer\":\"{\\\"token\\\":\\\"[REDACTED]\\\"}\"}");
+    }
+
+    @Test
+    void theEscapedValueStopsAtItsOwnClosingQuote() {
+        // Greedy value matching used to run past the secret's escaped closing
+        // quote and swallow the rest of the embedded document; the approver then
+        // lost the tool's remaining arguments.
+        String arguments = "{\"outer\":\"{\\\"password\\\":\\\"x\\\",\\\"cmd\\\":\\\"rm -rf /\\\"}\"}";
+        assertThat(CredentialRedactor.redact(arguments)).isEqualTo(
+                "{\"outer\":\"{\\\"password\\\":\\\"[REDACTED]\\\",\\\"cmd\\\":\\\"rm -rf /\\\"}\"}");
     }
 
     @Test
     void masksNamedSecretValuesThatContainJsonEscapes() {
         String arguments = "{\"password\":\"C:\\\\x\"}";
-        String redacted = CredentialRedactor.redact(arguments);
-        assertThat(redacted)
-                .doesNotContain("C:\\\\x")
-                .contains("[REDACTED]");
-        assertThat(CredentialRedactor.redact(redacted)).isEqualTo(redacted);
+        assertThat(CredentialRedactor.redact(arguments))
+                .isEqualTo("{\"password\":\"[REDACTED]\"}");
+        assertThat(CredentialRedactor.redact(CredentialRedactor.redact(arguments)))
+                .isEqualTo("{\"password\":\"[REDACTED]\"}");
     }
 
     @Test

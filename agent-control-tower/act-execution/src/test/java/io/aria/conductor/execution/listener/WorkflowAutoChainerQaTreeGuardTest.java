@@ -91,14 +91,14 @@ class WorkflowAutoChainerQaTreeGuardTest {
     @Test
     void passWithATreeThatRemovedSourceFiles_failsTheStepWithoutAdvancing() {
         prepareQaStep(TEMPLATE_PARAMS);
-        WorkflowAutoChainer chainer = chainerSupplying(removalDiff(300));
+        WorkflowAutoChainer chainer = chainerSupplying(removalDiff(2));
 
         chainer.onRunCompleted(completed(CLEAN_QA_OUTPUT));
 
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(workflowService).markStepFailed(eq(chain.getId()), eq(0), message.capture());
         assertThat(message.getValue())
-                .contains("removed 300")
+                .contains("removed 2")
                 .contains(GitHandoffMetadata.branchName(chain.getId()))
                 .contains("outside qa_report.md");
         assertThat(requestedRepo).hasValue(REPO_URL);
@@ -108,6 +108,22 @@ class WorkflowAutoChainerQaTreeGuardTest {
         // No PASS is recorded on the DoD either.
         verify(dodService, never()).review(anyString(), anyString(), anyString(), anyBoolean(),
                 any(), anyString(), anyString());
+    }
+
+    @Test
+    void passWithATruncatedPage_failsTheStepWithoutAdvancing() {
+        // The F19 page: 300 entries, at GitHub's cap, so removals cannot be trusted.
+        prepareQaStep(TEMPLATE_PARAMS);
+        WorkflowAutoChainer chainer = chainerSupplying(removalDiff(300));
+
+        chainer.onRunCompleted(completed(CLEAN_QA_OUTPUT));
+
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(workflowService).markStepFailed(eq(chain.getId()), eq(0), message.capture());
+        assertThat(message.getValue())
+                .contains("may be truncated")
+                .contains(GitHandoffMetadata.branchName(chain.getId()));
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
     }
 
     @Test

@@ -100,15 +100,58 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
     /**
      * Counters the bridge's separate {@code usage} event reported for the
      * current prompt. Reset whenever a prompt starts or is cleared, so a report
-     * can never be carried to another prompt. {@code totalTokens} is recorded
-     * for completeness; the shared {@link UsageSnapshot} carries only the parts.
+     * can never be carried to another prompt. {@link UsageSnapshot} carries only
+     * input/output, so the report's total has no reader and is not recorded.
      */
-    private volatile Long reportedInputTokens;
-    private volatile Long reportedOutputTokens;
-    private volatile Long reportedTotalTokens;
+    private final ReportedUsage reportedUsage = new ReportedUsage();
 
     /** One offered native permission option, as the core offered it. */
     private record OfferedOption(String optionId, String kind) {
+    }
+
+    /**
+     * The per-prompt usage report the bridge's {@code usage} event carries. It is
+     * a nested value object so the precedence rule -- a reported counter (zero
+     * included) beats the terminal frame, an absent or non-numeric member is
+     * unknown -- is provable without a bridge client.
+     */
+    static final class ReportedUsage {
+
+        private volatile Long inputTokens;
+        private volatile Long outputTokens;
+
+        /** Records one {@code usage} event for the current prompt. */
+        void record(JsonNode payload) {
+            inputTokens = counter(payload, "inputTokens");
+            outputTokens = counter(payload, "outputTokens");
+        }
+
+        /** Forgets the report; called when its prompt starts, ends or is cleared. */
+        void clear() {
+            inputTokens = null;
+            outputTokens = null;
+        }
+
+        /** The reported input count, or the terminal frame's when nothing was reported. */
+        Long inputTokensOr(JsonNode terminalUsage) {
+            Long reported = inputTokens;
+            return reported != null ? reported : counter(terminalUsage, "inputTokens");
+        }
+
+        /** The reported output count, or the terminal frame's when nothing was reported. */
+        Long outputTokensOr(JsonNode terminalUsage) {
+            Long reported = outputTokens;
+            return reported != null ? reported : counter(terminalUsage, "outputTokens");
+        }
+
+        /** One counter: a member that is absent or not a number stays {@code null}, a zero stays zero. */
+        private static Long counter(JsonNode node, String member) {
+            if (node == null) {
+                return null;
+            }
+            JsonNode value = node.path(member);
+            return value.isNumber() ? value.asLong() : null;
+        }
     }
 
     QoderCoreSession(ExecutionSpec spec, QoderBridgeClient client, String model) {
@@ -159,9 +202,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             }
             promptInFlight = true;
             currentPromptId = -1;
-            reportedInputTokens = null;
-            reportedOutputTokens = null;
-            reportedTotalTokens = null;
+            reportedUsage.clear();
             promptFuture = new CompletableFuture<>();
             pending = promptFuture;
             consumer = events;
@@ -413,21 +454,19 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
      * non-numeric member stays {@code null} instead of becoming zero.
      */
     private void recordReportedUsage(JsonNode payload) {
-        reportedInputTokens = reportedCounter(payload, "inputTokens");
-        reportedOutputTokens = reportedCounter(payload, "outputTokens");
-        reportedTotalTokens = reportedCounter(payload, "totalTokens");
+        reportedUsage.record(payload);
     }
 
-    private static Long reportedCounter(JsonNode payload, String member) {
-        JsonNode value = payload.path(member);
-        return value.isNumber() ? value.asLong() : null;
-    }
-
-    private boolean isCurrentPrompt(JsonNode payload) {
+    /** One frame belongs to the acknowledged prompt, or to the pre-ack window when none is. */
+    static boolean isCurrentPrompt(int currentPromptId, JsonNode payload) {
         if (currentPromptId < 0) {
             return true;
         }
         return payload.path("promptId").asInt(-1) == currentPromptId;
+    }
+
+    private boolean isCurrentPrompt(JsonNode payload) {
+        return isCurrentPrompt(currentPromptId, payload);
     }
 
     private static boolean isTerminal(String type) {
@@ -455,23 +494,19 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
     private void completeResult(JsonNode payload) {
         CompletableFuture<CoreResult> future;
         StringBuilder text;
-        Long reportedInput;
-        Long reportedOutput;
+        Long inputTokens;
+        Long outputTokens;
+        JsonNode terminalUsage = payload.path("usage");
         synchronized (promptLock) {
             future = pending;
             text = output;
-            reportedInput = reportedInputTokens;
-            reportedOutput = reportedOutputTokens;
+            inputTokens = reportedUsage.inputTokensOr(terminalUsage);
+            outputTokens = reportedUsage.outputTokensOr(terminalUsage);
             clearPromptLocked();
         }
         if (future == null) {
             return;
         }
-        JsonNode usage = payload.path("usage");
-        Long inputTokens = reportedInput != null ? reportedInput
-                : (usage.has("inputTokens") ? usage.path("inputTokens").asLong() : null);
-        Long outputTokens = reportedOutput != null ? reportedOutput
-                : (usage.has("outputTokens") ? usage.path("outputTokens").asLong() : null);
         String observedModel = payload.path("observedModel").isTextual()
                 ? payload.path("observedModel").asText()
                 : null;
@@ -505,9 +540,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         pending = null;
         consumer = null;
         output = null;
-        reportedInputTokens = null;
-        reportedOutputTokens = null;
-        reportedTotalTokens = null;
+        reportedUsage.clear();
     }
 
     private void scheduleDeadline(CompletableFuture<CoreResult> future, Instant deadline) {

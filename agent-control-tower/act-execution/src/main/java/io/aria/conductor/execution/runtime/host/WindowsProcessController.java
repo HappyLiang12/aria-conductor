@@ -34,6 +34,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Windows ownership control built on the technique Task 1 verified on the live
@@ -246,6 +247,33 @@ final class WindowsProcessController implements OwnedProcessController {
      * deterministically and assert the proof fails closed on it.
      */
     volatile java.util.function.Consumer<Set<String>> afterFinalInventory = records -> { };
+    /**
+     * F2 (review round 2): the number of launches that are in flight -- counted from
+     * before the OS can make the launch a job member until its binding is registered
+     * in {@link #started}. A launch in that window is a live run that the shared job
+     * already sees but the controller does not supervise yet; it is not another run's
+     * orphan, and attribution must not claim it.
+     */
+    private final AtomicInteger inFlightLaunches = new AtomicInteger();
+    /**
+     * Test-visible seam for the window between the shared job admitting a launch
+     * ({@code assign}) and the launch being registered in {@link #started}:
+     * production never assigns it. In that window the run is a live job member but
+     * not yet supervised, so a concurrent stop must not attribute its root as an
+     * orphan of another run. The seam receives the launched pid, so a test can hold
+     * a launch in the window deterministically.
+     */
+    volatile java.util.function.IntConsumer afterAssign = pid -> { };
+    /**
+     * Test-visible seam for the window between the first job inventory of
+     * {@link #stop} and the second one: production never assigns it. A member the
+     * job admits in that window -- the attributed kill and its verdict round trips
+     * are long enough for a process being killed to spawn a child that inherits the
+     * shared job -- was never attributed, killed or verdict-checked, so a test
+     * places it here deterministically and asserts the second inventory fails the
+     * proof closed.
+     */
+    volatile Runnable afterAttribution = () -> { };
     private Supervisor supervisor;
 
     WindowsProcessController() {
@@ -279,6 +307,7 @@ final class WindowsProcessController implements OwnedProcessController {
         OwnedProcess owned = null;
         try {
             String jobMembership = current.command("assign " + process.pid());
+            afterAssign.accept((int) process.pid());
             String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(
                     "The launched runtime (pid " + process.pid() + ") vanished before its creation identity"
                             + " could be recorded"));
@@ -603,6 +632,7 @@ final class WindowsProcessController implements OwnedProcessController {
                         process.runId(), verdictOf(recordOf(process)), known, job, unaccounted);
             }
             clean &= unaccounted.isEmpty();
+            afterAttribution.run();
             // R7 (review round 4, P2): the population re-read before the straggler scan is
             // not the proof's last word -- the per-record verdicts, the own-survivor kill
             // and the final inventory with its classification are round trips after it. A
@@ -741,6 +771,28 @@ final class WindowsProcessController implements OwnedProcessController {
     }
 
     /**
+     * F1: the members of {@code fresh} that {@code previous} did not hold -- the
+     * identities that first appeared in a repeated job inventory. The comparison is
+     * identity-only ({@code pid@creation}); command lines and paths are never part
+     * of an inventory record. A null or empty {@code previous} accounts for nothing,
+     * so every fresh member is introduced; a null or empty {@code fresh} introduces
+     * nothing.
+     */
+    static List<String> membersIntroducedSince(List<String> fresh, List<String> previous) {
+        if (fresh == null || fresh.isEmpty()) {
+            return List.of();
+        }
+        List<String> introduced = new ArrayList<>();
+        for (String member : fresh) {
+            if (member == null || (previous != null && previous.contains(member))) {
+                continue;
+            }
+            introduced.add(member);
+        }
+        return introduced;
+    }
+
+    /**
      * This run's root creation identity as FILETIME ticks, or a non-positive value
      * when it is not a readable tick count -- which attributes nothing.
      */
@@ -841,6 +893,28 @@ final class WindowsProcessController implements OwnedProcessController {
     boolean observedRecordContains(UUID runId, String record) {
         Set<String> observed = observedRecords.get(runId);
         return observed != null && observed.contains(record);
+    }
+
+    /**
+     * F2: the number of runs whose writers a stop proof must treat as claimed -- the
+     * registered runs plus the launches still in flight. A launch is in flight from
+     * before the OS can make it a job member until it is registered, so a value of
+     * exactly {@code 1} means one supervised run and no concurrent launch. That is
+     * the only state in which attribution may claim a job member.
+     */
+    int supervisedOrLaunchingRunCount() {
+        return started.size() + inFlightLaunches.get();
+    }
+
+    /**
+     * Test-visible: the shared job's current membership, exactly as the stop proof's
+     * inventory reads it ({@code pid@creation}, OS identities only). It lets a test
+     * assert that a fixture writer really is a job member instead of assuming it: a
+     * writer outside the job would survive the job-attributed kill and make the
+     * premise vacuous.
+     */
+    List<String> jobMemberRecords() {
+        return jobMembers();
     }
 
     /**

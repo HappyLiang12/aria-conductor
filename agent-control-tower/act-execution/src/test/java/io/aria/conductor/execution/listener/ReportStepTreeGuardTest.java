@@ -30,21 +30,20 @@ class ReportStepTreeGuardTest {
 
     @Test
     void commitThatRemovesTheRepositoryTree_isRejected() {
-        // The observed commit: 300 removals, none of them the report.
-        List<ChangedFile> files = new java.util.ArrayList<>(IntStream.range(0, 300)
+        // The observed page: 300 removals and no qa_report.md entry. The report add
+        // existed on the commit but fell off GitHub's 300-file page.
+        List<ChangedFile> files = IntStream.range(0, 300)
                 .mapToObj(i -> new ChangedFile("agent-control-tower/src/main/File" + i + ".java",
                         ChangeType.REMOVED))
-                .toList());
-        files.add(new ChangedFile("qa_report.md", ChangeType.ADDED));
+                .toList();
 
         Optional<String> violation = guard.violation(new TreeDiff(
                 "sdd/9f3d06d3", "451c4867", "984df552", files));
 
         assertThat(violation).isPresent();
         assertThat(violation.get())
-                .contains("removed 300")
-                .contains("outside qa_report.md")
-                .contains("File0.java");
+                .contains("may be truncated")
+                .contains("but not " + ReportStepTreeGuard.REPORT_PATH);
     }
 
     @Test
@@ -95,19 +94,38 @@ class ReportStepTreeGuardTest {
     }
 
     @Test
-    void aFullFileListWithoutTheReport_failsClosedAsTruncated() {
-        // GitHub caps a commit's file list at 300. The F19 commit had 300 removals
-        // plus the report add; the truncated page can omit qa_report.md.
-        List<ChangedFile> truncated = IntStream.range(0, ReportStepTreeGuard.GITHUB_FILE_LIST_LIMIT)
+    void aReportLessPageBelowTheLimit_isNotJudged() {
+        // One entry under the cap: no truncation, so the DEV head keeps its
+        // previous behaviour even when it consists only of removals.
+        List<ChangedFile> devRefactor = IntStream
+                .range(0, ReportStepTreeGuard.GITHUB_FILE_LIST_LIMIT - 1)
                 .mapToObj(i -> new ChangedFile("agent-control-tower/src/main/File" + i + ".java",
                         ChangeType.REMOVED))
                 .toList();
 
+        assertThat(guard.violation(new TreeDiff("sdd/chain-1", "parent", "dev-head", devRefactor)))
+                .isEmpty();
+    }
+
+    @Test
+    void aFullPageThatIncludesTheReport_failsClosedAsTruncated() {
+        // A truncated page can also hide removals after qa_report.md. With no
+        // observed removal the old rule accepted this page; the cap makes it
+        // ambiguous, so it must fail closed too.
+        List<ChangedFile> files = new java.util.ArrayList<>(IntStream
+                .range(0, ReportStepTreeGuard.GITHUB_FILE_LIST_LIMIT - 1)
+                .mapToObj(i -> new ChangedFile("agent-control-tower/src/main/File" + i + ".java",
+                        ChangeType.MODIFIED))
+                .toList());
+        files.add(new ChangedFile(ReportStepTreeGuard.REPORT_PATH, ChangeType.ADDED));
+
         Optional<String> violation = guard.violation(
-                new TreeDiff("sdd/chain-1", "parent", "truncated-head", truncated));
+                new TreeDiff("sdd/chain-1", "parent", "truncated-head", files));
 
         assertThat(violation).isPresent();
-        assertThat(violation.get()).contains("may be truncated");
+        assertThat(violation.get())
+                .contains("may be truncated")
+                .contains("including " + ReportStepTreeGuard.REPORT_PATH);
     }
 
     @Test

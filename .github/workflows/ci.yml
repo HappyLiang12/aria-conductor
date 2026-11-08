@@ -55,6 +55,21 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/actions/**'
 
+  script-self-tests:
+    name: Start Script Self-Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes]
+    # Same gate as `build`: the scripts change under scripts/** (a `java` filter path),
+    # and both self-tests run on the runner's preinstalled bash/pwsh/node.
+    if: needs.changes.outputs.java == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Workspace root resolution (bash)
+        run: bash scripts/lib/workspace-roots.test.sh
+      - name: 'Startup checks: workspace roots + bridge freshness (pwsh)'
+        run: pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1
+
   build:
     name: Build Backend + Harness Distribution (once)
     runs-on: ubuntu-latest

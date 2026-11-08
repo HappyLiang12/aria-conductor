@@ -619,5 +619,39 @@
       "F31: the new CI job relies on the hosted runner preinstalling pwsh and node (INFERRED until the first hosted run); the ps1 rebuild path was not executed end-to-end locally",
       "the round-2 live E2E was not rerun on this branch; the fixes are pinned by unit/real-OS/integration tests, and the live stack was left untouched this wave"
     ]
+  },
+  "round2_live_f32": {
+    "date": "2026-11-08",
+    "finding": "F32 (high, new): a stop proof false-red on a stale sampled record whose pid was recycled by a protected process",
+    "live_evidence": {
+      "chain": "1ec123e6-6420-4623-bd43-c287383a517e (issue #54)",
+      "runs": "BA 34db2d84 COMPLETED (spec 6496f142); DEV cd174bb3 FAILED at finalization; QA never started",
+      "failure": "records [12960@134386217469441531 (unverifiable:open:5)]; allWritersStopped=false",
+      "root_cause": "the record was a short-lived qoder helper (creation 14:29:06.944Z; the Edit tool call completed 14:29:07.293Z). Its pid was gone; the pid was held by a protected system process, whose OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) is refused with access denied (5). Identity() had no handle-free fallback, so a dead record stayed unverifiable and the proof failed closed",
+      "classification": "product defect in the identity read; the fail-closed choice itself is correct"
+    },
+    "commits": ["ac4bcb13", "ea602614", "34108e2e", "4d954c69", "c3528ba3"],
+    "fix": "the embedded supervisor's Test-Record falls back to a handle-free WMI creation time when Identity() returns unverifiable. A stale record resolves to mismatch (clean) when the observed creation differs by more than 10 ms; the same process, a missing instance (gone), a null CreationDate, a malformed record, or a failed probe keep the fail-closed verdict. The comparison is in local wall-clock time to avoid a DST false mismatch. The probe is used only on the unverifiable branch and is bounded by -OperationTimeoutSec 5",
+    "tests": {
+      "unit": "WindowsProcessControllerOrphanAttributionTest 16 run / 0 failures / 0 errors / 0 skipped (12 pre-existing + 3 F32 + 1 malformed-record); includes the 2 ms and 20 ms sides of the 10 ms tolerance",
+      "failsafe": "HostExecutionBackendIntegrationTest#theEmbeddedSupervisorClassifiesARefusedOpenAsUnverifiableNotGone 1/0/0/0 (no assumption; the record now names the process it means)",
+      "red": "pre-fix, record 4@<ticks-500s> returned unverifiable:open:5 where mismatch was expected (the implementer's RED; the reviewer reproduced it by running the ddec9950 script)",
+      "revert_checks": "reverting the Test-Record branch or the 10 ms tolerance fails the corresponding tests"
+    },
+    "review": {
+      "round_1": "approve with fixes: 5 minors (100 ms residual false red, DST conversion, null CreationDate as absent, malformed-but-parseable records reclassified, no CIM timeout); all five fixed in 34108e2e",
+      "round_2": "approve with fixes: 4 P3s (DST comment overclaim, deleted self-pid assertion, timeout comment overclaim, absent/error untested); fixed or recorded here",
+      "round_3": "approve with fixes: no new P0-P2; the remaining timeout wording and the unsourced 225-process figure were corrected in c3528ba3; self-pid closed and the DST comment closed",
+      "measurement": "WMI CreationDate vs kernel FILETIME: max delta 9 ticks (0.9 us) across 232 readable processes, measured 2026-11-08 at 34108e2e by the independent reviewer; no committed script, so the code comment states only 'far below a millisecond'",
+      "precondition": "the PID-4 fixtures require a non-SYSTEM test identity; on a host that can open PID 4 they fail rather than skip (deliberate)"
+    },
+    "residuals": [
+      "a helper that lived under 10 ms and whose pid is recycled by a protected process can still stay unverifiable (false red; the recorded holder must be created within 10 ms of the record)",
+      "on a DST-observing host, the fall-back repeated hour collapses two UTC instants one hour apart; a recycled pid created exactly one hour after the record can stay unverifiable. The collision window is one hour per year (less in 30-minute zones), and the record stays unverifiable for as long as that holder lives; it never becomes a false clean",
+      "absent -> gone is the one new transition from unverifiable to a definite absence; it is code-read, not runtime-tested (the higher-risk of the two untested branches); error -> unverifiable is untested and stays fail-closed",
+      "no Windows runner in hosted CI: every job is ubuntu-latest, so the Windows-only F32 tests run only on a Windows developer host",
+      "the probe adds one local CIM round trip per unverifiable record; a hung provider is bounded by the supervisor's 120 s command wait (the caller's deadline is checked between round trips), and the worst-case batch latency is unmeasured",
+      "no end-to-end stop-proof test over a run whose observed record is recycled by a protected process; the classification is pinned and the proof's mismatch handling is exercised by the fake-supervisor tests"
+    ]
   }
 }

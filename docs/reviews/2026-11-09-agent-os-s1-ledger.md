@@ -73,6 +73,19 @@ provider test variables (they leak into tests and flip expected bindings).
 
 Plus the live SDD scenario on the HOST backend and hosted CI at the Gate A HEAD.
 
+Live-scenario constraints (from the 2026-11 QA runs; the operator supplies credentials and
+no agent reads `.env`):
+
+- build the immutable fat jar at the gate HEAD and run it directly; never
+  `spring-boot:run -pl act-app`;
+- H2 must stay in `MODE=MySQL`; use a fresh database or a copy that does not carry the
+  PACK credential key;
+- the opencode HOST provider key must not collide with an opencode built-in provider id,
+  and its models block must declare the model; `LLM_API_KEY` comes from the operator
+  environment;
+- one SDD chain on an existing GitHub issue with the spec gate approved once; assert the
+  chain completes, no 500 on approval, and one context manifest per BA/DEV/QA turn.
+
 Gate B (after B, D, C2a, C2b, I merge):
 
 - fresh H2 database, teach two facts via REST, restart, recall in a new conversation;

@@ -25,7 +25,7 @@ when its paths change.
 
 | Lane | Branch | Worktree | Status | Commits | Review | Merged |
 |---|---|---|---|---|---|---|
-| W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | IMPLEMENTED (handoff) | bd2b313f, d6236a31, 2a04fe59 | IN_REVIEW | no |
+| W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | IN_PROGRESS | pending | pending | no |
 | A1 | `lane/agent-os-a1` | pending | PENDING | - | - | no |
 | A2 | `lane/agent-os-a2` | pending | PENDING | - | - | no |
@@ -53,6 +53,16 @@ when its paths change.
 - Merge constraint: `LlmProvider.sensitivityCeiling` is non-null with no column until
   W0B's V81, so W0A must not be merged or booted alone; merge W0A and W0B in the same
   integration step before any act-app gate.
+- Independent review verdict: APPROVE at 2a04fe59, six Low follow-ups, no Critical/High.
+  Fixed in d142424f: `length = 16` on the ceiling column, a null guard in `onCreate`,
+  the SPI test renamed to `ContextSpiTest` so the unit tier runs it, and a
+  `withMaxSensitivity(null)` case that must stay INTERNAL. Evidence:
+  `ContextSpiTest` 5/0/0/0, `LlmProviderCeilingTest` 2/0/0/0.
+- Follow-ups handed to other lanes: a full 57-entry policy-map test and the
+  autoApproveRead implies WORKER_READ invariant go to C; the fact that no provider DTO
+  writes the ceiling stays documented as SQL-only in S1 (spec section 9 has no such
+  endpoint); the spec's `estimatedChars`/`estimatedTokens` "field" wording is textual
+  drift because both are derived accessors in the approved plan.
 
 ## Gates
 

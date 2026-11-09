@@ -140,7 +140,7 @@ Ownership (a lane may not edit another lane's files):
 - Create: `.../common/context/ContextSection.java`
 - Create: `.../common/context/ContextRequest.java`
 - Create: `.../common/context/ContextContributor.java`
-- Test: `agent-control-tower/act-common/src/test/java/io/aria/conductor/common/context/ContextContractTest.java`
+- Test: `agent-control-tower/act-common/src/test/java/io/aria/conductor/common/context/ContextSpiTest.java`
 
 **Interfaces:**
 - Consumes: `io.aria.conductor.common.model.Sensitivity`.
@@ -160,7 +160,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class ContextContractTest {
+class ContextSpiTest {
 
     @Test
     void sectionDerivesEstimatesAndDefaultsSensitivity() {
@@ -210,7 +210,7 @@ class ContextContractTest {
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-cd agent-control-tower && mvn -pl act-common test -Dtest=ContextContractTest
+cd agent-control-tower && mvn -pl act-common test -Dtest=ContextSpiTest
 ```
 
 Expected: FAIL to compile, `ContextSection`/`ContextRequest` not found.
@@ -328,7 +328,7 @@ public interface ContextContributor {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-cd agent-control-tower && mvn -pl act-common test -Dtest=ContextContractTest
+cd agent-control-tower && mvn -pl act-common test -Dtest=ContextSpiTest
 ```
 
 Expected: `Tests run: 4, Failures: 0, Errors: 0, Skipped: 0`.

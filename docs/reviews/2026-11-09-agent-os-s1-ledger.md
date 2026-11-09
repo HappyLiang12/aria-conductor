@@ -134,6 +134,12 @@ Verify the run's provider id is the row that was updated; the default provider s
   `scripts/lanes` shard plan for the new act-memory test classes
   (`node scripts/lane-plan.mjs gen` then `check`), because the shard runner refuses to
   start when a compiled test class is covered by no lane.
+- 2026-11-09: W0B shipped the trajectory bound as
+  `findTop200ByRunIdOrderByTurnNumberAsc`, but spec P6 says the *last* 200 turns; the
+  ascending derived query keeps the oldest. The contract was corrected to
+  `...OrderByTurnNumberDesc` with the history loader reversing into turn order, and the
+  plan's A1 test now stubs newest-first data so a loader that forgets the reversal
+  fails. The lane's repository and its bound test must be updated to match.
 
 ## Evidence to fill at each boundary
 

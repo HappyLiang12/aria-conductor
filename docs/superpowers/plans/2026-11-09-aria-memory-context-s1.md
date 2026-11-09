@@ -639,7 +639,9 @@ git commit -m "feat(memory): add the act-memory module skeleton"
 **Interfaces:**
 - Produces: tables, JPA entities, repositories, and bounded query methods:
   - `RunRepository.findTop20ByConversationIdOrderByCreatedAtDesc(String)`
-  - `SessionTrajectoryRepository.findTop200ByRunIdOrderByTurnNumberAsc(UUID)`
+  - `SessionTrajectoryRepository.findTop200ByRunIdOrderByTurnNumberDesc(UUID)` — the
+    newest 200 turns; the history loader reverses them to turn order (spec P6 says the
+    *last* 200 turns, so the ascending variant would have kept the oldest)
   - `ApprovalRepository.countByStatus(ApprovalStatus)`
 - Consumed by: A1 (history/manifest), B (services), D (backfill), C2a/C2b.
 
@@ -734,7 +736,7 @@ class BoundedTrajectoryQueryTest {
     void returnsAtMostTheTwoHundredOldestTurnsInOrder() {
         UUID runId = UUID.randomUUID();
         for (int i = 0; i < 250; i++) trajectories.saveAndFlush(trajectory(runId, i));
-        List<SessionTrajectory> rows = trajectories.findTop200ByRunIdOrderByTurnNumberAsc(runId);
+        List<SessionTrajectory> rows = trajectories.findTop200ByRunIdOrderByTurnNumberDesc(runId);
         assertThat(rows).hasSize(200);
         assertThat(rows.get(0).getTurnNumber()).isZero();
     }
@@ -876,8 +878,8 @@ Bounded repository methods:
 // RunRepository
 List<Run> findTop20ByConversationIdOrderByCreatedAtDesc(String conversationId);
 
-// SessionTrajectoryRepository
-List<SessionTrajectory> findTop200ByRunIdOrderByTurnNumberAsc(UUID runId);
+// SessionTrajectoryRepository — newest 200 turns; reverse for prompt order
+List<SessionTrajectory> findTop200ByRunIdOrderByTurnNumberDesc(UUID runId);
 
 // ApprovalRepository
 long countByStatus(ApprovalStatus status);
@@ -1429,7 +1431,8 @@ git commit -m "feat(context): add the system context contributors"
 
 **Interfaces:**
 - Consumes: `RunRepository.findTop20ByConversationIdOrderByCreatedAtDesc`,
-  `SessionTrajectoryRepository.findTop200ByRunIdOrderByTurnNumberAsc` (W0B).
+  `SessionTrajectoryRepository.findTop200ByRunIdOrderByTurnNumberDesc` (W0B; the loader
+  reverses the newest-first rows into turn order).
 - Produces: `List<ContextMessage> load(String conversationId, List<ContextMessage> clientFallback)`.
 
 Rules:
@@ -1455,16 +1458,18 @@ class ConversationHistoryLoaderTest {
                 .mapToObj(i -> run("c", i))
                 .toList();
         when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(newestFirst);
-        when(trajectories.findTop200ByRunIdOrderByTurnNumberAsc(any()))
+        // newest first, as the Desc repository returns them
+        when(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(any()))
                 .thenReturn(IntStream.range(0, 200)
-                        .mapToObj(i -> trajectory("user", "m" + i))
+                        .mapToObj(i -> trajectory("user", "m" + (199 - i)))
                         .toList());
 
         List<ContextMessage> history = loader.load("c", List.of());
 
         assertThat(history).hasSize(40);
+        // only a loader that reverses each run into turn order ends on the newest message
         assertThat(history.get(39).content()).isEqualTo("m199");
-        verify(trajectories, times(20)).findTop200ByRunIdOrderByTurnNumberAsc(any());
+        verify(trajectories, times(20)).findTop200ByRunIdOrderByTurnNumberDesc(any());
     }
 }
 ```

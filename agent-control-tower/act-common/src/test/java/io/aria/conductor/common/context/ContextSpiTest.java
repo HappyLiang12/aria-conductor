@@ -9,7 +9,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class ContextContractTest {
+class ContextSpiTest {
 
     @Test
     void sectionDerivesEstimatesAndDefaultsSensitivity() {
@@ -52,5 +52,16 @@ class ContextContractTest {
 
         assertThat(request.withMaxSensitivity(Sensitivity.CONFIDENTIAL).maxSensitivity())
                 .isEqualTo(Sensitivity.CONFIDENTIAL);
+    }
+
+    @Test
+    void narrowingToNullFallsBackToInternalRatherThanOpeningTheCeiling() {
+        ContextRequest request = new ContextRequest(
+                UUID.randomUUID(), "c", UUID.randomUUID(), ContextAdapter.SYNC, 1,
+                "goal", null, Sensitivity.RESTRICTED, 1000, null, null, List.of());
+
+        assertThat(request.withMaxSensitivity(null).maxSensitivity())
+                .as("a null ceiling must fail closed, never widen to RESTRICTED")
+                .isEqualTo(Sensitivity.INTERNAL);
     }
 }

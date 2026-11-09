@@ -1,5 +1,6 @@
 package io.aria.conductor.knowledge.service;
 
+import io.aria.conductor.common.context.ContextSection;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
 import io.aria.conductor.common.event.KnowledgeRetiredEvent;
 import io.aria.conductor.common.event.KnowledgeSubmittedEvent;
@@ -10,11 +11,13 @@ import io.aria.conductor.common.service.KnowledgeContextProvider;
 import io.aria.conductor.knowledge.dto.*;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
+import java.util.ArrayList;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -376,6 +379,50 @@ public class KnowledgeService implements KnowledgeContextProvider {
         return all.size() <= limit ? all : all.subList(0, limit);
     }
 
+    /**
+     * Typed knowledge sections for the context envelope (P3/P4/P6): one bounded
+     * query for the newest approved items and one section per item, filtered by the
+     * provider's sensitivity ceiling. The filter fails closed: an item with no
+     * recorded sensitivity is treated as {@link Sensitivity#INTERNAL}, and a null
+     * ceiling means {@code INTERNAL}.
+     */
+    @Transactional(readOnly = true)
+    public List<ContextSection> buildKnowledgeSections(int limit, Sensitivity ceiling) {
+        Sensitivity maxSensitivity = ceiling == null ? Sensitivity.INTERNAL : ceiling;
+        List<KnowledgeItem> approved = itemRepository
+                .findByStatusOrderByUpdatedAtDesc(KnowledgeStatus.APPROVED, PageRequest.of(0, limit));
+        List<ContextSection> sections = new ArrayList<>();
+        for (KnowledgeItem item : approved) {
+            Sensitivity itemSensitivity = item.getSensitivity() == null
+                    ? Sensitivity.INTERNAL
+                    : item.getSensitivity();
+            if (itemSensitivity.ordinal() > maxSensitivity.ordinal()) {
+                continue;
+            }
+            sections.add(new ContextSection(
+                    "knowledge:" + item.getId(),
+                    item.getName(),
+                    clippedDescription(item),
+                    itemSensitivity,
+                    List.of(item.getId().toString()),
+                    false,
+                    null));
+        }
+        return sections;
+    }
+
+    /**
+     * The description carried into a knowledge section, clipped to 500 characters
+     * so one verbose item cannot flood the envelope.
+     */
+    private static String clippedDescription(KnowledgeItem item) {
+        String content = item.getDescription() != null ? item.getDescription() : "";
+        if (content.length() > 500) {
+            content = content.substring(0, 500) + "...";
+        }
+        return content;
+    }
+
     @Override
     @Transactional(readOnly = true)
     public String buildKnowledgeContextPrompt(int limit) {
@@ -385,12 +432,8 @@ public class KnowledgeService implements KnowledgeContextProvider {
         }
         StringBuilder sb = new StringBuilder("## Knowledge Context\n");
         for (KnowledgeItem item : approved) {
-            String content = item.getDescription() != null ? item.getDescription() : "";
-            if (content.length() > 500) {
-                content = content.substring(0, 500) + "...";
-            }
             sb.append("- **").append(item.getName()).append("** (")
-              .append(item.getType()).append("): ").append(content).append("\n");
+              .append(item.getType()).append("): ").append(clippedDescription(item)).append("\n");
         }
         return sb.toString();
     }

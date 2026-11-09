@@ -27,11 +27,11 @@ when its paths change.
 |---|---|---|---|---|---|---|
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | MERGED (4980b0b1), BLOCK cleared by fix round | 100ba176..4980b0b1 (8) | BLOCK (all findings closed) | yes |
-| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | MERGED (4f726781), review BLOCK fixed in lane | b62a4fcb..56eca9c6 (6) + fix round | BLOCK (4 P2) -> fix round | yes |
+| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | MERGED (2f1ea4e6, rebased from 0245da65) | b62a4fcb..56eca9c6 (6) + 8 | APPROVE (final) | yes |
 | A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | MERGED (ac04408e) + fixes b06ebf36 | 2129a64a, b3849867, 2dc3a0ee | APPROVE (fixes applied) | yes |
-| B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IMPLEMENTED (040d5179), IN_REVIEW | 4c56b96d + 6 | IN_REVIEW | no |
+| B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IMPLEMENTED (d42b086b), fix rounds done, re-review in flight | 4c56b96d + 6 + 5 | BLOCK -> fix rounds | no |
 | C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | MERGED (f3cc3255), review BLOCK evidence-only | 34db1ac7 | BLOCK pending merged-head gate | yes |
-| D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | IMPLEMENTED (dfd61bf3), IN_REVIEW | e04a7fd8..dfd61bf3 | IN_REVIEW | no |
+| D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | MERGED (aa43c9bf, rebased from b7a72679) | e04a7fd8..aa43c9bf (6) | APPROVE (6 P3 open) | yes |
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
 | I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
@@ -259,6 +259,17 @@ Verify the run's provider id is the row that was updated; the default provider s
   seeding `memory.operator.*`; provider id/CORE emission stays with A1 if it is local.
 - 2026-11-09: reviews for B (040d5179) and D (dfd61bf3) are dispatched read-only while
   the A1 fix round runs; reviewers may not run Maven so the two do not contend.
+- 2026-11-09: D review APPROVE at b7a72679 after the V82 corruption fix. D was rebased
+  onto the feature head and merged as aa43c9bf. Six P3s remain and are accepted as
+  residual risks, none blocking: a lost-race entity is not added to linkTargets (its
+  name-matched links may never be proposed if the winning pass died between insert and
+  link pass); the completion marker itself can lose a duplicate-key race and log a
+  false failure although the marker exists; V82's WHERE is narrower than the CASE could
+  safely handle, so `{"a":1 }` / `{  }` rows are never marked (no corruption; primary
+  writers emit compact JSON); the "completion last" test fails at the first read rather
+  than at links.save; concurrency is proven with mocks, not a real constraint
+  translation; MariaDB execution of V82 is unverified (H2 only). V82 is lane-local, so
+  editing it breaks no released checksum.
 
 ## Evidence to fill at each boundary
 

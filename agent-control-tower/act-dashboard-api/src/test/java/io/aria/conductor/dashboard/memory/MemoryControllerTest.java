@@ -37,6 +37,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -47,6 +48,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -374,6 +376,23 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.truncated").value(false));
     }
 
+    @Test
+    void recallCapsFactsAndEntitiesAtCallerLimit() throws Exception {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(recall.recall(any())).thenReturn(new RecallResult(
+                List.of(MemoryEntityView.from(entity(first, "Operator")),
+                        MemoryEntityView.from(entity(second, "Second"))),
+                List.of(MemoryFactView.from(fact(first)), MemoryFactView.from(fact(second))),
+                false));
+
+        mvc.perform(get("/api/v1/memory/recall").param("q", "operator").param("limit", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.entities", hasSize(1)))
+                .andExpect(jsonPath("$.facts", hasSize(1)))
+                .andExpect(jsonPath("$.truncated").value(true));
+    }
+
     // ---------------------------------------------------------------- manifest
 
     @Test
@@ -444,6 +463,31 @@ class MemoryControllerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.ok").value(false))
                 .andExpect(jsonPath("$.errorType").value("CONFLICT"));
+    }
+
+    /**
+     * A duplicate POST /entities (same kind+canonicalKey) violates {@code uq_memory_entity}.
+     * The memory contract answers 409 CONFLICT with a fixed message; neither the h2 SQL
+     * detail nor the constraint name may reach the caller.
+     */
+    @Test
+    void mapsDataIntegrityViolationToConflictWithoutConstraintText() throws Exception {
+        when(command.createEntity(any(), any())).thenThrow(new DataIntegrityViolationException(
+                "could not execute statement [Unique index or primary key violation: "
+                        + "\"PUBLIC.UQ_MEMORY_ENTITY_INDEX_4 ON PUBLIC.MEMORY_ENTITY(KIND, CANONICAL_KEY) "
+                        + "VALUES ('PERSON', 'operator') ...\"]; SQL statement: insert into memory_entity ..."));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(content().string(not(containsString("UQ_MEMORY_ENTITY"))))
+                .andExpect(content().string(not(containsString("insert into"))))
+                .andExpect(content().string(not(containsString("SQL statement"))))
+                .andExpect(content().string(not(containsString("constraint"))));
     }
 
     @Test

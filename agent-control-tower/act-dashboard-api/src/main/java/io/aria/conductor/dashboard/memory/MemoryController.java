@@ -236,13 +236,21 @@ public class MemoryController {
 
     // ---------------------------------------------------------------- recall
 
+    /**
+     * The preview applies the caller's page limit to <em>both</em> lists. Recall itself caps
+     * entities at 12 and facts at 40; a caller limit below that is a preview cap, so the
+     * response says {@code truncated} up front instead of silently returning a shorter page.
+     */
     @GetMapping("/recall")
     public MemoryRecallPreview recall(@RequestParam(required = false, defaultValue = "") String q,
                                       @RequestParam(required = false) Integer limit) {
         RecallResult result = recall.recall(new RecallQuery(q, null, null));
         int cap = limit == null || limit <= 0 ? DEFAULT_RECALL_LIMIT : Math.min(limit, MAX_RECALL_LIMIT);
-        return new MemoryRecallPreview(result.entities(), result.facts().stream().limit(cap).toList(),
-                result.truncated());
+        List<MemoryEntityView> entities = result.entities().stream().limit(cap).toList();
+        List<MemoryFactView> facts = result.facts().stream().limit(cap).toList();
+        boolean trimmed = entities.size() < result.entities().size()
+                || facts.size() < result.facts().size();
+        return new MemoryRecallPreview(entities, facts, result.truncated() || trimmed);
     }
 
     // ---------------------------------------------------------------- manifest

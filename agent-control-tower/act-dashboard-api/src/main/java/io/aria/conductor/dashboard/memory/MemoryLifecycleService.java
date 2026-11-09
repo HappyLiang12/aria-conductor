@@ -20,6 +20,7 @@ import io.aria.conductor.memory.service.MemoryConflictException;
 import io.aria.conductor.memory.service.MemoryNotFoundException;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import io.aria.conductor.memory.service.MemoryValueGuard;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,6 +74,7 @@ public class MemoryLifecycleService {
         String before = entity.getDisplayName();
         entity.setDisplayName(name);
         entities.save(entity);
+        flushEntities("renamed");
         assertions.save(assertion(MemorySubjectType.ENTITY, entityId, MemoryAction.UPDATE, actor, null,
                 audit("displayName", before), audit("displayName", name)));
         return entity;
@@ -111,6 +113,7 @@ public class MemoryLifecycleService {
         String before = entity.getAttributes();
         entity.setAttributes(attributes.toString());
         entities.save(entity);
+        flushEntities("alias-updated");
         assertions.save(assertion(MemorySubjectType.ENTITY, entityId, MemoryAction.UPDATE, actor, null,
                 audit("aliases", aliasesOf(before)), audit("aliases", List.copyOf(merged))));
         return entity;
@@ -130,6 +133,7 @@ public class MemoryLifecycleService {
         }
         entity.setStatus(EntityStatus.RETIRED);
         entities.save(entity);
+        flushEntities("retired");
         assertions.save(assertion(MemorySubjectType.ENTITY, entityId, MemoryAction.RETIRE, actor, null,
                 audit("status", EntityStatus.ACTIVE.name()), audit("status", EntityStatus.RETIRED.name())));
         return entity;
@@ -156,12 +160,38 @@ public class MemoryLifecycleService {
         fact.setStatus(FactStatus.RETIRED);
         fact.setValidTo(now);
         facts.save(fact);
+        flushFacts("retired");
         assertions.save(assertion(MemorySubjectType.FACT, factId, MemoryAction.RETIRE, actor, sourceRef,
                 before, audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey())));
         return fact;
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /**
+     * Pushes the write through the row-level {@code @Version} inside the transaction,
+     * mirroring {@code MemoryCommandService}: a concurrent change surfaces here as the
+     * governed conflict with a fixed message instead of at commit as a raw
+     * {@code ObjectOptimisticLockingFailureException} whose Hibernate text names the entity
+     * class and row id.
+     */
+    private void flushEntities(String operation) {
+        try {
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("the entity changed while it was being " + operation
+                    + "; re-read before retrying");
+        }
+    }
+
+    private void flushFacts(String operation) {
+        try {
+            facts.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("the fact changed while it was being " + operation
+                    + "; re-read before retrying");
+        }
+    }
 
     private MemoryEntity requireEntity(UUID entityId) {
         if (entityId == null) {

@@ -5,6 +5,7 @@ import io.aria.conductor.memory.service.MemoryNotFoundException;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -34,6 +35,10 @@ public class MemoryExceptionHandler {
     static final String CONFLICT = "CONFLICT";
     static final String FORBIDDEN = "FORBIDDEN";
 
+    /** Fixed conflict text: no constraint name, SQL statement, or row value is echoed. */
+    static final String DATA_INTEGRITY_CONFLICT_MESSAGE =
+            "the write conflicts with an existing memory row; re-read and retry with a distinct key";
+
     @ExceptionHandler(MemoryValidationException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MemoryValidationException ex) {
         return body(HttpStatus.UNPROCESSABLE_ENTITY, VALIDATION, ex.getMessage());
@@ -60,6 +65,18 @@ public class MemoryExceptionHandler {
     @ExceptionHandler({MemoryConflictException.class, OptimisticLockingFailureException.class})
     public ResponseEntity<Map<String, Object>> handleConflict(RuntimeException ex) {
         return body(HttpStatus.CONFLICT, CONFLICT, ex.getMessage());
+    }
+
+    /**
+     * A unique-index collision (a duplicate {@code kind+canonicalKey} entity, a duplicate
+     * knowledge link) is a governed conflict, not a server error. The cause text names the
+     * constraint, the SQL statement, and on h2 the offending values, so the response carries
+     * a fixed message instead. Without this mapping the exception falls through to the
+     * platform-wide advice (500, key/detail echoed under h2).
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        return body(HttpStatus.CONFLICT, CONFLICT, DATA_INTEGRITY_CONFLICT_MESSAGE);
     }
 
     /** A worker credential or a failed origin/CSRF check is authenticated but not operator. */

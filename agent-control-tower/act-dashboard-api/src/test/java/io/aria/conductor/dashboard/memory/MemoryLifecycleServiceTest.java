@@ -14,11 +14,13 @@ import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
+import io.aria.conductor.memory.service.MemoryConflictException;
 import io.aria.conductor.memory.service.MemoryNotFoundException;
 import io.aria.conductor.memory.service.MemoryValueGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.List;
@@ -28,6 +30,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -146,6 +149,41 @@ class MemoryLifecycleServiceTest {
 
         verify(facts, never()).save(any());
         verify(assertions, never()).save(any());
+    }
+
+    /**
+     * The write is flushed inside the transaction, so a concurrent change surfaces here as
+     * the governed conflict with a fixed message — not at commit as a raw
+     * {@code ObjectOptimisticLockingFailureException} whose Hibernate text names the entity
+     * class and row id.
+     */
+    @Test
+    void renameTranslatesConcurrentModificationToGovernedConflict() {
+        UUID id = UUID.randomUUID();
+        when(entities.findById(id)).thenReturn(Optional.of(entity(id, null)));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, id))
+                .when(entities).flush();
+
+        assertThatThrownBy(() -> service.renameEntity(id, "Operator Prime", OPERATOR))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("re-read before retrying")
+                .hasMessageNotContaining(MemoryEntity.class.getName())
+                .hasMessageNotContaining(id.toString());
+    }
+
+    @Test
+    void retireFactTranslatesConcurrentModificationToGovernedConflict() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact active = fact(entityId, FactStatus.ACTIVE);
+        when(facts.findById(active.getId())).thenReturn(Optional.of(active));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, active.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> service.retireFact(active.getId(), "operator-console", OPERATOR))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("re-read before retrying")
+                .hasMessageNotContaining(MemoryFact.class.getName())
+                .hasMessageNotContaining(active.getId().toString());
     }
 
     @Test

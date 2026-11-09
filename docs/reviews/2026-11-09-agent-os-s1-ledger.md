@@ -25,7 +25,7 @@ when its paths change.
 
 | Lane | Branch | Worktree | Status | Commits | Review | Merged |
 |---|---|---|---|---|---|---|
-| W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | IN_PROGRESS | pending | pending | no |
+| W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | IMPLEMENTED (handoff) | bd2b313f, d6236a31, 2a04fe59 | IN_REVIEW | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | IN_PROGRESS | pending | pending | no |
 | A1 | `lane/agent-os-a1` | pending | PENDING | - | - | no |
 | A2 | `lane/agent-os-a2` | pending | PENDING | - | - | no |
@@ -35,6 +35,24 @@ when its paths change.
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
 | I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
+
+### W0A handoff (2026-11-09)
+
+- Commits bd2b313f (context SPI), d6236a31 (tool policy move), 2a04fe59 (provider
+  ceiling); worktree clean; every file inside the W0A ownership row.
+- RED captured per task (compile errors for the missing types and getter).
+- Evidence: `ContextContractTest` 4/0/0/0, `ToolDescriptorTest` 2/0/0/0,
+  `LlmProviderCeilingTest` 2/0/0/0; `mvn -pl act-common test` 140/0/0/0 with coverage
+  met; `mvn -pl act-mcp -am test` BUILD SUCCESS, act-mcp 190/0/0/0 over 21 classes
+  (act-agent 312, act-execution 1351, act-knowledge 263/4 skipped, act-dashboard-api 90,
+  act-aria 187/4 skipped, coverage met in 7 modules); `mvn -pl act-app -am test-compile`
+  exit 0.
+- Note: `*ContractTest` is a failsafe include and a surefire exclude, so
+  `ContextContractTest` runs in the `verify` (integration) tier, which Gate A's
+  `mvn verify` executes; no rename needed.
+- Merge constraint: `LlmProvider.sensitivityCeiling` is non-null with no column until
+  W0B's V81, so W0A must not be merged or booted alone; merge W0A and W0B in the same
+  integration step before any act-app gate.
 
 ## Gates
 

@@ -75,6 +75,9 @@ Gate B (after B, D, C2a, C2b, I merge):
   The product's live SDD chain is the Gate A/B acceptance scenario, not the build
   mechanism (building the chain with the chain is circular).
 - 2026-11-09: merge order is W0A/W0B, then A1/A2/C, Gate A, then B/D/C2a/C2b/I, Gate B.
+- 2026-11-09: the hosted unit matrix listed modules explicitly and omitted the new
+  act-memory module, so its tests would never run on hosted CI; a `memory` matrix group
+  was added at a9d76c89 before Wave 0 merges so Gate A/B evidence covers the module.
 
 ## Evidence to fill at each boundary
 

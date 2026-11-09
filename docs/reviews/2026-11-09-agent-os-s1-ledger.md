@@ -28,7 +28,7 @@ when its paths change.
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | FIXING (review BLOCK) | 100ba176, 73d264a1, e314dff3 (rebased c6d1eb06) | BLOCK (2 High, 2 Medium, 5 Low) | merged, fix in flight |
 | A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | IN_PROGRESS | - | - | no |
-| A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IN_PROGRESS | - | - | no |
+| A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IMPLEMENTED, IN_REVIEW | 2129a64a, b3849867, 2dc3a0ee | IN_REVIEW | no |
 | B | `lane/agent-os-b` | pending | PENDING | - | - | no |
 | C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IN_PROGRESS | - | - | no |
 | D | `lane/agent-os-d` | pending | PENDING | - | - | no |
@@ -82,8 +82,22 @@ when its paths change.
   endpoint); the spec's `estimatedChars`/`estimatedTokens` "field" wording is textual
   drift because both are derived accessors in the approved plan.
 
-### Wave 0 integration (2026-11-09)
+### A2 handoff (2026-11-09)
 
+- Commits 2129a64a (prompt contributor), b3849867 (initializer and duplicate history
+  load removed), 2dc3a0ee (knowledge contributor). Gate: act-aria 182/0/0/4,
+  act-knowledge 271/0/0/4, act-execution 1351/0/0/0, act-common 145, BUILD SUCCESS with
+  coverage met.
+- Open cross-lane follow-up: `KnowledgeContextProvider` is NOT deleted because
+  `AgentLoopEngine` (lane A1) still injects it. After A1 removes that constructor
+  parameter, delete the interface and drop `implements` plus its two methods from
+  `KnowledgeService`. The Lead owns this step after the A1 merge.
+- Deviations to review: `SkillContextProvider` retained in AriaStreamService (the stream
+  entry cannot carry a skill id and the plan's own test asserts the active-skill system
+  message); `KnowledgeItemRepository` gained a Pageable overload (the plan's test stubs it
+  and P6 forbids the subList path). Both are recorded as accepted pending the reviewer.
+
+### Wave 0 integration (2026-11-09)
 - `feat/agent-os-memory` at c6d1eb06: W0A rebased to 2036e833 and fast-forwarded, then
   W0B rebased and fast-forwarded; no conflicts. W0A and W0B are both in the branch, so
   the `sensitivity_ceiling` column and the non-null entity field exist together.

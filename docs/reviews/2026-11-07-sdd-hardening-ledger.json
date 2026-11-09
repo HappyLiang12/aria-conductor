@@ -731,10 +731,15 @@
       "chain": "1d251c5a (issue #39) BA run 9c28bf01 produced the spec; the chain is WAITING_APPROVAL at step 0 with approval 26beea6f PENDING, blocked by F35",
       "limits": "the exact recycled-parent shape was not reconstructed live; the creation-order filter is covered by the real-OS tests and the fake-supervisor scenarios, and the full BA -> spec -> DEV -> QA chain is not complete"
     },
+    "hosted_ci_at_9e5a8e84": {
+      "run": "42617253280 head 9e5a8e84, attempt 2: completed/success (16 jobs: 15 success, 1 skipped)",
+      "attempt_1": "failed only Frontend Build Check: ReportsPage.test.tsx 'hides ARCHIVED reports by default and auto-selects from the visible list' (TestingLibraryElementError: no .report-title match), 1 failed / 661 passed. The test awaits the tab but reads the toolbar synchronously while selectedId is set in a useEffect, so the effect can lose the race on a slow coverage run. The test and the page are unchanged by this branch and the previous head was green 662/662 -> flake; gh run rerun --failed -> attempt 2 green",
+      "sandbox": "42617253168 (Sandbox Lifecycle, real OpenSandbox) head 9e5a8e84: completed/success"
+    },
     "next": [
-      "update the PR #118 body with F33, the gate at fc5b927d, hosted CI at 80dcdd88, F34/F35 and the live status",
-      "push the docs head and get hosted CI green at the new head (PR #118 stays unmerged; merge is the user's action)",
-      "restore a fresh GitHub credential for pack-git-0001, then create a new chain and rerun the live SDD scenario end to end (the 26beea6f approval expires at 2026-11-09T12:48:14Z)"
+      "update the PR #118 body with F33, the gate at fc5b927d, hosted CI at 9e5a8e84, F34/F35 and the live status",
+      "restore a fresh GitHub credential for pack-git-0001, then create a new chain and rerun the live SDD scenario end to end (the 26beea6f approval expires at 2026-11-09T12:48:14Z)",
+      "merge is the user's action; PR #118 stays unmerged until then"
     ]
 
   }

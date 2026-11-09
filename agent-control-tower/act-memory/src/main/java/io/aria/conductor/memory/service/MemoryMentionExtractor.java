@@ -38,6 +38,13 @@ public class MemoryMentionExtractor {
     /** Upper bound of exact keys sent to one {@code IN} query. */
     static final int MAX_CANDIDATE_KEYS = 200;
 
+    /**
+     * Keys the single-token pass may not spend, so the 2-3 gram phrasings keep a share of
+     * the budget. A hyphenated canonical key ("aria-conductor") is reachable only through
+     * its 2-gram, so a long goal must not fill all 200 slots with single words first.
+     */
+    static final int PHRASE_RESERVE = 80;
+
     /** Longest phrase joined into one canonical-key candidate ("aria conductor repo"). */
     static final int MAX_NGRAM = 3;
 
@@ -57,13 +64,15 @@ public class MemoryMentionExtractor {
      */
     public Set<String> candidateKeys(String text, String focusRef) {
         LinkedHashSet<String> keys = new LinkedHashSet<>();
-        addPhrases(keys, normalize(text));
+        // The focus reference is what the turn is explicitly about, so it is looked up
+        // before the text: a long goal must not push it out of the bounded budget.
         String focus = normalize(focusRef);
         if (!focus.isEmpty()) {
             addCandidate(keys, focus);
             addCandidate(keys, trailingSegment(focus));
             addPhrases(keys, focus);
         }
+        addPhrases(keys, normalize(text));
         return keys;
     }
 
@@ -147,14 +156,20 @@ public class MemoryMentionExtractor {
         }
         List<String> tokens = new ArrayList<>();
         TOKEN.matcher(text).results().forEach(match -> tokens.add(match.group()));
+        int tokenLimit = MAX_CANDIDATE_KEYS - PHRASE_RESERVE;
         for (String token : tokens) {
+            if (keys.size() >= tokenLimit) {
+                break;
+            }
             addCandidate(keys, token);
         }
         for (int size = 2; size <= MAX_NGRAM; size++) {
             for (int start = 0; start + size <= tokens.size(); start++) {
                 String phrase = String.join(" ", tokens.subList(start, start + size));
-                addCandidate(keys, phrase);
+                // Hyphenated first: that is the canonical-key spelling of a multi-word
+                // name, and the phrase share of the budget may not reach every spelling.
                 addCandidate(keys, phrase.replace(' ', '-'));
+                addCandidate(keys, phrase);
                 addCandidate(keys, phrase.replace(' ', '_'));
             }
         }

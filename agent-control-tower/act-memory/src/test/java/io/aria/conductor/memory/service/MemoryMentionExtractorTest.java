@@ -31,6 +31,28 @@ class MemoryMentionExtractorTest {
                 .contains("aria", "conductor", "aria-conductor", "aria_conductor", "aria conductor");
     }
 
+    /**
+     * A goal long enough that its single tokens alone exceed the 200-key budget must still
+     * yield the hyphenated canonical key of a phrase near its start: the exact key is only
+     * reachable through the 2-gram, so the token pass may not consume the whole budget.
+     */
+    @Test
+    void aGoalPastTheKeyBudgetStillCarriesItsHyphenatedCanonicalKey() {
+        StringBuilder goal = new StringBuilder("aria-conductor ");
+        for (int i = 0; i < 260; i++) {
+            goal.append("filler").append(i).append(' ');
+        }
+
+        Set<String> keys = extractor.candidateKeys(goal.toString(), "");
+
+        assertThat(keys)
+                .as("a phrase candidate is never starved by the single-token pass")
+                .contains("aria-conductor");
+        assertThat(keys.size())
+                .as("the candidate set stays bounded")
+                .isLessThanOrEqualTo(MemoryMentionExtractor.MAX_CANDIDATE_KEYS);
+    }
+
     @Test
     void canonicalKeyMatchingIsCaseInsensitiveAndTokenBounded() {
         MemoryEntity operator = entity("operator", "Operator", null);

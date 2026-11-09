@@ -15,6 +15,8 @@ import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,9 +41,10 @@ import java.util.UUID;
  * subject can never become ACTIVE. Repeating the same verdict is a no-op that writes no
  * second assertion; flipping a decided subject is a conflict.
  * <p>
- * The frozen repositories expose no status-scoped lookup, so the review inbox enumerates
- * rows with {@code findAll()}. That is the S1 inbox size; a bounded {@code findByStatus}
- * query is the repository follow-up.
+ * The inbox is a bounded, newest-first page: two status-scoped, page-limited queries (one
+ * per subject table) are merged and truncated, so reviewing proposals never enumerates the
+ * fact and relation history. A row older than the page is reached by narrowing the status
+ * or the limit, not by loading everything.
  */
 @Service
 public class MemoryProposalService {
@@ -60,25 +63,41 @@ public class MemoryProposalService {
         this.assertions = assertions;
     }
 
-    /** The review inbox: every fact and relation in {@code status}, oldest first. */
+    /** The review inbox page size: bounded, newest first. */
+    static final int INBOX_LIMIT = 50;
+
+    /** The review inbox: the newest {@link #INBOX_LIMIT} facts and relations in {@code status}. */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposals(FactStatus status) {
+        return listProposals(status, INBOX_LIMIT);
+    }
+
+    /**
+     * One bounded page of the review inbox, newest first. Facts and relations are read with
+     * two status-scoped, page-limited queries instead of enumerating both tables, then merged
+     * into one page so the reviewer sees a single newest-first list.
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposals(FactStatus status, int limit) {
         FactStatus target = status == null ? FactStatus.PENDING : status;
+        int pageSize = limit <= 0 ? INBOX_LIMIT : limit;
+        Pageable page = PageRequest.of(0, pageSize);
         List<MemoryProposalView> inbox = new ArrayList<>();
-        for (MemoryFact fact : safe(facts.findAll())) {
-            if (fact != null && fact.getStatus() == target) {
+        for (MemoryFact fact : safe(facts.findByStatusOrderByCreatedAtDesc(target, page))) {
+            if (fact != null) {
                 inbox.add(MemoryProposalView.fromFact(fact));
             }
         }
-        for (MemoryRelation relation : safe(relations.findAll())) {
-            if (relation != null && relation.getStatus() == target) {
+        for (MemoryRelation relation : safe(relations.findByStatusOrderByCreatedAtDesc(target, page))) {
+            if (relation != null) {
                 inbox.add(MemoryProposalView.fromRelation(relation));
             }
         }
-        inbox.sort(Comparator.comparing(MemoryProposalView::subjectType)
-                .thenComparing(MemoryProposalView::createdAt, Comparator.nullsLast(Comparator.naturalOrder()))
+        inbox.sort(Comparator.comparing(MemoryProposalView::createdAt,
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(MemoryProposalView::subjectType)
                 .thenComparing(MemoryProposalView::id, Comparator.nullsLast(Comparator.naturalOrder())));
-        return inbox;
+        return inbox.size() > pageSize ? List.copyOf(inbox.subList(0, pageSize)) : inbox;
     }
 
     /**

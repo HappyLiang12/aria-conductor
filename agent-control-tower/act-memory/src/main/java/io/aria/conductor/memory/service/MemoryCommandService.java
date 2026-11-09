@@ -24,6 +24,7 @@ import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,19 +67,22 @@ public class MemoryCommandService {
     private final MemoryKnowledgeLinkRepository links;
     private final MemoryAssertionRepository assertions;
     private final MemoryValueGuard guard;
+    private final MemoryProposalWriter proposalWriter;
 
     public MemoryCommandService(MemoryEntityRepository entities,
                                 MemoryFactRepository facts,
                                 MemoryRelationRepository relations,
                                 MemoryKnowledgeLinkRepository links,
                                 MemoryAssertionRepository assertions,
-                                MemoryValueGuard guard) {
+                                MemoryValueGuard guard,
+                                MemoryProposalWriter proposalWriter) {
         this.entities = entities;
         this.facts = facts;
         this.relations = relations;
         this.links = links;
         this.assertions = assertions;
         this.guard = guard;
+        this.proposalWriter = proposalWriter;
     }
 
     @Transactional
@@ -139,8 +143,35 @@ public class MemoryCommandService {
         Optional<MemoryFact> alreadyProposed = facts.findByEntityIdOrderByValidFromDesc(entityId).stream()
                 .filter(fact -> proposalHash.equals(fact.getProposalHash()))
                 .findFirst();
-        return alreadyProposed.orElseGet(
-                () -> insertFact(entityId, factKey, command, actor, origin, status, proposalHash, now));
+        if (alreadyProposed.isPresent()) {
+            return alreadyProposed.get();
+        }
+        MemoryFact proposal = buildFact(entityId, factKey, command, origin, status, proposalHash, now);
+        MemoryAssertion assertion = assertion(MemorySubjectType.FACT, proposal.getId(), MemoryAction.CREATE, actor,
+                command.sourceRef(), now, null, audit(
+                        "entityId", entityId.toString(),
+                        "factKey", factKey,
+                        "status", status.name(),
+                        "origin", origin.name()));
+        return writeProposal(proposal, assertion, proposalHash);
+    }
+
+    /**
+     * The unique index on {@code proposal_hash} is the atomic guard: a concurrent extraction
+     * of the same proposal can pass the probe too. The loser does not fail — it returns the
+     * row that won, which is exactly what "a repeated extraction is a no-op" means
+     * (spec §11). A violation whose winner cannot be read is still reported as a governed
+     * conflict rather than a raw database error.
+     */
+    private MemoryFact writeProposal(MemoryFact proposal, MemoryAssertion assertion, String proposalHash) {
+        try {
+            return proposalWriter.insertProposal(proposal, assertion);
+        } catch (DataIntegrityViolationException e) {
+            return proposalWriter.findExistingProposal(proposal.getEntityId(), proposalHash)
+                    .orElseThrow(() -> new MemoryConflictException("proposal for entity "
+                            + proposal.getEntityId() + " and key '" + proposal.getFactKey()
+                            + "' collided with a concurrent write that cannot be read back; retry"));
+        }
     }
 
     @Transactional
@@ -392,7 +423,21 @@ public class MemoryCommandService {
 
     private MemoryFact insertFact(UUID entityId, String factKey, AddFactCommand command, MemoryActor actor,
                                   MemoryOrigin origin, FactStatus status, String proposalHash, Instant now) {
-        MemoryFact fact = MemoryFact.builder()
+        MemoryFact fact = buildFact(entityId, factKey, command, origin, status, proposalHash, now);
+        facts.save(fact);
+        assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.CREATE, actor,
+                command.sourceRef(), now, null, audit(
+                        "entityId", entityId.toString(),
+                        "factKey", factKey,
+                        "status", status.name(),
+                        "origin", origin.name())));
+        return fact;
+    }
+
+    /** Builds the row only; the caller decides which transaction writes it. */
+    private static MemoryFact buildFact(UUID entityId, String factKey, AddFactCommand command,
+                                        MemoryOrigin origin, FactStatus status, String proposalHash, Instant now) {
+        return MemoryFact.builder()
                 .id(UUID.randomUUID())
                 .entityId(entityId)
                 .factKey(factKey)
@@ -404,14 +449,6 @@ public class MemoryCommandService {
                 .proposalHash(proposalHash)
                 .validFrom(now)
                 .build();
-        facts.save(fact);
-        assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.CREATE, actor,
-                command.sourceRef(), now, null, audit(
-                        "entityId", entityId.toString(),
-                        "factKey", factKey,
-                        "status", status.name(),
-                        "origin", origin.name())));
-        return fact;
     }
 
     private void ensureNoCurrentActiveFact(UUID entityId, String factKey) {

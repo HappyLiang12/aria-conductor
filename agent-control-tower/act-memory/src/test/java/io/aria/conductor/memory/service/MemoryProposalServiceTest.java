@@ -21,8 +21,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +33,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -72,8 +76,10 @@ class MemoryProposalServiceTest {
         MemoryFact activeFact = fact(pendingFact.getEntityId(), "timezone", FactStatus.ACTIVE, OLD);
         MemoryRelation pendingRelation = relation(FactStatus.PENDING);
         MemoryRelation activeRelation = relation(FactStatus.ACTIVE);
-        when(facts.findAll()).thenReturn(List.of(activeFact, pendingFact));
-        when(relations.findAll()).thenReturn(List.of(activeRelation, pendingRelation));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingRelation));
 
         List<MemoryProposalView> pending = proposals.listProposals(FactStatus.PENDING);
 
@@ -84,6 +90,43 @@ class MemoryProposalServiceTest {
         assertThat(pending.get(0).origin()).isEqualTo("EXTRACTION");
         assertThat(pending.get(1).predicate()).isEqualTo("OWNS");
         assertThat(pending.get(1).status()).isEqualTo("PENDING");
+    }
+
+    /**
+     * The inbox is bounded and newest first, so reviewing proposals cannot load the whole
+     * fact and relation history and cannot be dominated by the oldest rows.
+     */
+    @Test
+    void theInboxIsBoundedAndNewestFirst() {
+        List<MemoryFact> pendingFacts = new ArrayList<>();
+        List<MemoryRelation> pendingRelations = new ArrayList<>();
+        for (int i = 0; i < MemoryProposalService.INBOX_LIMIT; i++) {
+            pendingFacts.add(fact(UUID.randomUUID(), "key-" + i, FactStatus.PENDING,
+                    OLD.plusSeconds(i)));
+            pendingRelations.add(relation(FactStatus.PENDING, OLD.plusSeconds(i).plusMillis(500)));
+        }
+        pendingFacts.add(fact(UUID.randomUUID(), "key-oldest", FactStatus.PENDING, OLD.minusSeconds(60)));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(pendingFacts);
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(pendingRelations);
+
+        List<MemoryProposalView> inbox = proposals.listProposals(null);
+
+        assertThat(inbox).as("the inbox page is capped").hasSize(MemoryProposalService.INBOX_LIMIT);
+        assertThat(inbox).extracting(MemoryProposalView::createdAt)
+                .as("newest first")
+                .isSortedAccordingTo(Comparator.reverseOrder());
+        assertThat(inbox).extracting(MemoryProposalView::factKey).doesNotContain("key-oldest");
+
+        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
+        verify(facts).findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), page.capture());
+        assertThat(page.getValue().getPageSize())
+                .as("the query itself is bounded")
+                .isEqualTo(MemoryProposalService.INBOX_LIMIT);
+        assertThat(page.getValue().getOffset()).isZero();
+        verify(facts, never()).findAll();
+        verify(relations, never()).findAll();
     }
 
     @Test
@@ -180,8 +223,10 @@ class MemoryProposalServiceTest {
 
     @Test
     void theInboxDefaultsToPending() {
-        when(facts.findAll()).thenReturn(List.of(fact(UUID.randomUUID(), "editor", FactStatus.PENDING, OLD)));
-        when(relations.findAll()).thenReturn(List.of());
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(fact(UUID.randomUUID(), "editor", FactStatus.PENDING, OLD)));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of());
 
         assertThat(proposals.listProposals(null))
                 .extracting(MemoryProposalView::status)
@@ -262,6 +307,10 @@ class MemoryProposalServiceTest {
     }
 
     private static MemoryRelation relation(FactStatus status) {
+        return relation(status, OLD);
+    }
+
+    private static MemoryRelation relation(FactStatus status, Instant createdAt) {
         return MemoryRelation.builder()
                 .id(UUID.randomUUID())
                 .fromEntityId(UUID.randomUUID())
@@ -271,8 +320,8 @@ class MemoryProposalServiceTest {
                 .origin(status == FactStatus.PENDING ? MemoryOrigin.EXTRACTION : MemoryOrigin.OPERATOR)
                 .sensitivity(Sensitivity.INTERNAL)
                 .validFrom(OLD)
-                .createdAt(OLD)
-                .updatedAt(OLD)
+                .createdAt(createdAt)
+                .updatedAt(createdAt)
                 .build();
     }
 

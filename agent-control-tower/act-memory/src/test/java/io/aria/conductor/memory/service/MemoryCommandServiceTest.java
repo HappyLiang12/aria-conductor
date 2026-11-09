@@ -31,6 +31,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.description;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -84,11 +86,25 @@ class MemoryCommandServiceTest {
     @Mock
     MemoryAssertionRepository assertions;
 
+    @Mock
+    MemoryProposalWriter proposalWriter;
+
     MemoryCommandService command;
+
+    private final MemoryValueGuard guard = new MemoryValueGuard();
 
     @BeforeEach
     void setUp() {
-        command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard());
+        command = new MemoryCommandService(entities, facts, relations, links, assertions, guard, proposalWriter);
+        // The real writer persists the proposal in its own transaction; here it is delegated
+        // so the tests can still assert exactly how many rows were written.
+        lenient().when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
+                .thenAnswer(invocation -> {
+                    MemoryFact fact = invocation.getArgument(0);
+                    facts.save(fact);
+                    assertions.save(invocation.getArgument(1));
+                    return fact;
+                });
     }
 
     // ---------------------------------------------------------------- governance
@@ -325,6 +341,54 @@ class MemoryCommandServiceTest {
 
         assertThat(second.getId()).isNotEqualTo(first.getId());
         verify(facts, times(2)).save(any(MemoryFact.class));
+    }
+
+    @Test
+    void theLoserOfAProposalRaceReturnsTheWinnersRowInsteadOfFailing() {
+        UUID entityId = id("person");
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        MemoryFact winner = MemoryFact.builder()
+                .id(id("f-winner"))
+                .entityId(entityId)
+                .factKey("editor")
+                .valueText("vim")
+                .valueType("STRING")
+                .status(FactStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .sensitivity(Sensitivity.INTERNAL)
+                .proposalHash("hash-of-the-same-proposal")
+                .validFrom(VALID_FROM)
+                .build();
+        when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_memory_fact_proposal violated"));
+        when(proposalWriter.findExistingProposal(eq(entityId), any()))
+                .thenReturn(Optional.of(winner));
+
+        MemoryFact returned = command.addFact(entityId,
+                new AddFactCommand("editor", "vim", "STRING", Sensitivity.INTERNAL, "run-1"), EXTRACTION);
+
+        assertThat(returned.getId())
+                .as("a duplicate proposal is a no-op that returns the stored row")
+                .isEqualTo(winner.getId());
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    @Test
+    void aProposalRaceWithoutAReadableWinnerIsStillAGovernedResult() {
+        UUID entityId = id("person");
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_memory_fact_proposal violated"));
+        when(proposalWriter.findExistingProposal(eq(entityId), any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("editor", "vim", "STRING", Sensitivity.INTERNAL, "run-1"), EXTRACTION))
+                .as("never surface a raw database error to the memory API")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("editor");
     }
 
     // ---------------------------------------------------------------- merge

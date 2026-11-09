@@ -75,7 +75,8 @@ class MemoryCommandServiceTransactionTest {
 
     @BeforeEach
     void setUp() {
-        command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard());
+        command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
+                new MemoryProposalWriter(facts, assertions));
         ownTransaction = new TransactionTemplate(transactionManager);
         ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }

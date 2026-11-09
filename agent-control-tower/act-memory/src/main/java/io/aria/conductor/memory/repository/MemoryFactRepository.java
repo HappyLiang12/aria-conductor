@@ -2,6 +2,7 @@ package io.aria.conductor.memory.repository;
 
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryFact;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -40,4 +41,10 @@ public interface MemoryFactRepository extends JpaRepository<MemoryFact, UUID> {
      * first, regardless of status or closure.
      */
     List<MemoryFact> findByEntityIdOrderByValidFromDesc(UUID entityId);
+
+    /**
+     * Proposal review inbox: one bounded page of facts in one status, newest first. The
+     * inbox must not enumerate the fact history to find the few PENDING rows.
+     */
+    List<MemoryFact> findByStatusOrderByCreatedAtDesc(FactStatus status, Pageable page);
 }

@@ -31,6 +31,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -416,6 +417,80 @@ class MemoryCommandServiceTest {
         assertThat(retired.getFromEntityId()).isEqualTo(targetId);
         assertThat(retired.getValidTo()).isEqualTo(VALID_FROM.plusSeconds(60));
         verify(relations).save(retired);
+    }
+
+    @Test
+    void mergeClosesTheIncomingFactWhenTheSurvivorAlreadyHoldsTheKey() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        MemoryFact incoming = currentFact(id("f-source"), sourceId, "timezone", "UTC", 1);
+        MemoryFact survivor = currentFact(id("f-target"), targetId, "timezone", "Asia/Hong_Kong", 1);
+        when(facts.findByEntityIdOrderByValidFromDesc(sourceId)).thenReturn(List.of(incoming));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(targetId, FactStatus.ACTIVE))
+                .thenReturn(List.of(survivor));
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(survivor.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        assertThat(survivor.getValidTo()).as("the survivor's current value stays current").isNull();
+        assertThat(incoming.getStatus())
+                .as("the incoming value is superseded, never silently overwritten")
+                .isEqualTo(FactStatus.RETIRED);
+        assertThat(incoming.getValidTo()).isNotNull();
+        assertThat(incoming.getEntityId()).isEqualTo(targetId);
+
+        List<MemoryAssertion> written = captureAssertions(2);
+        assertThat(written).extracting(MemoryAssertion::getAction)
+                .as("the collision is audited as an explicit supersede")
+                .containsExactlyInAnyOrder(MemoryAction.MERGE, MemoryAction.SUPERSEDE);
+        assertThat(written).filteredOn(assertion -> assertion.getAction() == MemoryAction.SUPERSEDE)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getSubjectId()).isEqualTo(incoming.getId());
+                    assertThat(assertion.getAfterJson()).contains("RETIRED").contains(survivor.getId().toString());
+                });
+    }
+
+    @Test
+    void aMergeDoesNotCloseAKeyTheSurvivorHasOnlyAsHistory() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        MemoryFact incoming = currentFact(id("f-source"), sourceId, "timezone", "UTC", 1);
+        when(facts.findByEntityIdOrderByValidFromDesc(sourceId)).thenReturn(List.of(incoming));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(targetId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(incoming.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        assertThat(incoming.getValidTo()).isNull();
+        assertThat(incoming.getEntityId()).isEqualTo(targetId);
+    }
+
+    @Test
+    void aConcurrentActiveWriteThatLosesTheVersionRaceIsAConflict() {
+        UUID entityId = id("person");
+        MemoryEntity entity = entity(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(entities.save(any(MemoryEntity.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, entityId));
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("timezone", "UTC", "STRING", Sensitivity.INTERNAL, null), OPERATOR))
+                .as("the entity's optimistic version is the guard against two current values")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
     }
 
     @Test

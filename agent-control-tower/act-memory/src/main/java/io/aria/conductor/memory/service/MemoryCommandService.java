@@ -24,6 +24,7 @@ import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -123,11 +124,12 @@ public class MemoryCommandService {
         guard.checkValue("valueText", command.valueText());
         MemoryOrigin origin = originOf(actor);
         FactStatus status = statusOf(origin, factKey, command.sourceRef());
-        requireEntity(entityId);
+        MemoryEntity entity = requireEntity(entityId);
         Instant now = Instant.now();
 
         if (status == FactStatus.ACTIVE) {
             ensureNoCurrentActiveFact(entityId, factKey);
+            claimCurrentValueSlot(entity, factKey, now);
             return insertFact(entityId, factKey, command, actor, origin, status, null, now);
         }
 
@@ -264,7 +266,7 @@ public class MemoryCommandService {
         Instant now = Instant.now();
 
         MergeTally tally = new MergeTally();
-        moveFacts(sourceId, targetId, tally);
+        moveFacts(sourceId, targetId, actor, tally);
         moveRelations(sourceId, targetId, tally);
         moveLinks(sourceId, targetId, tally);
 
@@ -277,22 +279,58 @@ public class MemoryCommandService {
                         "status", EntityStatus.MERGED.name(),
                         "mergedInto", targetId.toString(),
                         "factsMoved", tally.factsMoved,
+                        "factsSuperseded", tally.factsSuperseded,
                         "relationsMoved", tally.relationsMoved,
                         "linksMoved", tally.linksMoved,
                         "linksDropped", tally.linksDropped)));
         return source;
     }
 
-    /** Every fact row, so the survivor's history is complete. */
-    private void moveFacts(UUID sourceId, UUID targetId, MergeTally tally) {
+    /**
+     * Every fact row, so the survivor's history is complete. A fact key the survivor
+     * already holds as the current ACTIVE value is a collision: the survivor's value stays
+     * current and the incoming row is closed ({@code valid_to=now}, RETIRED) with a
+     * SUPERSEDE assertion, because spec §7 forbids two overlapping current values and
+     * forbids a silent overwrite — the operator merge is the explicit replacement decision.
+     */
+    private void moveFacts(UUID sourceId, UUID targetId, MemoryActor actor, MergeTally tally) {
+        Instant now = Instant.now();
+        Map<String, MemoryFact> currentOnTarget = new LinkedHashMap<>();
+        for (MemoryFact existing : safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                targetId, FactStatus.ACTIVE))) {
+            if (existing != null) {
+                currentOnTarget.put(existing.getFactKey(), existing);
+            }
+        }
         for (MemoryFact fact : safe(facts.findByEntityIdOrderByValidFromDesc(sourceId))) {
             if (fact == null) {
+                continue;
+            }
+            MemoryFact collision = currentOnTarget.get(fact.getFactKey());
+            if (collision != null && isCurrent(fact) && isCurrent(collision)) {
+                String factKey = fact.getFactKey();
+                fact.setStatus(FactStatus.RETIRED);
+                fact.setValidTo(now);
+                fact.setEntityId(targetId);
+                facts.save(fact);
+                assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.SUPERSEDE,
+                        actor, null, now,
+                        audit("status", FactStatus.ACTIVE.name(), "factKey", factKey,
+                                "entityId", sourceId.toString()),
+                        audit("status", FactStatus.RETIRED.name(), "factKey", factKey,
+                                "entityId", targetId.toString(),
+                                "keptFactId", collision.getId().toString())));
+                tally.factsSuperseded++;
                 continue;
             }
             fact.setEntityId(targetId);
             facts.save(fact);
             tally.factsMoved++;
         }
+    }
+
+    private static boolean isCurrent(MemoryFact fact) {
+        return fact != null && fact.getStatus() == FactStatus.ACTIVE && fact.getValidTo() == null;
     }
 
     private void moveRelations(UUID sourceId, UUID targetId, MergeTally tally) {
@@ -344,6 +382,7 @@ public class MemoryCommandService {
     /** Counts recorded on the merge assertion; not persisted anywhere else. */
     private static final class MergeTally {
         private int factsMoved;
+        private int factsSuperseded;
         private int relationsMoved;
         private int linksMoved;
         private int linksDropped;
@@ -382,6 +421,27 @@ public class MemoryCommandService {
         if (exists) {
             throw new MemoryConflictException("an ACTIVE fact for entity " + entityId + " and key '" + factKey
                     + "' already exists; supersede it instead of writing a second value");
+        }
+    }
+
+    /**
+     * Serialises the "one current ACTIVE value per (entity, fact key)" decision (spec §6.3)
+     * on the entity's optimistic {@code @Version}: the read above and the insert below are
+     * not atomic on their own, so the write first bumps the entity row and flushes. Two
+     * racing writers read the same version; the loser's {@code UPDATE ... WHERE version=?}
+     * matches no row, which surfaces here as a governed conflict instead of a second
+     * current value. A database partial unique index is not usable because H2 and MariaDB
+     * differ on that construct, so the version check is the guard.
+     */
+    private void claimCurrentValueSlot(MemoryEntity entity, String factKey, Instant now) {
+        entity.setUpdatedAt(now);
+        try {
+            entities.save(entity);
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("entity " + entity.getId()
+                    + " changed while a current value for '" + factKey
+                    + "' was being claimed; another writer won the race — re-read before writing");
         }
     }
 

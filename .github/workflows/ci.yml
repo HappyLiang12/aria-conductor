@@ -139,6 +139,8 @@ jobs:
             modules: act-execution
           - group: knowledge-aria
             modules: act-knowledge,act-aria
+          - group: memory
+            modules: act-memory
           - group: api-mcp-app
             modules: act-dashboard-api,act-mcp,act-app
     steps:

@@ -16,6 +16,7 @@ import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryKnowledgeLink;
+import io.aria.conductor.memory.model.MemoryLinkStatus;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
@@ -33,7 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -68,6 +69,7 @@ public class MemoryCommandService {
     private final MemoryAssertionRepository assertions;
     private final MemoryValueGuard guard;
     private final MemoryProposalWriter proposalWriter;
+    private final MemoryCurrentValueSlot currentValueSlot;
 
     public MemoryCommandService(MemoryEntityRepository entities,
                                 MemoryFactRepository facts,
@@ -75,7 +77,8 @@ public class MemoryCommandService {
                                 MemoryKnowledgeLinkRepository links,
                                 MemoryAssertionRepository assertions,
                                 MemoryValueGuard guard,
-                                MemoryProposalWriter proposalWriter) {
+                                MemoryProposalWriter proposalWriter,
+                                MemoryCurrentValueSlot currentValueSlot) {
         this.entities = entities;
         this.facts = facts;
         this.relations = relations;
@@ -83,6 +86,7 @@ public class MemoryCommandService {
         this.assertions = assertions;
         this.guard = guard;
         this.proposalWriter = proposalWriter;
+        this.currentValueSlot = currentValueSlot;
     }
 
     @Transactional
@@ -128,12 +132,12 @@ public class MemoryCommandService {
         guard.checkValue("valueText", command.valueText());
         MemoryOrigin origin = originOf(actor);
         FactStatus status = statusOf(origin, factKey, command.sourceRef());
-        MemoryEntity entity = requireEntity(entityId);
+        requireEntity(entityId);
         Instant now = Instant.now();
 
         if (status == FactStatus.ACTIVE) {
             ensureNoCurrentActiveFact(entityId, factKey);
-            claimCurrentValueSlot(entity, factKey, now);
+            currentValueSlot.claim(entityId, factKey, now);
             return insertFact(entityId, factKey, command, actor, origin, status, null, now);
         }
 
@@ -198,6 +202,11 @@ public class MemoryCommandService {
         Instant now = Instant.now();
 
         String factKey = current.getFactKey();
+        // The fresh row is another current value, so this path claims the same entity slot an
+        // addFact claims: that is what stops an addFact or an approval on the same key from
+        // committing a second row with valid_to=null.
+        currentValueSlot.claim(current.getEntityId(), factKey, now);
+
         String before = audit("factKey", factKey, "value", current.getValueText(),
                 "status", current.getStatus().name());
         current.setStatus(FactStatus.RETIRED);
@@ -216,6 +225,7 @@ public class MemoryCommandService {
                 .validFrom(now)
                 .build();
         facts.save(fresh);
+        flushFacts(factKey, "superseded");
 
         String after = audit("factKey", factKey, "value", command.valueText(),
                 "status", FactStatus.ACTIVE.name());
@@ -267,10 +277,11 @@ public class MemoryCommandService {
      * re-pointed, including closed and RETIRED ones, so the survivor carries the complete
      * history and nothing is left pointing at a redirect. Collisions have an explicit rule:
      * <ul>
-     *   <li>a knowledge link the survivor already holds for the same knowledge item wins:
-     *       the duplicate source link is deleted, because
+     *   <li>when both entities link the same knowledge item,
      *       {@code uq_memory_knowledge_link(entity_id, knowledge_item_id)} allows only one
-     *       and the survivor's decision is the authoritative one.</li>
+     *       row: the stronger decision stays (ACTIVE &gt; PROPOSED &gt; RETIRED), the weaker
+     *       row is deleted, and its id is recorded on the merge assertion so the discarded
+     *       decision stays auditable.</li>
      * </ul>
      */
     @Transactional
@@ -313,7 +324,8 @@ public class MemoryCommandService {
                         "factsSuperseded", tally.factsSuperseded,
                         "relationsMoved", tally.relationsMoved,
                         "linksMoved", tally.linksMoved,
-                        "linksDropped", tally.linksDropped)));
+                        "linksDropped", tally.linksDropped,
+                        "linksDroppedIds", tally.droppedLinkIds)));
         return source;
     }
 
@@ -385,29 +397,68 @@ public class MemoryCommandService {
         }
     }
 
+    /**
+     * The unique index allows one row per (entity, knowledge item), so a collision has to
+     * drop one of the two. The dropped row is the <em>weaker</em> decision, not simply the
+     * source's: a survivor that only RETIRED (or is still PROPOSED on) the item must not
+     * discard the source's approved ACTIVE decision. The dropped row's id is recorded on the
+     * merge assertion, so the discarded decision stays auditable.
+     */
     private void moveLinks(UUID sourceId, UUID targetId, MergeTally tally) {
-        Set<UUID> alreadyLinked = new HashSet<>();
+        Map<UUID, MemoryKnowledgeLink> survivorLinks = new LinkedHashMap<>();
         for (MemoryKnowledgeLink existing : safe(links.findByEntityId(targetId))) {
             if (existing != null) {
-                alreadyLinked.add(existing.getKnowledgeItemId());
+                survivorLinks.put(existing.getKnowledgeItemId(), existing);
             }
         }
         for (MemoryKnowledgeLink link : safe(links.findByEntityId(sourceId))) {
             if (link == null) {
                 continue;
             }
-            if (!alreadyLinked.add(link.getKnowledgeItemId())) {
-                // The survivor is already linked to this knowledge item: its row (and its
-                // decision) wins, and the duplicate is dropped so the unique constraint
-                // keeps holding for any later merge.
-                links.delete(link);
-                tally.linksDropped++;
+            MemoryKnowledgeLink survivorLink = survivorLinks.get(link.getKnowledgeItemId());
+            if (survivorLink == null) {
+                repointLink(link, targetId);
+                survivorLinks.put(link.getKnowledgeItemId(), link);
+                tally.linksMoved++;
                 continue;
             }
-            link.setEntityId(targetId);
-            links.save(link);
-            tally.linksMoved++;
+            if (linkStrength(link.getStatus()) > linkStrength(survivorLink.getStatus())) {
+                // The source carries the stronger decision, so the survivor's weaker row is
+                // the one dropped. Delete (and flush) before re-pointing: Hibernate runs
+                // updates before deletes, and the unique index would otherwise fire.
+                links.delete(survivorLink);
+                links.flush();
+                repointLink(link, targetId);
+                survivorLinks.put(link.getKnowledgeItemId(), link);
+                tally.drop(survivorLink);
+                continue;
+            }
+            // The survivor's decision is at least as strong: its row wins and the duplicate
+            // is dropped so the unique constraint keeps holding for any later merge.
+            links.delete(link);
+            tally.drop(link);
         }
+    }
+
+    private void repointLink(MemoryKnowledgeLink link, UUID targetId) {
+        link.setEntityId(targetId);
+        links.save(link);
+    }
+
+    /**
+     * ACTIVE beats a pending PROPOSED link, which beats RETIRED. The enum declares
+     * PROPOSED, ACTIVE, RETIRED, so its ordinal order is not the strength order and the rank
+     * is spelled out here.
+     */
+    private static int linkStrength(MemoryLinkStatus status) {
+        if (status == null) {
+            return 0;
+        }
+        return switch (status) {
+            case ACTIVE -> 2;
+            case PROPOSED -> 1;
+            case RETIRED -> 0;
+        };
     }
 
     /** Counts recorded on the merge assertion; not persisted anywhere else. */
@@ -417,6 +468,12 @@ public class MemoryCommandService {
         private int relationsMoved;
         private int linksMoved;
         private int linksDropped;
+        private final List<String> droppedLinkIds = new ArrayList<>();
+
+        private void drop(MemoryKnowledgeLink link) {
+            linksDropped++;
+            droppedLinkIds.add(String.valueOf(link.getId()));
+        }
     }
 
     // ---------------------------------------------------------------- helpers
@@ -462,23 +519,16 @@ public class MemoryCommandService {
     }
 
     /**
-     * Serialises the "one current ACTIVE value per (entity, fact key)" decision (spec §6.3)
-     * on the entity's optimistic {@code @Version}: the read above and the insert below are
-     * not atomic on their own, so the write first bumps the entity row and flushes. Two
-     * racing writers read the same version; the loser's {@code UPDATE ... WHERE version=?}
-     * matches no row, which surfaces here as a governed conflict instead of a second
-     * current value. A database partial unique index is not usable because H2 and MariaDB
-     * differ on that construct, so the version check is the guard.
+     * Pushes the fact writes through the row-level {@code @Version} inside the method, so a
+     * concurrent supersede/approval that changed the same row surfaces as the governed
+     * conflict here instead of as a raw optimistic-lock failure at transaction commit.
      */
-    private void claimCurrentValueSlot(MemoryEntity entity, String factKey, Instant now) {
-        entity.setUpdatedAt(now);
+    private void flushFacts(String factKey, String operation) {
         try {
-            entities.save(entity);
-            entities.flush();
+            facts.flush();
         } catch (OptimisticLockingFailureException e) {
-            throw new MemoryConflictException("entity " + entity.getId()
-                    + " changed while a current value for '" + factKey
-                    + "' was being claimed; another writer won the race — re-read before writing");
+            throw new MemoryConflictException("the current value for '" + factKey
+                    + "' changed while it was being " + operation + "; re-read before retrying");
         }
     }
 

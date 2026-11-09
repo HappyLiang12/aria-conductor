@@ -49,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.description;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -95,7 +96,8 @@ class MemoryCommandServiceTest {
 
     @BeforeEach
     void setUp() {
-        command = new MemoryCommandService(entities, facts, relations, links, assertions, guard, proposalWriter);
+        command = new MemoryCommandService(entities, facts, relations, links, assertions, guard, proposalWriter,
+                new MemoryCurrentValueSlot(entities));
         // The real writer persists the proposal in its own transaction; here it is delegated
         // so the tests can still assert exactly how many rows were written.
         lenient().when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
@@ -221,6 +223,7 @@ class MemoryCommandServiceTest {
         UUID entityId = id("person");
         MemoryFact old = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
         when(facts.findById(old.getId())).thenReturn(Optional.of(old));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
 
         MemoryFact fresh = command.supersedeFact(old.getId(),
                 new SupersedeFactCommand("Asia/Hong_Kong", 3, "run-9"), OPERATOR);
@@ -282,6 +285,57 @@ class MemoryCommandServiceTest {
                 new SupersedeFactCommand("Asia/Hong_Kong", 3, "run-1"), EXTRACTION))
                 .isInstanceOf(MemoryValidationException.class);
         verifyNoInteractions(entities, facts, relations, assertions);
+    }
+
+    /**
+     * A supersede inserts a new current value, so it must claim the entity slot the same way
+     * an addFact does. Losing that claim — an addFact (or an approval) bumped the entity
+     * version first — has to surface as the governed conflict, never as a raw
+     * {@code OptimisticLockingFailureException}.
+     */
+    @Test
+    void aSupersedeThatLosesTheEntitySlotIsAGovernedConflict() {
+        UUID entityId = id("person");
+        MemoryFact old = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        when(facts.findById(old.getId())).thenReturn(Optional.of(old));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(entities.save(any(MemoryEntity.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, entityId));
+
+        assertThatThrownBy(() -> command.supersedeFact(old.getId(),
+                new SupersedeFactCommand("Asia/Hong_Kong", 3, null), OPERATOR))
+                .as("a lost slot is a conflict, not a 500")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        assertThat(old.getStatus()).as("the loser writes no closed row").isEqualTo(FactStatus.ACTIVE);
+        assertThat(old.getValidTo()).isNull();
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
+     * The fact row carries its own {@code @Version}: two supersedes of the same row can pass
+     * the service's expected-version check and still collide on the UPDATE. That loss is
+     * raised by the flush, and it must be translated in the same method instead of escaping
+     * at commit.
+     */
+    @Test
+    void aSupersedeWhoseRowVersionWasChangedUnderneathIsAGovernedConflict() {
+        UUID entityId = id("person");
+        MemoryFact old = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        when(facts.findById(old.getId())).thenReturn(Optional.of(old));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, old.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> command.supersedeFact(old.getId(),
+                new SupersedeFactCommand("Asia/Hong_Kong", 3, null), OPERATOR))
+                .as("a row-version loss is the governed 409, not a raw exception")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        verify(assertions, never()).save(any());
     }
 
     // ---------------------------------------------------------------- proposals
@@ -458,9 +512,101 @@ class MemoryCommandServiceTest {
         verify(links, never()).save(duplicateSourceLink);
     }
 
+    /**
+     * The survivor has only RETIRED the knowledge item while the source holds the approved
+     * ACTIVE decision. Deduping on {@code knowledgeItemId} alone would delete the approved
+     * row and silently discard the decision, so the stronger status must win (ACTIVE >
+     * PROPOSED > RETIRED) and only the weaker row may be dropped.
+     */
     @Test
-    void mergeRepointsClosedAndRetiredRelationsSoHistoryFollowsTheSurvivor() {
+    void mergeKeepsTheApprovedSourceLinkOverARetiredSurvivorLink() {
         UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        UUID sharedKnowledge = id("knowledge-shared");
+        MemoryKnowledgeLink retiredOnSurvivor = link(id("l-survivor"), targetId, sharedKnowledge);
+        retiredOnSurvivor.setStatus(MemoryLinkStatus.RETIRED);
+        MemoryKnowledgeLink activeOnSource = link(id("l-source"), sourceId, sharedKnowledge);
+        activeOnSource.setStatus(MemoryLinkStatus.ACTIVE);
+        when(links.findByEntityId(targetId)).thenReturn(List.of(retiredOnSurvivor));
+        when(links.findByEntityId(sourceId)).thenReturn(List.of(activeOnSource));
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(activeOnSource.getEntityId())
+                .as("the approved decision survives the merge")
+                .isEqualTo(targetId);
+        assertThat(activeOnSource.getStatus()).isEqualTo(MemoryLinkStatus.ACTIVE);
+        verify(links).save(activeOnSource);
+        verify(links, description("only the weaker RETIRED row is dropped")).delete(retiredOnSurvivor);
+        verify(links, never()).delete(activeOnSource);
+        verify(links, never()).save(retiredOnSurvivor);
+        assertThat(captureAssertions(1).get(0).getAfterJson())
+                .as("the dropped decision is recorded on the merge assertion")
+                .contains("linksDroppedIds")
+                .contains(retiredOnSurvivor.getId().toString());
+    }
+
+    /** The mirrored direction: the survivor's ACTIVE decision wins and the source row is dropped. */
+    @Test
+    void mergeKeepsTheActiveSurvivorLinkOverARetiredSourceLink() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        UUID sharedKnowledge = id("knowledge-shared");
+        MemoryKnowledgeLink activeOnSurvivor = link(id("l-survivor"), targetId, sharedKnowledge);
+        activeOnSurvivor.setStatus(MemoryLinkStatus.ACTIVE);
+        MemoryKnowledgeLink retiredOnSource = link(id("l-source"), sourceId, sharedKnowledge);
+        retiredOnSource.setStatus(MemoryLinkStatus.RETIRED);
+        when(links.findByEntityId(targetId)).thenReturn(List.of(activeOnSurvivor));
+        when(links.findByEntityId(sourceId)).thenReturn(List.of(retiredOnSource));
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(activeOnSurvivor.getEntityId()).isEqualTo(targetId);
+        verify(links, never()).delete(activeOnSurvivor);
+        verify(links, never()).save(activeOnSurvivor);
+        verify(links).delete(retiredOnSource);
+        verify(links, never()).save(retiredOnSource);
+        assertThat(captureAssertions(1).get(0).getAfterJson())
+                .contains("linksDroppedIds")
+                .contains(retiredOnSource.getId().toString());
+    }
+
+    /**
+     * PROPOSED outranks RETIRED. ACTIVE is not the only stronger status, so the rank must be
+     * explicit: the enum declares PROPOSED, ACTIVE, RETIRED, and its ordinal order is not
+     * the strength order.
+     */
+    @Test
+    void mergeKeepsAProposedSourceLinkOverARetiredSurvivorLink() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        UUID sharedKnowledge = id("knowledge-shared");
+        MemoryKnowledgeLink retiredOnSurvivor = link(id("l-survivor"), targetId, sharedKnowledge);
+        retiredOnSurvivor.setStatus(MemoryLinkStatus.RETIRED);
+        MemoryKnowledgeLink proposedOnSource = link(id("l-source"), sourceId, sharedKnowledge);
+        proposedOnSource.setStatus(MemoryLinkStatus.PROPOSED);
+        when(links.findByEntityId(targetId)).thenReturn(List.of(retiredOnSurvivor));
+        when(links.findByEntityId(sourceId)).thenReturn(List.of(proposedOnSource));
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(proposedOnSource.getEntityId()).isEqualTo(targetId);
+        verify(links).save(proposedOnSource);
+        verify(links).delete(retiredOnSurvivor);
+        verify(links, never()).delete(proposedOnSource);
+    }
+
+    @Test
+    void mergeRepointsClosedAndRetiredRelationsSoHistoryFollowsTheSurvivor() {        UUID sourceId = id("duplicate-operator");
         UUID targetId = id("operator");
         when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
         when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));

@@ -15,6 +15,7 @@ import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -54,13 +55,16 @@ public class MemoryProposalService {
     private final MemoryFactRepository facts;
     private final MemoryRelationRepository relations;
     private final MemoryAssertionRepository assertions;
+    private final MemoryCurrentValueSlot currentValueSlot;
 
     public MemoryProposalService(MemoryFactRepository facts,
                                  MemoryRelationRepository relations,
-                                 MemoryAssertionRepository assertions) {
+                                 MemoryAssertionRepository assertions,
+                                 MemoryCurrentValueSlot currentValueSlot) {
         this.facts = facts;
         this.relations = relations;
         this.assertions = assertions;
+        this.currentValueSlot = currentValueSlot;
     }
 
     /** The review inbox page size: bounded, newest first. */
@@ -145,6 +149,11 @@ public class MemoryProposalService {
             return MemoryProposalView.fromFact(proposal);
         }
 
+        // An approval opens a current ACTIVE value, so it claims the same entity slot an
+        // addFact or a supersede claims: without it an approval racing an addFact on the
+        // same (entity, factKey) can commit two rows with valid_to=null.
+        currentValueSlot.claim(proposal.getEntityId(), proposal.getFactKey(), now);
+
         // No silent overwrite: a conflicting current value is retired in the same transaction.
         for (MemoryFact current : safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
                 proposal.getEntityId(), FactStatus.ACTIVE))) {
@@ -163,9 +172,27 @@ public class MemoryProposalService {
         proposal.setStatus(FactStatus.ACTIVE);
         proposal.setValidFrom(now);
         facts.save(proposal);
+        flushFacts(proposal);
         assertions.save(assertion(MemorySubjectType.FACT, proposal.getId(), MemoryAction.UPDATE, actor, now,
                 before, audit("status", FactStatus.ACTIVE.name(), "factKey", proposal.getFactKey())));
         return MemoryProposalView.fromFact(proposal);
+    }
+
+    /**
+     * Pushes the fact writes through the row-level {@code @Version} inside the method, so a
+     * concurrent decision on the same proposal (or a supersede of the conflicting row)
+     * surfaces as the governed conflict here instead of as a raw optimistic-lock failure at
+     * transaction commit.
+     */
+    private void flushFacts(MemoryFact proposal) {
+        try {
+            facts.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("memory fact " + proposal.getId()
+                    + " for key '" + proposal.getFactKey()
+                    + "' or its conflicting current value changed while the approval was being "
+                    + "written; re-read before deciding");
+        }
     }
 
     private MemoryProposalView decideRelation(MemoryRelation proposal, ProposalDecision decision,

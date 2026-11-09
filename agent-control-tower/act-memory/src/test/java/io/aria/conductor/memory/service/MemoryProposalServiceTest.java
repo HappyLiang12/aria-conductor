@@ -4,15 +4,18 @@ import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
+import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryAction;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
+import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
+import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +24,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
@@ -34,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -63,11 +68,14 @@ class MemoryProposalServiceTest {
     @Mock
     MemoryAssertionRepository assertions;
 
+    @Mock
+    MemoryEntityRepository entities;
+
     MemoryProposalService proposals;
 
     @BeforeEach
     void setUp() {
-        proposals = new MemoryProposalService(facts, relations, assertions);
+        proposals = new MemoryProposalService(facts, relations, assertions, new MemoryCurrentValueSlot(entities));
     }
 
     @Test
@@ -135,6 +143,7 @@ class MemoryProposalServiceTest {
         MemoryFact active = fact(entityId, "timezone", FactStatus.ACTIVE, OLD);
         MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
         when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
         when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
                 .thenReturn(List.of(active));
 
@@ -163,6 +172,7 @@ class MemoryProposalServiceTest {
     void approvingWithoutAConflictWritesOneAssertion() {
         MemoryFact proposed = fact(UUID.randomUUID(), "timezone", FactStatus.PENDING, OLD);
         when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(proposed.getEntityId())).thenReturn(Optional.of(entity(proposed.getEntityId())));
         when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(proposed.getEntityId(),
                 FactStatus.ACTIVE)).thenReturn(List.of());
 
@@ -174,6 +184,55 @@ class MemoryProposalServiceTest {
         assertThat(written.getValue().getAction()).isEqualTo(MemoryAction.UPDATE);
         assertThat(written.getValue().getBeforeJson()).contains("PENDING");
         assertThat(written.getValue().getAfterJson()).contains("ACTIVE");
+    }
+
+    /**
+     * Approval writes a current ACTIVE value, so it must claim the same entity slot an
+     * addFact claims. Without the claim an approval and an addFact on the same (entity,
+     * factKey) can both commit a current row; the loser's version bump has to surface as the
+     * governed conflict.
+     */
+    @Test
+    void anApprovalThatLosesTheEntitySlotIsAGovernedConflict() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(entities.save(any(MemoryEntity.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, entityId));
+
+        assertThatThrownBy(() -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR))
+                .as("a lost slot is a conflict, not a 500")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        assertThat(proposed.getStatus()).as("the loser promotes nothing").isEqualTo(FactStatus.PENDING);
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
+     * The promoted row carries its own {@code @Version}: a concurrent decision on the same
+     * proposal can pass the PENDING check and still collide on the UPDATE. The flush must
+     * translate that loss instead of letting it escape at commit.
+     */
+    @Test
+    void anApprovalWhoseRowVersionWasChangedUnderneathIsAGovernedConflict() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, proposed.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR))
+                .as("a row-version loss is the governed 409, not a raw exception")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        verify(assertions, never()).save(any());
     }
 
     @Test
@@ -198,6 +257,7 @@ class MemoryProposalServiceTest {
     void decidingTheSameOutcomeTwiceIsIdempotent() {
         MemoryFact proposed = fact(UUID.randomUUID(), "editor", FactStatus.PENDING, OLD);
         when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(proposed.getEntityId())).thenReturn(Optional.of(entity(proposed.getEntityId())));
         when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(proposed.getEntityId(),
                 FactStatus.ACTIVE)).thenReturn(List.of());
 
@@ -289,6 +349,18 @@ class MemoryProposalServiceTest {
     }
 
     // ---------------------------------------------------------------- fixtures
+
+    private static MemoryEntity entity(UUID entityId) {
+        return MemoryEntity.builder()
+                .id(entityId)
+                .kind("PERSON")
+                .canonicalKey("operator")
+                .displayName("operator")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .build();
+    }
 
     private static MemoryFact fact(UUID entityId, String factKey, FactStatus status, Instant createdAt) {
         return MemoryFact.builder()

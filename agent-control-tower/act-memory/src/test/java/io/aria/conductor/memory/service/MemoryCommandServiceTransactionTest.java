@@ -5,10 +5,14 @@ import io.aria.conductor.memory.MemoryJpaSliceConfig;
 import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.CreateEntityCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
+import io.aria.conductor.memory.dto.ProposalDecision;
+import io.aria.conductor.memory.dto.SupersedeFactCommand;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
+import io.aria.conductor.memory.model.MemoryFact;
+import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
@@ -24,6 +28,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -71,12 +76,14 @@ class MemoryCommandServiceTransactionTest {
     MemoryAssertionRepository assertions;
 
     private MemoryCommandService command;
+    private MemoryProposalService proposals;
     private TransactionTemplate ownTransaction;
 
     @BeforeEach
     void setUp() {
         command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
-                new MemoryProposalWriter(facts, assertions));
+                new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities));
+        proposals = new MemoryProposalService(facts, relations, assertions, new MemoryCurrentValueSlot(entities));
         ownTransaction = new TransactionTemplate(transactionManager);
         ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -125,7 +132,7 @@ class MemoryCommandServiceTransactionTest {
         ownTransaction.executeWithoutResult(status -> entities.saveAndFlush(MemoryEntity.builder()
                 .id(entityId)
                 .kind("PERSON")
-                .canonicalKey("operator")
+                .canonicalKey("operator-" + entityId)
                 .displayName("Operator")
                 .build()));
         when(assertions.save(any(MemoryAssertion.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -160,5 +167,181 @@ class MemoryCommandServiceTransactionTest {
         } catch (MemoryConflictException e) {
             return "CONFLICT";
         }
+    }
+
+    /**
+     * Cross-path race, addFact vs approval, on the same (entity, factKey). Both write a
+     * current ACTIVE row, so both must claim the entity slot. The addFact holds the slot
+     * (its version bump is flushed and uncommitted) while the approval reads the same
+     * version and then tries to claim it: the approval's UPDATE matches no row once the
+     * addFact commits, and that loss is the governed conflict. Exactly one current row may
+     * survive.
+     */
+    @Test
+    void addFactAndAnApprovalOfTheSameKeyNeverBothLandCurrent() throws Exception {
+        UUID entityId = UUID.randomUUID();
+        UUID proposalId = UUID.randomUUID();
+        seedEntityAndPendingProposal(entityId, proposalId, "timezone");
+        when(assertions.save(any(MemoryAssertion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        CountDownLatch slotHeld = new CountDownLatch(1);
+        CountDownLatch approvalRead = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> approval = pool.submit(() -> {
+                if (!slotHeld.await(30, TimeUnit.SECONDS)) {
+                    return "NEVER_STARTED";
+                }
+                try {
+                    ownTransaction.executeWithoutResult(status -> {
+                        // Read the entity at the version the racing addFact read. The service
+                        // reuses this persistence context, so its claim carries the stale
+                        // version into the UPDATE.
+                        entities.findById(entityId).orElseThrow();
+                        approvalRead.countDown();
+                        proposals.decideProposal(proposalId, ProposalDecision.APPROVE,
+                                new MemoryActor(MemoryActorType.OPERATOR, "local"));
+                    });
+                    return "APPROVED";
+                } catch (MemoryConflictException e) {
+                    return "CONFLICT";
+                }
+            });
+
+            ownTransaction.executeWithoutResult(status -> {
+                command.addFact(entityId,
+                        new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, null),
+                        new MemoryActor(MemoryActorType.OPERATOR, "local"));
+                slotHeld.countDown();
+                assertThat(await(approvalRead))
+                        .as("the approval read the entity before the addFact committed")
+                        .isTrue();
+            });
+
+            assertThat(approval.get(30, TimeUnit.SECONDS))
+                    .as("the approval loses the entity slot to the addFact")
+                    .isEqualTo("CONFLICT");
+        } finally {
+            pool.shutdownNow();
+        }
+
+        ownTransaction.executeWithoutResult(status -> assertThat(
+                facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .as("never two current values for one fact key, whichever path wrote first")
+                .hasSize(1));
+    }
+
+    /**
+     * Cross-path race, addFact vs supersede, on one entity. The supersede opens a new
+     * current row, so it claims the same entity slot: reading the entity before the addFact
+     * commits must make the supersede's claim lose. The guard is the entity row, so the two
+     * paths serialise per entity — that coarseness is the same one two addFacts already pay.
+     */
+    @Test
+    void addFactAndASupersedeOnTheSameEntityNeverBothCommit() throws Exception {
+        UUID entityId = UUID.randomUUID();
+        UUID currentFactId = UUID.randomUUID();
+        seedEntityAndCurrentFact(entityId, currentFactId, "timezone");
+        when(assertions.save(any(MemoryAssertion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        CountDownLatch slotHeld = new CountDownLatch(1);
+        CountDownLatch supersedeRead = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> supersede = pool.submit(() -> {
+                if (!slotHeld.await(30, TimeUnit.SECONDS)) {
+                    return "NEVER_STARTED";
+                }
+                try {
+                    ownTransaction.executeWithoutResult(status -> {
+                        facts.findById(currentFactId).orElseThrow();
+                        entities.findById(entityId).orElseThrow();
+                        supersedeRead.countDown();
+                        command.supersedeFact(currentFactId,
+                                new SupersedeFactCommand("Asia/Hong_Kong", 0, null),
+                                new MemoryActor(MemoryActorType.OPERATOR, "local"));
+                    });
+                    return "SUPERSEDED";
+                } catch (MemoryConflictException e) {
+                    return "CONFLICT";
+                }
+            });
+
+            ownTransaction.executeWithoutResult(status -> {
+                command.addFact(entityId,
+                        new AddFactCommand("os", "linux", "STRING", Sensitivity.INTERNAL, null),
+                        new MemoryActor(MemoryActorType.OPERATOR, "local"));
+                slotHeld.countDown();
+                assertThat(await(supersedeRead))
+                        .as("the supersede read the entity before the addFact committed")
+                        .isTrue();
+            });
+
+            assertThat(supersede.get(30, TimeUnit.SECONDS))
+                    .as("the supersede loses the entity slot to the addFact")
+                    .isEqualTo("CONFLICT");
+        } finally {
+            pool.shutdownNow();
+        }
+
+        ownTransaction.executeWithoutResult(status -> assertThat(
+                facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .as("one current value per key after the race")
+                .hasSize(2)
+                .extracting(MemoryFact::getFactKey)
+                .containsExactlyInAnyOrder("os", "timezone"));
+    }
+
+    private static boolean await(CountDownLatch latch) {
+        try {
+            return latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private void seedEntityAndPendingProposal(UUID entityId, UUID proposalId, String factKey) {
+        ownTransaction.executeWithoutResult(status -> {
+            entities.saveAndFlush(MemoryEntity.builder()
+                    .id(entityId)
+                    .kind("PERSON")
+                    .canonicalKey("operator-" + entityId)
+                    .displayName("Operator")
+                    .build());
+            facts.saveAndFlush(MemoryFact.builder()
+                    .id(proposalId)
+                    .entityId(entityId)
+                    .factKey(factKey)
+                    .valueText("UTC")
+                    .valueType("STRING")
+                    .status(FactStatus.PENDING)
+                    .origin(MemoryOrigin.EXTRACTION)
+                    .sensitivity(Sensitivity.INTERNAL)
+                    .validFrom(Instant.now())
+                    .build());
+        });
+    }
+
+    private void seedEntityAndCurrentFact(UUID entityId, UUID factId, String factKey) {
+        ownTransaction.executeWithoutResult(status -> {
+            entities.saveAndFlush(MemoryEntity.builder()
+                    .id(entityId)
+                    .kind("PERSON")
+                    .canonicalKey("operator-" + entityId)
+                    .displayName("Operator")
+                    .build());
+            facts.saveAndFlush(MemoryFact.builder()
+                    .id(factId)
+                    .entityId(entityId)
+                    .factKey(factKey)
+                    .valueText("UTC")
+                    .valueType("STRING")
+                    .status(FactStatus.ACTIVE)
+                    .origin(MemoryOrigin.OPERATOR)
+                    .sensitivity(Sensitivity.INTERNAL)
+                    .validFrom(Instant.now())
+                    .build());
+        });
     }
 }

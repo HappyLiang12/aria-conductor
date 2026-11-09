@@ -104,6 +104,66 @@ class AriaManagedPromptMigrationIntegrationTest extends BaseH2IntegrationTest {
 
     @Test
     @Transactional
+    void turnsAWhitespaceOnlyObjectIntoTheObjectLiteral() throws IOException {
+        insertAria("{ }");
+
+        assertThat(replayV82()).as("an empty object with inner whitespace is still empty").isEqualTo(1);
+
+        assertThat(ariaConfig()).isEqualTo(OBJECT_LITERAL);
+        assertThat(MAPPER.readTree(ariaConfig()).path("managedPromptVersion").asInt()).isEqualTo(1);
+        assertThat(replayV82()).as("replay is a no-op").isZero();
+        assertThat(ariaConfig()).isEqualTo(OBJECT_LITERAL);
+    }
+
+    @Test
+    @Transactional
+    void leavesATrailingCommaConfigUnchanged() throws IOException {
+        String malformed = "{\"a\":1,}";
+        insertAria(malformed);
+
+        assertThat(replayV82()).as("a shape the statement cannot repair is not selected").isZero();
+
+        assertThat(ariaConfig()).as("no character is dropped and nothing is appended").isEqualTo(malformed);
+    }
+
+    @Test
+    @Transactional
+    void leavesAnObjectWithWhitespaceBeforeTheBraceUnchanged() throws IOException {
+        String nonCompact = "{\n}";
+        insertAria(nonCompact);
+
+        assertThat(replayV82()).as("appending after whitespace would open the object with a comma").isZero();
+
+        assertThat(ariaConfig()).isEqualTo(nonCompact);
+    }
+
+    @Test
+    @Transactional
+    void appendsTheMarkerToACompactObject() throws IOException {
+        insertAria("{\"a\":1}");
+
+        assertThat(replayV82()).isEqualTo(1);
+
+        assertThat(ariaConfig()).isEqualTo("{\"a\":1,\"managedPromptVersion\":1}");
+        assertThat(occurrences(ariaConfig(), MARKER)).isEqualTo(1);
+        assertThat(replayV82()).as("a marked row is excluded from the second pass").isZero();
+        assertThat(ariaConfig()).isEqualTo("{\"a\":1,\"managedPromptVersion\":1}");
+    }
+
+    @Test
+    @Transactional
+    void doesNotAppendASecondMarkerWhenTheColonIsSpaced() throws IOException {
+        String marked = "{\"managedPromptVersion\" : 2}";
+        insertAria(marked);
+
+        assertThat(replayV82()).as("marker detection never assumes the colon's spacing").isZero();
+
+        assertThat(ariaConfig()).isEqualTo(marked);
+        assertThat(occurrences(ariaConfig(), "\"managedPromptVersion\"")).isEqualTo(1);
+    }
+
+    @Test
+    @Transactional
     void keepsANonAsciiConfigIntact() throws IOException {
         insertAria("{\"systemPrompt\":\"\u00c4ria \u2014 op\u00e9rateur \u2713\",\"maxToolCallRounds\":15}");
 

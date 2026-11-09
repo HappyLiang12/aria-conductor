@@ -12,6 +12,8 @@
 --
 -- H2 MODE=MySQL and MariaDB 10.7 are the only supported targets; only plain string
 -- functions are used and no column (in particular no timestamp) is created or altered.
+-- CHAR_LENGTH (not LENGTH) measures characters on both: MariaDB's LENGTH counts bytes,
+-- which would slice a non-ASCII config mid-character.
 
 UPDATE agents
 SET config = CASE
@@ -19,7 +21,7 @@ SET config = CASE
             THEN '{"managedPromptVersion":1}'
         WHEN TRIM(config) LIKE '%"managedPromptVersion":%'
             THEN config
-        ELSE CONCAT(SUBSTRING(TRIM(config), 1, LENGTH(TRIM(config)) - 1),
+        ELSE CONCAT(SUBSTRING(TRIM(config), 1, CHAR_LENGTH(TRIM(config)) - 1),
                     ',"managedPromptVersion":1}')
     END
 WHERE id = CAST('00000000-0000-0000-0000-000000000001' AS UUID)

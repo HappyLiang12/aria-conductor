@@ -104,6 +104,20 @@ class AriaManagedPromptMigrationIntegrationTest extends BaseH2IntegrationTest {
 
     @Test
     @Transactional
+    void keepsANonAsciiConfigIntact() throws IOException {
+        insertAria("{\"systemPrompt\":\"\u00c4ria \u2014 op\u00e9rateur \u2713\",\"maxToolCallRounds\":15}");
+
+        assertThat(replayV82()).isEqualTo(1);
+
+        JsonNode parsed = MAPPER.readTree(ariaConfig());
+        assertThat(parsed.path("systemPrompt").asText())
+                .as("the marker is inserted by character position, never mid-character")
+                .isEqualTo("\u00c4ria \u2014 op\u00e9rateur \u2713");
+        assertThat(parsed.path("managedPromptVersion").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    @Transactional
     void leavesEveryOtherAgentRowUntouched() throws IOException {
         UUID otherAgentId = UUID.randomUUID();
         jdbc.update("INSERT INTO agents (id, name, agent_type, config, health_status, created_at) "

@@ -14,6 +14,12 @@ import java.util.UUID;
 public interface SessionTrajectoryRepository extends JpaRepository<SessionTrajectory, UUID> {
     List<SessionTrajectory> findByRunIdOrderByTurnNumberAsc(UUID runId);
 
+    /**
+     * P6: the bounded transcript load. At most the 200 oldest turns of one run, in turn
+     * order, selected by the database — never a full run loaded and sliced in memory.
+     */
+    List<SessionTrajectory> findTop200ByRunIdOrderByTurnNumberAsc(UUID runId);
+
     @Query("SELECT COALESCE(MAX(t.turnNumber), 0) FROM SessionTrajectory t WHERE t.runId = :runId")
     int findMaxTurnNumberByRunId(@Param("runId") UUID runId);
 

@@ -205,6 +205,10 @@ public class MemoryTools implements McpTool {
      * {@code retireFact}, never an inline repository write, so the status check, the
      * RETIRE assertion, the version flush and the conflict translation all happen before
      * this method answers and a conflict can never ride a transaction that still commits.
+     * <p>
+     * The acknowledgement is metadata only — id, provenance, sensitivity and validity,
+     * never the value. The caller already holds the fact id, so echoing the retired value
+     * would be a value read above the deployment ceiling by another name.
      */
     @Tool(name = "forget_fact",
             description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current.")
@@ -216,7 +220,7 @@ public class MemoryTools implements McpTool {
             toolPolicies.requireAuthority(FORGET_FACT, actor);
             actor.requireOperator();
             MemoryFact fact = commands.retireFact(factId, memoryActor(actor));
-            return ToolResponses.ok(MemoryFactView.from(fact));
+            return ToolResponses.ok(retireAck(fact));
         } catch (SecurityException e) {
             return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (MemoryNotFoundException e) {
@@ -384,6 +388,27 @@ public class MemoryTools implements McpTool {
         }
         return new MemoryActor(MemoryActorType.EXTRACTION,
                 actor.runId() == null ? null : actor.runId().toString());
+    }
+
+    /**
+     * Whitelist projection of a retired fact: every field a caller needs to confirm the
+     * retire, and deliberately no {@code valueText}. Keep it a whitelist — a new field on
+     * {@link MemoryFact} must be reviewed before it can travel through this surface.
+     */
+    private static Map<String, Object> retireAck(MemoryFact fact) {
+        Map<String, Object> ack = new LinkedHashMap<>();
+        ack.put("id", fact.getId() == null ? null : fact.getId().toString());
+        ack.put("entityId", fact.getEntityId() == null ? null : fact.getEntityId().toString());
+        ack.put("factKey", fact.getFactKey());
+        ack.put("valueType", fact.getValueType());
+        ack.put("status", fact.getStatus() == null ? null : fact.getStatus().name());
+        ack.put("origin", fact.getOrigin() == null ? null : fact.getOrigin().name());
+        ack.put("sensitivity", fact.getSensitivity() == null ? null : fact.getSensitivity().name());
+        ack.put("confidence", fact.getConfidence());
+        ack.put("validFrom", fact.getValidFrom());
+        ack.put("validTo", fact.getValidTo());
+        ack.put("version", fact.getVersion());
+        return ack;
     }
 
     /**

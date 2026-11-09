@@ -249,6 +249,41 @@ class MemoryToolsTest {
         assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"CONFLICT\"");
     }
 
+    /**
+     * The forget acknowledgement must not become the way around the read ceiling: the
+     * caller already holds the fact id, but a CONFIDENTIAL value must not leave the
+     * surface merely because the fact was retired. The response is metadata only, and
+     * the governed retire still happens before it is built.
+     */
+    @Test
+    void forgettingAConfidentialFactAcksMetadataOnlyWithoutTheValue() {
+        MemoryFact retired = MemoryFact.builder()
+                .id(FACT_ID)
+                .entityId(ENTITY_ID)
+                .factKey("salary")
+                .valueText("188888")
+                .valueType("STRING")
+                .status(FactStatus.RETIRED)
+                .origin(MemoryOrigin.OPERATOR)
+                .sensitivity(Sensitivity.CONFIDENTIAL)
+                .validFrom(VALID_FROM)
+                .validTo(VALID_FROM.plusSeconds(60))
+                .version(1L)
+                .build();
+        when(commands.retireFact(eq(FACT_ID), any())).thenReturn(retired);
+
+        String json = tools.forgetFact(FACT_ID, operatorContext());
+
+        verify(commands).retireFact(eq(FACT_ID), any());
+        assertThat(json).contains("\"ok\":true")
+                .contains("\"id\":\"" + FACT_ID + "\"")
+                .contains("\"status\":\"RETIRED\"")
+                .contains("\"sensitivity\":\"CONFIDENTIAL\"")
+                .contains("\"validTo\"")
+                .doesNotContain("\"valueText\"")
+                .doesNotContain("188888");
+    }
+
     @Test
     void recallMemoryReturnsRankedFactsWithProvenance() {
         when(recall.recall(any())).thenReturn(new RecallResult(

@@ -4,6 +4,7 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -52,10 +53,19 @@ class McpEndpointIntegrationTest {
                 .build()) {
             client.initialize();
             McpSchema.ListToolsResult tools = client.listTools();
+            ToolCatalog catalog = new ToolCatalog();
 
             assertThat(tools.tools())
                     .extracting(McpSchema.Tool::name)
-                    .containsExactlyInAnyOrderElementsOf(McpToolInventory.EXPECTED_TOOL_NAMES);
+                    .containsExactlyInAnyOrderElementsOf(McpToolInventory.EXPECTED_TOOL_NAMES)
+                    .containsExactlyInAnyOrderElementsOf(catalog.names());
+            // The registered description is the catalog's one-line @Tool description.
+            assertThat(tools.tools()).allSatisfy(tool ->
+                    assertThat(tool.description())
+                            .isEqualTo(catalog.find(tool.name())
+                                    .orElseThrow(() -> new AssertionError(
+                                            "registered tool '" + tool.name() + "' is not in the catalog"))
+                                    .description()));
         }
     }
 

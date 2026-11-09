@@ -8,6 +8,8 @@ import java.util.Set;
  * The endpoint integration tests assert the live tool list equals this set, so
  * adding a platform capability without a matching MCP tool fails the build
  * visibly (design §4 parity harness), and removing or renaming one does too.
+ * The reviewed catalog ({@code mcp.catalog.ToolCatalog}) is the source of
+ * truth; the parity test asserts this inventory equals its registered names.
  */
 final class McpToolInventory {
 

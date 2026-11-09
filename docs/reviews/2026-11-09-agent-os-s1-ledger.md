@@ -28,9 +28,9 @@ when its paths change.
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | IN_PROGRESS | pending | pending | no |
 | A1 | `lane/agent-os-a1` | pending | PENDING | - | - | no |
-| A2 | `lane/agent-os-a2` | pending | PENDING | - | - | no |
+| A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IN_PROGRESS | - | - | no |
 | B | `lane/agent-os-b` | pending | PENDING | - | - | no |
-| C | `lane/agent-os-c` | pending | PENDING | - | - | no |
+| C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IN_PROGRESS | - | - | no |
 | D | `lane/agent-os-d` | pending | PENDING | - | - | no |
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
@@ -150,6 +150,10 @@ Verify the run's provider id is the row that was updated; the default provider s
   `...OrderByTurnNumberDesc` with the history loader reversing into turn order, and the
   plan's A1 test now stubs newest-first data so a loader that forgets the reversal
   fails. The lane's repository and its bound test must be updated to match.
+- 2026-11-09: the dependency graph makes A2 and C depend only on W0A (not W0B), so their
+  worktrees branch from the W0A lane head d142424f and both lanes start while W0B is
+  still gating. They will be rebased onto the integrated Wave 0 head before merge.
+  A1, B and D need W0B artifacts (manifest, entities, V81) and stay blocked.
 
 ## Evidence to fill at each boundary
 

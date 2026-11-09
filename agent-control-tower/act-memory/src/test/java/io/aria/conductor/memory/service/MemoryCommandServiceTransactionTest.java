@@ -9,6 +9,7 @@ import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
+import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,9 @@ class MemoryCommandServiceTransactionTest {
     @Autowired
     MemoryRelationRepository relations;
 
+    @MockitoBean
+    MemoryKnowledgeLinkRepository links;
+
     @Autowired
     PlatformTransactionManager transactionManager;
 
@@ -59,7 +63,7 @@ class MemoryCommandServiceTransactionTest {
 
     @BeforeEach
     void setUp() {
-        command = new MemoryCommandService(entities, facts, relations, assertions, new MemoryValueGuard());
+        command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard());
         ownTransaction = new TransactionTemplate(transactionManager);
         ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }

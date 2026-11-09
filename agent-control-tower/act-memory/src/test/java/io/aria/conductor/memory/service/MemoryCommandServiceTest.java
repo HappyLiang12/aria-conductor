@@ -13,12 +13,15 @@ import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
+import io.aria.conductor.memory.model.MemoryKnowledgeLink;
+import io.aria.conductor.memory.model.MemoryLinkStatus;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
+import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +45,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.description;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -73,13 +78,16 @@ class MemoryCommandServiceTest {
     MemoryRelationRepository relations;
 
     @Mock
+    MemoryKnowledgeLinkRepository links;
+
+    @Mock
     MemoryAssertionRepository assertions;
 
     MemoryCommandService command;
 
     @BeforeEach
     void setUp() {
-        command = new MemoryCommandService(entities, facts, relations, assertions, new MemoryValueGuard());
+        command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard());
     }
 
     // ---------------------------------------------------------------- governance
@@ -356,6 +364,61 @@ class MemoryCommandServiceTest {
     }
 
     @Test
+    void mergeRepointsKnowledgeLinksAndDropsTheSourceLinkOnADuplicate() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        UUID sharedKnowledge = id("knowledge-shared");
+        UUID sourceOnlyKnowledge = id("knowledge-source-only");
+        MemoryKnowledgeLink survivorLink = link(id("l-survivor"), targetId, sharedKnowledge);
+        MemoryKnowledgeLink duplicateSourceLink = link(id("l-duplicate"), sourceId, sharedKnowledge);
+        MemoryKnowledgeLink sourceOnlyLink = link(id("l-source-only"), sourceId, sourceOnlyKnowledge);
+        when(links.findByEntityId(targetId)).thenReturn(List.of(survivorLink));
+        when(links.findByEntityId(sourceId)).thenReturn(List.of(duplicateSourceLink, sourceOnlyLink));
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(sourceOnlyLink.getEntityId())
+                .as("a link only the source had moves to the survivor")
+                .isEqualTo(targetId);
+        verify(links).save(sourceOnlyLink);
+        assertThat(survivorLink.getEntityId()).as("the survivor's own link is untouched").isEqualTo(targetId);
+        verify(links, never()).delete(survivorLink);
+        verify(links, never()).save(survivorLink);
+        verify(links, description(
+                "the duplicate source link is dropped, so uq_memory_knowledge_link cannot be violated"))
+                .delete(duplicateSourceLink);
+        verify(links, never()).save(duplicateSourceLink);
+    }
+
+    @Test
+    void mergeRepointsClosedAndRetiredRelationsSoHistoryFollowsTheSurvivor() {
+        UUID sourceId = id("duplicate-operator");
+        UUID targetId = id("operator");
+        when(entities.findById(sourceId)).thenReturn(Optional.of(entity(sourceId)));
+        when(entities.findById(targetId)).thenReturn(Optional.of(entity(targetId)));
+
+        MemoryRelation retired = relation(id("r-retired"), sourceId, "WORKS_ON", id("conductor"));
+        retired.setStatus(FactStatus.RETIRED);
+        retired.setValidTo(VALID_FROM.plusSeconds(60));
+        when(relations.findByFromEntityIdAndStatus(eq(sourceId), any(FactStatus.class)))
+                .thenAnswer(invocation -> invocation.getArgument(1) == FactStatus.RETIRED
+                        ? List.of(retired)
+                        : List.of());
+
+        command.mergeEntities(sourceId, targetId, OPERATOR);
+
+        assertThat(retired.getStatus())
+                .as("provenance rule: re-point every row, so closed history stays with the survivor")
+                .isEqualTo(FactStatus.RETIRED);
+        assertThat(retired.getFromEntityId()).isEqualTo(targetId);
+        assertThat(retired.getValidTo()).isEqualTo(VALID_FROM.plusSeconds(60));
+        verify(relations).save(retired);
+    }
+
+    @Test
     void anAlreadyMergedSourceCannotBeMergedAgain() {
         UUID sourceId = id("merged");
         MemoryEntity source = entity(sourceId);
@@ -561,6 +624,16 @@ class MemoryCommandServiceTest {
                 .origin(MemoryOrigin.OPERATOR)
                 .sensitivity(Sensitivity.INTERNAL)
                 .validFrom(VALID_FROM)
+                .build();
+    }
+
+    private MemoryKnowledgeLink link(UUID id, UUID entityId, UUID knowledgeItemId) {
+        return MemoryKnowledgeLink.builder()
+                .id(id)
+                .entityId(entityId)
+                .knowledgeItemId(knowledgeItemId)
+                .status(MemoryLinkStatus.ACTIVE)
+                .createdAt(VALID_FROM)
                 .build();
     }
 

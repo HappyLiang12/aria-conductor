@@ -15,12 +15,14 @@ import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
+import io.aria.conductor.memory.model.MemoryKnowledgeLink;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
+import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,26 +57,25 @@ public class MemoryCommandService {
     private static final Set<String> STRUCTURAL_FACT_KEYS =
             Set.of("repo", "branch", "issue", "stack", "workspace");
 
-    /** The relation statuses a merge re-points: history (RETIRED) keeps its old subject. */
-    private static final List<FactStatus> LIVE_RELATION_STATUSES =
-            List.of(FactStatus.ACTIVE, FactStatus.PENDING);
-
     private static final ObjectMapper AUDIT = new ObjectMapper();
 
     private final MemoryEntityRepository entities;
     private final MemoryFactRepository facts;
     private final MemoryRelationRepository relations;
+    private final MemoryKnowledgeLinkRepository links;
     private final MemoryAssertionRepository assertions;
     private final MemoryValueGuard guard;
 
     public MemoryCommandService(MemoryEntityRepository entities,
                                 MemoryFactRepository facts,
                                 MemoryRelationRepository relations,
+                                MemoryKnowledgeLinkRepository links,
                                 MemoryAssertionRepository assertions,
                                 MemoryValueGuard guard) {
         this.entities = entities;
         this.facts = facts;
         this.relations = relations;
+        this.links = links;
         this.assertions = assertions;
         this.guard = guard;
     }
@@ -225,8 +227,18 @@ public class MemoryCommandService {
     }
 
     /**
-     * Merge is operator-only: the source keeps a {@code merged_into} redirect and its live
-     * facts and relations move to the surviving entity in the same transaction.
+     * Merge is operator-only: the source keeps a {@code merged_into} redirect and every
+     * row that referenced it moves to the surviving entity in the same transaction.
+     * <p>
+     * Provenance rule (one rule for facts, relations, and links): <em>all</em> rows are
+     * re-pointed, including closed and RETIRED ones, so the survivor carries the complete
+     * history and nothing is left pointing at a redirect. Collisions have an explicit rule:
+     * <ul>
+     *   <li>a knowledge link the survivor already holds for the same knowledge item wins:
+     *       the duplicate source link is deleted, because
+     *       {@code uq_memory_knowledge_link(entity_id, knowledge_item_id)} allows only one
+     *       and the survivor's decision is the authoritative one.</li>
+     * </ul>
      */
     @Transactional
     public MemoryEntity mergeEntities(UUID sourceId, UUID targetId, MemoryActor actor) {
@@ -251,20 +263,10 @@ public class MemoryCommandService {
         }
         Instant now = Instant.now();
 
-        for (MemoryFact fact : facts.findByEntityIdOrderByValidFromDesc(sourceId)) {
-            fact.setEntityId(targetId);
-            facts.save(fact);
-        }
-        for (FactStatus status : LIVE_RELATION_STATUSES) {
-            for (MemoryRelation relation : relations.findByFromEntityIdAndStatus(sourceId, status)) {
-                relation.setFromEntityId(targetId);
-                relations.save(relation);
-            }
-            for (MemoryRelation relation : relations.findByToEntityIdAndStatus(sourceId, status)) {
-                relation.setToEntityId(targetId);
-                relations.save(relation);
-            }
-        }
+        MergeTally tally = new MergeTally();
+        moveFacts(sourceId, targetId, tally);
+        moveRelations(sourceId, targetId, tally);
+        moveLinks(sourceId, targetId, tally);
 
         String before = audit("status", source.getStatus().name(), "mergedInto", null);
         source.setStatus(EntityStatus.MERGED);
@@ -273,8 +275,78 @@ public class MemoryCommandService {
         assertions.save(assertion(MemorySubjectType.ENTITY, sourceId, MemoryAction.MERGE, actor,
                 null, now, before, audit(
                         "status", EntityStatus.MERGED.name(),
-                        "mergedInto", targetId.toString())));
+                        "mergedInto", targetId.toString(),
+                        "factsMoved", tally.factsMoved,
+                        "relationsMoved", tally.relationsMoved,
+                        "linksMoved", tally.linksMoved,
+                        "linksDropped", tally.linksDropped)));
         return source;
+    }
+
+    /** Every fact row, so the survivor's history is complete. */
+    private void moveFacts(UUID sourceId, UUID targetId, MergeTally tally) {
+        for (MemoryFact fact : safe(facts.findByEntityIdOrderByValidFromDesc(sourceId))) {
+            if (fact == null) {
+                continue;
+            }
+            fact.setEntityId(targetId);
+            facts.save(fact);
+            tally.factsMoved++;
+        }
+    }
+
+    private void moveRelations(UUID sourceId, UUID targetId, MergeTally tally) {
+        for (FactStatus status : FactStatus.values()) {
+            for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(sourceId, status))) {
+                if (relation == null) {
+                    continue;
+                }
+                relation.setFromEntityId(targetId);
+                relations.save(relation);
+                tally.relationsMoved++;
+            }
+            for (MemoryRelation relation : safe(relations.findByToEntityIdAndStatus(sourceId, status))) {
+                if (relation == null) {
+                    continue;
+                }
+                relation.setToEntityId(targetId);
+                relations.save(relation);
+                tally.relationsMoved++;
+            }
+        }
+    }
+
+    private void moveLinks(UUID sourceId, UUID targetId, MergeTally tally) {
+        Set<UUID> alreadyLinked = new HashSet<>();
+        for (MemoryKnowledgeLink existing : safe(links.findByEntityId(targetId))) {
+            if (existing != null) {
+                alreadyLinked.add(existing.getKnowledgeItemId());
+            }
+        }
+        for (MemoryKnowledgeLink link : safe(links.findByEntityId(sourceId))) {
+            if (link == null) {
+                continue;
+            }
+            if (!alreadyLinked.add(link.getKnowledgeItemId())) {
+                // The survivor is already linked to this knowledge item: its row (and its
+                // decision) wins, and the duplicate is dropped so the unique constraint
+                // keeps holding for any later merge.
+                links.delete(link);
+                tally.linksDropped++;
+                continue;
+            }
+            link.setEntityId(targetId);
+            links.save(link);
+            tally.linksMoved++;
+        }
+    }
+
+    /** Counts recorded on the merge assertion; not persisted anywhere else. */
+    private static final class MergeTally {
+        private int factsMoved;
+        private int relationsMoved;
+        private int linksMoved;
+        private int linksDropped;
     }
 
     // ---------------------------------------------------------------- helpers
@@ -417,5 +489,9 @@ public class MemoryCommandService {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private static <T> List<T> safe(List<T> rows) {
+        return rows == null ? List.of() : rows;
     }
 }

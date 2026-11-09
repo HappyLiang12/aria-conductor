@@ -44,5 +44,16 @@
             <artifactId>archunit-junit5</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          Test-only: MemoryModuleBoundaryTest compiles a fixture that references an
+          io.aria.conductor.execution type so the boundary rule can be proven to reject a real
+          cross-module dependency. The production classpath still resolves act-memory without
+          act-execution (AGENTS.md module table: "depends on act-common only").
+        -->
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-execution</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

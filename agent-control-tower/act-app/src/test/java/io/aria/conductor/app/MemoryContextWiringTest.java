@@ -40,6 +40,7 @@ import io.aria.conductor.memory.service.MemoryContextContributor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -52,6 +53,9 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * Lane I integration guard (plan "Lane I: Integration and architecture guard", spec §5 and
@@ -74,7 +78,7 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
     @Autowired
     List<ContextContributor> contributors;
 
-    @Autowired
+    @MockitoSpyBean
     ContextAssembler contextAssembler;
 
     @Autowired
@@ -161,6 +165,8 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
         assertThat(row.getSectionsJson())
                 .as("the manifest stores provenance metadata, never the prompt text")
                 .doesNotContain("do the work");
+
+        verify(contextAssembler, times(1)).assemble(any(ContextRequest.class), any());
     }
 
     /**
@@ -210,6 +216,9 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
                 .runId(stale.getId()).turnNumber(1).agentId(agentId)
                 .adapter("CORE").sectionsJson("[]").droppedJson("[]").degradedJson("[]")
                 .maxChars(24_000).estimatedTokens(0).createdAt(old).build());
+        assertThat(manifests.findByRunIdOrderByTurnNumberAsc(stale.getId()))
+                .as("seeded before the purge, so the empty-after assertion cannot pass vacuously")
+                .hasSize(1);
 
         String key = "repo:lane-i-fixture-" + UUID.randomUUID();
         MemoryEntity entity = memoryEntities.saveAndFlush(MemoryEntity.builder()

@@ -27,11 +27,11 @@ when its paths change.
 |---|---|---|---|---|---|---|
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
 | W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | MERGED (4980b0b1), BLOCK cleared by fix round | 100ba176..4980b0b1 (8) | BLOCK (all findings closed) | yes |
-| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | MERGED (4f726781), IN_REVIEW | b62a4fcb..56eca9c6 (6) | IN_REVIEW | yes |
+| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | MERGED (4f726781), review BLOCK fixed in lane | b62a4fcb..56eca9c6 (6) + fix round | BLOCK (4 P2) -> fix round | yes |
 | A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | MERGED (ac04408e) + fixes b06ebf36 | 2129a64a, b3849867, 2dc3a0ee | APPROVE (fixes applied) | yes |
-| B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IN_PROGRESS (B-1 done, B-2 running) | 4c56b96d | - | no |
+| B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IMPLEMENTED (040d5179), IN_REVIEW | 4c56b96d + 6 | IN_REVIEW | no |
 | C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | MERGED (f3cc3255), review BLOCK evidence-only | 34db1ac7 | BLOCK pending merged-head gate | yes |
-| D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | IN_PROGRESS | e04a7fd8 | - | no |
+| D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | IMPLEMENTED (dfd61bf3), IN_REVIEW | e04a7fd8..dfd61bf3 | IN_REVIEW | no |
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
 | I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
@@ -243,6 +243,22 @@ Verify the run's provider id is the row that was updated; the default provider s
   chars including the ellipsis, and the source-id assertion pins the item id. C's BLOCK
   is evidence-only (the mutant run overwrote its green report) and is cleared by the
   wave gate at this head. A1's review and B-2 are in flight; D is still implementing.
+- 2026-11-09: A1 review BLOCK rulings. (1) The tool catalog cannot fit the spec's
+  3,000-character tools cap with per-tool descriptions: the real 51 visible entries
+  render to roughly 15,000 characters, which is what produced the observed mid-line
+  cut. The prompt section is therefore compact (`- name (POLICY)`, sorted, no
+  descriptions); the core binds tools natively through MCP and the section exists to
+  make the reviewed policy classification visible. Truncation stays line-safe for a
+  pathological catalog. This is a deliberate deviation from spec §8.1's "one-line
+  descriptions" and is recorded in the release notes. (2) `dropped_json` must never
+  carry prompt text: history drops become `history:dropped:<index>`. (3) The current
+  request renders once, in the Goal section; the engine no longer appends the seed as
+  a message, and `CoreTask.userPrompt` is read directly from the run's prompt seed per
+  spec §8.3. (4) The unused history cap is applied, and optional sections scale
+  proportionally before the drop order per spec §8.2 step 5. Deferred to lane I:
+  seeding `memory.operator.*`; provider id/CORE emission stays with A1 if it is local.
+- 2026-11-09: reviews for B (040d5179) and D (dfd61bf3) are dispatched read-only while
+  the A1 fix round runs; reviewers may not run Maven so the two do not contend.
 
 ## Evidence to fill at each boundary
 

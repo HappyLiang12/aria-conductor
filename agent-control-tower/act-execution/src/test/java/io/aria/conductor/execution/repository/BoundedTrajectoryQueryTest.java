@@ -13,8 +13,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * P6: a run's transcript is loaded with a bounded query. A run with more turns than
- * the bound must yield exactly the 200 oldest turns in turn order -- the tail is
- * never loaded, and another run's rows never leak in.
+ * the bound must yield exactly the 200 newest turns, newest first -- the oldest turns
+ * fall out of the bound, and another run's rows never leak in. Spec P6 bounds the
+ * *last* 200 turns, so an ascending query would keep the wrong end.
  */
 class BoundedTrajectoryQueryTest extends DataJpaTestBase {
 
@@ -24,7 +25,7 @@ class BoundedTrajectoryQueryTest extends DataJpaTestBase {
     SessionTrajectoryRepository trajectories;
 
     @Test
-    void returnsAtMostTheTwoHundredOldestTurnsInOrder() {
+    void returnsAtMostTheTwoHundredNewestTurnsNewestFirst() {
         UUID runId = UUID.randomUUID();
         UUID otherRunId = UUID.randomUUID();
         for (int i = 0; i < 250; i++) {
@@ -33,26 +34,33 @@ class BoundedTrajectoryQueryTest extends DataJpaTestBase {
         trajectories.saveAndFlush(trajectory(otherRunId, 0));
         flushAndClear();
 
-        List<SessionTrajectory> rows = trajectories.findTop200ByRunIdOrderByTurnNumberAsc(runId);
+        List<SessionTrajectory> rows = trajectories.findTop200ByRunIdOrderByTurnNumberDesc(runId);
 
         assertThat(rows).hasSize(BOUND);
-        assertThat(rows.get(0).getTurnNumber()).isZero();
-        assertThat(rows.get(BOUND - 1).getTurnNumber()).as("the newest 50 turns are out of the bound")
-                .isEqualTo(BOUND - 1);
+        assertThat(rows.get(0).getTurnNumber()).as("newest first")
+                .isEqualTo(249);
+        assertThat(rows.get(BOUND - 1).getTurnNumber()).as("the oldest 50 turns are out of the bound")
+                .isEqualTo(50);
         assertThat(rows).allMatch(row -> runId.equals(row.getRunId()));
+
+        // What the history loader renders: the same page reversed into chronological order.
+        List<SessionTrajectory> chronological = rows.reversed();
+        assertThat(chronological).extracting(SessionTrajectory::getTurnNumber)
+                .startsWith(50, 51)
+                .endsWith(248, 249);
     }
 
     @Test
-    void aShortRunIsReturnedInFull() {
+    void aShortRunIsReturnedInFullNewestFirst() {
         UUID runId = UUID.randomUUID();
         for (int i = 0; i < 3; i++) {
             trajectories.saveAndFlush(trajectory(runId, i));
         }
         flushAndClear();
 
-        assertThat(trajectories.findTop200ByRunIdOrderByTurnNumberAsc(runId))
+        assertThat(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(runId))
                 .extracting(SessionTrajectory::getTurnNumber)
-                .containsExactly(0, 1, 2);
+                .containsExactly(2, 1, 0);
     }
 
     private SessionTrajectory trajectory(UUID runId, int turnNumber) {

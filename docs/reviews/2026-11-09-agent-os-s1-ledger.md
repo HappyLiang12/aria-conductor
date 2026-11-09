@@ -34,9 +34,9 @@ when its paths change.
 | B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IMPLEMENTED (d42b086b), fix rounds done, re-review in flight | 4c56b96d + 6 + 5 | BLOCK -> fix rounds | no |
 | C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | MERGED (f3cc3255), review BLOCK evidence-only | 34db1ac7 | BLOCK pending merged-head gate | yes |
 | D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | MERGED (aa43c9bf, rebased from b7a72679) | e04a7fd8..aa43c9bf (6) | APPROVE (6 P3 open) | yes |
-| C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
-| C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
-| I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
+| C2a | `lane/agent-os-c2a` | `D:/project/aria-agent-os-c2a` | MERGED (a6fc68b5) | 4 commits | BLOCK (P1) -> APPROVE after fix | yes |
+| C2b | `lane/agent-os-c2b` | `D:/project/aria-agent-os-c2b` | MERGED (15e9ae36) | 6 commits | BLOCK (ceiling/forget) -> APPROVE | yes |
+| I | `lane/agent-os-i` | `D:/project/aria-agent-os-i` | IN_REVIEW (96984d75 + guard fix) | 5 commits + fix | APPROVE WITH FIXES | no |
 
 ### W0B handoff and review (2026-11-09)
 
@@ -344,6 +344,23 @@ Verify the run's provider id is the row that was updated; the default provider s
   Gate A verdict: PASS for the S1 acceptance arm (context, manifests, approvals,
   regression), with the live SDD deliverable BLOCKED by those two pre-existing
   platform/environment gaps, recorded rather than simulated.
+- 2026-11-10: Wave 2 reviews. C2a was BLOCKed on one P1 (a duplicate entity create
+  reached the global handler as a 500 with the wrong envelope and h2 constraint text);
+  the fix maps only unique collisions to 409 and other integrity failures to 422, with
+  a regression test. Accepted with follow-ups: MemoryLifecycleService reimplements
+  rename/alias/retire entity and retire fact outside act-memory (governance parity
+  checked; move into the command service later), q filtering is an in-controller scan
+  over a bounded page without alias matching, and memory reads keep the existing
+  unauthenticated dashboard posture (decision: same as the rest of the local console;
+  C2b's MCP reads are separately clamped). C2b was BLOCKed on the read path leaking
+  above-INTERNAL facts and on the inline, transaction-unsafe forget mutation; the fix
+  clamps every memory read at INTERNAL (actor can only lower it, unlabelled fails
+  closed), adds MemoryCommandService.retireFact with flush/conflict translation and
+  real tests, and makes the forget acknowledgement metadata-only. Decisions: memory
+  read tools stay autoApproveRead=false, proposal reason is not persisted, and
+  get_context_manifest is global metadata. Lane I was APPROVED WITH FIXES: the ArchUnit
+  canary did not exercise the real boundary selectors (fixed with a fixture-based
+  violation proof), and the purge test lacked a pre-purge existence assertion.
 
 ## Evidence to fill at each boundary
 

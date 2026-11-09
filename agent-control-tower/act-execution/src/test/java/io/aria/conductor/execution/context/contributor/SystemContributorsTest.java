@@ -92,6 +92,18 @@ class SystemContributorsTest {
                         "name: Kim\ntimezone: Asia/Taipei\nlanguage: zh-TW"));
     }
 
+    @Test
+    void identityFallsBackToDefaultsWhenTheConfigReadFails() {
+        SystemConfigRepository config = mock(SystemConfigRepository.class);
+        when(config.findById(anyString())).thenThrow(new IllegalStateException("config unavailable"));
+
+        List<ContextSection> sections = new IdentityContextContributor(config).contribute(request());
+
+        assertThat(sections).singleElement().satisfies(section ->
+                assertThat(section.content()).isEqualTo(
+                        "name: Operator\ntimezone: UTC\nlanguage: en"));
+    }
+
     // ---- policy ----
 
     @Test

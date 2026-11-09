@@ -1,9 +1,11 @@
 package io.aria.conductor.common.config;
 
 /**
- * Stable identities and permitted values of the System Config entries whose
- * values are frozen into other records -- a run's deadline is written into its
- * execution binding at admission and cannot be re-resolved afterwards.
+ * Stable identities and permitted values of the System Config entries the
+ * platform reads by name: the values frozen into other records -- a run's
+ * deadline is written into its execution binding at admission and cannot be
+ * re-resolved afterwards -- and the operator identity the context envelope
+ * renders.
  *
  * <p>This is the one definition the admin API validates against, the runtime
  * reads through and the V73 migration guard asserts. The dashboard mirrors the

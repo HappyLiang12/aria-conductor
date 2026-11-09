@@ -55,10 +55,16 @@ public class IdentityContextContributor implements ContextContributor {
     }
 
     private String value(String key, String fallback) {
-        return config.findById(key)
-                .map(SystemConfig::getConfigValue)
-                .filter(found -> found != null && !found.isBlank())
-                .map(String::trim)
-                .orElse(fallback);
+        try {
+            return config.findById(key)
+                    .map(SystemConfig::getConfigValue)
+                    .filter(found -> found != null && !found.isBlank())
+                    .map(String::trim)
+                    .orElse(fallback);
+        } catch (RuntimeException e) {
+            // Identity is required for every agent, so an unreadable config row
+            // must not fail the run: the documented defaults are still an identity.
+            return fallback;
+        }
     }
 }

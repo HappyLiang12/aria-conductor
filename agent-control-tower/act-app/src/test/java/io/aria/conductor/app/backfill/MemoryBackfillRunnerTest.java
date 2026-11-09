@@ -27,6 +27,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.DefaultApplicationArguments;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.List;
@@ -242,6 +249,89 @@ class MemoryBackfillRunnerTest {
     }
 
     @Test
+    void aFailedPassDoesNotRecordCompletionSoTheNextBootRetries() {
+        when(agents.findAll())
+                .thenThrow(new DataAccessResourceFailureException("database unavailable"))
+                .thenReturn(List.of(agent("A", null)));
+
+        runner.run(new DefaultApplicationArguments(new String[0]));
+
+        // Completion is recorded last, so a failed pass leaves no marker and is retried.
+        verify(systemConfig, never()).save(any());
+
+        BackfillReport retry = runner.run();
+
+        assertThat(retry.agentsCreated()).as("the unmarked pass still has work to do").isEqualTo(1);
+        verify(systemConfig, times(1)).save(any());
+    }
+
+    @Test
+    void aDuplicateKeyFromAConcurrentBootDoesNotAbortThePass() {
+        when(agents.findAll()).thenReturn(List.of(agent("Alpha", null), agent("Beta", null)));
+        when(entities.save(any()))
+                .thenThrow(new DataIntegrityViolationException("uq_memory_entity"))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BackfillReport report = runner.run();
+
+        assertThat(report.agentsCreated())
+                .as("the row that lost the race is skipped, not written twice")
+                .isEqualTo(1);
+        verify(systemConfig, times(1)).save(any());
+    }
+
+    @Test
+    void aDuplicateLinkFromAConcurrentBootDoesNotAbortThePass() {
+        when(entities.findAll()).thenReturn(List.of(existingEntity("PERSON", "operator", "Operator")));
+        when(knowledge.findAll()).thenReturn(List.of(knowledge("Operator")));
+        when(links.save(any())).thenThrow(new DataIntegrityViolationException("uq_memory_knowledge_link"));
+
+        BackfillReport report = runner.run();
+
+        assertThat(report.linksProposed()).isZero();
+        verify(systemConfig, times(1)).save(any());
+    }
+
+    @Test
+    void keepsARepositoryKeyAtTheColumnLimitAndSkipsALongerOne() {
+        String prefix = "https://github.com/acme/";
+        String atLimit = prefix + "a".repeat(255 - prefix.length());
+        String overLimit = prefix + "b".repeat(256 - prefix.length());
+        assertThat(atLimit).hasSize(255);
+        assertThat(overLimit).hasSize(256);
+        when(chains.findAll()).thenReturn(List.of(
+                chain("{\"repoUrl\":\"" + atLimit + "\"}", null),
+                chain("{\"issueRepo\":\"" + overLimit + "\"}", null)));
+
+        try (LogCapture logs = captureLog()) {
+            BackfillReport report = runner.run();
+
+            assertThat(report.reposCreated())
+                    .as("canonical_key and display_name are VARCHAR(255), so only the shorter key fits")
+                    .isEqualTo(1);
+            List<MemoryEntity> saved = savedEntities();
+            assertThat(saved).extracting(MemoryEntity::getCanonicalKey).containsExactly(atLimit);
+            assertThat(saved).extracting(MemoryEntity::getDisplayName).containsExactly(atLimit);
+            assertThat(logs.events()).as("the skipped key is reported, so the data loss is visible")
+                    .anyMatch(event -> event.getLevel() == Level.WARN
+                            && event.getFormattedMessage().contains("Skipping a repository key"));
+        }
+    }
+
+    @Test
+    void theFirstPassOverAnEmptyDatabaseDoesNotReportItselfAsAlreadyCompleted() {
+        try (LogCapture logs = captureLog()) {
+            runner.run(new DefaultApplicationArguments(new String[0]));
+
+            verify(systemConfig, times(1)).save(any());
+            assertThat(logs.events()).extracting(ILoggingEvent::getFormattedMessage)
+                    .as("the marker was just written, so this pass did not find a completed backfill")
+                    .anyMatch(message -> message.startsWith("Memory backfill complete"))
+                    .noneMatch(message -> message.contains("already completed"));
+        }
+    }
+
+    @Test
     void theApplicationRunnerEntryPointRunsTheBackfill() {
         when(agents.findAll()).thenReturn(List.of(agent("A", null)));
 
@@ -255,6 +345,29 @@ class MemoryBackfillRunnerTest {
         ArgumentCaptor<MemoryEntity> captor = ArgumentCaptor.forClass(MemoryEntity.class);
         verify(entities, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
         return captor.getAllValues();
+    }
+
+    /** Captures the runner's own log events for the duration of a try-with-resources block. */
+    private static LogCapture captureLog() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(MemoryBackfillRunner.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return new LogCapture(logger, appender);
+    }
+
+    private record LogCapture(ch.qos.logback.classic.Logger logger, ListAppender<ILoggingEvent> appender)
+            implements AutoCloseable {
+
+        List<ILoggingEvent> events() {
+            return List.copyOf(appender.list);
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+        }
     }
 
     private static Agent agent(String name, Instant retiredAt) {

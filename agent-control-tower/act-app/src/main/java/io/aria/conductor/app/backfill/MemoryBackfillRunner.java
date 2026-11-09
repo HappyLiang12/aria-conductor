@@ -24,6 +24,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -71,6 +72,9 @@ public class MemoryBackfillRunner implements ApplicationRunner {
     /** Repository identity observed on a workflow chain, in template params and step JSON. */
     private static final Set<String> REPO_PARAM_KEYS = Set.of("repoUrl", "issueRepo");
 
+    /** {@code memory_entities.canonical_key}/{@code display_name} are VARCHAR(255). */
+    static final int MAX_CANONICAL_KEY_LENGTH = 255;
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final AgentRepository agents;
@@ -111,9 +115,15 @@ public class MemoryBackfillRunner implements ApplicationRunner {
             return;
         }
         try {
+            // Read before the pass so a no-op report can say which of the two no-ops it was:
+            // one that wrote the completion marker with nothing to copy, or one that found
+            // the marker already set.
+            boolean completedBefore = completed || completionRecorded();
             BackfillReport report = run();
             if (report.equals(BackfillReport.noop())) {
-                log.info("Memory backfill already completed; nothing to do");
+                log.info(completedBefore
+                        ? "Memory backfill already completed; nothing to do"
+                        : "Memory backfill completed this pass with nothing to copy");
             }
         } catch (RuntimeException e) {
             // The pass is idempotent and completion is recorded last, so leaving the marker
@@ -155,7 +165,9 @@ public class MemoryBackfillRunner implements ApplicationRunner {
                 continue;
             }
             MemoryEntity entity = newEntity(KIND_AGENT, canonicalKey, agent.getName(), now);
-            entities.save(entity);
+            if (!saveWinningTheRace(entity)) {
+                continue;
+            }
             linkTargets.put(entity.getId(), entity);
             agentsCreated++;
         }
@@ -171,7 +183,9 @@ public class MemoryBackfillRunner implements ApplicationRunner {
                 continue;
             }
             MemoryEntity entity = newEntity(KIND_REPO, repoKey, repoKey, now);
-            entities.save(entity);
+            if (!saveWinningTheRace(entity)) {
+                continue;
+            }
             linkTargets.put(entity.getId(), entity);
             reposCreated++;
         }
@@ -215,16 +229,48 @@ public class MemoryBackfillRunner implements ApplicationRunner {
                 if (!existingLinks.add(new LinkKey(entity.getId(), item.getId()))) {
                     continue;
                 }
-                links.save(MemoryKnowledgeLink.builder()
+                MemoryKnowledgeLink link = MemoryKnowledgeLink.builder()
                         .entityId(entity.getId())
                         .knowledgeItemId(item.getId())
                         .status(MemoryLinkStatus.PROPOSED)
                         .createdAt(now)
-                        .build());
+                        .build();
+                if (!saveWinningTheRace(link)) {
+                    continue;
+                }
                 proposed++;
             }
         }
         return proposed;
+    }
+
+    /**
+     * Writes one row and treats a unique-constraint violation as a lost race, not a failure:
+     * a second boot can insert the same {@code (kind, canonical_key)} or the same
+     * {@code (entity_id, knowledge_item_id)} pair between this pass's read and this write, and
+     * aborting the whole pass (leaving it unmarked and retried forever) would be the wrong
+     * answer to a row that is already there. Any other failure still propagates, so the marker
+     * stays unset and the next boot retries.
+     */
+    private boolean saveWinningTheRace(MemoryEntity entity) {
+        try {
+            entities.save(entity);
+            return true;
+        } catch (DataIntegrityViolationException e) {
+            // The key can be a repository URL, so the row identity is not logged.
+            log.info("Memory backfill skipped a {} entity a concurrent pass already wrote", entity.getKind());
+            return false;
+        }
+    }
+
+    private boolean saveWinningTheRace(MemoryKnowledgeLink link) {
+        try {
+            links.save(link);
+            return true;
+        } catch (DataIntegrityViolationException e) {
+            log.info("Memory backfill skipped a knowledge link a concurrent pass already proposed");
+            return false;
+        }
     }
 
     private static MemoryEntity newEntity(String kind, String canonicalKey, String displayName, Instant now) {
@@ -289,7 +335,12 @@ public class MemoryBackfillRunner implements ApplicationRunner {
         }
     }
 
-    /** Deterministic identity of a repository URL: trimmed, without trailing slashes. */
+    /**
+     * Deterministic identity of a repository URL: trimmed, without trailing slashes, and
+     * bounded to what {@code canonical_key}/{@code display_name} can hold. A longer key is
+     * skipped rather than truncated (a truncated URL is a different repository) -- and skipped
+     * rather than written, because a value-too-long error would fail every boot.
+     */
     static String normalizeRepoKey(String raw) {
         if (raw == null) {
             return null;
@@ -298,7 +349,16 @@ public class MemoryBackfillRunner implements ApplicationRunner {
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
-        return normalized.isEmpty() ? null : normalized;
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (normalized.length() > MAX_CANONICAL_KEY_LENGTH) {
+            // The URL can carry credentials in its user-info part, so only the length is logged.
+            log.warn("Skipping a repository key of {} characters; canonical_key holds at most {}",
+                    normalized.length(), MAX_CANONICAL_KEY_LENGTH);
+            return null;
+        }
+        return normalized;
     }
 
     private record EntityKey(String kind, String canonicalKey) {

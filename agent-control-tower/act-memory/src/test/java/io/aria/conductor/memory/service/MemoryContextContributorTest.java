@@ -119,14 +119,14 @@ class MemoryContextContributorTest {
     }
 
     @Test
-    void anEmptyRecallIsRecordedAsDegradedRatherThanOmitted() {
+    void aCleanEmptyRecallIsNotADegradation() {
         submitReturns(CompletableFuture.completedFuture(RecallResult.empty()));
 
         List<ContextSection> sections = contributor.contribute(request("nobody special", "", List.of()));
 
-        assertThat(sections).hasSize(1);
-        assertThat(sections.get(0).content()).isEmpty();
-        assertThat(sections.get(0).degradedReason()).contains("empty");
+        assertThat(sections)
+                .as("nothing relevant to recall is an ordinary turn, not a degraded one")
+                .isEmpty();
     }
 
     @Test

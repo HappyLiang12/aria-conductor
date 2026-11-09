@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -36,9 +37,10 @@ import java.util.concurrent.TimeoutException;
  * <p>
  * Recall runs on a shared single-thread executor with a 200 ms budget: a slow repository
  * returns an empty degraded section and never blocks the run. Any failure inside this
- * contributor — timeout, repository exception, render exception, empty result — is recorded
- * as a degraded reason; nothing is thrown into the assembler and nothing disappears
- * silently.
+ * contributor — timeout, interruption, repository or render exception — is recorded as a
+ * degraded reason; nothing is thrown into the assembler and no failure disappears silently.
+ * A clean empty recall contributes no section at all: "no relevant memory" is an ordinary
+ * turn, not a degradation.
  */
 @Component
 public class MemoryContextContributor implements ContextContributor {
@@ -96,7 +98,7 @@ public class MemoryContextContributor implements ContextContributor {
         try {
             RecallResult result = recallWithinBudget(
                     new RecallQuery(text, request.maxSensitivity(), focus));
-            return List.of(sectionOf(result));
+            return sectionOf(result).map(List::of).orElseGet(List::of);
         } catch (RecallDegradedException e) {
             return List.of(degradedSection(e.reason));
         } catch (RuntimeException e) {
@@ -130,16 +132,21 @@ public class MemoryContextContributor implements ContextContributor {
         }
     }
 
-    private static ContextSection sectionOf(RecallResult result) {
+    /**
+     * The section, or nothing. An empty recall means the turn simply had no relevant memory:
+     * that is a clean miss, so it contributes no section and records no degraded reason. Only
+     * a recall that failed (timeout, interruption, repository error) is degraded.
+     */
+    private static Optional<ContextSection> sectionOf(RecallResult result) {
         if (result == null || result.isEmpty()) {
-            return degradedSection("memory-recall-empty");
+            return Optional.empty();
         }
         Rendered rendered = render(result);
         if (rendered.content().isEmpty()) {
-            return degradedSection("memory-recall-empty");
+            return Optional.empty();
         }
-        return new ContextSection(SECTION_ID, TITLE, rendered.content(), rendered.sensitivity(),
-                rendered.sourceIds(), rendered.truncated(), null);
+        return Optional.of(new ContextSection(SECTION_ID, TITLE, rendered.content(), rendered.sensitivity(),
+                rendered.sourceIds(), rendered.truncated(), null));
     }
 
     /** Deterministic layout: every entity line, then every fact line, then the char cap. */

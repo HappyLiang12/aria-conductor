@@ -26,9 +26,14 @@ import io.aria.conductor.execution.housekeeping.HousekeepingModel.HousekeepingRe
 import io.aria.conductor.execution.housekeeping.HousekeepingService;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
+import io.aria.conductor.memory.model.MemoryAction;
+import io.aria.conductor.memory.model.MemoryActorType;
+import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryOrigin;
+import io.aria.conductor.memory.model.MemorySubjectType;
+import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.service.MemoryContextContributor;
@@ -95,6 +100,9 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
 
     @Autowired
     MemoryFactRepository memoryFacts;
+
+    @Autowired
+    MemoryAssertionRepository memoryAssertions;
 
     @Test
     void theRealContextCollectsIdentityPolicyKnowledgeMemoryAndToolContributors() {
@@ -213,6 +221,10 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
                 .valueType("STRING").status(FactStatus.ACTIVE).origin(MemoryOrigin.OPERATOR)
                 .sensitivity(Sensitivity.INTERNAL).validFrom(Instant.now())
                 .createdAt(Instant.now()).build());
+        MemoryAssertion assertion = memoryAssertions.saveAndFlush(MemoryAssertion.builder()
+                .subjectType(MemorySubjectType.ENTITY).subjectId(entity.getId())
+                .action(MemoryAction.CREATE).actorType(MemoryActorType.OPERATOR)
+                .actorRef("lane-i-test").createdAt(Instant.now()).build());
 
         HousekeepingReceipt receipt = housekeepingService.execute(
                 new HousekeepingRequest(List.of("runs"), false, Exclusions.empty(), true));
@@ -228,5 +240,7 @@ class MemoryContextWiringTest extends BaseH2IntegrationTest {
                 .as("governed memory is never a housekeeping target").isPresent();
         assertThat(memoryFacts.findById(fact.getId()))
                 .as("governed memory is never a housekeeping target").isPresent();
+        assertThat(memoryAssertions.findById(assertion.getId()))
+                .as("the append-only assertion audit is never a housekeeping target").isPresent();
     }
 }

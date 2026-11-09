@@ -733,12 +733,13 @@ class BoundedTrajectoryQueryTest {
     @Autowired SessionTrajectoryRepository trajectories;
 
     @Test
-    void returnsAtMostTheTwoHundredOldestTurnsInOrder() {
+    void returnsAtMostTheTwoHundredNewestTurnsNewestFirst() {
         UUID runId = UUID.randomUUID();
         for (int i = 0; i < 250; i++) trajectories.saveAndFlush(trajectory(runId, i));
         List<SessionTrajectory> rows = trajectories.findTop200ByRunIdOrderByTurnNumberDesc(runId);
         assertThat(rows).hasSize(200);
-        assertThat(rows.get(0).getTurnNumber()).isZero();
+        assertThat(rows.get(0).getTurnNumber()).isEqualTo(249);
+        assertThat(rows.get(199).getTurnNumber()).isEqualTo(50);
     }
 }
 ```

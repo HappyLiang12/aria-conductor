@@ -26,8 +26,8 @@ when its paths change.
 | Lane | Branch | Worktree | Status | Commits | Review | Merged |
 |---|---|---|---|---|---|---|
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
-| W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | IN_PROGRESS | pending | pending | no |
-| A1 | `lane/agent-os-a1` | pending | PENDING | - | - | no |
+| W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | FIXING (review BLOCK) | 100ba176, 73d264a1, e314dff3 (rebased c6d1eb06) | BLOCK (2 High, 2 Medium, 5 Low) | merged, fix in flight |
+| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | IN_PROGRESS | - | - | no |
 | A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IN_PROGRESS | - | - | no |
 | B | `lane/agent-os-b` | pending | PENDING | - | - | no |
 | C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IN_PROGRESS | - | - | no |
@@ -35,6 +35,24 @@ when its paths change.
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
 | I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
+
+### W0B handoff and review (2026-11-09)
+
+- Commits 100ba176 (module skeleton), 73d264a1 (schema, entities, repositories,
+  bounded queries). Full `-pl act-app -am test` at that head: 9 modules, 279 surefire
+  reports, zero failures/errors; act-memory slice 4/0/0/0, migration IT 4/0/0/0,
+  trajectory bound 2/0/0/0, manifest slice 3/0/0/0.
+- Independent review verdict: BLOCK at 73d264a1. Two High: the trajectory bound kept the
+  oldest 200 (spec P6 says the last 200) and lanes B/D call repositories that did not
+  exist while repository/** is W0B-only. Two Medium: the new module was in no hosted or
+  sharded lane, and three of five entities had no round-trip test. Five Low.
+- Dispositions: the newest-200 contract was corrected at e314dff3 (test 2/0/0/0; plan
+  snippet amended), the hosted matrix group was already added at a9d76c89, and a fix
+  round now owns the missing derived queries, the entity round-trips, the deterministic
+  fact order, `countByStatus` and the manifest bulk delete. Housekeeping and
+  `cleanup-all.sql` registration go to lane I.
+
+
 
 ### W0A handoff (2026-11-09)
 
@@ -63,6 +81,17 @@ when its paths change.
   writes the ceiling stays documented as SQL-only in S1 (spec section 9 has no such
   endpoint); the spec's `estimatedChars`/`estimatedTokens` "field" wording is textual
   drift because both are derived accessors in the approved plan.
+
+### Wave 0 integration (2026-11-09)
+
+- `feat/agent-os-memory` at c6d1eb06: W0A rebased to 2036e833 and fast-forwarded, then
+  W0B rebased and fast-forwarded; no conflicts. W0A and W0B are both in the branch, so
+  the `sensitivity_ceiling` column and the non-null entity field exist together.
+- Wave gate at the integrated head is re-run after the W0B fix round lands; the earlier
+  per-lane evidence (W0A full unit tier, W0B full nine-module unit tier) does not cover
+  the combined tree.
+- A1 starts from c6d1eb06; A2 and C started from the earlier W0A head d142424f and will
+  be rebased onto the integrated head before merge.
 
 ## Gates
 

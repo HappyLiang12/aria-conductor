@@ -57,7 +57,12 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Approve or reject a PENDING knowledge item. decision is APPROVED or REJECTED; reason is optional and recorded for rejections. Only APPROVED items become usable by agents."),
             write("retire_knowledge",
                     "Retire an APPROVED knowledge item so agents can no longer use it. Only APPROVED items can be retired."),
-            // memory (spec §9): a worker write is a PENDING proposal, an operator write is ACTIVE
+            // memory (spec §9): a worker write is a PENDING proposal, an operator write is ACTIVE.
+            // Decision (2026-11 review): every memory READ descriptor below stays
+            // autoApproveRead=false even though its policy is WORKER_READ. Memory carries
+            // learned operator/user facts rather than reference material, so the reviewed
+            // default keeps an operator approval in front of every memory read; the flag is
+            // deliberate, not an omission, and ToolCatalogParityTest pins it.
             write("remember_fact",
                     "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity."),
             read("recall_memory",

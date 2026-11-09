@@ -176,6 +176,29 @@ class ToolCatalogParityTest {
         }
     }
 
+    /**
+     * Decision (2026-11 review), pinned so a later tidy-up cannot flip it: the memory read
+     * tools stay WORKER_READ but are never auto-approved. Memory data is learned operator
+     * and user facts rather than reference material, so an operator approval stays in front
+     * of every read even though the policy class would allow auto-approval.
+     */
+    @Test
+    void theMemoryReadToolsAreWorkerReadButNeverAutoApproved() {
+        List<String> memoryReads = List.of("recall_memory", "list_memory_entities", "get_memory_entity",
+                "list_memory_proposals", "get_context_manifest");
+
+        assertThat(catalog.autoApproveReadNames()).doesNotContainAnyElementsOf(memoryReads);
+        assertThat(catalog.tools())
+                .filteredOn(tool -> memoryReads.contains(tool.name()))
+                .hasSize(memoryReads.size())
+                .allSatisfy(tool -> {
+                    assertThat(tool.policy()).isEqualTo(ToolPolicy.WORKER_READ);
+                    assertThat(tool.autoApproveRead())
+                            .as("%s must stay operator-approved", tool.name())
+                            .isFalse();
+                });
+    }
+
     @Test
     void everyDescriptorCarriesItsOneLineToolDescription() {
         assertThat(catalog.tools()).allSatisfy(tool -> {

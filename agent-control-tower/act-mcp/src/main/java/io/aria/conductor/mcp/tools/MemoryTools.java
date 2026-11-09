@@ -254,7 +254,10 @@ public class MemoryTools implements McpTool {
     public String decideMemoryProposal(
             @ToolParam(description = "Subject id of the PENDING proposal (fact or relation)") UUID proposalId,
             @ToolParam(description = "true = approve, false = reject") boolean approve,
-            @ToolParam(description = "Decision note (audit only)", required = false) String reason,
+            // Accepted for client compatibility only: MemoryProposalService has no reason
+            // channel, so the note is neither persisted nor audited. It is not "audit only".
+            @ToolParam(description = "Decision note; accepted for compatibility and not persisted "
+                    + "(the memory service has no reason channel)", required = false) String reason,
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
@@ -277,6 +280,17 @@ public class MemoryTools implements McpTool {
         }
     }
 
+    /**
+     * Context-assembly metadata for a run: section ids with source ids and sizes, drops and
+     * degraded reasons. The projection is a whitelist, so an unexpected field — in
+     * particular prompt text, which is never stored here — cannot travel through.
+     * <p>
+     * Decision (2026-11 review): the manifest stays <em>global metadata</em> — any caller
+     * the tool policy admits may read any run's manifest, not only the actor's own run. It
+     * reveals which sections were assembled and why, never their text, so the exposure is
+     * metadata rather than prompt content; scoping the read to {@code actor.runId()} is a
+     * possible follow-up, deliberately not taken here for an operator introspection tool.
+     */
     @Tool(name = "get_context_manifest",
             description = "Read every context assembly recorded for a run, in turn order: turnNumber, adapter, section ids with source ids and estimates, dropped sections with reasons, and degraded sections with reasons. Metadata only — prompt content is never stored or returned.")
     public String getContextManifest(@ToolParam(description = "Run id (UUID)") UUID runId) {

@@ -9,10 +9,16 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.common.service.KnowledgeContextProvider;
+import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
+import io.aria.conductor.execution.context.ContextAssembler;
+import io.aria.conductor.execution.context.ContextManifestService;
+import io.aria.conductor.execution.context.ContextProperties;
+import io.aria.conductor.execution.context.ConversationHistoryLoader;
+import io.aria.conductor.execution.context.ProviderCeilingResolver;
+import io.aria.conductor.execution.context.contributor.AgentPolicyContextContributor;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
@@ -21,7 +27,6 @@ import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunInputCoordinator;
-import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,8 +80,8 @@ class AgentLoopEngineAdmissionTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock WorkflowService workflowService;
     @Mock WorkflowChainRepository workflowChainRepository;
-    @Mock AgentSkillResolver agentSkillResolver;
-    @Mock KnowledgeContextProvider knowledgeProvider;
+    @Mock ProviderCeilingResolver ceilings;
+    @Mock ContextManifestService manifestService;
     @Mock WorkspaceManager workspaceManager;
     @Mock ApprovalRepository approvalRepository;
     @Mock RunInputCoordinator inputCoordinator;
@@ -149,10 +154,15 @@ class AgentLoopEngineAdmissionTest {
         engine = new AgentLoopEngine(
                 runRepository, agentRepository, sessionStateManager, approvalGate,
                 permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
-                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                workflowChainRepository,
+                new ContextAssembler(List.of(new AgentPolicyContextContributor(agentRepository)),
+                        ceilings, new ContextProperties()),
+                new ConversationHistoryLoader(runRepository, trajectoryRepository),
+                manifestService, new ContextProperties(), workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, recordingQueue, null /* KanbanRepository */,
                 inputCoordinator);
+        lenient().when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
         stubStatusWrites();
         stubCompletionWrites();
     }
@@ -218,7 +228,6 @@ class AgentLoopEngineAdmissionTest {
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
         when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
-        when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
     }
 
     // ---- (a) owned: acquire at admission + start signal, no settle ----

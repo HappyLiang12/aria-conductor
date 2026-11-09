@@ -29,6 +29,10 @@
         </dependency>
         <dependency>
             <groupId>io.aria.conductor</groupId>
+            <artifactId>act-memory</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
             <artifactId>act-execution</artifactId>
         </dependency>
         <dependency>

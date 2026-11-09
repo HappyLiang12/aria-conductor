@@ -81,7 +81,11 @@ final class ContextBudget {
                     continue;
                 }
                 int share = (int) Math.ceil((double) overflow * section.content().length() / pool);
-                scaled.add(truncate(section, section.content().length() - share));
+                int cap = section.content().length() - share;
+                // Scale only when a whole line can go and a non-empty body stays.
+                // A cut that would leave just the marker is not a scale: the
+                // section is left untouched and the drop order decides its fate.
+                scaled.add(keepsWholeLine(section, cap) ? truncate(section, cap) : section);
             }
             capped = scaled;
             int reclaimed = chars(capped, kept);
@@ -123,13 +127,30 @@ final class ContextBudget {
     }
 
     /**
-     * A section the proportional pass may shrink: optional and multi-line. A
-     * single-line section has no line boundary to shrink to, so scaling it would
-     * mean cutting it mid-line; the drop order decides its fate instead.
+     * A section the proportional pass may shrink: optional, and multi-line enough
+     * that dropping its trailing lines leaves a non-empty body behind the marker.
+     * A single line — even one that merely ends with a newline — has no line
+     * boundary to shrink to, so scaling it would mean emptying the section; the
+     * drop order decides its fate instead.
      */
     private static boolean scalable(ContextSection section) {
-        return !REQUIRED_GROUPS.contains(group(section.id()))
-                && section.content().indexOf('\n') >= 0;
+        if (REQUIRED_GROUPS.contains(group(section.id()))) {
+            return false;
+        }
+        String content = section.content();
+        int lineEnd = content.indexOf('\n');
+        return lineEnd > 0
+                && !content.substring(0, lineEnd).isBlank()
+                && !content.substring(lineEnd + 1).isBlank();
+    }
+
+    /**
+     * Whether cutting {@code section} to {@code cap} keeps at least one whole,
+     * non-blank line beside {@link #TRUNCATION_MARKER}: only then is the cut a
+     * scale rather than an emptying of the body.
+     */
+    private static boolean keepsWholeLine(ContextSection section, int cap) {
+        return !wholeLinesBefore(section.content(), cap).isBlank();
     }
 
     /**
@@ -143,16 +164,23 @@ final class ContextBudget {
         if (content.length() <= cap) {
             return section;
         }
-        String clipped = "";
-        int room = cap - TRUNCATION_MARKER.length() - 1;
-        if (room > 0) {
-            String head = content.substring(0, Math.min(room, content.length()));
-            int lineEnd = head.lastIndexOf('\n');
-            String kept = lineEnd < 0 ? "" : head.substring(0, lineEnd + 1);
-            clipped = kept + TRUNCATION_MARKER;
-        }
+        String clipped = wholeLinesBefore(content, cap) + TRUNCATION_MARKER;
         return new ContextSection(section.id(), section.title(), clipped, section.sensitivity(),
                 section.sourceIds(), true, section.degradedReason());
+    }
+
+    /**
+     * The whole lines of {@code content} that fit before the marker under
+     * {@code cap}, or {@code ""} when no whole line fits beside it.
+     */
+    private static String wholeLinesBefore(String content, int cap) {
+        int room = cap - TRUNCATION_MARKER.length() - 1;
+        if (room <= 0) {
+            return "";
+        }
+        String head = content.substring(0, Math.min(room, content.length()));
+        int lineEnd = head.lastIndexOf('\n');
+        return lineEnd < 0 ? "" : head.substring(0, lineEnd + 1);
     }
 
     static int chars(List<ContextSection> sections, List<ContextMessage> history) {

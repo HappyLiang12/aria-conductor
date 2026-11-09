@@ -347,13 +347,14 @@ REST under `/api/v1/memory`:
 
 Responses carry ids, provenance, sensitivity, and validity. Errors use the existing
 `ok`/`errorType`/`message` envelope with explicit codes: `VALIDATION`, `NOT_FOUND`,
-`CONFLICT`, `FORBIDDEN`.
+`CONFLICT`, `FORBIDDEN`. A proposal is a PENDING fact or relation; the id in the
+proposals API is the subject's id.
 
 MCP tools and policies (all registered through `ToolCatalog`):
 
 | Tool | Policy | Behavior |
 |---|---|---|
-| `remember_fact` | WORKER_WRITE | writes a PENDING proposal unless the actor is the operator |
+| `remember_fact` | WORKER_WRITE | a worker call writes a PENDING proposal with origin EXTRACTION; an operator call writes ACTIVE |
 | `recall_memory` | WORKER_READ | returns ranked facts/entities with provenance |
 | `list_memory_entities` | WORKER_READ | list/filter |
 | `get_memory_entity` | WORKER_READ | entity detail |

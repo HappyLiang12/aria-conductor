@@ -6,6 +6,7 @@ import io.aria.conductor.memory.model.MemorySubjectType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Read view of a proposal — a PENDING fact or relation awaiting an operator decision.
@@ -61,7 +62,7 @@ public record MemoryProposalView(
                 relation.getValidFrom());
     }
 
-    private static String idString(java.util.UUID id) {
+    private static String idString(UUID id) {
         return id == null ? null : id.toString();
     }
 

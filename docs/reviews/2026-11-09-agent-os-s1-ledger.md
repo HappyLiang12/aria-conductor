@@ -129,6 +129,11 @@ Verify the run's provider id is the row that was updated; the default provider s
   which contradicts spec section 9 (`/api/v1/memory/runs/{id}/context-manifest`). The
   spec is authoritative; the plan example was corrected and C2a must implement the
   spec path. The W0B repository comment already matches the spec.
+- 2026-11-09: integration items that no product lane owns are assigned to lane I:
+  confirm the hosted `memory` matrix group added at a9d76c89, and regenerate the
+  `scripts/lanes` shard plan for the new act-memory test classes
+  (`node scripts/lane-plan.mjs gen` then `check`), because the shard runner refuses to
+  start when a compiled test class is covered by no lane.
 
 ## Evidence to fill at each boundary
 

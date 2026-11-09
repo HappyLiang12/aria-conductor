@@ -10,14 +10,12 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,7 +54,6 @@ class AriaServiceChatTest {
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
     @Mock IntentClassifier intentClassifier;
-    @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
     @Mock AriaRunStateRepository stateRepository;
@@ -70,8 +67,7 @@ class AriaServiceChatTest {
         AriaSyncRunWaiter waiter = new AriaSyncRunWaiter(stateRepository,
                 AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L);
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                intentClassifier,
-                knowledgeService, trajectoryRepository, toolCallRepository, waiter);
+                intentClassifier, toolCallRepository, waiter);
 
         ariaAgent = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
@@ -196,6 +192,20 @@ class AriaServiceChatTest {
         ariaService.chat(request("hello"));
 
         verify(agentLoopEngine).startRun(eq(RUN_ID), anyList());
+    }
+
+    /**
+     * P5: server-side history has one owner (the engine's history loader, keyed by
+     * conversation id). The sync adapter must not load a second copy and must not
+     * hand one to the engine.
+     */
+    @Test
+    void chat_handsNoHistoryToTheEngineAndNeverLoadsItsOwn() {
+        ariaService.chat(request("hello"));
+
+        verify(agentLoopEngine).startRun(RUN_ID, List.of());
+        verify(runRepository, never()).findByConversationIdOrderByCreatedAtAsc(anyString());
+        verify(trajectoryRepository, never()).findByRunIdInOrderByTurnNumberAsc(any());
     }
 
     @Test
@@ -360,140 +370,6 @@ class AriaServiceChatTest {
     }
 
     @Test
-    void chat_passesPriorUserAndAssistantTurnsToEngineInOrder() {
-        UUID priorRunId = UUID.randomUUID();
-        Run priorRun = Run.builder().id(priorRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.COMPLETED).createdAt(Instant.now()).build();
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenReturn(List.of(priorRun));
-        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(priorRunId)))
-                .thenReturn(List.of(
-                        trajectory(priorRunId, 1, "user", "first question"),
-                        trajectory(priorRunId, 2, "assistant", "first answer"),
-                        trajectory(priorRunId, 3, "tool", "tool output"),
-                        trajectory(priorRunId, 4, "assistant", "   ")));
-
-        ariaService.chat(request("follow-up"));
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<LlmMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(agentLoopEngine).startRun(eq(RUN_ID), captor.capture());
-        List<LlmMessage> history = captor.getValue();
-        assertThat(history).hasSize(2);
-        assertThat(history.get(0).role()).isEqualTo("user");
-        assertThat(history.get(0).content()).isEqualTo("first question");
-        assertThat(history.get(1).role()).isEqualTo("assistant");
-        assertThat(history.get(1).content()).isEqualTo("first answer");
-    }
-
-    @Test
-    void chat_keepsFailedRunTrajectoriesAndAppendsTheFailureNote() {
-        UUID completedRunId = UUID.randomUUID();
-        Run completedPriorRun = Run.builder().id(completedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.COMPLETED).createdAt(Instant.now()).build();
-        UUID failedRunId = UUID.randomUUID();
-        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.FAILED).errorMessage("relay dead").createdAt(Instant.now()).build();
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenReturn(List.of(completedPriorRun, failedRun));
-        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(completedRunId, failedRunId)))
-                .thenReturn(List.of(
-                        trajectory(completedRunId, 1, "user", "first question"),
-                        trajectory(completedRunId, 2, "assistant", "first answer"),
-                        trajectory(failedRunId, 1, "user", "seed of the failed turn")));
-
-        ariaService.chat(request("follow-up"));
-
-        List<LlmMessage> history = capturedHistory();
-        assertThat(history).hasSize(4);
-        assertThat(history.get(0).role()).isEqualTo("user");
-        assertThat(history.get(0).content()).isEqualTo("first question");
-        assertThat(history.get(1).role()).isEqualTo("assistant");
-        assertThat(history.get(1).content()).isEqualTo("first answer");
-        assertThat(history.get(2).role()).isEqualTo("user");
-        assertThat(history.get(2).content()).isEqualTo("seed of the failed turn");
-        assertThat(history.get(3).role()).isEqualTo("assistant");
-        assertThat(history.get(3).content())
-                .isEqualTo("（系統註記：上一回合因「relay dead」失敗，未產生回覆。）");
-    }
-
-    @Test
-    void chat_appendsGenericNoteWhenFailedRunHasNoErrorMessage() {
-        UUID failedRunId = UUID.randomUUID();
-        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.FAILED).createdAt(Instant.now()).build();
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenReturn(List.of(failedRun));
-        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId)))
-                .thenReturn(List.of());
-
-        ariaService.chat(request("retry"));
-
-        List<LlmMessage> history = capturedHistory();
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).role()).isEqualTo("assistant");
-        assertThat(history.get(0).content())
-                .isEqualTo("（系統註記：上一回合失敗，未產生回覆。）");
-    }
-
-    @Test
-    void chat_placesTheFailureNoteRightAfterItsOwnRunNeverAfterALaterRun() {
-        UUID failedRunId = UUID.randomUUID();
-        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.FAILED).errorMessage("sandbox died").createdAt(Instant.now()).build();
-        UUID completedRunId = UUID.randomUUID();
-        Run completedPriorRun = Run.builder().id(completedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.COMPLETED).createdAt(Instant.now()).build();
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenReturn(List.of(failedRun, completedPriorRun));
-        // Global turnNumber order interleaves the runs; grouping must still land the
-        // note directly after the failed run's own trajectory.
-        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId, completedRunId)))
-                .thenReturn(List.of(
-                        trajectory(completedRunId, 1, "user", "second question"),
-                        trajectory(failedRunId, 1, "user", "seed of the failed turn"),
-                        trajectory(completedRunId, 2, "assistant", "second answer")));
-
-        ariaService.chat(request("follow-up"));
-
-        List<LlmMessage> history = capturedHistory();
-        assertThat(history).extracting(LlmMessage::content).containsExactly(
-                "seed of the failed turn",
-                "（系統註記：上一回合因「sandbox died」失敗，未產生回覆。）",
-                "second question",
-                "second answer");
-    }
-
-    @Test
-    void chat_clipsFailedRunErrorMessageTo200CharsInTheNote() {
-        UUID failedRunId = UUID.randomUUID();
-        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.FAILED).errorMessage("x".repeat(350)).createdAt(Instant.now()).build();
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenReturn(List.of(failedRun));
-        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId)))
-                .thenReturn(List.of());
-
-        ariaService.chat(request("retry"));
-
-        List<LlmMessage> history = capturedHistory();
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).content())
-                .isEqualTo("（系統註記：上一回合因「" + "x".repeat(200) + "」失敗，未產生回覆。）");
-    }
-
-    @Test
-    void chat_usesEmptyHistoryWhenHistoryLoadFails() {
-        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
-                .thenThrow(new RuntimeException("query failed"));
-
-        AriaChatResponse response = ariaService.chat(request("hi"));
-
-        assertThat(response.getMessage()).isEqualTo("All done");
-        verify(agentLoopEngine).startRun(RUN_ID, List.of());
-    }
-
-    @Test
     void chat_returnsCancelledRunWithHonestMessage() {
         completedRun.setStatus(RunStatus.CANCELLED);
         completedRun.setFinalOutput(null);
@@ -505,20 +381,5 @@ class AriaServiceChatTest {
         assertThat(response.getMessage())
                 .contains("cancelled")
                 .doesNotContain("completed your request");
-    }
-
-    /** The conversation history the chat handed to the engine, in order. */
-    private List<LlmMessage> capturedHistory() {
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<LlmMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(agentLoopEngine).startRun(eq(RUN_ID), captor.capture());
-        return captor.getValue();
-    }
-
-    private SessionTrajectory trajectory(UUID runId, int turn, String role, String content) {
-        return SessionTrajectory.builder()
-                .id(UUID.randomUUID()).runId(runId).turnNumber(turn)
-                .role(role).content(content).createdAt(Instant.now())
-                .build();
     }
 }

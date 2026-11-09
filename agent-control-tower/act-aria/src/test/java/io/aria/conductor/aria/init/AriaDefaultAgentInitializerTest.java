@@ -64,10 +64,14 @@ class AriaDefaultAgentInitializerTest {
 
         ArgumentCaptor<String> config = ArgumentCaptor.forClass(String.class);
         verify(legacySetupService).initializeMissingAria(config.capture());
+        // P1: the managed prompt is a context contributor, so the stored row carries only
+        // the runtime knobs and the version marker that says this row is managed.
         assertThat(config.getValue())
                 .contains("\"taskApprovalRequired\":false")
                 .contains("\"maxToolCallRounds\":15")
-                .contains("You are Aria");
+                .contains("\"managedPromptVersion\":1")
+                .doesNotContain("systemPrompt")
+                .doesNotContain("You are Aria");
     }
 
     @Test

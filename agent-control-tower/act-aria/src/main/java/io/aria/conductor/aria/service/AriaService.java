@@ -12,10 +12,7 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import static io.aria.conductor.execution.engine.AgentLoopEngine.parseMaxIterationsFromConfig;
 import io.aria.conductor.execution.llm.*;
-import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
-import io.aria.conductor.knowledge.service.KnowledgeService;
 import io.aria.conductor.common.model.PromptCall;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,33 +23,16 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * Sync Aria chat adapter. It owns no prompt and no history: the managed policy
+ * comes from {@code AriaPromptContributor} and the bounded conversation history
+ * comes from the engine's server-side history loader, both keyed by this run's
+ * conversation id (P1/P5).
+ */
 @Slf4j
 @Service
 public class AriaService {
 
-    private static final int MAX_HISTORY_TURNS = 20;
-    // Bumped from 5 to 10 so multi-tool prompts (e.g. "create agent + start run + show approvals + dashboard summary")
-    // can complete even when the LLM (e.g. glm-5.1) emits a single tool call per round.
-    private static final int MAX_TOOL_CALL_ROUNDS = 15;
-
-    private static final int MAX_KNOWLEDGE_ITEMS = 5;
-
-    /**
-     * Stage 1→2 of the self-improvement pipeline. After a multi-tool conversation we ask the
-     * LLM to extract ONE reusable insight which we store as PENDING knowledge for human review.
-     */
-    private static final String EXTRACTION_PROMPT =
-            "Based on the conversation above, extract ONE reusable insight or operational pattern "
-          + "that would help in future interactions. Respond with ONLY the insight in 1-2 sentences. "
-          + "If nothing reusable, respond with exactly 'NONE'.";
-
-    private static final int MIN_TOOL_CALLS_FOR_EXTRACTION = 2;
-    private static final int EXTRACTION_MAX_TOKENS = 200;
-
-    /**
-     * Token budget for the context-compaction summarization call. Keep small — we only need
-     * 2-3 sentences of recap, not a full transcript.
-     */
     /** Marker prefix on the synthesized summary message so it is easy to identify in logs/UI. */
     private static final String COMPACTION_MARKER = "[Earlier context] ";
 
@@ -60,8 +40,6 @@ public class AriaService {
     private final AgentRepository agentRepository;
     private final RunRepository runRepository;
     private final IntentClassifier intentClassifier;
-    private final KnowledgeService knowledgeService;
-    private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
     private final AriaSyncRunWaiter syncRunWaiter;
 
@@ -69,16 +47,12 @@ public class AriaService {
                        AgentRepository agentRepository,
                        RunRepository runRepository,
                        IntentClassifier intentClassifier,
-                       KnowledgeService knowledgeService,
-                       SessionTrajectoryRepository trajectoryRepository,
                        ToolCallRepository toolCallRepository,
                        AriaSyncRunWaiter syncRunWaiter) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
         this.intentClassifier = intentClassifier;
-        this.knowledgeService = knowledgeService;
-        this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
         this.syncRunWaiter = syncRunWaiter;
     }
@@ -93,9 +67,6 @@ public class AriaService {
         Agent aria = agentRepository.findById(AriaConstants.ARIA_AGENT_ID)
                 .orElseThrow(() -> new IllegalStateException("Aria agent not found — ensure AriaDefaultAgentInitializer ran"));
 
-        // Restore multi-turn conversation history from prior runs with same conversationId
-        List<LlmMessage> priorMessages = loadConversationHistory(conversationId);
-
         // Build a Run — AgentLoopEngine will handle LLM calls and tool execution
         Run run = Run.builder()
                 .agentId(AriaConstants.ARIA_AGENT_ID)
@@ -106,8 +77,9 @@ public class AriaService {
                 .build();
         run = runRepository.save(run);
 
-        // Execute via unified engine with prior conversation context
-        agentLoopEngine.startRun(run.getId(), priorMessages);
+        // History has one owner: the engine loads it server-side from the run's
+        // conversation id (P5). The sync adapter delegates with no client messages.
+        agentLoopEngine.startRun(run.getId(), List.of());
 
         // Wait for the run without holding a request transaction or DB connection
         // (F6): every read is its own short transaction, the sleep is outside one.
@@ -182,172 +154,6 @@ public class AriaService {
         // Still live after the bounded sync window: report exactly what was seen.
         return "Run " + runId + " is still " + status
                 + ". It has not completed; follow it in the Runs dashboard or use streaming chat for live updates.";
-    }
-
-    String buildSystemPrompt() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("""
-                You are Aria, the AI operator assistant for the Aria Conductor.
-                You help operators manage their fleet of AI agents by providing information,
-                executing commands, and answering questions about the system.
-
-                ## Available Tools
-
-                **Agents:**
-                - list_agents: List all agents with their status
-                - get_agent: Get details for a specific agent (requires id)
-                - create_agent: Create a new AI agent (requires name, role)
-                - update_agent: Update an agent's name, description, or role (requires id)
-                - retire_agent: Retire/soft-delete an agent (requires id)
-
-                **Runs (Agent Execution):**
-                - start_run: Start a new agent run (requires agentId, prompt)
-                - list_runs: List all runs
-                - list_running_runs: List currently active runs
-                - get_run: Get run details including iterations and tokens (requires id)
-                - pause_run: Pause a running execution (requires id)
-                - resume_run: Resume a paused run, optionally with new instruction (requires id, optional instruction)
-                - cancel_run: Cancel a run (requires id)
-
-                **Approvals:**
-                - list_pending_approvals: List actions waiting for human approval. Approval decisions belong to the operator in the dashboard; you cannot decide them, and no tool lets you.
-
-                **Knowledge:**
-                - store_knowledge: Save new knowledge as PENDING (requires name, content, type). Valid types: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE
-                - list_knowledge: List all knowledge items with lifecycle status (operator view)
-                - query_knowledge: Search APPROVED knowledge only (agent-facing, returns only approved non-retired)
-                - review_knowledge: Approve or reject pending knowledge (requires id, decision, optional reason)
-                - retire_knowledge: Retire a knowledge item (requires id)
-
-                **Kanban:**
-                - create_kanban_item: Create a task item (requires title, optional priority/assignee/description)
-                - list_kanban_items: List all kanban items (optional status filter)
-                - update_kanban_item: Update an existing item's metadata — title, priority, assignee, or description (requires id). USE THIS TOOL whenever the user asks to "update", "edit", "change", "modify", "rename", or "reassign" a kanban item's fields.
-                - transition_kanban_item: Change item status (requires id, status). Valid transitions:
-                  BACKLOG -> TODO, CANCELLED
-                  TODO -> IN_PROGRESS, BACKLOG, CANCELLED
-                  IN_PROGRESS -> TODO, BACKLOG, REVIEW, DONE, CANCELLED
-                  REVIEW -> IN_PROGRESS, TODO, DONE, CANCELLED
-                  DONE, CANCELLED: terminal. BLOCKED: retired.
-
-                **Definition of Done (DoD):**
-                - init_dod: Initialize DoD tracking for a task (requires taskId)
-                - submit_dod_review: Submit a DoD stage review (requires taskId, passed, evidence)
-                - get_dod_status: Get current DoD status for a task (requires taskId)
-
-                **Reports:**
-                - generate_report: Generate a new report (requires title, description)
-                - list_reports: List all reports
-                - amend_report: Amend an existing report (requires reportId, instruction)
-
-                **Dashboard:**
-                - get_dashboard_summary: Get system overview statistics
-
-                **Workflows (multi-agent orchestration):**
-                - create_workflow: Create and START an executable BA->Dev->QA style chain (requires name + a steps[] array of {agent, promptTemplate}, or a yaml definition). USE THIS — not store_knowledge — when the user asks to build or run a multi-step / multi-agent workflow. Each step's agent may be an id, name, or role; use {previousOutput} in a step's promptTemplate to pass the prior step's result forward.
-                - get_workflow: Get a workflow chain's status and per-step progress (requires id)
-                - list_workflows: List all workflow chains
-                - cancel_workflow: Cancel a running/pending workflow (requires id)
-                - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
-                - instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
-                  optional parameters (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
-
-                - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
-                  approved "development-workflow" template and instantiate it with an issueRef parameter via
-                  instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
-                  QA verdict. Users can copy the template knowledge item and edit its YAML to customise their own workflow.
-                  NEVER use create_workflow for the BA->Dev->QA loop; always use instantiate_template.
-                  Always pass issueRepo (owner/repo) and repoUrl parameters when instantiating the development-workflow template. When a SPEC_REVIEW rejection contains user answers, carry them into the resubmission; answer trivial questions yourself from the issue body before escalating to the user.
-
-                ## Rules
-
-                IMPORTANT — knowledge governance:
-                Newly stored knowledge is always PENDING and requires human review before agents
-                can use it. Never claim that a freshly stored item is already active.
-
-                IMPORTANT — multi-step requests:
-                When the user's request implies multiple distinct actions, you MUST call every
-                required tool, one after another. Do not stop after the first tool call. Only
-                produce your final answer once every requested action has been executed.
-                If you cannot complete an action, state it clearly — never fabricate success.
-
-                IMPORTANT — sequential execution:
-                Execute ALL requested actions in the order specified. If one fails, report the
-                failure and continue with remaining actions. Never skip an action silently.
-
-                Always be helpful, concise, and proactive. Use tools to get real data rather than guessing.
-                Format responses clearly with bullet points or tables when listing items.
-                """);
-
-        // Inject approved knowledge context — single shared formatter (no longer duplicated).
-        try {
-            String knowledgePrompt = knowledgeService.buildKnowledgeContextPrompt(MAX_KNOWLEDGE_ITEMS);
-            if (!knowledgePrompt.isBlank()) {
-                sb.append(knowledgePrompt);
-            }
-        } catch (Exception e) {
-            // Never let knowledge injection crash the chat
-            log.warn("Failed to inject knowledge context: {}", e.getMessage());
-        }
-
-        return sb.toString();
-    }
-
-    /**
-     * Load conversation history from prior runs with the same conversationId.
-     */
-    private List<LlmMessage> loadConversationHistory(String conversationId) {
-        if (conversationId == null) return List.of();
-        try {
-            List<Run> priorRuns = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
-            if (priorRuns.isEmpty()) return List.of();
-            List<UUID> priorRunIds = priorRuns.stream().map(Run::getId).toList();
-            List<SessionTrajectory> trajectories = trajectoryRepository
-                    .findByRunIdInOrderByTurnNumberAsc(priorRunIds);
-            // The repository returns trajectories globally ordered by turnNumber; grouping
-            // preserves that within-run order for each run.
-            Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
-                    .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
-            // Assemble per run, in runs order (createdAt asc): a FAILED run's trajectories stay
-            // in context (so Aria knows what was asked) and its synthetic note lands directly
-            // after them, never after a later run's messages.
-            List<LlmMessage> history = new ArrayList<>();
-            for (Run run : priorRuns) {
-                for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
-                    if (!"user".equals(t.getRole()) && !"assistant".equals(t.getRole())) continue;
-                    if (t.getContent() == null || t.getContent().isBlank()) continue;
-                    history.add("user".equals(t.getRole())
-                            ? LlmMessage.user(t.getContent())
-                            : LlmMessage.assistant(t.getContent()));
-                }
-                if (run.getStatus() == RunStatus.FAILED) {
-                    history.add(LlmMessage.assistant(failedTurnNote(run.getErrorMessage())));
-                }
-            }
-            // Keep the MOST RECENT turns, not the oldest, while preserving chronological order (#36).
-            return keepMostRecent(history, 40); // ~20 user+assistant turns
-        } catch (Exception e) {
-            log.warn("Failed to load conversation history: {}", e.getMessage());
-            return List.of();
-        }
-    }
-
-    /** Max characters of a failed run's error message carried into the context note. */
-    private static final int MAX_ERROR_NOTE_CHARS = 200;
-
-    /**
-     * ONE synthetic assistant message telling the next turn the previous one failed.
-     * A null/blank error message falls back to a generic note; long messages are clipped
-     * so a runaway error never floods the context.
-     */
-    private static String failedTurnNote(String errorMessage) {
-        if (errorMessage == null || errorMessage.isBlank()) {
-            return "（系統註記：上一回合失敗，未產生回覆。）";
-        }
-        String clipped = errorMessage.length() > MAX_ERROR_NOTE_CHARS
-                ? errorMessage.substring(0, MAX_ERROR_NOTE_CHARS)
-                : errorMessage;
-        return "（系統註記：上一回合因「" + clipped + "」失敗，未產生回覆。）";
     }
 
     /**

@@ -29,8 +29,14 @@ import java.util.UUID;
  * Streaming variant of {@link AriaService#chat(AriaChatRequest)}.
  *
  * <p>Acts as a thin bridge: creates a Run, then delegates execution to
- * {@link AgentLoopEngine#startRunStream(UUID, SseEmitter, List)}.
+ * {@link AgentLoopEngine#startRunStream(UUID, SseEmitter, List, String)}.
  * The engine emits SSE events directly into the provided emitter.
+ *
+ * <p>This adapter owns no prompt: the managed Aria policy comes from
+ * {@code AriaPromptContributor}. The only system text it sends is the active
+ * slash-command skill, which the engine lifts into {@code ContextRequest.clientPolicy}
+ * (P1/P2/P5). Server-side history is loaded by the engine from the run's
+ * conversation id; the client history is only the streaming fallback.
  */
 @Slf4j
 @Service
@@ -43,20 +49,17 @@ public class AriaStreamService {
     private final AgentRepository agentRepository;
     private final RunRepository runRepository;
     private final IntentClassifier intentClassifier;
-    private final AriaService ariaService;
     private final SkillContextProvider skillContextProvider;
 
     public AriaStreamService(AgentLoopEngine agentLoopEngine,
                              AgentRepository agentRepository,
                              RunRepository runRepository,
                              IntentClassifier intentClassifier,
-                             AriaService ariaService,
                              SkillContextProvider skillContextProvider) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
         this.intentClassifier = intentClassifier;
-        this.ariaService = ariaService;
         this.skillContextProvider = skillContextProvider;
     }
 
@@ -92,7 +95,7 @@ public class AriaStreamService {
                     .build();
             run = runRepository.save(run);
 
-            List<LlmMessage> contextMessages = buildInitialContext(request);
+            List<LlmMessage> contextMessages = buildPriorContext(request);
 
             agentLoopEngine.startRunStream(run.getId(), emitter, contextMessages, intent);
 
@@ -115,20 +118,18 @@ public class AriaStreamService {
     }
 
     /**
-     * The turns that precede the current request, in order: the system prompt and the
-     * client's history. The current request itself is the run's prompt seed -- the
-     * engine persists it as the run's first timeline row and passes it to the model,
-     * so including it here as well would duplicate it in both the messages and the
-     * conversation timeline.
+     * The turns that precede the current request, in order: at most one client-policy
+     * system message for an active skill, then the client's history. The current
+     * request itself is the run's prompt seed -- the engine persists it as the run's
+     * first timeline row and passes it to the model, so including it here as well
+     * would duplicate it in both the messages and the conversation timeline.
      */
-    private List<LlmMessage> buildInitialContext(AriaChatRequest request) {
+    private List<LlmMessage> buildPriorContext(AriaChatRequest request) {
         List<LlmMessage> messages = new ArrayList<>();
 
-        String systemPrompt = ariaService.buildSystemPrompt();
         String directive = resolveSkillDirective(request.getSkillId());
-        String combined = (systemPrompt == null ? "" : systemPrompt) + directive;
-        if (!combined.isBlank()) {
-            messages.add(LlmMessage.system(combined));
+        if (!directive.isBlank()) {
+            messages.add(LlmMessage.system(directive));
         }
 
         List<AriaChatRequest.ChatMessage> clientHistory = request.getHistory();
@@ -148,7 +149,7 @@ public class AriaStreamService {
     }
 
     /**
-     * Resolve a slash-command skillId into a system-prompt suffix.
+     * Resolve a slash-command skillId into a client-policy system directive.
      * Returns "" when absent, unknown, disabled, non-SKILL stage, or template-less.
      * Governance is delegated to SkillContextProvider — never throws into the stream.
      */
@@ -157,7 +158,7 @@ public class AriaStreamService {
         try {
             return skillContextProvider.getEnabledSkillsByIds(List.of(skillId)).stream()
                     .findFirst()
-                    .map(s -> "\n\n## Active Skill: " + s.name() + "\n" + s.template())
+                    .map(s -> "## Active Skill: " + s.name() + "\n" + s.template())
                     .orElseGet(() -> {
                         log.warn("Skill {} not injectable (unknown/disabled/non-SKILL/no template)", skillId);
                         return "";

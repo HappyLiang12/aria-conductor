@@ -2,16 +2,19 @@ package io.aria.conductor.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.context.ContextManifest;
 import io.aria.conductor.execution.context.ContextManifestRepository;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
+import io.aria.conductor.memory.dto.MemoryEntityView;
 import io.aria.conductor.memory.dto.MemoryFactView;
 import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
 import io.aria.conductor.memory.dto.RecallQuery;
+import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryAction;
@@ -60,6 +63,12 @@ import java.util.UUID;
  * secret-like fact can never become the error that leaks it. The manifest tool returns
  * section ids, drops and degraded reasons only — the prompt content is never stored, and
  * the projection here is a whitelist so an unexpected field cannot travel through.
+ *
+ * <p>Every read is clamped to the deployment ceiling {@link #READ_CEILING} (INTERNAL):
+ * facts, relations and proposals above it, and entities themselves above it, are removed
+ * before the response is built. The actor of the call may only lower that ceiling — the
+ * operator credential is the strongest authority on this surface and still reads at
+ * INTERNAL — so no credential and no tool argument can widen a read.
  */
 @Component
 @RequiredArgsConstructor
@@ -76,6 +85,13 @@ public class MemoryTools implements McpTool {
 
     /** Provenance recorded when the caller supplies none. */
     private static final String DEFAULT_SOURCE_REF = "mcp:memory";
+
+    /**
+     * The deployment ceiling of every memory read on this surface: worker-facing data
+     * stops at INTERNAL (spec §9). It is a constant, not a caller input — an actor can
+     * only lower it, never raise it.
+     */
+    static final Sensitivity READ_CEILING = Sensitivity.INTERNAL;
 
     private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
 
@@ -123,9 +139,18 @@ public class MemoryTools implements McpTool {
     public String recallMemory(
             @ToolParam(description = "Text to recall memory for (goal or conversation excerpt)") String text,
             @ToolParam(description = "Workspace or repository reference that names an entity", required = false)
-            String focusRef) {
+            String focusRef,
+            ToolContext toolContext) {
         try {
-            return ToolResponses.ok(recall.recall(new RecallQuery(text, null, focusRef)));
+            Sensitivity ceiling = readCeiling(actorOf(toolContext));
+            RecallResult result = recall.recall(new RecallQuery(text, ceiling, focusRef));
+            List<MemoryEntityView> entities = safe(result.entities()).stream()
+                    .filter(entity -> withinCeiling(entity.sensitivity(), ceiling))
+                    .toList();
+            List<MemoryFactView> facts = safe(result.facts()).stream()
+                    .filter(fact -> withinCeiling(fact.sensitivity(), ceiling))
+                    .toList();
+            return ToolResponses.ok(new RecallResult(entities, facts, result.truncated()));
         } catch (MemoryValidationException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -134,14 +159,20 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_entities",
-            description = "List memory entities. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200.")
+            description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200.")
     public String listMemoryEntities(
             @ToolParam(description = "Entity kind or blank", required = false) String kind,
             @ToolParam(description = "ACTIVE, MERGED or RETIRED; default ACTIVE", required = false) String status,
-            @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit) {
+            @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit,
+            ToolContext toolContext) {
         try {
+            Sensitivity ceiling = readCeiling(actorOf(toolContext));
             EntityStatus parsed = status == null || status.isBlank() ? null : parseEntityStatus(status);
-            return ToolResponses.ok(queries.listEntities(kind, parsed, limit == null ? 0 : limit));
+            List<MemoryEntityView> entities = safe(queries.listEntities(kind, parsed, limit == null ? 0 : limit))
+                    .stream()
+                    .filter(entity -> withinCeiling(entity.sensitivity(), ceiling))
+                    .toList();
+            return ToolResponses.ok(entities);
         } catch (MemoryValidationException | IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -150,12 +181,24 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "get_memory_entity",
-            description = "Get one memory entity with its current ACTIVE facts: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity.")
-    public String getMemoryEntity(@ToolParam(description = "Memory entity id (UUID)") UUID entityId) {
+            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity.")
+    public String getMemoryEntity(
+            @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
+            ToolContext toolContext) {
         try {
+            Sensitivity ceiling = readCeiling(actorOf(toolContext));
+            MemoryEntityView entity = queries.getEntity(entityId);
+            if (!withinCeiling(entity.sensitivity(), ceiling)) {
+                // Over-ceiling entities are indistinguishable from missing ones: the
+                // refusal must not confirm that a CONFIDENTIAL entity exists.
+                throw new MemoryNotFoundException("memory entity " + entityId + " not found");
+            }
+            List<MemoryFactView> facts = safe(queries.currentFacts(entityId)).stream()
+                    .filter(fact -> withinCeiling(fact.sensitivity(), ceiling))
+                    .toList();
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("entity", queries.getEntity(entityId));
-            payload.put("facts", queries.currentFacts(entityId));
+            payload.put("entity", entity);
+            payload.put("facts", facts);
             return ToolResponses.ok(payload);
         } catch (MemoryNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
@@ -220,12 +263,17 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_proposals",
-            description = "List memory proposals awaiting review: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING.")
+            description = "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING.")
     public String listMemoryProposals(
-            @ToolParam(description = "PENDING, ACTIVE or RETIRED; default PENDING", required = false) String status) {
+            @ToolParam(description = "PENDING, ACTIVE or RETIRED; default PENDING", required = false) String status,
+            ToolContext toolContext) {
         try {
+            Sensitivity ceiling = readCeiling(actorOf(toolContext));
             FactStatus parsed = status == null || status.isBlank() ? FactStatus.PENDING : parseFactStatus(status);
-            return ToolResponses.ok(proposals.listProposals(parsed));
+            List<MemoryProposalView> inbox = safe(proposals.listProposals(parsed)).stream()
+                    .filter(proposal -> withinCeiling(proposal.sensitivity(), ceiling))
+                    .toList();
+            return ToolResponses.ok(inbox);
         } catch (MemoryValidationException | IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -288,6 +336,59 @@ public class MemoryTools implements McpTool {
         } catch (Exception e) {
             return ToolResponses.error("MANIFEST_READ_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }
+    }
+
+    /**
+     * The ceiling one read applies: the deployment ceiling, lowered by the caller's own
+     * grant when it is narrower. Both authorities hold the deployment ceiling today, so a
+     * run-scoped worker, the operator credential and the anonymous auth-mode=none session
+     * read identically — the clamp is the invariant, and it is the only place a future
+     * per-actor grant could narrow a read.
+     */
+    static Sensitivity readCeiling(ActorPrincipal actor) {
+        Sensitivity grant = actor == null ? READ_CEILING : grantOf(actor);
+        return grant.ordinal() < READ_CEILING.ordinal() ? grant : READ_CEILING;
+    }
+
+    /** The reviewed grant table: no authority holds more than the deployment ceiling yet. */
+    private static Sensitivity grantOf(ActorPrincipal actor) {
+        return switch (actor.role()) {
+            case OPERATOR, WORKER -> READ_CEILING;
+        };
+    }
+
+    /**
+     * Best-effort transport actor. A read does not require one — auth-mode=none publishes
+     * no actor and the read still runs at the deployment ceiling — and identity never
+     * comes from the tool arguments, so an absent actor cannot widen or narrow the result.
+     */
+    private static ActorPrincipal actorOf(ToolContext toolContext) {
+        if (toolContext == null) {
+            return null;
+        }
+        try {
+            return McpActorContext.require(toolContext);
+        } catch (SecurityException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Fail closed: an unlabelled or unreadable sensitivity is treated as RESTRICTED, so
+     * missing metadata can never widen what a read returns.
+     */
+    private static boolean withinCeiling(String sensitivity, Sensitivity ceiling) {
+        Sensitivity effective;
+        try {
+            effective = sensitivity == null ? Sensitivity.RESTRICTED : Sensitivity.valueOf(sensitivity);
+        } catch (IllegalArgumentException e) {
+            effective = Sensitivity.RESTRICTED;
+        }
+        return effective.ordinal() <= ceiling.ordinal();
+    }
+
+    private static <T> List<T> safe(List<T> rows) {
+        return rows == null ? List.of() : rows;
     }
 
     /**

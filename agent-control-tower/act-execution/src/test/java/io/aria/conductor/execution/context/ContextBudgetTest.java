@@ -82,4 +82,61 @@ class ContextBudgetTest {
         assertThat(result.history()).hasSize(3);
         assertThat(result.dropped()).isEmpty();
     }
+
+    @Test
+    void scalesOptionalSectionsProportionallyBeforeDroppingAnySection() {
+        ContextProperties properties = new ContextProperties();
+        String identity = "operator";
+        String policy = "be safe";
+        String skills = lines("a", 10);
+        String knowledge = lines("k", 6);
+        List<ContextSection> sections = List.of(
+                section("identity", "Identity", identity),
+                section("policy", "Policy", policy),
+                section("skills", "Skills", skills),
+                section("knowledge:1", "Knowledge", knowledge));
+
+        // The four blocks render 403 characters; the 300-character cap has to be
+        // reclaimed from the two optional sections alone.
+        BudgetResult result = new ContextBudget(properties, 300)
+                .apply(sections, List.of(), new ArrayList<>());
+
+        assertThat(result.dropped()).isEmpty();
+        assertThat(result.sections()).extracting(ContextSection::id)
+                .containsExactly("identity", "policy", "skills", "knowledge:1");
+        assertThat(result.sections().get(0).content()).isEqualTo(identity);
+        assertThat(result.sections().get(0).truncated()).isFalse();
+        assertThat(result.sections().get(1).content()).isEqualTo(policy);
+        assertThat(result.sections().get(1).truncated()).isFalse();
+        // Both optional sections were scaled, neither was dropped.
+        assertThat(result.sections().subList(2, 4)).allSatisfy(scaled -> {
+            assertThat(scaled.truncated()).isTrue();
+            assertThat(scaled.content()).endsWith("- ... (truncated)").isNotBlank();
+        });
+        assertThat(ContextBudget.renderedChars(result.sections())).isLessThanOrEqualTo(300);
+    }
+
+    @Test
+    void aSingleLineOptionalSectionIsNotScaledIntoAHalfLine() {
+        ContextProperties properties = new ContextProperties();
+        List<ContextSection> sections = List.of(
+                section("identity", "Identity", "operator"),
+                section("memory", "Memory", "one single fact line"));
+
+        BudgetResult result = new ContextBudget(properties, 10)
+                .apply(sections, List.of(), new ArrayList<>());
+
+        // There is no line boundary to shrink to, so the drop order removes the
+        // whole section instead of emitting a half line.
+        assertThat(result.sections()).extracting(ContextSection::id).containsExactly("identity");
+        assertThat(result.dropped()).contains("memory:budget");
+    }
+
+    private static String lines(String fill, int count) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            text.append(fill.repeat(20)).append('\n');
+        }
+        return text.toString();
+    }
 }

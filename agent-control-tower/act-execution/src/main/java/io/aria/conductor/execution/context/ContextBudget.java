@@ -19,10 +19,11 @@ record BudgetResult(
 
 /**
  * Fits one envelope into {@code maxChars} (spec §8.2 steps 5-6): per-section
- * caps first, then the history cap (oldest-first), then history trimmed to the
+ * caps first, then the history cap (oldest-first), then the optional sections
+ * scaled proportionally to reclaim an overflow, then history trimmed to the
  * global cap, then the optional groups dropped in the fixed order
  * {@code workspace, skills, knowledge, memory}. Identity, policy and goal are
- * never dropped.
+ * never scaled and never dropped.
  *
  * <p>The budget counts the characters actually sent: a section costs its
  * rendered block and a history message costs its content.
@@ -60,6 +61,34 @@ final class ContextBudget {
         }
 
         int total = chars(capped, kept);
+        // Spec §8.2 step 5: before anything is dropped, shrink the optional
+        // sections proportionally to reclaim the overflow. Required sections
+        // (identity, policy, goal) and history stay untouched here.
+        while (total > maxChars) {
+            List<ContextSection> scalable = capped.stream().filter(ContextBudget::scalable).toList();
+            int pool = scalable.stream().mapToInt(section -> section.content().length()).sum();
+            if (pool == 0) {
+                break;
+            }
+            int overflow = total - maxChars;
+            List<ContextSection> scaled = new ArrayList<>(capped.size());
+            for (ContextSection section : capped) {
+                if (!scalable(section)) {
+                    scaled.add(section);
+                    continue;
+                }
+                int share = (int) Math.ceil((double) overflow * section.content().length() / pool);
+                scaled.add(truncate(section, section.content().length() - share));
+            }
+            capped = scaled;
+            int reclaimed = chars(capped, kept);
+            if (reclaimed >= total) {
+                // Nothing left to reclaim line-safely: the drop order takes over.
+                break;
+            }
+            total = reclaimed;
+        }
+
         while (total > maxChars && !kept.isEmpty()) {
             kept.remove(0);
             // Spec §6.6/§8.2 step 8: a drop is recorded by id and index, never by prompt text.
@@ -88,6 +117,19 @@ final class ContextBudget {
         int dot = id.indexOf('.');
         int end = colon < 0 ? dot : (dot < 0 ? colon : Math.min(colon, dot));
         return end < 0 ? id : id.substring(0, end);
+    }
+
+    /** Never scaled, never dropped: the required sections of spec §8.2 step 6. */
+    private static final List<String> REQUIRED_GROUPS = List.of("identity", "policy", "goal");
+
+    /**
+     * A section the proportional pass may shrink: optional and multi-line. A
+     * single-line section has no line boundary to shrink to, so scaling it would
+     * mean cutting it mid-line; the drop order decides its fate instead.
+     */
+    private static boolean scalable(ContextSection section) {
+        return !REQUIRED_GROUPS.contains(group(section.id()))
+                && section.content().indexOf('\n') >= 0;
     }
 
     /**

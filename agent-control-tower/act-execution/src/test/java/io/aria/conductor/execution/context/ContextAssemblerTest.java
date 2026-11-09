@@ -98,8 +98,11 @@ class ContextAssemblerTest {
         assertThat(result.history()).hasSize(1);
         assertThat(result.history().get(0).content()).isEqualTo("newest");
         assertThat(result.systemText()).contains("## identity");
-        assertThat(result.dropped()).contains("history:oldest");
+        assertThat(result.dropped()).contains("history:dropped:0");
         assertThat(result.dropped()).doesNotContain("memory:budget");
+        // Spec §6.6/§8.2 step 8: a drop reason is an id and an index, never prompt text.
+        assertThat(result.dropped()).noneMatch(reason ->
+                reason.contains("oldest") || reason.contains("newest"));
     }
 
     @Test

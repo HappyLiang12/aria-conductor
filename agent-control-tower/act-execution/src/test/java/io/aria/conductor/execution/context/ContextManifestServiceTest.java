@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * The manifest is the provenance record of one assembly (spec §6.6, §8.5): one
@@ -83,9 +85,38 @@ class ContextManifestServiceTest extends DataJpaTestBase {
         assertThat(row.getCreatedAt()).isNotNull();
     }
 
+    @Test
+    void aDroppedHistoryMessageIsPersistedAsAContentFreeMarker() {
+        UUID runId = UUID.randomUUID();
+        ContextManifestService service = new ContextManifestService(manifests, mapper);
+        ProviderCeilingResolver ceilings = mock(ProviderCeilingResolver.class);
+        when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
+        ContextAssembler assembler = new ContextAssembler(List.of(new FakeContributor("goal", 30,
+                true, true, List.of(new ContextSection("goal", "Goal", "0123456789",
+                Sensitivity.INTERNAL, List.of(), false, null)), null)), ceilings, new ContextProperties());
+        ContextRequest request = request(runId, 0, 60);
+
+        AssembledContext assembled = assembler.assemble(request, List.of(
+                new ContextMessage("user", "oldest operator turn", null),
+                new ContextMessage("assistant", "newest assistant turn", null)));
+        service.record(request, assembled);
+        flushAndClear();
+
+        assertThat(assembled.dropped()).contains("history:dropped:0");
+        assertThat(assembled.dropped()).noneMatch(reason ->
+                reason.contains("operator turn") || reason.contains("assistant turn"));
+        ContextManifest row = manifests.findByRunIdOrderByTurnNumberAsc(runId).get(0);
+        assertThat(row.getDroppedJson()).contains("history:dropped:0")
+                .doesNotContain("oldest", "newest", "operator turn", "assistant turn");
+    }
+
     private static ContextRequest request(UUID runId, int turnNumber) {
+        return request(runId, turnNumber, 24_000);
+    }
+
+    private static ContextRequest request(UUID runId, int turnNumber, int maxChars) {
         return new ContextRequest(runId, "c", UUID.randomUUID(), ContextAdapter.SYNC, turnNumber,
-                "ship it", null, Sensitivity.RESTRICTED, 24_000, null, "", List.of());
+                "ship it", null, Sensitivity.RESTRICTED, maxChars, null, "", List.of());
     }
 
     private static AssembledContext assembled(String sectionId, int estimatedTokens) {

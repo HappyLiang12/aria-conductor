@@ -48,10 +48,12 @@ final class ContextBudget {
         }
 
         List<ContextMessage> kept = new ArrayList<>(history);
+        int nextOriginalIndex = 0;
         int total = chars(capped, kept);
         while (total > maxChars && !kept.isEmpty()) {
-            ContextMessage removed = kept.remove(0);
-            dropped.add("history:" + removed.content());
+            kept.remove(0);
+            // Spec §6.6/§8.2 step 8: a drop is recorded by id and index, never by prompt text.
+            dropped.add("history:dropped:" + nextOriginalIndex++);
             total = chars(capped, kept);
         }
 

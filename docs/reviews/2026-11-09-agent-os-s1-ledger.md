@@ -422,6 +422,22 @@ Verify the run's provider id is the row that was updated; the default provider s
   get_context_manifest is global metadata. Lane I was APPROVED WITH FIXES: the ArchUnit
   canary did not exercise the real boundary selectors (fixed with a fixture-based
   violation proof), and the purge test lacked a pre-purge existence assertion.
+- 2026-11-10: Gate B close. Live memory acceptance is VERIFIED at `7f6647ab` (fresh H2,
+  real opencode HOST core): teach/recall provenance, restart persistence, six runs each
+  with one manifest row and zero prompt/fact text, a real worker-actor MCP
+  `remember_fact` PENDING proposal (EXTRACTION, run id in the assertion) absent until an
+  operator approval and present afterwards, and a RESTRICTED fact blocked at INTERNAL then
+  present after the active provider ceiling was raised. The full gate at `7f6647ab` was
+  red on F-B1 only: lane I's shared cleanup truncated V81's `context_manifests` inside the
+  sole V65-pinned IT. Fix-b (e36958cb) split the V81 truncation into
+  `cleanup-context-manifests.sql`, executed by full-schema consumers only; the pinned IT
+  keeps the pre-V81 script. Final full gate at `e36958cb` is green: surefire 2919/0/0/8
+  (common 145, agent 314, execution 1425, knowledge 269/4, memory 162, dashboard-api 122,
+  aria 178/4, mcp 209, app 95), failsafe 263/0/0/6 (agent 13, execution 97/6, knowledge 12,
+  mcp 18, app 123), dashboard 662/662 plus build, mcp-server 157/157, bridge 62/62. Gate B
+  verdict: PASS with the residuals recorded in the QA report; the live SDD deliverable is
+  still blocked by the pre-existing read-only HOST toolset and the podman `memory.max`
+  defect, and MariaDB is unverified (H2 only).
 
 - 2026-11-10: Gate B full gate red. `ae0c3aeb` added `TRUNCATE TABLE context_manifests`
   to the shared test cleanup script, but `ReviewAskRepairMigrationIntegrationTest` pins

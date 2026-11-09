@@ -156,15 +156,6 @@ public class AriaService {
                 + ". It has not completed; follow it in the Runs dashboard or use streaming chat for live updates.";
     }
 
-    /**
-     * Keeps the most recent {@code max} messages while preserving chronological order (#36).
-     * Prevents long conversations from dropping their newest turns (the old code kept the oldest).
-     */
-    static List<LlmMessage> keepMostRecent(List<LlmMessage> history, int max) {
-        if (history.size() <= max) return history;
-        return new java.util.ArrayList<>(history.subList(history.size() - max, history.size()));
-    }
-
     /** One-click synthesis template (Feature B4): fixed header, one line per child, fixed tail. */
     private static final String SYNTHESIS_PROMPT_HEADER =
             "以下子任務已完成，請彙整結果並給我建議報告與下一步：";

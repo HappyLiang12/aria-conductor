@@ -7,7 +7,6 @@ import io.aria.conductor.common.event.KnowledgeSubmittedEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.*;
-import io.aria.conductor.common.service.KnowledgeContextProvider;
 import io.aria.conductor.knowledge.dto.*;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
@@ -26,7 +25,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
-public class KnowledgeService implements KnowledgeContextProvider {
+public class KnowledgeService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeService.class);
     private static final String INITIAL_VERSION = "v0.1.0";
@@ -412,30 +411,15 @@ public class KnowledgeService implements KnowledgeContextProvider {
     }
 
     /**
-     * The description carried into a knowledge section, clipped to 500 characters
-     * so one verbose item cannot flood the envelope.
+     * The description carried into a knowledge section, clipped to at most 500 characters
+     * (ellipsis included) so one verbose item cannot flood the envelope.
      */
     private static String clippedDescription(KnowledgeItem item) {
         String content = item.getDescription() != null ? item.getDescription() : "";
         if (content.length() > 500) {
-            content = content.substring(0, 500) + "...";
+            content = content.substring(0, 497) + "...";
         }
         return content;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public String buildKnowledgeContextPrompt(int limit) {
-        List<KnowledgeItem> approved = getApprovedKnowledgeContext(limit);
-        if (approved == null || approved.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder("## Knowledge Context\n");
-        for (KnowledgeItem item : approved) {
-            sb.append("- **").append(item.getName()).append("** (")
-              .append(item.getType()).append("): ").append(clippedDescription(item)).append("\n");
-        }
-        return sb.toString();
     }
 
     @Transactional(readOnly = true)

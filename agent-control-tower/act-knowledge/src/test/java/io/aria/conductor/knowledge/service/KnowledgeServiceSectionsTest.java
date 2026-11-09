@@ -69,6 +69,8 @@ class KnowledgeServiceSectionsTest {
             assertThat(section.sensitivity()).isEqualTo(Sensitivity.INTERNAL);
             assertThat(section.sourceIds()).hasSize(1);
         });
+        assertThat(sections).extracting(section -> section.sourceIds().get(0))
+                .containsExactly(a.getId().toString(), b.getId().toString());
         verify(itemRepository).findByStatusOrderByUpdatedAtDesc(eq(KnowledgeStatus.APPROVED), any());
     }
 
@@ -94,7 +96,8 @@ class KnowledgeServiceSectionsTest {
 
         ContextSection section = knowledgeService.buildKnowledgeSections(5, Sensitivity.PUBLIC).get(0);
 
-        assertThat(section.content()).isEqualTo("X".repeat(500) + "...");
+        assertThat(section.content()).isEqualTo("X".repeat(497) + "...");
+        assertThat(section.content()).hasSize(500);
     }
 
     @Test

@@ -2281,7 +2281,7 @@ curl -s "$BASE/api/v1/memory/recall?q=timezone"
 
 ```bash
 curl -s "$BASE/api/v1/memory/recall?q=timezone%20Asia/Hong_Kong"
-curl -s "$BASE/api/v1/runs/<runId>/context-manifest"
+curl -s "$BASE/api/v1/memory/runs/<runId>/context-manifest"
 ```
 4. Create a PENDING proposal through `remember_fact` with a worker actor; assert it is
    absent from the next prompt; approve it via `decide_memory_proposal`; assert it appears

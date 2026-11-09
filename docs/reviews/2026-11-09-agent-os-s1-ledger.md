@@ -94,6 +94,10 @@ Verify the run's provider id is the row that was updated; the default provider s
 - 2026-11-09: the hosted unit matrix listed modules explicitly and omitted the new
   act-memory module, so its tests would never run on hosted CI; a `memory` matrix group
   was added at a9d76c89 before Wave 0 merges so Gate A/B evidence covers the module.
+- 2026-11-09: the plan's Gate B example called `GET /api/v1/runs/{id}/context-manifest`,
+  which contradicts spec section 9 (`/api/v1/memory/runs/{id}/context-manifest`). The
+  spec is authoritative; the plan example was corrected and C2a must implement the
+  spec path. The W0B repository comment already matches the spec.
 
 ## Evidence to fill at each boundary
 

@@ -210,6 +210,20 @@ HEAD `a6fcfec4`, tree clean. Full transcript:
   dashboard 662/662 (79 files) and `pnpm build` exit 0, MCP server 157/157 (20 files).
 - Lane B and D are already merged at this head (`a6fcfec4`); the plan's merge order is
   therefore ahead of the gate. Gate A must go green before Gate B.
+- **Live SDD retry (2026-11-10): opencode launch RESOLVED, scenario BLOCKED.** With
+  `ARIA_CORES_OPENCODE_EXECUTABLE` pointing at the native 1.14.31 exe, the fat jar at
+  `1fb8f542` launched ten run-owned cores, the trusted-launch check refused none, and the
+  only approval decision returned 200. Chain `588bcde6-6c48-4713-8c7c-0c7d248df72b` on issue
+  #112 ran BA → DEV → QA four times (nine runs, 75,918 tokens) and ended FAILED
+  (`SDD loop exhausted: … attempts=3`): the governed opencode document denies
+  `edit`/`write`/`patch`/`bash` (`OpenCodeCoreAdapter.java:126-129`) and the platform MCP is
+  wired only for the Aria agent (`RunMcpWiring.java:51`), so every DEV/QA run reported a
+  read-only toolset, DEV delivered no code, and each QA verdict was DEFECT. `context_manifests`
+  has exactly one row per executed turn (ten rows; `group by run_id` → 1/2/2). Assertions
+  `StopProof[allWritersStopped=false]` (0 occurrences) and no-500-on-approval both hold. The
+  live scenario is blocked by the SDD toolset, not by opencode; a COMPLETED chain with a
+  delivered change is NOT VERIFIED. Full transcript in
+  `docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md` §6.
 
 Gate B (after B, D, C2a, C2b, I merge):
 
@@ -303,6 +317,13 @@ Verify the run's provider id is the row that was updated; the default provider s
   than at links.save; concurrency is proven with mocks, not a real constraint
   translation; MariaDB execution of V82 is unverified (H2 only). V82 is lane-local, so
   editing it breaks no released checksum.
+- 2026-11-10: Gate A live retry outcome. opencode HOST is verified live on this host
+  (native 1.14.31 executable, trusted-launch check passed, real turns). The live SDD
+  scenario is still not a gateable pass: the governed read-only toolset for non-Aria agents
+  prevents DEV/QA from doing their steps, independent of S1. Gate A's live arm therefore
+  stays BLOCKED; the fix belongs to the core tool surface (platform MCP for worker agents or
+  a reviewed write policy), not to the S1 lanes, and no qoder fallback or simulation was
+  used.
 
 ## Evidence to fill at each boundary
 

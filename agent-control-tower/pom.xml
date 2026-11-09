@@ -22,6 +22,7 @@
         <module>act-agent</module>
         <module>act-execution</module>
         <module>act-knowledge</module>
+        <module>act-memory</module>
         <module>act-aria</module>
         <module>act-dashboard-api</module>
         <module>act-mcp</module>
@@ -79,6 +80,11 @@
             <dependency>
                 <groupId>io.aria.conductor</groupId>
                 <artifactId>act-knowledge</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.aria.conductor</groupId>
+                <artifactId>act-memory</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

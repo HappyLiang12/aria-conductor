@@ -30,7 +30,7 @@ when its paths change.
 | A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | IN_PROGRESS | - | - | no |
 | A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IMPLEMENTED, IN_REVIEW | 2129a64a, b3849867, 2dc3a0ee | IN_REVIEW | no |
 | B | `lane/agent-os-b` | pending | PENDING | - | - | no |
-| C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IN_PROGRESS | - | - | no |
+| C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IMPLEMENTED, IN_REVIEW | 34db1ac7 | IN_REVIEW | no |
 | D | `lane/agent-os-d` | pending | PENDING | - | - | no |
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
@@ -81,6 +81,22 @@ when its paths change.
   writes the ceiling stays documented as SQL-only in S1 (spec section 9 has no such
   endpoint); the spec's `estimatedChars`/`estimatedTokens` "field" wording is textual
   drift because both are derived accessors in the approved plan.
+
+### C handoff (2026-11-09)
+
+- Commit 34db1ac7: ToolCatalog with 59 descriptors (57 registered MCP names plus the two
+  core-native read-only tools WebSearch/WebFetch), registry delegation, full name→policy
+  pin, auto-approve invariants, inventory parity, live endpoint parity. Gate: act-mcp
+  181/0/0/0, whole chain BUILD SUCCESS; endpoint IT 2/0/0/0; a policy-swap mutant reddens
+  three assertions and is reverted.
+- Deviation: `McpProperties` lives in act-execution, so the lane could not make its
+  default equal the catalog without touching another module; it kept the 26-name default
+  and added the two native tools to the catalog as WORKER_READ instead. Consequence:
+  `policyOf("WebSearch"/"WebFetch")` changes from GATED to WORKER_READ, and A1's
+  `ToolCatalogContextContributor` must render the full descriptor set minus OPERATOR_ONLY
+  (59), so the generated prompt lists the native read tools that operators already
+  auto-approve. The reviewer is asked to check for any production call site that resolves
+  those names through `policyOf`.
 
 ### A2 handoff (2026-11-09)
 

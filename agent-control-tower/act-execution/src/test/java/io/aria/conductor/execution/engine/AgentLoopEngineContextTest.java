@@ -96,6 +96,8 @@ class AgentLoopEngineContextTest {
 
     private Agent agent;
     private final Map<UUID, Run> runsById = new java.util.HashMap<>();
+    private final Map<UUID, List<io.aria.conductor.common.model.SessionTrajectory>> trajectoryRows =
+            new java.util.HashMap<>();
     private final List<CoreTask> dispatched = new CopyOnWriteArrayList<>();
 
     @BeforeEach
@@ -122,7 +124,8 @@ class AgentLoopEngineContextTest {
             }
             return 1;
         });
-        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(any())).thenReturn(List.of());
+        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(any())).thenAnswer(invocation ->
+                trajectoryRows.getOrDefault(invocation.getArgument(0), List.of()));
         when(trajectoryRepository.findMaxTurnNumberByRunId(any())).thenReturn(0);
         when(approvalRepository.findByRunIdAndStatusAndSource(any(), any(), any())).thenReturn(List.of());
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreLauncher);
@@ -229,7 +232,102 @@ class AgentLoopEngineContextTest {
         verify(coreLauncher, times(1)).execute(any(), any(), any());
     }
 
+    @Test
+    void theCurrentRequestEntersOnceThroughTheGoalSectionAndTheSeedChannel() {
+        when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
+        ContextAssembler assembler = new ContextAssembler(
+                List.of(new GoalContextContributor()), ceilings, new ContextProperties());
+        Run run = run("c", "do the work");
+
+        start(engine(assembler, loader(), manifestService), run.getId(), List.of(LlmMessage.user("hello")));
+
+        ContextTaskView task = awaitTask();
+        assertThat(task.task.systemPrompt()).contains("## Goal\ndo the work");
+        assertThat(task.task.userPrompt()).isEqualTo("do the work");
+        assertThat(task.task.history()).extracting(LlmMessage::content)
+                .containsExactly("hello");
+        int inSystem = occurrences(task.task.systemPrompt(), "do the work");
+        int inHistory = task.task.history().stream()
+                .mapToInt(message -> occurrences(message.content(), "do the work")).sum();
+        assertThat(inSystem).isEqualTo(1);
+        assertThat(inSystem + inHistory).isEqualTo(1);
+    }
+
+    @Test
+    void aStaleUserTurnCanNeverBeMistakenForTheCurrentRequest() {
+        when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
+        ContextAssembler assembler = new ContextAssembler(
+                List.of(new GoalContextContributor()), ceilings, new ContextProperties());
+        Run run = run("c", "do the work");
+        // A retried/resumed run's own timeline: its seed row, a partial answer and
+        // a later user row (an approval answer). The last user row is NOT the request.
+        trajectoryRows.put(run.getId(), List.of(
+                trajectory(1, "user", "do the work"),
+                trajectory(2, "assistant", "partial answer"),
+                trajectory(3, "user", "approve the tool call")));
+
+        start(engine(assembler, loader(), manifestService), run.getId(), List.of(LlmMessage.user("hello")));
+
+        ContextTaskView task = awaitTask();
+        assertThat(task.task.userPrompt()).isEqualTo("do the work");
+        assertThat(task.task.history()).extracting(LlmMessage::content)
+                .containsExactly("hello", "partial answer", "approve the tool call");
+        assertThat(task.task.history()).extracting(LlmMessage::content).doesNotContain("do the work");
+        assertThat(occurrences(task.task.systemPrompt(), "do the work")).isEqualTo(1);
+    }
+
+    @Test
+    void aClientTranscriptThatEchoesTheCurrentRequestAtItsTailIsDropped() {
+        when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
+        ContextAssembler assembler = new ContextAssembler(
+                List.of(new GoalContextContributor()), ceilings, new ContextProperties());
+        Run run = run("c", "do the work");
+
+        start(engine(assembler, loader(), manifestService), run.getId(),
+                List.of(LlmMessage.user("hello"), LlmMessage.user("do the work")));
+
+        ContextTaskView task = awaitTask();
+        assertThat(task.task.history()).extracting(LlmMessage::content).containsExactly("hello");
+        assertThat(task.task.userPrompt()).isEqualTo("do the work");
+        assertThat(occurrences(task.task.systemPrompt(), "do the work")).isEqualTo(1);
+    }
+
+    @Test
+    void aRunWithoutASeedHasAnEmptyUserPrompt() {
+        when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
+        ContextAssembler assembler = new ContextAssembler(
+                List.of(new GoalContextContributor()), ceilings, new ContextProperties());
+        Run run = run("c", null);
+
+        start(engine(assembler, loader(), manifestService), run.getId(), List.of());
+
+        ContextTaskView task = awaitTask();
+        assertThat(task.task.userPrompt()).isEmpty();
+        assertThat(task.task.history()).isEmpty();
+    }
+
     // ---- scaffolding ----
+
+    private static int occurrences(String text, String needle) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length())) {
+            count++;
+        }
+        return count;
+    }
+
+    private static io.aria.conductor.common.model.SessionTrajectory trajectory(
+            int turn, String role, String content) {
+        return io.aria.conductor.common.model.SessionTrajectory.builder()
+                .runId(UUID.randomUUID())
+                .turnNumber(turn)
+                .role(role)
+                .content(content)
+                .build();
+    }
 
     private AgentLoopEngine engine(ContextAssembler assembler, ConversationHistoryLoader loader,
                                    ContextManifestService manifests) {

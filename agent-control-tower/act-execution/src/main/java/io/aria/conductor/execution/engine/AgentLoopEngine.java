@@ -473,14 +473,20 @@ public class AgentLoopEngine {
         return TERMINAL_STATUSES.contains(status);
     }
 
-    /** The accepted conversation as the core task: system material, history, current request. */
+    /**
+     * The accepted conversation as the core task: system material, history, current request.
+     *
+     * <p>Spec §8.3: the current request enters as the run's prompt seed, never as
+     * the last user turn of a transcript. A stale prior user row (an approval
+     * answer, an earlier instruction) sits in the history where it belongs and can
+     * never be mistaken for this turn's request.
+     */
     private CoreTask coreTask(RunContext ctx, ContextAdapter adapter) {
+        Run run = runRepository.findById(ctx.getRunId()).orElse(null);
+        String userPrompt = run == null || run.getPromptSeed() == null ? "" : run.getPromptSeed();
         StringBuilder system = new StringBuilder();
         List<LlmMessage> history = new ArrayList<>();
-        String userPrompt = "";
-        List<LlmMessage> messages = buildMessages(ctx, adapter);
-        for (int i = 0; i < messages.size(); i++) {
-            LlmMessage message = messages.get(i);
+        for (LlmMessage message : buildMessages(ctx, adapter)) {
             String role = message.role() == null ? "" : message.role();
             if ("system".equals(role)) {
                 if (message.content() != null && !message.content().isBlank()) {
@@ -489,22 +495,11 @@ public class AgentLoopEngine {
                     }
                     system.append(message.content());
                 }
-            } else if ("user".equals(role) && i == lastUserIndex(messages)) {
-                userPrompt = message.content() == null ? "" : message.content();
             } else {
                 history.add(message);
             }
         }
         return new CoreTask(system.toString(), List.copyOf(history), userPrompt);
-    }
-
-    private static int lastUserIndex(List<LlmMessage> messages) {
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            if ("user".equals(messages.get(i).role())) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     /** Waits (bounded) for a control acknowledgement; a missing one is a refused control, never a success. */
@@ -1054,6 +1049,7 @@ public class AgentLoopEngine {
             if ("system".equals(role)) continue;
             fallback.add(new ContextMessage(role, prior.content(), prior.toolCallId()));
         }
+        dropTrailingEchoOfTheRequest(fallback, run);
 
         ContextRequest request = new ContextRequest(
                 ctx.getRunId(), ctx.getConversationId(), ctx.getAgentId(), adapter,
@@ -1081,10 +1077,20 @@ public class AgentLoopEngine {
         List<SessionTrajectory> history = trajectoryRepository
                 .findByRunIdOrderByTurnNumberAsc(ctx.getRunId());
 
+        // A run's own seed is persisted as its first user row for the conversation
+        // timeline; the Goal section and the prompt-seed channel already carry it,
+        // so it is never replayed as history (spec §8.2 step 4, §8.3).
+        String seed = run == null ? null : run.getPromptSeed();
+        boolean seedRowPending = seed != null && !seed.isBlank();
+
         for (SessionTrajectory t : history) {
             if ("system".equals(t.getRole())) {
                 messages.add(LlmMessage.system(t.getContent()));
             } else if ("user".equals(t.getRole())) {
+                if (seedRowPending && seed.equals(t.getContent())) {
+                    seedRowPending = false;
+                    continue;
+                }
                 messages.add(LlmMessage.user(t.getContent()));
             } else if ("assistant".equals(t.getRole())) {
                 // Reconstruct tool_calls from stored JSON for multi-iteration DeepSeek compatibility
@@ -1098,14 +1104,23 @@ public class AgentLoopEngine {
             }
         }
 
-        // If no history, add the prompt seed from the run
-        if (history.isEmpty()) {
-            if (run != null && run.getPromptSeed() != null) {
-                messages.add(LlmMessage.user(run.getPromptSeed()));
-            }
-        }
-
         return messages;
+    }
+
+    /**
+     * A client transcript can echo the current request as its newest turn. The
+     * request already enters through the Goal section and the seed channel, so a
+     * trailing copy is dropped instead of becoming history (spec §8.3).
+     */
+    private static void dropTrailingEchoOfTheRequest(List<ContextMessage> fallback, Run run) {
+        String seed = run == null ? null : run.getPromptSeed();
+        if (seed == null || seed.isBlank() || fallback.isEmpty()) {
+            return;
+        }
+        ContextMessage last = fallback.get(fallback.size() - 1);
+        if (!"tool".equals(last.role()) && seed.equals(last.content())) {
+            fallback.remove(fallback.size() - 1);
+        }
     }
 
     /** The turn this assembly belongs to: one past the run's last recorded turn. */

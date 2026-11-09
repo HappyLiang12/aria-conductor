@@ -13,15 +13,12 @@ import io.aria.conductor.memory.dto.ProposalDecision;
 import io.aria.conductor.memory.dto.RecallQuery;
 import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.FactStatus;
-import io.aria.conductor.memory.model.MemoryAction;
 import io.aria.conductor.memory.model.MemoryActorType;
-import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
-import io.aria.conductor.memory.repository.MemoryAssertionRepository;
-import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.service.MemoryCommandService;
+import io.aria.conductor.memory.service.MemoryConflictException;
 import io.aria.conductor.memory.service.MemoryNotFoundException;
 import io.aria.conductor.memory.service.MemoryProposalService;
 import io.aria.conductor.memory.service.MemoryQueryService;
@@ -41,7 +38,6 @@ import org.springframework.ai.mcp.McpToolUtils;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,8 +73,6 @@ class MemoryToolsTest {
     @Mock MemoryQueryService queries;
     @Mock MemoryRecallService recall;
     @Mock ContextManifestRepository manifests;
-    @Mock MemoryFactRepository facts;
-    @Mock MemoryAssertionRepository assertions;
 
     private McpProperties mcpProperties;
     private MemoryTools tools;
@@ -89,8 +83,7 @@ class MemoryToolsTest {
     @BeforeEach
     void setUp() {
         mcpProperties = new McpProperties();
-        tools = new MemoryTools(commands, proposals, queries, recall, manifests, facts, assertions,
-                toolPolicies, mcpProperties);
+        tools = new MemoryTools(commands, proposals, queries, recall, manifests, toolPolicies, mcpProperties);
     }
 
     private ToolContext context(ActorPrincipal actor) {
@@ -190,7 +183,7 @@ class MemoryToolsTest {
         String json = tools.forgetFact(FACT_ID, workerContext());
 
         assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"FORBIDDEN\"");
-        verifyNoInteractions(facts, assertions);
+        verifyNoInteractions(commands);
     }
 
     @Test
@@ -217,33 +210,43 @@ class MemoryToolsTest {
         assertThat(json).contains("\"ok\":true").contains("\"status\":\"RETIRED\"");
     }
 
+    /**
+     * The governed mutation (this round's regression): forget_fact delegates to the
+     * command service's transactional retire, so no repository write happens inside the
+     * tool method and a conflict or rollback is decided before the tool answers.
+     */
     @Test
-    void operatorForgetRetiresTheFactAndWritesAnAssertion() {
-        MemoryFact active = fact(FactStatus.ACTIVE, MemoryOrigin.OPERATOR);
-        when(facts.findById(FACT_ID)).thenReturn(Optional.of(active));
+    void operatorForgetRetiresTheFactThroughTheGovernedCommandService() {
+        when(commands.retireFact(eq(FACT_ID), any()))
+                .thenReturn(fact(FactStatus.RETIRED, MemoryOrigin.OPERATOR));
 
         String json = tools.forgetFact(FACT_ID, operatorContext());
 
-        ArgumentCaptor<MemoryFact> saved = ArgumentCaptor.forClass(MemoryFact.class);
-        verify(facts).save(saved.capture());
-        assertThat(saved.getValue().getStatus()).isEqualTo(FactStatus.RETIRED);
-        assertThat(saved.getValue().getValidTo()).isNotNull();
-
-        ArgumentCaptor<MemoryAssertion> assertion = ArgumentCaptor.forClass(MemoryAssertion.class);
-        verify(assertions).save(assertion.capture());
-        assertThat(assertion.getValue().getAction()).isEqualTo(MemoryAction.RETIRE);
-        assertThat(assertion.getValue().getActorType()).isEqualTo(MemoryActorType.OPERATOR);
+        ArgumentCaptor<MemoryActor> actor = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(commands).retireFact(eq(FACT_ID), actor.capture());
+        assertThat(actor.getValue().type()).isEqualTo(MemoryActorType.OPERATOR);
         assertThat(json).contains("\"ok\":true").contains("\"status\":\"RETIRED\"");
     }
 
     @Test
     void forgetAnUnknownFactIsReportedAsNotFound() {
-        when(facts.findById(FACT_ID)).thenReturn(Optional.empty());
+        when(commands.retireFact(eq(FACT_ID), any()))
+                .thenThrow(new MemoryNotFoundException("memory fact " + FACT_ID + " not found"));
 
         String json = tools.forgetFact(FACT_ID, operatorContext());
 
         assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"NOT_FOUND\"");
-        verify(facts, never()).save(any());
+        verify(commands).retireFact(eq(FACT_ID), any());
+    }
+
+    @Test
+    void aConcurrentForgetIsReportedAsConflict() {
+        when(commands.retireFact(eq(FACT_ID), any()))
+                .thenThrow(new MemoryConflictException("fact " + FACT_ID + " is not the current ACTIVE value"));
+
+        String json = tools.forgetFact(FACT_ID, operatorContext());
+
+        assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"CONFLICT\"");
     }
 
     @Test

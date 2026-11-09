@@ -292,6 +292,32 @@ class MemoryCommandServiceTransactionTest {
                 .containsExactlyInAnyOrder("os", "timezone"));
     }
 
+    /**
+     * The governed forget is one transaction: when the RETIRE assertion cannot be written,
+     * the fact row must stay current rather than committing a closed row with no audit
+     * entry (the regression the inline MCP repository write could not rule out).
+     */
+    @Test
+    void aFailedRetireAssertionRollsBackTheRetirement() {
+        UUID entityId = UUID.randomUUID();
+        UUID factId = UUID.randomUUID();
+        seedEntityAndCurrentFact(entityId, factId, "timezone");
+        when(assertions.save(any(MemoryAssertion.class)))
+                .thenThrow(new IllegalStateException("assertion write failed"));
+
+        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status ->
+                command.retireFact(factId, new MemoryActor(MemoryActorType.OPERATOR, "local"))))
+                .isInstanceOf(IllegalStateException.class);
+
+        ownTransaction.executeWithoutResult(status -> {
+            MemoryFact after = facts.findById(factId).orElseThrow();
+            assertThat(after.getStatus())
+                    .as("the retirement and its assertion share one transaction")
+                    .isEqualTo(FactStatus.ACTIVE);
+            assertThat(after.getValidTo()).isNull();
+        });
+    }
+
     private static boolean await(CountDownLatch latch) {
         try {
             return latch.await(30, TimeUnit.SECONDS);

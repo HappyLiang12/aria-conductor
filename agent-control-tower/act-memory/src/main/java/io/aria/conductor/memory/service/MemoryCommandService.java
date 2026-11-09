@@ -236,6 +236,41 @@ public class MemoryCommandService {
         return fresh;
     }
 
+    /**
+     * The governed forget: close the current ACTIVE value and record the RETIRE assertion in
+     * one transaction. Operator-only — a run or extraction actor may never remove memory.
+     * An already-closed or non-ACTIVE row is a conflict, never a silent second retire, and
+     * the row-level version is pushed through the flush so a concurrent change surfaces as
+     * the governed conflict inside the method rather than at commit.
+     * <p>
+     * The audit payload names the key and the lifecycle status, never the value: a fact's
+     * value can be CONFIDENTIAL, and the frozen row already records it once.
+     */
+    @Transactional
+    public MemoryFact retireFact(UUID factId, MemoryActor actor) {
+        if (actor == null || actor.type() != MemoryActorType.OPERATOR) {
+            throw new SecurityException("retiring a memory fact is operator-only");
+        }
+        if (factId == null) {
+            throw new MemoryValidationException("factId is required");
+        }
+        MemoryFact current = facts.findById(factId)
+                .orElseThrow(() -> new MemoryNotFoundException("memory fact " + factId + " not found"));
+        if (current.getStatus() != FactStatus.ACTIVE || current.getValidTo() != null) {
+            throw new MemoryConflictException("fact " + factId + " is not the current ACTIVE value");
+        }
+        Instant now = Instant.now();
+        String factKey = current.getFactKey();
+        String before = audit("factKey", factKey, "status", current.getStatus().name());
+        current.setStatus(FactStatus.RETIRED);
+        current.setValidTo(now);
+        facts.save(current);
+        flushFacts(factKey, "retired");
+        assertions.save(assertion(MemorySubjectType.FACT, current.getId(), MemoryAction.RETIRE, actor,
+                null, now, before, audit("factKey", factKey, "status", FactStatus.RETIRED.name())));
+        return current;
+    }
+
     @Transactional
     public MemoryRelation addRelation(AddRelationCommand command, MemoryActor actor) {
         String predicate = requireText(command.predicate(), "predicate");

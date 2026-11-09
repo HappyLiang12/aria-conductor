@@ -17,13 +17,8 @@ import io.aria.conductor.memory.dto.RecallQuery;
 import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
-import io.aria.conductor.memory.model.MemoryAction;
 import io.aria.conductor.memory.model.MemoryActorType;
-import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryFact;
-import io.aria.conductor.memory.model.MemorySubjectType;
-import io.aria.conductor.memory.repository.MemoryAssertionRepository;
-import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.service.MemoryCommandService;
 import io.aria.conductor.memory.service.MemoryConflictException;
 import io.aria.conductor.memory.service.MemoryNotFoundException;
@@ -37,9 +32,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -100,8 +93,6 @@ public class MemoryTools implements McpTool {
     private final MemoryQueryService queries;
     private final MemoryRecallService recall;
     private final ContextManifestRepository manifests;
-    private final MemoryFactRepository facts;
-    private final MemoryAssertionRepository assertions;
     private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
 
@@ -209,9 +200,14 @@ public class MemoryTools implements McpTool {
         }
     }
 
+    /**
+     * The governed forget: the mutation is the command service's transactional
+     * {@code retireFact}, never an inline repository write, so the status check, the
+     * RETIRE assertion, the version flush and the conflict translation all happen before
+     * this method answers and a conflict can never ride a transaction that still commits.
+     */
     @Tool(name = "forget_fact",
             description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current.")
-    @Transactional
     public String forgetFact(
             @ToolParam(description = "Memory fact id (UUID)") UUID factId,
             ToolContext toolContext) {
@@ -219,32 +215,7 @@ public class MemoryTools implements McpTool {
             ActorPrincipal actor = McpActorContext.require(toolContext);
             toolPolicies.requireAuthority(FORGET_FACT, actor);
             actor.requireOperator();
-            MemoryFact fact = facts.findById(factId)
-                    .orElseThrow(() -> new MemoryNotFoundException("memory fact " + factId + " not found"));
-            if (fact.getStatus() == FactStatus.RETIRED || fact.getValidTo() != null) {
-                // Already forgotten: no second retire assertion is written.
-                return ToolResponses.ok(MemoryFactView.from(fact));
-            }
-            Instant now = Instant.now();
-            String before = audit("status", name(fact.getStatus()), "factKey", fact.getFactKey());
-            fact.setStatus(FactStatus.RETIRED);
-            fact.setValidTo(now);
-            facts.save(fact);
-            assertions.save(MemoryAssertion.builder()
-                    .id(UUID.randomUUID())
-                    .subjectType(MemorySubjectType.FACT)
-                    .subjectId(fact.getId())
-                    .action(MemoryAction.RETIRE)
-                    .actorType(MemoryActorType.OPERATOR)
-                    .actorRef(actor.runId() == null ? null : actor.runId().toString())
-                    .sourceRef(DEFAULT_SOURCE_REF)
-                    .beforeJson(before)
-                    .afterJson(audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey()))
-                    .createdAt(now)
-                    .build());
-            // Surface a stale-version or write failure inside the envelope instead of at
-            // commit, after the tool has already answered ok.
-            facts.flush();
+            MemoryFact fact = commands.retireFact(factId, memoryActor(actor));
             return ToolResponses.ok(MemoryFactView.from(fact));
         } catch (SecurityException e) {
             return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
@@ -254,9 +225,6 @@ public class MemoryTools implements McpTool {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (MemoryConflictException e) {
             return ToolResponses.error("CONFLICT", e.getMessage(), e, mcpProperties.isDebug());
-        } catch (org.springframework.dao.OptimisticLockingFailureException e) {
-            return ToolResponses.error("CONFLICT", "the fact changed while it was being retired; re-read before retrying",
-                    e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("FORGET_FACT_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }
@@ -477,19 +445,6 @@ public class MemoryTools implements McpTool {
         }
     }
 
-    /** A small JSON audit payload, built from alternating key/value arguments. */
-    private static String audit(Object... keysAndValues) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        for (int i = 0; i + 1 < keysAndValues.length; i += 2) {
-            snapshot.put(String.valueOf(keysAndValues[i]), keysAndValues[i + 1]);
-        }
-        try {
-            return JSON.writeValueAsString(snapshot);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     private static EntityStatus parseEntityStatus(String raw) {
         try {
             return EntityStatus.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
@@ -504,9 +459,5 @@ public class MemoryTools implements McpTool {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Invalid status '" + raw + "'. Valid: PENDING, ACTIVE, RETIRED");
         }
-    }
-
-    private static String name(Enum<?> value) {
-        return value == null ? null : value.name();
     }
 }

@@ -338,6 +338,91 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
     }
 
+    // ---------------------------------------------------------------- retire
+
+    @Test
+    void retireClosesTheCurrentValueAndWritesTheRetireAssertion() {
+        UUID entityId = id("person");
+        MemoryFact current = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        when(facts.findById(current.getId())).thenReturn(Optional.of(current));
+
+        MemoryFact retired = command.retireFact(current.getId(), OPERATOR);
+
+        assertThat(retired).isSameAs(current);
+        assertThat(current.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(current.getValidTo()).as("the closed row records when it stopped being current").isNotNull();
+        verify(facts).save(current);
+
+        List<MemoryAssertion> written = captureAssertions(1);
+        assertThat(written).singleElement().satisfies(assertion -> {
+            assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+            assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.FACT);
+            assertThat(assertion.getSubjectId()).isEqualTo(current.getId());
+            assertThat(assertion.getActorType()).isEqualTo(MemoryActorType.OPERATOR);
+            assertThat(assertion.getBeforeJson()).contains("ACTIVE").contains("timezone");
+            assertThat(assertion.getAfterJson()).contains("RETIRED").contains("timezone");
+        });
+    }
+
+    @Test
+    void retiringAClosedFactIsAConflictAndWritesNothing() {
+        UUID entityId = id("person");
+        MemoryFact closed = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        closed.setStatus(FactStatus.RETIRED);
+        closed.setValidTo(VALID_FROM.plusSeconds(60));
+        when(facts.findById(closed.getId())).thenReturn(Optional.of(closed));
+
+        assertThatThrownBy(() -> command.retireFact(closed.getId(), OPERATOR))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(closed.getId().toString());
+
+        assertThat(closed.getValidTo()).as("the closure is not rewritten").isEqualTo(VALID_FROM.plusSeconds(60));
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
+     * The fact row carries its own {@code @Version}: two retires of the same row can both
+     * pass the status check and still collide on the UPDATE. That loss is raised by the
+     * flush and must be translated in the method, before the assertion is written, so the
+     * caller sees the governed conflict and no partial retire is left behind.
+     */
+    @Test
+    void aRetireWhoseRowVersionWasChangedUnderneathIsAGovernedConflict() {
+        UUID entityId = id("person");
+        MemoryFact current = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        when(facts.findById(current.getId())).thenReturn(Optional.of(current));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, current.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> command.retireFact(current.getId(), OPERATOR))
+                .as("a row-version loss is the governed 409, not a raw exception")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone");
+
+        verify(assertions, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"EXTRACTION", "RUN"})
+    void retireIsOperatorOnly(String actorType) {
+        assertThatThrownBy(() -> command.retireFact(id("f1"),
+                new MemoryActor(MemoryActorType.valueOf(actorType), "run-1")))
+                .isInstanceOf(SecurityException.class);
+        verifyNoInteractions(facts, assertions);
+    }
+
+    @Test
+    void retiringAMissingFactIsNotFound() {
+        UUID missing = id("gone");
+        when(facts.findById(missing)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> command.retireFact(missing, OPERATOR))
+                .isInstanceOf(MemoryNotFoundException.class)
+                .hasMessageContaining(missing.toString());
+        verify(assertions, never()).save(any());
+    }
+
     // ---------------------------------------------------------------- proposals
 
     @Test
@@ -857,7 +942,8 @@ class MemoryCommandServiceTest {
 
     @Test
     void everyMutationIsTransactional() {
-        Set<String> mutations = Set.of("createEntity", "addFact", "supersedeFact", "addRelation", "mergeEntities");
+        Set<String> mutations = Set.of("createEntity", "addFact", "supersedeFact", "retireFact",
+                "addRelation", "mergeEntities");
         assertThat(MemoryCommandService.class.getDeclaredMethods())
                 .filteredOn(method -> mutations.contains(method.getName()))
                 .hasSize(mutations.size())

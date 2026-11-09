@@ -87,6 +87,9 @@ public class MemoryFact {
         if (id == null) id = UUID.randomUUID();
         if (createdAt == null) createdAt = Instant.now();
         if (validFrom == null) validFrom = Instant.now();
+        // Stamped on insert as well as on update: the recency order of a fact is
+        // OrderByUpdatedAtDesc, so a freshly inserted row must not sort as unknown.
+        if (updatedAt == null) updatedAt = Instant.now();
         if (status == null) status = FactStatus.PENDING;
         if (sensitivity == null) sensitivity = Sensitivity.INTERNAL;
         if (origin == null) origin = MemoryOrigin.EXTRACTION;

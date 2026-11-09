@@ -76,6 +76,9 @@ public class MemoryEntity {
     protected void onCreate() {
         if (id == null) id = UUID.randomUUID();
         if (createdAt == null) createdAt = Instant.now();
+        // Stamped on insert as well as on update, so "newest first" is defined for a row
+        // that has never been updated.
+        if (updatedAt == null) updatedAt = Instant.now();
         if (status == null) status = EntityStatus.ACTIVE;
         if (sensitivity == null) sensitivity = Sensitivity.INTERNAL;
         if (origin == null) origin = MemoryOrigin.EXTRACTION;

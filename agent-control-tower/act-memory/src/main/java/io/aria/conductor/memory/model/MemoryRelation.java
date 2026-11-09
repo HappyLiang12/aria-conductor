@@ -84,6 +84,8 @@ public class MemoryRelation {
         if (id == null) id = UUID.randomUUID();
         if (createdAt == null) createdAt = Instant.now();
         if (validFrom == null) validFrom = Instant.now();
+        // Stamped on insert as well as on update, for consistency with entities and facts.
+        if (updatedAt == null) updatedAt = Instant.now();
         if (status == null) status = FactStatus.PENDING;
         if (sensitivity == null) sensitivity = Sensitivity.INTERNAL;
         if (origin == null) origin = MemoryOrigin.EXTRACTION;

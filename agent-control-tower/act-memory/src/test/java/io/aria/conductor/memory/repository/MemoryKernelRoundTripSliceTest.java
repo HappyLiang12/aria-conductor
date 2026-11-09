@@ -6,6 +6,7 @@ import io.aria.conductor.memory.model.MemoryAction;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
+import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryKnowledgeLink;
 import io.aria.conductor.memory.model.MemoryLinkStatus;
 import io.aria.conductor.memory.model.MemoryOrigin;
@@ -39,6 +40,9 @@ class MemoryKernelRoundTripSliceTest extends MemorySliceTestSupport {
     MemoryEntityRepository entities;
 
     @Autowired
+    MemoryFactRepository facts;
+
+    @Autowired
     MemoryRelationRepository relations;
 
     @Autowired
@@ -46,6 +50,12 @@ class MemoryKernelRoundTripSliceTest extends MemorySliceTestSupport {
 
     @Autowired
     MemoryKnowledgeLinkRepository links;
+
+    private MemoryFact proposal(UUID entityId, String proposalHash) {
+        MemoryFact fact = fact(entityId, "editor", FactStatus.PENDING);
+        fact.setProposalHash(proposalHash);
+        return fact;
+    }
 
     @Test
     void aRelationRoundTripsItsEnumsAsStrings() {
@@ -92,6 +102,25 @@ class MemoryKernelRoundTripSliceTest extends MemorySliceTestSupport {
         assertThatThrownBy(() -> relations.saveAndFlush(
                 relation(a.getId(), "WORKS_ON", b.getId(), FactStatus.ACTIVE, hash)))
                 .as("a retried extraction cannot duplicate its row")
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    /**
+     * The database level of the duplicate-proposal rule: the service's probe can be passed
+     * by two concurrent extractions, so {@code uq_memory_fact_proposal} must reject the
+     * second row. A row without a hash (operator/run writes) is not constrained.
+     */
+    @Test
+    void aFactProposalHashIsUniqueWhenPresentAndMayBeAbsentOnManyRows() {
+        MemoryEntity entity = entities.saveAndFlush(entity("PERSON", "operator"));
+        facts.saveAndFlush(proposal(entity.getId(), null));
+        facts.saveAndFlush(proposal(entity.getId(), null));
+        assertThat(facts.count()).as("operator/run writes carry no proposal hash").isEqualTo(2);
+
+        String hash = "dup-" + UUID.randomUUID();
+        facts.saveAndFlush(proposal(entity.getId(), hash));
+        assertThatThrownBy(() -> facts.saveAndFlush(proposal(entity.getId(), hash)))
+                .as("a retried extraction cannot duplicate its proposal")
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 

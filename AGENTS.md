@@ -18,6 +18,7 @@ no removed provider to select.
 | `act-agent` | Agent lifecycle: creation, config, health, templates | `agent-control-tower/act-agent/src/main/java/io/aria/conductor/agent/` |
 | `act-execution` | LLM client, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), approvals, workflows | `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/ExecutionModule.java` |
 | `act-knowledge` | Knowledge base CRUD, versioning, Git-backed storage | `agent-control-tower/act-knowledge/src/main/java/io/aria/conductor/knowledge/` |
+| `act-memory` | Governed long-term memory: entities, relations, facts, assertions, deterministic recall, and the memory context contributor (depends on `act-common` only) | `agent-control-tower/act-memory/src/main/java/io/aria/conductor/memory/MemoryModule.java` |
 | `act-aria` | Aria AI assistant: chat sessions, orchestration, scheduled jobs | `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/AriaModule.java` |
 | `act-dashboard-api` | REST API controllers for dashboard | `agent-control-tower/act-dashboard-api/src/main/java/io/aria/conductor/dashboard/DashboardModule.java` |
 | `act-app` | Spring Boot entry point, config, Flyway migrations | `agent-control-tower/act-app/src/main/java/io/aria/conductor/ActApplication.java` |
@@ -76,6 +77,7 @@ no removed provider to select.
 |-------|---------|
 | All Java tests + coverage | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` |
 | Single module test | `cd agent-control-tower && mvn test -pl <module-name>` |
+| Memory module tests + module-boundary guard (ArchUnit) | `cd agent-control-tower && mvn test -pl act-memory -Dspring.profiles.active=h2` |
 | Frontend type-check + build | `cd agent-control-tower/act-dashboard && pnpm build` |
 | Frontend unit tests (vitest) | `cd agent-control-tower/act-dashboard && pnpm test` |
 | Frontend E2E (Playwright) | `cd agent-control-tower/act-dashboard && npx playwright test` |

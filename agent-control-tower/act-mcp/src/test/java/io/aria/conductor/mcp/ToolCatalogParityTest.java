@@ -1,13 +1,20 @@
 package io.aria.conductor.mcp;
 
+import io.aria.conductor.common.context.ContextAdapter;
+import io.aria.conductor.common.context.ContextRequest;
+import io.aria.conductor.common.context.ContextSection;
+import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.common.tool.ToolDescriptor;
 import io.aria.conductor.common.tool.ToolPolicy;
+import io.aria.conductor.execution.context.contributor.ToolCatalogContextContributor;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.catalog.ToolCatalog;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +66,15 @@ class ToolCatalogParityTest {
         expected.put("query_knowledge", ToolPolicy.WORKER_READ);
         expected.put("review_knowledge", ToolPolicy.WORKER_WRITE);
         expected.put("retire_knowledge", ToolPolicy.WORKER_WRITE);
+        // memory
+        expected.put("remember_fact", ToolPolicy.WORKER_WRITE);
+        expected.put("recall_memory", ToolPolicy.WORKER_READ);
+        expected.put("list_memory_entities", ToolPolicy.WORKER_READ);
+        expected.put("get_memory_entity", ToolPolicy.WORKER_READ);
+        expected.put("forget_fact", ToolPolicy.OPERATOR_ONLY);
+        expected.put("list_memory_proposals", ToolPolicy.WORKER_READ);
+        expected.put("decide_memory_proposal", ToolPolicy.OPERATOR_ONLY);
+        expected.put("get_context_manifest", ToolPolicy.WORKER_READ);
         // approvals
         expected.put("list_approvals", ToolPolicy.WORKER_READ);
         expected.put("decide_approval", ToolPolicy.OPERATOR_ONLY);
@@ -165,6 +181,49 @@ class ToolCatalogParityTest {
         assertThat(catalog.tools()).allSatisfy(tool -> {
             assertThat(tool.description()).as("description of '%s'", tool.name()).isNotBlank();
             assertThat(tool.description()).as("description of '%s'", tool.name()).doesNotContain("\n");
+        });
+    }
+
+    /**
+     * The memory surface is eight tools on top of the 59-descriptor catalog: 65
+     * registered names, 67 descriptors including the two core-native web tools.
+     */
+    @Test
+    void theCatalogCoversTheMemorySurface() {
+        assertThat(catalog.tools()).hasSize(67);
+        assertThat(catalog.names()).hasSize(65);
+        assertThat(catalog.tools())
+                .filteredOn(tool -> tool.policy() == ToolPolicy.OPERATOR_ONLY)
+                .hasSize(10);
+    }
+
+    /**
+     * The Aria prompt's tool section is generated from this catalog and excludes
+     * OPERATOR_ONLY entries: a worker may never approve its own proposal, so
+     * {@code decide_memory_proposal} and {@code forget_fact} must be absent while
+     * the other six memory tools are visible.
+     */
+    @Test
+    void theGeneratedToolSectionExcludesTheOperatorOnlyMemoryTools() {
+        ContextRequest request = new ContextRequest(UUID.randomUUID(), "c", null, ContextAdapter.SYNC, 1,
+                "ship it", null, Sensitivity.INTERNAL, 24_000, null, null, List.of());
+
+        List<ContextSection> sections = new ToolCatalogContextContributor(catalog).contribute(request);
+
+        assertThat(sections).singleElement().satisfies(section -> {
+            assertThat(section.content())
+                    .doesNotContain("decide_memory_proposal")
+                    .doesNotContain("forget_fact")
+                    .contains("remember_fact (WORKER_WRITE)")
+                    .contains("recall_memory (WORKER_READ)")
+                    .contains("list_memory_entities (WORKER_READ)")
+                    .contains("get_memory_entity (WORKER_READ)")
+                    .contains("list_memory_proposals (WORKER_READ)")
+                    .contains("get_context_manifest (WORKER_READ)");
+            // 67 descriptors minus the 10 operator-only entries.
+            assertThat(section.content().lines()).hasSize(57);
+            assertThat(section.content().length()).isLessThan(3_000);
+            assertThat(section.truncated()).isFalse();
         });
     }
 

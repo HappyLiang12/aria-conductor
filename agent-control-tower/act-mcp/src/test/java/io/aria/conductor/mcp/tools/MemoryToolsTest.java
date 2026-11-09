@@ -323,8 +323,8 @@ class MemoryToolsTest {
                 .adapter("SYNC")
                 .sectionsJson("[{\"id\":\"identity\",\"sources\":[\"operator\"],\"chars\":12,\"tokens\":4,"
                         + "\"truncated\":false,\"content\":\"PROMPT TEXT MUST NOT LEAK\"}]")
-                .droppedJson("[{\"id\":\"knowledge\",\"reason\":\"budget\"}]")
-                .degradedJson("[{\"id\":\"memory\",\"reason\":\"timeout\"}]")
+                .droppedJson("[\"knowledge:budget\"]")
+                .degradedJson("[\"memory:timeout\"]")
                 .maxChars(24_000)
                 .estimatedTokens(1_200)
                 .createdAt(VALID_FROM)
@@ -337,10 +337,8 @@ class MemoryToolsTest {
                 .contains("\"turnNumber\":1")
                 .contains("\"adapter\":\"SYNC\"")
                 .contains("\"identity\"")
-                .contains("\"knowledge\"")
-                .contains("\"budget\"")
-                .contains("\"memory\"")
-                .contains("\"timeout\"")
+                .contains("\"knowledge:budget\"")
+                .contains("\"memory:timeout\"")
                 .doesNotContain("PROMPT TEXT")
                 .doesNotContain("\"content\"");
     }

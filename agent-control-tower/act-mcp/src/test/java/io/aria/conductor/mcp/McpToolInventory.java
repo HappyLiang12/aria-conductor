@@ -18,6 +18,9 @@ final class McpToolInventory {
             "list_workflow_templates", "instantiate_workflow_template", "get_workflow",
             // knowledge
             "list_knowledge", "store_knowledge", "query_knowledge", "review_knowledge", "retire_knowledge",
+            // memory
+            "remember_fact", "recall_memory", "list_memory_entities", "get_memory_entity",
+            "forget_fact", "list_memory_proposals", "decide_memory_proposal", "get_context_manifest",
             // approvals
             "list_approvals", "decide_approval",
             // agents

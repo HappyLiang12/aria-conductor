@@ -76,7 +76,8 @@ class ToolPolicyRegistryTest {
                 .filter(name -> registry.policyOf(name) == ToolPolicy.OPERATOR_ONLY))
                 .containsExactlyInAnyOrder("decide_approval", "retire_agent", "housekeeping_execute",
                         "create_llm_provider", "update_llm_provider", "delete_llm_provider",
-                        "activate_llm_provider", "test_llm_provider");
+                        "activate_llm_provider", "test_llm_provider",
+                        "forget_fact", "decide_memory_proposal");
     }
 
     @Test

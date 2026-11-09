@@ -110,7 +110,8 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
         assertThat(task.systemPrompt()).as("skills must be injected via buildMessages reuse")
                 .contains("## Skills", "When triaging, check logs first");
         assertThat(task.systemPrompt()).as("knowledge must be injected via buildMessages reuse")
-                .contains("## Knowledge Context", "deploy-proc");
+                .contains("## deploy-proc", "Always blue-green deploy")
+                .doesNotContain("## Knowledge Context");
         assertThat(task.userPrompt()).as("user request must be merged into the task prompt")
                 .isEqualTo("refactor the module");
 

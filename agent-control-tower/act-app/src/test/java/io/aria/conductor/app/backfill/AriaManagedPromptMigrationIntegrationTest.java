@@ -90,7 +90,7 @@ class AriaManagedPromptMigrationIntegrationTest extends BaseH2IntegrationTest {
     @Transactional
     void turnsAnEmptyConfigIntoTheObjectLiteral() throws IOException {
         for (String empty : Arrays.asList(null, "", "{}")) {
-            jdbc.update("DELETE FROM agents WHERE id = ?", ARIA_AGENT_ID);
+            deleteAriaAgent();
             insertAria(empty);
 
             assertThat(replayV82()).as("config=%s", empty).isEqualTo(1);
@@ -207,6 +207,17 @@ class AriaManagedPromptMigrationIntegrationTest extends BaseH2IntegrationTest {
                 .isZero();
         assertThat(ariaConfig()).isEqualTo(afterFirstPass);
         assertThat(occurrences(ariaConfig(), MARKER)).isEqualTo(1);
+    }
+
+    /**
+     * Removes the fixed Aria row together with the FK children SQL does not cascade.
+     * cleanup-all.sql truncates runs (and agent_tools/agent_skills cascade), but it does
+     * not truncate agent_sessions, so a session committed by an earlier IT class in the
+     * same JVM would otherwise block this delete on FK_SESSIONS_AGENT.
+     */
+    private void deleteAriaAgent() {
+        jdbc.update("DELETE FROM agent_sessions WHERE agent_id = ?", ARIA_AGENT_ID);
+        jdbc.update("DELETE FROM agents WHERE id = ?", ARIA_AGENT_ID);
     }
 
     private void insertAria(String config) {

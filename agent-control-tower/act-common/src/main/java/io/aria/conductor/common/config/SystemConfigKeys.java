@@ -18,6 +18,15 @@ public final class SystemConfigKeys {
     public static final int TASK_DEADLINE_MIN_MINUTES = 1;
     public static final int TASK_DEADLINE_MAX_MINUTES = 1440;
 
+    /**
+     * Operator identity rendered by the context envelope's identity section
+     * (spec §8.1): display name, IANA timezone and language tag. Durable
+     * preferences live in memory, not here.
+     */
+    public static final String MEMORY_OPERATOR_NAME = "memory.operator.name";
+    public static final String MEMORY_OPERATOR_TIMEZONE = "memory.operator.timezone";
+    public static final String MEMORY_OPERATOR_LANGUAGE = "memory.operator.language";
+
     private SystemConfigKeys() {
     }
 }

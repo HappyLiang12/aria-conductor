@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import java.sql.SQLException;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -38,6 +40,16 @@ public class MemoryExceptionHandler {
     /** Fixed conflict text: no constraint name, SQL statement, or row value is echoed. */
     static final String DATA_INTEGRITY_CONFLICT_MESSAGE =
             "the write conflicts with an existing memory row; re-read and retry with a distinct key";
+
+    /**
+     * Fixed validation text for an integrity failure that is not a key collision: no column
+     * name, length, SQL statement, or driver class is echoed.
+     */
+    static final String DATA_INTEGRITY_VALIDATION_MESSAGE =
+            "the request data does not fit a memory field; check required values and their maximum lengths";
+
+    /** A bounded walk over the cause chain; diagnostics are nested at most a few levels deep. */
+    private static final int MAX_CAUSE_DEPTH = 16;
 
     @ExceptionHandler(MemoryValidationException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MemoryValidationException ex) {
@@ -69,14 +81,50 @@ public class MemoryExceptionHandler {
 
     /**
      * A unique-index collision (a duplicate {@code kind+canonicalKey} entity, a duplicate
-     * knowledge link) is a governed conflict, not a server error. The cause text names the
-     * constraint, the SQL statement, and on h2 the offending values, so the response carries
-     * a fixed message instead. Without this mapping the exception falls through to the
+     * knowledge link, a repeated {@code proposal_hash}) is a governed conflict. Any other
+     * integrity failure — a value that overflows a V81 VARCHAR column, a NOT NULL rule —
+     * is input the row cannot hold, so it is a validation error, not a conflict. Both paths
+     * return a fixed message: the cause text names the constraint, the SQL statement, and
+     * on h2 the offending values. Without this mapping the exception falls through to the
      * platform-wide advice (500, key/detail echoed under h2).
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
-        return body(HttpStatus.CONFLICT, CONFLICT, DATA_INTEGRITY_CONFLICT_MESSAGE);
+        if (isUniqueCollision(ex)) {
+            return body(HttpStatus.CONFLICT, CONFLICT, DATA_INTEGRITY_CONFLICT_MESSAGE);
+        }
+        return body(HttpStatus.UNPROCESSABLE_ENTITY, VALIDATION, DATA_INTEGRITY_VALIDATION_MESSAGE);
+    }
+
+    /**
+     * H2 reports a unique violation as SQLState 23505; MySQL/MariaDB report duplicate-key
+     * vendor code 1062 under the generic SQLState 23000. When the driver state is absent
+     * (a translated or synthetic exception), the unique-index wording is the only marker.
+     */
+    private static boolean isUniqueCollision(DataIntegrityViolationException failure) {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (current instanceof SQLException sql && isDuplicateKey(sql)) {
+                return true;
+            }
+            if (mentionsUniqueIndex(current.getMessage())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static boolean isDuplicateKey(SQLException sql) {
+        return "23505".equals(sql.getSQLState()) || sql.getErrorCode() == 1062;
+    }
+
+    private static boolean mentionsUniqueIndex(String message) {
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("unique") || lower.contains("duplicate entry") || lower.contains("duplicate key");
     }
 
     /** A worker credential or a failed origin/CSRF check is authenticated but not operator. */

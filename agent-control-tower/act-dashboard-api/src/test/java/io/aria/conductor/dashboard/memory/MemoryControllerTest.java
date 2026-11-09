@@ -43,6 +43,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -487,6 +488,61 @@ class MemoryControllerTest {
                 .andExpect(content().string(not(containsString("UQ_MEMORY_ENTITY"))))
                 .andExpect(content().string(not(containsString("insert into"))))
                 .andExpect(content().string(not(containsString("SQL statement"))))
+                .andExpect(content().string(not(containsString("constraint"))));
+    }
+
+    /**
+     * H2 raises SQLState 23505 for a duplicate against {@code uq_memory_entity}; the state
+     * alone marks the collision, even when the driver text carries no "unique" word.
+     */
+    @Test
+    void mapsUniqueSqlStateViolationToConflictWithoutDriverText() throws Exception {
+        when(command.createEntity(any(), any())).thenThrow(new DataIntegrityViolationException(
+                "could not execute statement",
+                new SQLException("record already exists", "23505", 23505)));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value(
+                        "the write conflicts with an existing memory row; re-read and retry with a distinct key"))
+                .andExpect(content().string(not(containsString("23505"))))
+                .andExpect(content().string(not(containsString("record already exists"))))
+                .andExpect(content().string(not(containsString("SQLException"))))
+                .andExpect(content().string(not(containsString("DataIntegrityViolationException"))));
+    }
+
+    /**
+     * A value that overflows a V81 VARCHAR column (e.g. {@code kind} over VARCHAR(32)) is
+     * input the row cannot hold, not a key collision: 422 VALIDATION with a fixed message.
+     * The driver's truncation text, SQL statement, and state must not reach the caller.
+     */
+    @Test
+    void mapsOversizedColumnValueToValidationWithoutSqlText() throws Exception {
+        String oversizedKind = "K".repeat(300);
+        when(command.createEntity(any(), any())).thenThrow(new DataIntegrityViolationException(
+                "could not execute statement [Value too long for column \"KIND CHARACTER VARYING(32)\": \""
+                        + oversizedKind + " (300)\"]; SQL statement: insert into memory_entities ...",
+                new SQLException("Value too long for column \"KIND CHARACTER VARYING(32)\" (22001)",
+                        "22001", 22001)));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"" + oversizedKind + "\",\"canonicalKey\":\"operator\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("VALIDATION"))
+                .andExpect(jsonPath("$.message").value(
+                        "the request data does not fit a memory field; check required values and their maximum lengths"))
+                .andExpect(content().string(not(containsString("Value too long"))))
+                .andExpect(content().string(not(containsString("CHARACTER VARYING"))))
+                .andExpect(content().string(not(containsString("insert into"))))
+                .andExpect(content().string(not(containsString("SQL statement"))))
+                .andExpect(content().string(not(containsString("22001"))))
+                .andExpect(content().string(not(containsString("SQLException"))))
                 .andExpect(content().string(not(containsString("constraint"))));
     }
 

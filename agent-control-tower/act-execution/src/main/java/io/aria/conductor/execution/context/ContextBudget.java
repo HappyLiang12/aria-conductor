@@ -30,6 +30,9 @@ final class ContextBudget {
 
     static final List<String> DROP_ORDER = List.of("workspace", "skills", "knowledge", "memory");
 
+    /** The last line of a section whose content was cut; a cap never splits a line. */
+    static final String TRUNCATION_MARKER = "- ... (truncated)";
+
     private final ContextProperties properties;
     private final int maxChars;
 
@@ -80,9 +83,26 @@ final class ContextBudget {
         return end < 0 ? id : id.substring(0, end);
     }
 
+    /**
+     * Cuts {@code section} to at most {@code cap} characters at a line boundary:
+     * whole trailing lines are dropped and {@link #TRUNCATION_MARKER} records
+     * that content was cut. When not even the marker fits, or no whole line fits
+     * beside it, the body is dropped rather than cut mid-line.
+     */
     private static ContextSection truncate(ContextSection section, int cap) {
-        return new ContextSection(section.id(), section.title(),
-                section.content().substring(0, cap), section.sensitivity(),
+        String content = section.content();
+        if (content.length() <= cap) {
+            return section;
+        }
+        String clipped = "";
+        int room = cap - TRUNCATION_MARKER.length() - 1;
+        if (room > 0) {
+            String head = content.substring(0, Math.min(room, content.length()));
+            int lineEnd = head.lastIndexOf('\n');
+            String kept = lineEnd < 0 ? "" : head.substring(0, lineEnd + 1);
+            clipped = kept + TRUNCATION_MARKER;
+        }
+        return new ContextSection(section.id(), section.title(), clipped, section.sensitivity(),
                 section.sourceIds(), true, section.degradedReason());
     }
 

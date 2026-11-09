@@ -11,13 +11,18 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.Comparator;
 import java.util.List;
 
 /**
  * The generated tool section (spec P7): every catalog entry except the
- * operator-only ones, as {@code - name (POLICY): description}. The catalog is
- * the one classification, so the prompt cannot disagree with the policy
- * registry.
+ * operator-only ones, as one compact {@code - name (POLICY)} line, sorted by
+ * name so the same catalog always renders the same prompt. The catalog is the
+ * one classification, so the prompt cannot disagree with the policy registry.
+ *
+ * <p>Descriptions stay out of the prompt copy: the core binds the tools natively
+ * through MCP, and this section exists to make the reviewed policy
+ * classification visible within the 3,000-character tools cap.
  *
  * <p>The catalog provider is a seam other lanes implement; when none is wired
  * the section is simply absent instead of failing the envelope.
@@ -54,6 +59,7 @@ public class ToolCatalogContextContributor implements ContextContributor {
         }
         List<ToolDescriptor> visible = catalog.tools().stream()
                 .filter(tool -> tool.policy() != ToolPolicy.OPERATOR_ONLY)
+                .sorted(Comparator.comparing(ToolDescriptor::name))
                 .toList();
         if (visible.isEmpty()) {
             return List.of();
@@ -61,8 +67,7 @@ public class ToolCatalogContextContributor implements ContextContributor {
         StringBuilder content = new StringBuilder();
         for (ToolDescriptor tool : visible) {
             content.append("- ").append(tool.name())
-                    .append(" (").append(tool.policy()).append("): ")
-                    .append(tool.description()).append('\n');
+                    .append(" (").append(tool.policy()).append(")\n");
         }
         List<String> sources = visible.stream().map(ToolDescriptor::name).toList();
         return List.of(new ContextSection(id(), "Tools", content.toString(),

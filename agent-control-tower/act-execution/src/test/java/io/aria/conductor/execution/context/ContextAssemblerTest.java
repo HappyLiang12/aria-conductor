@@ -199,16 +199,20 @@ class ContextAssemblerTest {
     @Test
     void capsASectionByItsGroup_andAdottedIdResolvesToItsGroup() {
         when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
-        properties.setCaps(Map.of("policy", 5, "memory", 4));
+        properties.setCaps(Map.of("policy", 45, "memory", 30));
         ContextContributor policy = fake("policy", 20, true, true,
-                List.of(section("policy.agent", "Policy", "012345678901")));
+                List.of(section("policy.agent", "Policy",
+                        "- aaaaaaaaaaaaaaaaaaaa\n- bbbbbbbbbbbbbbbbbbbb\n")));
         ContextContributor memory = fake("memory", 40, true, false,
-                List.of(section("memory", "Memory", "012345678901")));
+                List.of(section("memory", "Memory",
+                        "0123456789\n0123456789\n0123456789\n")));
 
         AssembledContext result = assembler(policy, memory).assemble(request(1_000), List.of());
 
+        // Line-safe: the last whole line that fits, then the truncation marker.
         assertThat(result.sections()).extracting(ContextSection::content)
-                .containsExactly("01234", "0123");
+                .containsExactly("- aaaaaaaaaaaaaaaaaaaa\n- ... (truncated)",
+                        "0123456789\n- ... (truncated)");
         assertThat(result.sections()).allMatch(ContextSection::truncated);
     }
 }

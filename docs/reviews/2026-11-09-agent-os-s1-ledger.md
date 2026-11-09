@@ -450,6 +450,13 @@ Verify the run's provider id is the row that was updated; the default provider s
   `gh run watch <id> --exit-status`; the expected result is 17/17. Release status is
   therefore "implemented and locally fully gated; hosted CI green pending the platform
   outage".
+- 2026-11-10: Actions recovered at 18:44Z. Run `42676702501` at `1189de48` is **17/17
+  success** (Detect Changed Trees, Frontend Build, Java unit groups common-agent /
+  execution / knowledge-aria / memory / api-mcp-app, Integration Failsafe, TS MCP,
+  Start Script Self-Tests, Docker Build, E2E Smoke, and four Playwright shards). The
+  release gate is met at that head; the commit that records this line is documentation
+  only, and the final hosted run at the resulting head is visible with
+  `gh run list --branch feat/agent-os-memory --limit 1`.
 
 - 2026-11-10: Gate B full gate red. `ae0c3aeb` added `TRUNCATE TABLE context_manifests`
   to the shared test cleanup script, but `ReviewAskRepairMigrationIntegrationTest` pins

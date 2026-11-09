@@ -9,6 +9,8 @@ import org.springframework.test.context.jdbc.Sql;
         classes = {ActApplication.class, NoopLlmTestConfig.class},
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles({"test", "noop-llm"})
-@Sql(scripts = "classpath:db/cleanup-all.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_CLASS)
+@Sql(scripts = {
+        "classpath:db/cleanup-all.sql",
+        "classpath:db/cleanup-context-manifests.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_CLASS)
 public abstract class BaseH2IntegrationTest {
 }

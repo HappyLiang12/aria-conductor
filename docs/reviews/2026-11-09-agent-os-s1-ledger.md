@@ -48,13 +48,29 @@ cd /d/project/aria-agent-os/packages/mcp-server && pnpm test
 cd /d/project/aria-agent-os/packages/qoder-acp-bridge && pnpm test
 ```
 
+Preflight before the Gate A command: `git status -sb` clean; build the Qoder ACP bridge
+dist (`cd packages/qoder-acp-bridge && pnpm build`) because the core adapter contract ITs
+launch the real bridge; run Maven in a shell with no exported `OPENCODE_SANDBOX_*` or
+provider test variables (they leak into tests and flip expected bindings).
+
 Plus the live SDD scenario on the HOST backend and hosted CI at the Gate A HEAD.
 
 Gate B (after B, D, C2a, C2b, I merge):
 
 - fresh H2 database, teach two facts via REST, restart, recall in a new conversation;
 - approve a PENDING proposal and observe it on the next turn;
-- verify the RESTRICTED ceiling filter;
+- verify the RESTRICTED ceiling filter. S1 adds no provider-ceiling REST surface, so the
+  ceiling is raised by stopping the backend, running the H2 shell against the same file
+  database, and restarting:
+
+```bash
+java -cp <h2.jar> org.h2.tools.Shell \
+  -url "jdbc:h2:file:./data/act_db;MODE=MySQL" -user sa -password "" \
+  -sql "UPDATE llm_providers SET sensitivity_ceiling='RESTRICTED'"
+```
+
+Verify the run's provider id is the row that was updated; the default provider starts at
+`INTERNAL` from V81.
 - full local gate plus the live SDD scenario plus hosted CI at the Gate B HEAD.
 
 ## Decision log

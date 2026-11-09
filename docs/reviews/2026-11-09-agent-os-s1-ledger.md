@@ -26,12 +26,12 @@ when its paths change.
 | Lane | Branch | Worktree | Status | Commits | Review | Merged |
 |---|---|---|---|---|---|---|
 | W0A | `lane/agent-os-w0a` | `D:/project/aria-agent-os-w0a` | APPROVED | bd2b313f, d6236a31, 2a04fe59, d142424f | APPROVE (6 Low) | no |
-| W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | FIXING (review BLOCK) | 100ba176, 73d264a1, e314dff3 (rebased c6d1eb06) | BLOCK (2 High, 2 Medium, 5 Low) | merged, fix in flight |
-| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | IN_PROGRESS | - | - | no |
-| A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | IMPLEMENTED, IN_REVIEW | 2129a64a, b3849867, 2dc3a0ee | IN_REVIEW | no |
-| B | `lane/agent-os-b` | pending | PENDING | - | - | no |
-| C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | IMPLEMENTED, IN_REVIEW | 34db1ac7 | IN_REVIEW | no |
-| D | `lane/agent-os-d` | pending | PENDING | - | - | no |
+| W0B | `lane/agent-os-w0b` | `D:/project/aria-agent-os-w0b` | MERGED (4980b0b1), BLOCK cleared by fix round | 100ba176..4980b0b1 (8) | BLOCK (all findings closed) | yes |
+| A1 | `lane/agent-os-a1` | `D:/project/aria-agent-os-a1` | MERGED (4f726781), IN_REVIEW | b62a4fcb..56eca9c6 (6) | IN_REVIEW | yes |
+| A2 | `lane/agent-os-a2` | `D:/project/aria-agent-os-a2` | MERGED (ac04408e) + fixes b06ebf36 | 2129a64a, b3849867, 2dc3a0ee | APPROVE (fixes applied) | yes |
+| B | `lane/agent-os-b` | `D:/project/aria-agent-os-b` | IN_PROGRESS (B-1 done, B-2 running) | 4c56b96d | - | no |
+| C | `lane/agent-os-c` | `D:/project/aria-agent-os-c` | MERGED (f3cc3255), review BLOCK evidence-only | 34db1ac7 | BLOCK pending merged-head gate | yes |
+| D | `lane/agent-os-d` | `D:/project/aria-agent-os-d` | IN_PROGRESS | e04a7fd8 | - | no |
 | C2a | `lane/agent-os-c2a` | pending | PENDING | - | - | no |
 | C2b | `lane/agent-os-c2b` | pending | PENDING | - | - | no |
 | I | feature branch | `D:/project/aria-agent-os` | PENDING | - | - | no |
@@ -236,6 +236,13 @@ Verify the run's provider id is the row that was updated; the default provider s
   worktrees branch from the W0A lane head d142424f and both lanes start while W0B is
   still gating. They will be rebased onto the integrated Wave 0 head before merge.
   A1, B and D need W0B artifacts (manifest, entities, V81) and stay blocked.
+- 2026-11-09: Wave 1 integration at b06ebf36: C (f3cc3255), A1 (4f726781) and A2
+  (ac04408e) rebased and fast-forwarded with no conflicts. A2's review P3s are applied
+  as lead glue in b06ebf36: `KnowledgeContextProvider` and its two obsolete tests
+  deleted after A1 removed the engine dependency, the knowledge clip is now at most 500
+  chars including the ellipsis, and the source-id assertion pins the item id. C's BLOCK
+  is evidence-only (the mutant run overwrote its green report) and is cleared by the
+  wave gate at this head. A1's review and B-2 are in flight; D is still implementing.
 
 ## Evidence to fill at each boundary
 

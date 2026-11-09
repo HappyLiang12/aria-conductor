@@ -93,6 +93,29 @@ when its paths change.
 - A1 starts from c6d1eb06; A2 and C started from the earlier W0A head d142424f and will
   be rebased onto the integrated head before merge.
 
+## Recovery runbook (state as of 2026-11-09T14:13Z)
+
+If this delivery is interrupted, resume from here; nothing below depends on
+conversation memory.
+
+- Integration branch: `feat/agent-os-memory` at the commit that carries this file.
+  Wave 0A and Wave 0B are merged; Wave 0B's review fix round, A1, A2 and C are running
+  in their own worktrees and may have added commits since.
+- Worktrees: `aria-agent-os-a1` (`lane/agent-os-a1`, base c6d1eb06),
+  `aria-agent-os-a2` and `aria-agent-os-c` (`lane/agent-os-a2`, `lane/agent-os-c`,
+  base d142424f), `aria-agent-os-w0b` (`lane/agent-os-w0b`, head c6d1eb06 + fix round).
+- To integrate a lane once its review verdict is APPROVE:
+  `cd <lane worktree> && git rebase feat/agent-os-memory && cd D:/project/aria-agent-os && git merge --ff-only <lane branch>`.
+  A2 and C must be rebased (their base predates the Wave 0 integration); A1, W0B and
+  later B/D branch from the integration head and normally fast-forward.
+- Wave gate after the W0B fix merges, at the integrated HEAD:
+  `cd agent-control-tower && mvn -pl act-common,act-memory,act-execution,act-agent,act-mcp -am test -Dspring.profiles.active=h2`
+  plus `mvn -pl act-app verify -Dskip.unit.tests=true -Dit.test=MemoryMigrationIntegrationTest`.
+- Then unblock lanes B (`lane/agent-os-b`) and D (`lane/agent-os-d`): create each with
+  `git worktree add -b lane/agent-os-b ../aria-agent-os-b feat/agent-os-memory` (same for
+  D) and dispatch them against plan lines 1794-1939 and 1997-2061.
+- Gate A and Gate B commands and preflight live under "## Gates" above.
+
 ## Gates
 
 Gate A (after W0A, W0B, A1, A2, C merge):

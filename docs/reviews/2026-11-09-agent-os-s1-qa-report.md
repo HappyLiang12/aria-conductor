@@ -69,7 +69,12 @@ Full transcript: `docs/reviews/evidence/2026-11-09-gate-b/gate-b-evidence.md`.
   build, MCP server 157/157, bridge 62/62 with a rebuilt dist.
 - Live SDD rerun: NOT VERIFIED — not run after Wave 2; the Gate A live arm and its
   pre-existing toolset blocker are unchanged (see residual risks).
-- Hosted CI run id and job counts: see the final run recorded in the ledger.
+- Hosted CI run id and job counts: BLOCKED by a GitHub Actions platform outage at the
+  final head `b865ae72`. Two dispatches failed at startup with zero jobs (42672785727,
+  53 s; 42673755024, 52 s) while githubstatus.com reported `Actions: major_outage`; the
+  workflow is active and `ci.yml` is unchanged from the 17/17 green run 42656087082.
+  Retry when Actions recovers: `gh workflow run ci.yml --ref feat/agent-os-memory`.
+  This is the only open gate item and it is environmental, not product.
 
 ## Residual risks and follow-ups
 

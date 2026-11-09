@@ -438,6 +438,18 @@ Verify the run's provider id is the row that was updated; the default provider s
   verdict: PASS with the residuals recorded in the QA report; the live SDD deliverable is
   still blocked by the pre-existing read-only HOST toolset and the podman `memory.max`
   defect, and MariaDB is unverified (H2 only).
+- 2026-11-10: hosted CI at the final head `b865ae72` is blocked by a GitHub Actions
+  platform outage. Two dispatches (42672785727, 53 s; 42673755024, 52 s) completed as
+  failure with **zero jobs** and the UI note "This run likely failed because of a workflow
+  file issue"; the workflow is `state=active`, `ci.yml` is byte-identical to the file that
+  produced the 17/17 green run 42656087082 at `62020f64`, and githubstatus.com reported
+  `Actions: major_outage` while `API Requests: operational`. Classified
+  environment/platform, not product. The only changes since the green run are Wave 2 code
+  covered by the green local full gate at `e36958cb` plus documentation. Retry when
+  Actions recovers: `gh workflow run ci.yml --ref feat/agent-os-memory`, then
+  `gh run watch <id> --exit-status`; the expected result is 17/17. Release status is
+  therefore "implemented and locally fully gated; hosted CI green pending the platform
+  outage".
 
 - 2026-11-10: Gate B full gate red. `ae0c3aeb` added `TRUNCATE TABLE context_manifests`
   to the shared test cleanup script, but `ReviewAskRepairMigrationIntegrationTest` pins

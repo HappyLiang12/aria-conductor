@@ -663,5 +663,61 @@
       "dashboard": "pnpm --dir agent-control-tower/act-dashboard test -- --run -> 662 passed / 79 files",
       "note": "the gate ran at 50b14ae6; c3528ba3 is the code HEAD and the only later change is this ledger"
     }
+  },
+  "round2_live_f33": {
+    "date": "2026-11-09",
+    "finding": "F33 (critical, pre-existing): the descendant walk trusted a recycled parent pid and the stop proof killed the backend JVM and its supervisor",
+    "live_evidence": {
+      "chain": "4acb12d3-98ab-4e79-a5e4-28c4fd71d456 (issue #113; Aria run a3e16f1a-3809-4e3f-98ea-6881aecfa5db)",
+      "runs": "BA 891dfb9f COMPLETED; DEV 79a84800 COMPLETED at 15:56:45Z (the F32 checkpoint passed); QA be18e519 RUNNING when the backend died",
+      "failure": "the QA stop proof's kill list was [29396@134386262687499051; 29952@134386270058310074; 35532@134386270058291309; 8312@134386262687326000]. Backend 8312 was created 15:44:28.7326Z and supervisor 29396 at 15:44:28.7499Z; the QA root 33680 was created 15:56:46.0377Z. The backend died at 00:06:54 local (16:06:54Z), port 8080 down, the QA run stranded",
+      "root_cause": "Tree built children from PROCESSENTRY32W.th32ParentProcessID without validating creation order. The backend's dead launcher pid was reused by the QA root, so the backend's stale parent link made it and its supervisor (12 minutes older) look like descendants. The 500 ms sampler observed both and the stop proof killed them",
+      "classification": "product defect in the descendant walk, pre-existing (not caused by F32); the F32 checkpoint itself passed at DEV"
+    },
+    "commits": [
+      "fc5b927d"
+    ],
+    "fix": "The walker validates every parent link by creation order (10 ms tolerance): a child older than its enumerated parent is a stale link and its subtree is not this root; a gone node's children are not followed; a live unreadable holder is a gap, classified by the F32 handle-free probe (older holder = stale link, newer = genuine unkillable child). Every tree read drops records older than the recorded root and anchors on the root identity; every mutating batch refuses the controller JVM, the supervision channel, malformed records and any record that predates the run; the supervisor refuses its own pid",
+    "tests": {
+      "unit": "WindowsProcessControllerTreeIdentityTest 11 run / 0 failures / 0 errors / 0 skipped (root boundary, anchor, both gap shapes, refusal guard, link classifier, real-OS self-kill, tree and guarded kill path); WindowsProcessControllerOrphanAttributionTest 16/0/0/0; OwnedProcessControllerTest 7/0/0/0; OwnerIdentityTest 4/0/0/0",
+      "failsafe": "HostExecutionBackendIntegrationTest 50/0/0/0 at the F33 head (47 pre-existing + stale-tree-record + unverifiable-tree-node stop + pause-gap)",
+      "red": "the real-OS self-kill test killed the supervisor pre-fix and failed after the 120 s command window ('Host control supervisor gave no response to kill 21816@...'); the fake stale-tree test, with the two Java filter call sites temporarily reverted, failed at 'a process older than the run's root cannot be its descendant: never sampled'",
+      "revert_checks": "reverting the root boundary fails the fake stale-tree test; reverting the pause gap guard fails the pause test; moving the C# tolerance away from CREATION_ORDER_TOLERANCE_TICKS fails the link test"
+    },
+    "review": {
+      "round_1": "approve with fixes: 3 P2 (root reuse between the anchor verdict and the enumeration; the C# per-link rule untested; a skipped unverifiable subtree could false-clean), 5 P3 (malformed-record defence claim, unreadable root disabling the predates-run refusal, kill-path fixture margin, lane fragment drift, duplicated/overclaimed tolerance); all fixed in fc5b927d",
+      "round_2": "approve with fixes: 3 P3 (the gap had no escalation path, the anchor residual was undocumented, the pause gap branch was untested); all fixed in fc5b927d",
+      "round_3": "approve; no new safety, gate or CI finding; the PS gap classifier and the C# 3-part gap emission have no protected-process fixture (Java parsing is pinned)"
+    },
+    "residuals": [
+      "a node that exited before its identity read is not followed and leaves no gap: an earlier holder of its pid may have created some of its snapshot children, so following it could signal a stranger. The job inventory and the 500 ms sampler cover every case except a breakaway child created within the last sampler interval whose parent exits mid-walk (the documented F25 class)",
+      "a root pid reused within the 10 ms anchor tolerance of the recorded creation would pass; it requires the recorded root to die and the pid to be reused inside 10 ms",
+      "the PowerShell gap classifier (WMI probe older-holder drop) has no protected/elevated fixture; the probe and the link classifier are individually tested (F32, link), the composition is code-read",
+      "the four real-OS tests are Windows-only; hosted CI is ubuntu-only, so they run on a Windows developer host only",
+      "the live F33 drill (a stop proof over the exact recycled-parent shape) is not replayed yet; the live rerun after this fix is the next gate"
+    ],
+    "gate": {
+      "head": "fc5b927d",
+      "command": "cd agent-control-tower && mvn -B -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2",
+      "result": "BUILD SUCCESS (06:52), exit 0",
+      "totals": "act-common 136, act-agent 312+13, act-execution 1426+97 (6 skipped), act-knowledge 263 (4 skipped)+12, act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172+18, act-app 77+106 -> 2909 tests, 0 failures, 0 errors, 14 skipped",
+      "lane": "node scripts/lane-plan.mjs check -> act-execution exact cover OK, 125 shardable classes (g4 regenerated with the 17 unmeasured classes + the new test at 0s)",
+      "not_rerun": "qoder bridge (62/5) and dashboard (662/79) are unchanged since a8290fc5; hosted CI runs both at the new head"
+    },
+    "f34_credentials": {
+      "finding": "F34 (medium, open): the live QA run raw git push failed with exit 128 ('Invalid username or token'); the run environment exposed GH_TOKEN=ui-token-e2e-... (a synthetic placeholder), while the pack credential path is separate",
+      "status": "recorded, not fixed; the QA prompt/tooling must not inherit the synthetic token as a usable credential"
+    },
+    "ci_flakes_at_a8290fc5": {
+      "run": "42496329688 (16 jobs: 15 success, 1 skipped) after one gh run rerun --failed",
+      "frontend": "TaskDrawer.test.tsx: the typed feedback was undefined",
+      "java": "RunAdmissionIntegrationTest expected IN_PROGRESS but was TODO within 30 s",
+      "action": "both passed on rerun; local gate green at the same head; no code change; the F33 head needs a fresh full run"
+    },
+    "next": [
+      "push fc5b927d to origin/fix/round2-live-findings and get hosted CI green at the new head (PR #118 stays unmerged)",
+      "restart the backend from the fixed fat jar and rerun the live SDD scenario; a stop proof over the QA/DEV finalization is the live proof of F33",
+      "update the PR #118 body: F33 finding, fix, gate, CI run and the F34 credential finding"
+    ]
   }
 }

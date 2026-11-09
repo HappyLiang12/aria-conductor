@@ -714,10 +714,28 @@
       "java": "RunAdmissionIntegrationTest expected IN_PROGRESS but was TODO within 30 s",
       "action": "both passed on rerun; local gate green at the same head; no code change; the F33 head needs a fresh full run"
     },
+    "f35_credentials": {
+      "finding": "F35 (live-chain blocker, inferred): chain 1d251c5a (issue #39) finished BA (run 9c28bf01) and stopped at the spec approval 26beea6f; POST /api/v1/approvals/26beea6f.../decide returned 500 GitBranchException: GitHub API error 401: Bad credentials from GitBranchService.createBranch",
+      "cause": "no GitHub token in .env or the process environment; the old backend log records 'Stored credential GITHUB_TOKEN for pack pack-git-0001' at 15:53-15:55Z during the previous live run, so the pack credential was most likely overwritten with the synthetic ui-token-e2e-* placeholder (the F34 mechanism). No secret value was read or written",
+      "status": "open; needs a fresh GitHub credential for pack-git-0001 (human checkpoint); approval 26beea6f stays PENDING until expiresAt 2026-11-09T12:48:14Z, so a retry must use a new chain"
+    },
+    "hosted_ci_at_80dcdd88": {
+      "run": "42613239079 head 80dcdd88, attempt 2: completed/success (16 jobs: 15 success, 1 skipped)",
+      "attempt_1": "failed only the Java Integration Tests (Failsafe) job: SddWorkflowIntegrationTest.boundaries_qaWithoutVerdict_failsChain:302 -> configureCoreNoGating:788, Mockito WrongTypeOfReturnValue (Boolean cannot be returned by execute()); the test file is unchanged by this branch and the local gate was green at the same head, classified flake; gh run rerun --failed took attempt 2 green",
+      "sandbox": "42613238900 (Sandbox Lifecycle, real OpenSandbox) head 80dcdd88: completed/success",
+      "action": "no code change; a second occurrence at a clean head promotes the flake to a product bug"
+    },
+    "live_rerun_after_fix": {
+      "backend": "fat jar from the fixed head, profile h2, adk.default-provider=opencode, health UP; no Maven ran while it was up",
+      "drills": "run 8390ba06 FAILED ('The Qoder bridge event stream failed: closed'), cancel 409 (already failed); run be36a815 COMPLETED at the cancel instant (409 'reached COMPLETED while the verified cancel completed'); the backend stayed UP in both and no stop-proof warning was logged, so the F33 self-kill did not reproduce",
+      "chain": "1d251c5a (issue #39) BA run 9c28bf01 produced the spec; the chain is WAITING_APPROVAL at step 0 with approval 26beea6f PENDING, blocked by F35",
+      "limits": "the exact recycled-parent shape was not reconstructed live; the creation-order filter is covered by the real-OS tests and the fake-supervisor scenarios, and the full BA -> spec -> DEV -> QA chain is not complete"
+    },
     "next": [
-      "push fc5b927d to origin/fix/round2-live-findings and get hosted CI green at the new head (PR #118 stays unmerged)",
-      "restart the backend from the fixed fat jar and rerun the live SDD scenario; a stop proof over the QA/DEV finalization is the live proof of F33",
-      "update the PR #118 body: F33 finding, fix, gate, CI run and the F34 credential finding"
+      "update the PR #118 body with F33, the gate at fc5b927d, hosted CI at 80dcdd88, F34/F35 and the live status",
+      "push the docs head and get hosted CI green at the new head (PR #118 stays unmerged; merge is the user's action)",
+      "restore a fresh GitHub credential for pack-git-0001, then create a new chain and rerun the live SDD scenario end to end (the 26beea6f approval expires at 2026-11-09T12:48:14Z)"
     ]
+
   }
 }

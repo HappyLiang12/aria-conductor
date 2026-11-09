@@ -179,6 +179,35 @@ class MemoryProposalServiceTest {
     }
 
     @Test
+    void theInboxDefaultsToPending() {
+        when(facts.findAll()).thenReturn(List.of(fact(UUID.randomUUID(), "editor", FactStatus.PENDING, OLD)));
+        when(relations.findAll()).thenReturn(List.of());
+
+        assertThat(proposals.listProposals(null))
+                .extracting(MemoryProposalView::status)
+                .containsExactly("PENDING");
+    }
+
+    @Test
+    void aRejectedRelationStaysRetiredAndCannotBeApproved() {
+        MemoryRelation proposal = relation(FactStatus.PENDING);
+        when(facts.findById(proposal.getId())).thenReturn(Optional.empty());
+        when(relations.findById(proposal.getId())).thenReturn(Optional.of(proposal));
+
+        MemoryProposalView decided = proposals.decideProposal(proposal.getId(), ProposalDecision.REJECT, OPERATOR);
+
+        assertThat(decided.status()).isEqualTo("RETIRED");
+        assertThat(proposal.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(proposal.getValidTo()).isNotNull();
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions).save(written.capture());
+        assertThat(written.getValue().getAction()).isEqualTo(MemoryAction.RETIRE);
+        assertThat(written.getValue().getSubjectType()).isEqualTo(MemorySubjectType.RELATION);
+        assertThatThrownBy(() -> proposals.decideProposal(proposal.getId(), ProposalDecision.APPROVE, OPERATOR))
+                .isInstanceOf(MemoryConflictException.class);
+    }
+
+    @Test
     void anUnknownSubjectIsNotFound() {
         UUID subjectId = UUID.randomUUID();
         when(facts.findById(subjectId)).thenReturn(Optional.empty());

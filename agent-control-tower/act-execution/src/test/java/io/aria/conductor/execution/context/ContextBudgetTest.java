@@ -35,8 +35,7 @@ class ContextBudgetTest {
     }
 
     @Test
-    void aSectionCapNeverCutsMidLine() {
-        ContextProperties properties = new ContextProperties();
+    void aSectionCapNeverCutsMidLine() {        ContextProperties properties = new ContextProperties();
         properties.setCaps(Map.of("tools", 60));
 
         BudgetResult result = new ContextBudget(properties, 24_000)
@@ -50,5 +49,37 @@ class ContextBudgetTest {
         assertThat(lines.subList(0, lines.size() - 1))
                 .isNotEmpty()
                 .allMatch(line -> line.matches("^- tool_\\d+ \\(WORKER_READ\\)$"));
+    }
+
+    @Test
+    void appliesBothCapsOldestFirstAndRecordsContentFreeMarkers() {
+        ContextProperties properties = new ContextProperties();
+        properties.setCaps(Map.of("history", 20));
+        List<ContextMessage> history = List.of(
+                message("aaaaaaaaaa"), message("bbbbbbbbbb"), message("cccccccccc"));
+
+        // The 20-character history cap drops the oldest message; the 39-character
+        // global cap (20 rendered goal characters plus 20 history characters) then
+        // drops the next oldest one.
+        BudgetResult result = new ContextBudget(properties, 39)
+                .apply(List.of(section("goal", "Goal", "0123456789")), history, new ArrayList<>());
+
+        assertThat(result.history()).extracting(ContextMessage::content)
+                .containsExactly("cccccccccc");
+        assertThat(result.dropped()).containsExactly("history:dropped:0", "history:dropped:1");
+    }
+
+    @Test
+    void historyThatFitsTheHistoryCapIsKeptWhole() {
+        ContextProperties properties = new ContextProperties();
+        properties.setCaps(Map.of("history", 30));
+        List<ContextMessage> history = List.of(
+                message("aaaaaaaaaa"), message("bbbbbbbbbb"), message("cccccccccc"));
+
+        BudgetResult result = new ContextBudget(properties, 24_000)
+                .apply(List.of(), history, new ArrayList<>());
+
+        assertThat(result.history()).hasSize(3);
+        assertThat(result.dropped()).isEmpty();
     }
 }

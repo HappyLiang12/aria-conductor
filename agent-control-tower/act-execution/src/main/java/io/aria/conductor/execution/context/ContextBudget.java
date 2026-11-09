@@ -19,9 +19,10 @@ record BudgetResult(
 
 /**
  * Fits one envelope into {@code maxChars} (spec §8.2 steps 5-6): per-section
- * caps first, then history trimmed oldest-first, then the optional groups
- * dropped in the fixed order {@code workspace, skills, knowledge, memory}.
- * Identity, policy and goal are never dropped.
+ * caps first, then the history cap (oldest-first), then history trimmed to the
+ * global cap, then the optional groups dropped in the fixed order
+ * {@code workspace, skills, knowledge, memory}. Identity, policy and goal are
+ * never dropped.
  *
  * <p>The budget counts the characters actually sent: a section costs its
  * rendered block and a history message costs its content.
@@ -52,6 +53,12 @@ final class ContextBudget {
 
         List<ContextMessage> kept = new ArrayList<>(history);
         int nextOriginalIndex = 0;
+        int historyCap = properties.getCaps().getOrDefault("history", Integer.MAX_VALUE);
+        while (!kept.isEmpty() && historyChars(kept) > historyCap) {
+            kept.remove(0);
+            dropped.add("history:dropped:" + nextOriginalIndex++);
+        }
+
         int total = chars(capped, kept);
         while (total > maxChars && !kept.isEmpty()) {
             kept.remove(0);
@@ -107,9 +114,11 @@ final class ContextBudget {
     }
 
     static int chars(List<ContextSection> sections, List<ContextMessage> history) {
-        return renderedChars(sections) + history.stream()
-                .mapToInt(message -> message.content().length())
-                .sum();
+        return renderedChars(sections) + historyChars(history);
+    }
+
+    static int historyChars(List<ContextMessage> history) {
+        return history.stream().mapToInt(message -> message.content().length()).sum();
     }
 
     static int renderedChars(List<ContextSection> sections) {

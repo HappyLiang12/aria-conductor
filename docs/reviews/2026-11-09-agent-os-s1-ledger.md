@@ -1,6 +1,8 @@
 # Agent OS S1 Delivery Ledger (2026-11-09)
 
-Status: Wave 0 in progress
+Status: Wave 1 merged at `a6fcfec4`; Gate A BLOCKED by a red full local gate
+(two stale integration assertions and one order-dependent IT). Evidence:
+`docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md`.
 Spec: `docs/superpowers/specs/2026-11-09-aria-memory-context-design.md` (commits `6e2035c2`, `6664f779`)
 Plan: `docs/superpowers/plans/2026-11-09-aria-memory-context-s1.md` (commit `65285701`)
 Feature branch: `feat/agent-os-memory`
@@ -177,6 +179,37 @@ no agent reads `.env`):
   environment;
 - one SDD chain on an existing GitHub issue with the spec gate approved once; assert the
   chain completes, no 500 on approval, and one context manifest per BA/DEV/QA turn.
+
+### Gate A evidence (Release QA, 2026-11-10)
+
+HEAD `a6fcfec4`, tree clean. Full transcript:
+`docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md`.
+
+- **Wave gate: GREEN.** `mvn -B -pl act-common,act-memory,act-execution,act-agent,act-mcp -am test`
+  at `a6fcfec4`: BUILD SUCCESS, 279 classes, 2753 tests, 0 failures/errors, 8 skipped
+  (act-common 145, act-agent 314, act-execution 1424, act-knowledge 269/4, act-memory
+  152, act-dashboard-api 90, act-aria 178/4, act-mcp 181), coverage met.
+  `MemoryMigrationIntegrationTest` 4/0/0/0 on a fresh H2. act-mcp is 181/0/0/0 over
+  21 classes, matching lane C's claim, so **C's evidence-only BLOCK is cleared**.
+- **Full local gate: RED.** `mvn -B -pl act-execution,act-agent,act-aria,act-app -am verify`
+  builds every upstream module green (surefire 2844 tests, 8 skipped; failsafe 13
+  act-agent, 97 act-execution/6 skipped, 12 act-knowledge, 18 act-mcp) and then fails
+  `act-app` failsafe: 123 tests, **2 failures, 1 error**.
+  - F-A1 product/deterministic: `AgentLoopInjectionIntegrationTest:103` and
+    `OpenCodeTaskExecutionIntegrationTest:113` still assert `## Knowledge Context`, the
+    heading of the `KnowledgeContextProvider` that A2 deleted. The contributor that
+    replaced it renders one section per item (`## deploy-proc`), which the same prompt
+    contains. Both tests were last touched at `60d542f1` (PR #109), so the A1/A2 merge
+    left them stale. Reproduces in an isolated re-run (1/1 and 1/2 respectively).
+  - F-A2 product test isolation: `AriaManagedPromptMigrationIntegrationTest.turnsAnEmptyConfigIntoTheObjectLiteral`
+    errors deleting the Aria agent row while `agent_sessions` still references it
+    (FK_SESSIONS_AGENT). The class is 12/0/0/0 in isolation; the error is order-dependent
+    pollution from an earlier IT in the same failsafe JVM.
+  - No product code, test, migration or config was changed by Gate A.
+- **Non-Maven surfaces: GREEN.** Bridge 62/62 (5 files, dist rebuilt from source),
+  dashboard 662/662 (79 files) and `pnpm build` exit 0, MCP server 157/157 (20 files).
+- Lane B and D are already merged at this head (`a6fcfec4`); the plan's merge order is
+  therefore ahead of the gate. Gate A must go green before Gate B.
 
 Gate B (after B, D, C2a, C2b, I merge):
 

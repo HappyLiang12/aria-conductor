@@ -139,7 +139,84 @@ No product code, test or migration was modified by Gate A.
 | Dashboard build | `pnpm build` | `tsc -b && vite build` exit 0, 1.30 s, chunk-size warning only |
 | MCP server | `cd packages/mcp-server && pnpm install --frozen-lockfile && pnpm test` | 20 files, 157/157 tests passed |
 
-## 4. Not yet run at the time of this file
+## 4. Live SDD scenario — BLOCKED by the host runtime (not marked passed)
 
-- Live SDD scenario (Gate A step 3) — recorded in the ledger when complete.
-- Hosted CI run id (Gate A step 4) — recorded in the ledger when complete.
+Stack: fat jar `act-app/target/act-app-0.1.0-SNAPSHOT.jar` (95 MB, built by the full
+`verify` at this head), fresh file database
+`jdbc:h2:file:./data/gate-a-db;MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE`, launched from an
+isolated directory (`%TEMP%/gate-a/live`) with the operator's env file sourced
+in-process (never printed), `--adk.default-provider=opencode`. Health 200, Flyway
+migrated, the active provider auto-created from the environment (DeepSeek /
+deepseek-v4-flash), `development-workflow` template APPROVED. The operator GitHub
+credential was stored through `POST /api/v1/packs/pack-git-0001/credentials`
+(`{"status":"stored","restartRequired":false}`), value read from the authenticated
+`gh` CLI and never printed.
+
+Both placement options for the `opencode` core fail on this host:
+
+### Attempt 1 — SANDBOX (the mode V59 gives the opencode agents)
+
+Chain `44683e11-1ebc-417d-98ff-374f4d196d4b`, BA run
+`bf3262ef-74b0-42af-b59f-8b35ab6524e6`: RUNNING for ~4 s, then FAILED with
+`iterations=0` before the first turn.
+
+```
+com.alibaba.opensandbox.sandbox.api.infrastructure.ServerException: Server error : 500 Internal Server Error
+{"code":"DOCKER::SANDBOX_START_FAILED","message":"Failed to create or start container: 500 Server Error for
+http+docker://localhost/v1.44/containers/.../start: Internal Server Error (\"crun: open `memory.max` for
+writing: No such file or directory: OCI runtime attempted to invoke a command that was not found\")"}
+```
+
+Reproduced outside the product, so the product is not the cause:
+
+```
+$ podman run --rm --memory 256m docker.io/library/node:22-slim true
+Error: preparing container ... for attach: crun: open `memory.max` for writing: No such file or directory:
+OCI runtime attempted to invoke a command that was not found
+```
+
+The podman machine (3 CPU / 2 GiB, WSL) cannot enforce a memory limit, so every
+OpenSandbox create fails. Environment defect, not product.
+
+### Attempt 2 — HOST (the placement the ledger names for Gate A)
+
+The opencode CLI on this host is only the npm shim
+`C:/Users/User/AppData/Roaming/npm/opencode.cmd`; there is no native
+`opencode*.exe` anywhere under the npm prefix or `%LOCALAPPDATA%`. The Product must
+start the profile executable, so the shim makes Windows start `cmd.exe`, and the
+trusted-launch check refuses it by design:
+
+```
+Agents switched to opencode/HOST via PUT /api/v1/agents/runtime {"updated":4,"executionMode":"HOST"}
+Chain 682f6537-0ffd-4eda-8bd6-40be5709c49c, BA run f55448d3-6297-4d4e-9649-f26d6bddc6f7
+Froze run f55448d3... to core opencode/HOST
+java.lang.IllegalStateException: The runtime the OS started (cmd) is not the executable of the trusted
+launch profile (opencode)
+run status=FAILED, iterations=0
+```
+
+This is the fail-closed check doing its job; the gap is environmental (no native
+opencode binary). A wrapper `.exe` or borrowing a credential from another store would
+be simulation, so it was not done.
+
+### qoder HOST alternative
+
+`C:/Users/User/.qoder/bin/qodercli/qodercli-1.1.61.exe` and a rebuilt
+`packages/qoder-acp-bridge/dist` are present, but the qoder core needs an operator PAT
+through `PUT /api/v1/cores/qoder/credential` (round-2 finding F1: the CLI login is not
+adopted). Neither `QODER_PAT`, `QODER_API_KEY`, `QODER_TOKEN` nor
+`ARIA_CORES_QODER_CREDENTIAL` is present in the operator env file, and no operator is
+in the loop to supply one. Not run rather than simulated.
+
+### Consequence
+
+No BA/DEV/QA turn ever reached a prompt, so the manifest assertion
+(one `context_manifests` row per turn) is NOT VERIFIED, not passed. Both chains are
+aborted attempts and are recorded as such. The database was left at
+`%TEMP%/gate-a/live/data/gate-a-db` for the stop-and-query step.
+
+## 5. Hosted CI
+
+Workflow `ci.yml` at `039d3d10` (the evidence commit; `git diff a6fcfec4..039d3d10` is
+the two documentation files only), `gh workflow run ci.yml --ref feat/agent-os-memory`,
+run id `42652224806`.

@@ -85,6 +85,15 @@ public class MemoryCommandService {
         guard.checkKey("canonicalKey", canonicalKey);
         guard.checkValue("displayName", command.displayName());
         MemoryOrigin origin = originOf(actor);
+        if (origin == MemoryOrigin.EXTRACTION) {
+            // Spec §7: the EXTRACTION row of the governance matrix covers preferences,
+            // identity facts, relations and new links — all PENDING. An entity is a
+            // structural row: an inference may never mint an immediately recallable
+            // ACTIVE entity, and a PENDING entity has no meaning (nothing could hang off
+            // it). Operator and run/backfill writes are the only entity creators.
+            throw new MemoryValidationException(
+                    "an EXTRACTION actor cannot create a memory entity; create it as OPERATOR and let the extraction propose facts, relations or links");
+        }
         Instant now = Instant.now();
 
         MemoryEntity entity = MemoryEntity.builder()

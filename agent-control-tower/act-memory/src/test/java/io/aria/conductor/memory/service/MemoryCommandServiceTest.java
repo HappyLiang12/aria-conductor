@@ -446,6 +446,16 @@ class MemoryCommandServiceTest {
     }
 
     @Test
+    void anExtractionCannotCreateAnActiveStructuralEntity() {
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "operator", "Operator", Sensitivity.INTERNAL), EXTRACTION))
+                .as("spec §7: EXTRACTION may propose facts, relations and links — never an entity")
+                .isInstanceOf(MemoryValidationException.class)
+                .hasMessageContaining("EXTRACTION");
+        verifyNoInteractions(entities, facts, relations, assertions);
+    }
+
+    @Test
     void creatingAnEntityWritesAnAssertionAndDefaultsSensitivity() {
         MemoryEntity created = command.createEntity(
                 new CreateEntityCommand("PERSON", "operator", "Operator", null), OPERATOR);

@@ -38,6 +38,10 @@
             <artifactId>act-knowledge</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-memory</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>

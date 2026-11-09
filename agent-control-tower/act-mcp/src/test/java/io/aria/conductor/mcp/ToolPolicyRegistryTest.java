@@ -1,8 +1,8 @@
 package io.aria.conductor.mcp;
 
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.mcp.tools.ToolPolicyRegistry;
-import io.aria.conductor.mcp.tools.ToolPolicyRegistry.ToolPolicy;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

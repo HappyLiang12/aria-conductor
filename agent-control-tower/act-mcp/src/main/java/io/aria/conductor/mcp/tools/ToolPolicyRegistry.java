@@ -1,6 +1,7 @@
 package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.common.tool.ToolPolicy;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -28,14 +29,6 @@ import java.util.Set;
  */
 @Component
 public class ToolPolicyRegistry {
-
-    /** What authority a tool call requires. */
-    public enum ToolPolicy {
-        WORKER_READ,
-        WORKER_WRITE,
-        OPERATOR_ONLY,
-        GATED
-    }
 
     private static final Map<String, ToolPolicy> POLICIES = Map.ofEntries(
             // workflows

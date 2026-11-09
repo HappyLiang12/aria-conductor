@@ -324,6 +324,26 @@ Verify the run's provider id is the row that was updated; the default provider s
   stays BLOCKED; the fix belongs to the core tool surface (platform MCP for worker agents or
   a reviewed write policy), not to the S1 lanes, and no qoder fallback or simulation was
   used.
+- 2026-11-10: Gate A completion. (1) The first hosted run (42652224806 at 039d3d10) was
+  16/17 with the failsafe lane red: two app-level ITs still asserted the deleted
+  `## Knowledge Context` block (F-A1) and the V82 IT deleted an Aria row with live
+  `agent_sessions` children (F-A2). Both were test debt, fixed in lane fix-a
+  (3b352d96, merged 62020f64) with real assertions on the new `## <item>` shape and an
+  FK-safe cleanup; the act-app failsafe tier is 123/0/0/0. (2) Clean-room at 62020f64
+  (fresh worktree, no dist): the first attempt failed with 17 CoreAdapterContractTest
+  errors because a clean checkout has no `packages/qoder-acp-bridge/dist`; this is
+  clean-install, not product. Rebuilding the bridge first, the full gate is green:
+  Java verify (act-app failsafe 123/0/0/0), dashboard 662/662 plus build, mcp-server
+  157/157, qoder-acp-bridge 62/62. (3) Hosted CI run 42656087082 at 62020f64 is 17/17
+  success. (4) The live SDD retry verified the S1 arm end to end: chain 588bcde6, real
+  opencode HOST cores, approval 200, 10 context_manifests rows for 10 runs (one per
+  executed turn, unique key intact, no gaps), no StopProof false, 75,918 tokens; the
+  chain itself failed because the pre-existing governed HOST toolset denies write/bash
+  and the platform MCP is Aria-only, and the SANDBOX arm cannot start because the
+  podman machine cannot enforce `memory.max` (a machine restart did not change it).
+  Gate A verdict: PASS for the S1 acceptance arm (context, manifests, approvals,
+  regression), with the live SDD deliverable BLOCKED by those two pre-existing
+  platform/environment gaps, recorded rather than simulated.
 
 ## Evidence to fill at each boundary
 

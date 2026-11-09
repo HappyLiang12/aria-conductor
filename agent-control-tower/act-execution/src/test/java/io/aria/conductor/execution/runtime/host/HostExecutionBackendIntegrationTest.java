@@ -692,6 +692,110 @@ class HostExecutionBackendIntegrationTest {
     }
 
     /**
+     * F33 (critical), deterministic at the controller level: every enumeration of a
+     * live root reports a stale parent link -- the stranger {@code 6001@1}, older than
+     * the root (synthetic creation 5000000) by far more than the creation-order
+     * tolerance, and the genuine child {@code 6002@5000001}. That is the live shape:
+     * the QA root's dead launcher pid had been reused, which made the backend JVM and
+     * its supervisor (12 minutes older than the root) look like descendants and let
+     * the stop proof kill both. A process can never be a child of a process created
+     * after it, so the stranger must never be sampled or signalled, while the genuine
+     * child is both. Removing the root boundary fails this test: the stranger is
+     * remembered and the proof then fails closed over it (the kill guard refuses it,
+     * so it stays live).
+     */
+    @Test
+    void aTreeRecordOlderThanTheRunRootIsNeverSampledOrSignalled() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-stale-tree-record"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "stale-tree-record"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+
+        assertThat(awaitObservedRecord(controller, owned.runId(), "6002@5000001", 30_000))
+                .as("the genuine child must be sampled, or the test is vacuous").isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the fixture must really have reported the older stranger as a child")
+                .anyMatch(line -> line.startsWith("tree: ") && line.contains("6001@1@1"));
+        assertThat(controller.observedRecordContains(owned.runId(), "6001@1"))
+                .as("a process older than the run's root cannot be its descendant: never sampled")
+                .isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.allWritersStopped())
+                .as("the genuine child is killed and the proof is true").isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the stop must signal the genuine child").contains("killed: 6002@5000001");
+        assertThat(protocolLogLines(protocolLog))
+                .as("the stop must never signal a record older than the run's root")
+                .noneMatch(line -> line.startsWith("killed: 6001@1"));
+    }
+
+    /**
+     * F33 review P2: the walker no longer follows a subtree whose holder it cannot
+     * identify, so a live writer may sit under it. The read reports the subtree as an
+     * {@code unverifiable:} gap; the sampler must not remember it as an identity, and
+     * the stop must fail closed without signalling anything. Silently omitting the
+     * subtree would let the proof certify a writer it never saw.
+     */
+    @Test
+    void anUnidentifiableSubtreeFailsTheStopClosedWithoutSignallingAnything() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-unverifiable-tree-node"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "unverifiable-tree-node"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+
+        assertThat(awaitObservedRecord(controller, owned.runId(), "7005@9002", 30_000))
+                .as("the verifiable part of the tree is still sampled").isTrue();
+        assertThat(protocolLogLines(protocolLog))
+                .as("the fixture must really have reported an unidentifiable subtree")
+                .anyMatch(line -> line.startsWith("tree: ") && line.contains("unverifiable:7004"));
+        assertThat(controller.observedRecordContains(owned.runId(), "unverifiable:7004"))
+                .as("a gap names no identity and is never remembered as one").isFalse();
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(30));
+
+        assertThat(proof.allWritersStopped())
+                .as("a proof over a subtree the OS cannot identify fails closed").isFalse();
+        assertThat(protocolLogLines(protocolLog))
+                .as("nothing may be signalled when the tree cannot be certified")
+                .noneMatch(line -> line.startsWith("killed: "));
+    }
+
+    /**
+     * F33 review P2/P3: the gap guard is not only the stop's. A pause over a tree with
+     * an unidentifiable subtree can neither suspend it nor verify it, so it must report
+     * RUNNING/unverified and suspend nothing (`applied:` never appears).
+     */
+    @Test
+    void anUnidentifiableSubtreeFailsThePauseUnverified() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-unverifiable-pause"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path protocolLog = dir.resolve("supervisor-protocol.log");
+        WindowsProcessController controller =
+                new WindowsProcessController(fakeSupervisorHost(dir, protocolLog, "unverifiable-tree-node"));
+        cleanups.add(() -> deleteTree(dir));
+        OwnedProcess owned = startOnFakeSupervisor(controller, workspace);
+        awaitProtocolLines(protocolLog, "tree: ", 1, 30_000);
+
+        ControlAck ack = controller.pause(owned, Instant.now().plusSeconds(30))
+                .toCompletableFuture().get(30, TimeUnit.SECONDS);
+
+        assertThat(ack.state()).as("an unidentifiable subtree is not a paused subtree")
+                .isEqualTo(ControlState.RUNNING);
+        assertThat(ack.verified()).isFalse();
+        assertThat(protocolLogLines(protocolLog))
+                .as("nothing may be suspended over an unidentifiable subtree")
+                .noneMatch(line -> line.startsWith("applied: "));
+    }
+
+    /**
      * Release-blocking live finding (run 8af5e2a6): a WAITING_INPUT run's core
      * exits on its own -- the assistant's clarification question was delivered and
      * the bridge is gone -- and the operator's later cancel must still finalize.

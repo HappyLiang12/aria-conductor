@@ -1,5 +1,5 @@
 # act-execution shard fragment 4 of 4 - a surefire includes file (one FQCN per line).
-# cost=17.21s  classes=36
+# cost=17.21s  classes=53
 # measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
 # by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
 
@@ -19,23 +19,40 @@ io.aria.conductor.execution.kanban.KanbanMirrorPoolStarvationTest
 io.aria.conductor.execution.kanban.KanbanServiceEventTest
 io.aria.conductor.execution.kanban.KanbanServiceRunOutcomeTest
 io.aria.conductor.execution.kanban.KanbanServiceTest
+io.aria.conductor.execution.listener.GitTreeDiffSupplierTest
+io.aria.conductor.execution.listener.ReportStepTreeGuardTest
 io.aria.conductor.execution.listener.RunExecutionListenerTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerQaTreeGuardTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerQaVerdictGateTest
 io.aria.conductor.execution.listener.WorkflowAutoChainerTest
+io.aria.conductor.execution.listener.WorkflowCompletionCardListenerTest
 io.aria.conductor.execution.mcp.McpPropertiesTest
 io.aria.conductor.execution.mcp.SandboxHostResolverTest
 io.aria.conductor.execution.repository.ApprovalAskRepositoryTest
 io.aria.conductor.execution.runtime.AgentExecutionPolicyTest
 io.aria.conductor.execution.runtime.ClarificationQuestionsTest
+io.aria.conductor.execution.runtime.CoreExecutionServiceTelemetryInjectionTest
+io.aria.conductor.execution.runtime.CoreLaunchEnvironmentTest
 io.aria.conductor.execution.runtime.LaunchProfileTest
 io.aria.conductor.execution.runtime.RunAdmissionPropertiesTest
 io.aria.conductor.execution.runtime.RunAdmissionQueueEventsTest
 io.aria.conductor.execution.runtime.RunFinalizerTest
 io.aria.conductor.execution.runtime.TaskDeadlinePropertiesTest
+io.aria.conductor.execution.runtime.WorkflowScratchBindingTest
+io.aria.conductor.execution.runtime.WorkspacePathsConfiguredRootTest
+io.aria.conductor.execution.runtime.core.QoderCoreSessionReportedUsageTest
 io.aria.conductor.execution.runtime.host.CoreFailureTextTest
+io.aria.conductor.execution.runtime.host.HostAuthenticationFailureTextTest
 io.aria.conductor.execution.runtime.host.HostLaunchSecretFileTest
 io.aria.conductor.execution.runtime.host.OwnedProcessControllerTest
 io.aria.conductor.execution.runtime.host.RunCoreLogTest
+io.aria.conductor.execution.runtime.host.WindowsProcessControllerOrphanAttributionTest
+io.aria.conductor.execution.runtime.host.WindowsProcessControllerTreeIdentityTest
 io.aria.conductor.execution.security.ActorTokenServiceTest
+io.aria.conductor.execution.security.CredentialRedactorTest
 io.aria.conductor.execution.security.OperatorAuthorityResolverTest
 io.aria.conductor.execution.security.OperatorSessionServiceTest
+io.aria.conductor.execution.telemetry.CoreEventTelemetrySliceTest
+io.aria.conductor.execution.telemetry.CoreEventTelemetryTest
+io.aria.conductor.execution.telemetry.RunTelemetryServiceSliceTest
 io.aria.conductor.execution.tool.WorkspaceManagerTest

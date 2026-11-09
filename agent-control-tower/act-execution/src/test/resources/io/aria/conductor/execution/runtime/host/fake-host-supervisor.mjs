@@ -116,6 +116,21 @@
 //       "tree-of-recycled:") which the fake then lets a kill take. The bound run's
 //       own tree is gone, so a stop must decide on identity evidence alone and must
 //       never anchor a sweep on the recycled pid.
+//   stale-tree-record
+//       F33: every enumeration of a live root reports a stale parent link -- the
+//       stranger "6001@1" (older than the root, whose synthetic creation is
+//       5000000, by far more than the creation-order tolerance) and the
+//       genuine child "6002@5000001". A snapshot's th32ParentProcessID names the
+//       creator's pid at creation time; when that pid is recycled, an older process
+//       looks like a descendant. Both are live identities ("match") and the fake
+//       lets a kill take either, so a controller that trusts the link samples the
+//       stranger and signals it; the root boundary must drop it and keep the child.
+//   unverifiable-tree-node
+//       F33 review P2: every enumeration reports "unverifiable:7004@1" -- a subtree
+//       whose holder the OS cannot identify -- beside the genuine child "7005@9002"
+//       and the root. The gap is not an identity: the sampler must not remember it
+//       and the stop must fail closed without signalling anything, because a live
+//       writer may sit under the unidentifiable subtree.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
@@ -178,6 +193,18 @@ const recycledRoot = scenario === 'recycled-root';
 const recycledRootCreation = '9999';
 const recycledChild = '7003@7003';
 let recycledChildAlive = true;
+// stale-tree-record: the F33 shape. The root's synthetic creation is large enough that
+// the creation-order tolerance is meaningful: the stranger predates the root by far more
+// than 100 ms, the genuine child does not. Both answer "match" while alive and the fake
+// lets a kill take either, so a controller that trusts the stale link signals the stranger.
+const staleTreeRecord = scenario === 'stale-tree-record';
+const staleStranger = '6001@1';
+const staleChild = '6002@5000001';
+const staleStrangerState = { alive: true };
+const staleChildState = { alive: true };
+// unverifiable-tree-node: a subtree the OS cannot identify. It is not an identity and
+// the proof may not certify it either; the genuine child keeps the rest of the tree real.
+const unverifiableTree = scenario === 'unverifiable-tree-node';
 // unverifiable-member: a live job member whose identity the OS cannot read.
 const unverifiableMember = 'unverifiable:5002';
 const syntheticScenario = () => scenario === 'head-live-tail-gone'
@@ -232,6 +259,23 @@ function treeOf(pid) {
     // A sweep anchored on the recycled pid would enumerate a stranger's tree.
     log('tree-of-recycled: ' + pid);
     return `${recycledChild}@1;${pid}@${recycledRootCreation}@0`;
+  }
+  if (staleTreeRecord) {
+    // The F33 shape on every enumeration: a stale parent link makes the older stranger
+    // look like a child of the root. The genuine child keeps it a real tree.
+    const root = root0();
+    if (!root || root.pid !== pid || !root.alive) {
+      return '';
+    }
+    return `${staleStranger}@1;${staleChild}@1;${recordOf(root)}@0`;
+  }
+  if (unverifiableTree) {
+    // A subtree the OS cannot identify beside a genuine child and the verified root.
+    const root = root0();
+    if (!root || root.pid !== pid || !root.alive) {
+      return '';
+    }
+    return `unverifiable:7004@1;7005@9002@1;${recordOf(root)}@0`;
   }
   if (deadRootChild || deadRootUnverifiableChild) {
     const root = root0();
@@ -452,6 +496,12 @@ function verdictOf(record) {
       && record === grandchild) {
     return grandchildState.alive ? 'match' : 'gone';
   }
+  if (staleTreeRecord && record === staleStranger) {
+    return staleStrangerState.alive ? 'match' : 'gone';
+  }
+  if (staleTreeRecord && record === staleChild) {
+    return staleChildState.alive ? 'match' : 'gone';
+  }
   return 'gone';
 }
 
@@ -497,7 +547,7 @@ createInterface({ input: process.stdin }).on('line', (raw) => {
           break;
         }
         const pid = Number(argument);
-        roots.push({ pid, creation: String(9001 + roots.length), alive: true });
+        roots.push({ pid, creation: String(staleTreeRecord ? 5000000 : 9001 + roots.length), alive: true });
         log('assigned: ' + roots[roots.length - 1].pid);
         say('ok');
         break;
@@ -587,6 +637,22 @@ createInterface({ input: process.stdin }).on('line', (raw) => {
               return `${record}:gone`;
             }
             grandchildState.alive = false;
+            log('killed: ' + record);
+            return `${record}:ok`;
+          }
+          if (staleTreeRecord && record === staleStranger) {
+            if (!staleStrangerState.alive) {
+              return `${record}:gone`;
+            }
+            staleStrangerState.alive = false;
+            log('killed: ' + record);
+            return `${record}:ok`;
+          }
+          if (staleTreeRecord && record === staleChild) {
+            if (!staleChildState.alive) {
+              return `${record}:gone`;
+            }
+            staleChildState.alive = false;
             log('killed: ' + record);
             return `${record}:ok`;
           }

@@ -61,6 +61,32 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code GetExitCodeProcess} for liveness) and refuses to act when the recorded
  * creation identity does not match the process currently holding that PID.
  *
+ * <p>F33, critical (live QA stop proof of run be18e519): a parent link is the
+ * creator's pid at creation time and is never updated, so a dead creator's pid may
+ * be recycled by a newer, unrelated process. The live failure had the backend JVM
+ * and its supervisor -- 12 minutes <em>older</em> than the run root -- adopted as
+ * descendants of a freshly created QA root (the backend's dead launcher pid had
+ * been reused) and killed by that run's stop proof. The walk therefore validates
+ * every parent link against creation order: a process cannot be a child of a
+ * process created after it, so a link whose child predates its parent is stale and
+ * its subtree is not this root's. A gone node's children are not followed either --
+ * an earlier holder of its pid may have created some of them. A live but unreadable
+ * holder (protected/elevated) is reported as an {@code unverifiable:<pid>} gap and
+ * its subtree is not followed: a proof that meets a gap fails closed instead of
+ * silently omitting a subtree it cannot classify. On top of the walk, every tree
+ * read drops records older than the run's recorded root and anchors the tree on the
+ * root identity the controller verified -- a root pid reused between the ownership
+ * verdict and the enumeration fails the read instead of walking a stranger's tree.
+ * Every mutating control batch refuses this controller's own JVM, its supervision
+ * channel, malformed records and any record that predates the run; the supervisor
+ * additionally refuses itself. A refused record is never signalled -- it stays live,
+ * so the proof fails closed instead of certifying it stopped. The pid-reuse shape
+ * cannot be forced deterministically on a live host: the root boundary and the
+ * per-link boundary are unit-tested (the latter through the supervisor's own "link"
+ * classifier), the stale-link shape is reproduced deterministically by the
+ * fake-supervisor harness, and the walk's positive shape and both self-signal
+ * refusals are exercised on the real OS.
+ *
  * <p>Every stop proof carries a <b>job-membership completeness net</b>, because
  * the enumerated ownership alone cannot see a descendant whose intermediate
  * parent died before the first enumeration (it is unreachable from the root's
@@ -161,6 +187,18 @@ final class WindowsProcessController implements OwnedProcessController {
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(120);
     private static final long SETTLE_MILLIS = 50;
     private static final int MAX_ROUNDS = 400;
+    /**
+     * F33: 10 ms in FILETIME ticks, the same creation-order tolerance the supervisor
+     * applies per parent link (the "link" protocol test pins the two together). A
+     * child can never be created before its parent; the tolerance only absorbs an
+     * unforeseen clock-source disagreement -- the F32 measurement of the WMI/kernel
+     * delta was under 1 ms, and the live pid reuse that killed the backend was 12
+     * minutes, far outside any tolerance. A root pid reused within this window of the
+     * recorded creation time would pass the anchor; that requires the recorded root
+     * to die and the pid to be reused inside 10 ms, and is accepted as a theoretical
+     * residual -- the 10 ms window is the only guard on it.
+     */
+    static final long CREATION_ORDER_TOLERANCE_TICKS = 100_000L;
     private static final String WORKSPACE_POWERSHELL =
             "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
@@ -461,7 +499,15 @@ final class WindowsProcessController implements OwnedProcessController {
                         process.runId(), recordOf(process), rootVerdict);
             }
             for (int round = 0; round < MAX_ROUNDS; round++) {
-                List<String> live = anchorTree ? liveRecords(process.rootPid()) : List.of();
+                List<String> live = anchorTree ? liveRecords(process) : List.of();
+                List<String> gaps = live.stream().filter(WindowsProcessController::isTreeGap).toList();
+                if (!gaps.isEmpty()) {
+                    // F33 review P2: the walker dropped a subtree whose holder it could not
+                    // identify. It was not signalled and its children were not followed, so the
+                    // proof cannot know whether a live writer sits under it: it fails closed.
+                    return refused(process, "the root's tree reports an unidentifiable descendant subtree "
+                            + gaps + "; it cannot be certified as stopped, so nothing was signalled");
+                }
                 if (live.isEmpty()) {
                     break;
                 }
@@ -470,7 +516,7 @@ final class WindowsProcessController implements OwnedProcessController {
                         known.add(record);
                     }
                 }
-                operate("kill", live);
+                operate(process, "kill", live);
                 if (!Instant.now().isBefore(deadline)) {
                     return refused(process, "the caller's window elapsed during the root sweep");
                 }
@@ -508,7 +554,7 @@ final class WindowsProcessController implements OwnedProcessController {
                 return refused(process, "the caller's window elapsed before the straggler kill");
             }
             if (!stragglers.isEmpty()) {
-                operate("kill", stragglers);
+                operate(process, "kill", stragglers);
                 Thread.sleep(SETTLE_MILLIS);
             }
             if (!Instant.now().isBefore(deadline)) {
@@ -523,7 +569,7 @@ final class WindowsProcessController implements OwnedProcessController {
             // never an operation of a per-run stop.
             List<String> ownJobSurvivors = jobMembers().stream().filter(known::contains).toList();
             if (!ownJobSurvivors.isEmpty()) {
-                operate("kill", ownJobSurvivors);
+                operate(process, "kill", ownJobSurvivors);
                 Thread.sleep(SETTLE_MILLIS);
             }
             if (!Instant.now().isBefore(deadline)) {
@@ -533,9 +579,9 @@ final class WindowsProcessController implements OwnedProcessController {
             // round trips as well, so the population is re-read once more before the
             // per-record verdict decides the proof.
             mergeObserved(process.runId(), known);
-            List<String> remaining = anchorTree ? liveRecords(process.rootPid()) : List.of();
+            List<String> remaining = anchorTree ? liveRecords(process) : List.of();
             if (!remaining.isEmpty()) {
-                log.warn("Run {} stop proof: live records remain in the root's tree {}; the proof fails closed",
+                log.warn("Run {} stop proof: records or unverifiable descendants remain in the root's tree {}; the proof fails closed",
                         process.runId(), remaining);
             }
             boolean clean = remaining.isEmpty();
@@ -571,9 +617,9 @@ final class WindowsProcessController implements OwnedProcessController {
             }
             clean &= survivors.isEmpty() && unverifiable.isEmpty();
             Thread.sleep(SETTLE_MILLIS);
-            List<String> stillLive = anchorTree ? liveRecords(process.rootPid()) : List.of();
+            List<String> stillLive = anchorTree ? liveRecords(process) : List.of();
             if (!stillLive.isEmpty()) {
-                log.warn("Run {} stop proof: the root's tree still enumerates records {} after the settle;"
+                log.warn("Run {} stop proof: the root's tree still enumerates records or unverifiable descendants {} after the settle;"
                         + " the proof fails closed", process.runId(), stillLive);
             }
             clean &= stillLive.isEmpty();
@@ -622,7 +668,7 @@ final class WindowsProcessController implements OwnedProcessController {
                 log.info("Run {} stop proof: the shared job holds members {} created at or after this run's"
                                 + " root while it is the only supervised run; stopping them by identity",
                         process.runId(), attributable);
-                operate("kill", attributable);
+                operate(process, "kill", attributable);
                 Thread.sleep(SETTLE_MILLIS);
                 List<String> attributedSurvivors = new ArrayList<>();
                 for (String member : attributable) {
@@ -756,7 +802,7 @@ final class WindowsProcessController implements OwnedProcessController {
         List<String> foreignRunTrees = new ArrayList<>();
         for (OwnedProcess other : started.values()) {
             if (!other.runId().equals(process.runId()) && rootMatches(other)) {
-                foreignRunTrees.addAll(liveRecords(other.rootPid()));
+                foreignRunTrees.addAll(liveRecords(other));
             }
         }
         List<String> unaccounted = new ArrayList<>();
@@ -1044,7 +1090,16 @@ final class WindowsProcessController implements OwnedProcessController {
                 if (!"match".equals(current.command("record " + recordOf(process)))) {
                     continue;
                 }
-                observed.addAll(recordsFrom(current.command("tree " + process.rootPid())));
+                List<String> sampled = descendantsCreatedAtOrAfterRoot(
+                        recordsFrom(current.command("tree " + process.rootPid())),
+                        process.rootPid(), process.rootCreationIdentity());
+                for (String record : sampled) {
+                    // A gap names no identity: the sampler remembers identities only, and the
+                    // stop proof's own read reports the gap and fails closed.
+                    if (!isTreeGap(record)) {
+                        observed.add(record);
+                    }
+                }
                 observedPeaks.merge(entry.getKey(), observed.size(), Math::max);
                 pruneObserved(entry.getKey(), current, observed);
             } catch (RuntimeException e) {
@@ -1127,13 +1182,22 @@ final class WindowsProcessController implements OwnedProcessController {
         Map<String, Integer> ledger = suspensions.computeIfAbsent(process.runId(), key -> new LinkedHashMap<>());
         try {
             for (int round = 0; round < MAX_ROUNDS; round++) {
-                List<String> fresh = liveRecords(process.rootPid()).stream()
+                List<String> live = liveRecords(process);
+                List<String> gaps = live.stream().filter(WindowsProcessController::isTreeGap).toList();
+                if (!gaps.isEmpty()) {
+                    // F33 review P2: an unidentifiable subtree is not a paused subtree. The
+                    // supervisor never signals a gap; the pause therefore cannot be verified.
+                    log.warn("Run {} pause: the root's tree reports an unidentifiable descendant subtree {};"
+                            + " the pause is not verified", process.runId(), gaps);
+                    return new ControlAck(ControlState.RUNNING, false);
+                }
+                List<String> fresh = live.stream()
                         .filter(record -> !ledger.containsKey(record))
                         .toList();
                 if (fresh.isEmpty()) {
                     break;
                 }
-                Map<String, String> results = operate("suspend", fresh);
+                Map<String, String> results = operate(process, "suspend", fresh);
                 // The batch is applied inside the supervisor record by record: a
                 // record that exits or is recycled in between reports
                 // "gone"/"mismatch" while the later records were still suspended.
@@ -1160,7 +1224,7 @@ final class WindowsProcessController implements OwnedProcessController {
             // last suspension, so a child spawned during the sweep is included; a
             // run whose root vanished mid-sweep is not a paused run.
             boolean complete = rootMatches(process)
-                    && liveRecords(process.rootPid()).stream().allMatch(ledger::containsKey);
+                    && liveRecords(process).stream().allMatch(ledger::containsKey);
             return new ControlAck(complete ? ControlState.PAUSED : ControlState.RUNNING, complete);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1185,7 +1249,7 @@ final class WindowsProcessController implements OwnedProcessController {
         for (Map.Entry<String, Integer> entry : new ArrayList<>(ledger.entrySet())) {
             boolean resolved = true;
             for (int count = 0; count < entry.getValue(); count++) {
-                String applied = operate("resume", List.of(entry.getKey())).get(entry.getKey());
+                String applied = operate(process, "resume", List.of(entry.getKey())).get(entry.getKey());
                 // NtResumeProcess decrements the suspend count: every recorded
                 // suspension needs its own resume or the tree stays suspended.
                 resolved &= "ok".equals(applied) || "gone".equals(applied)
@@ -1242,18 +1306,109 @@ final class WindowsProcessController implements OwnedProcessController {
     }
 
     /** Live owned records of the run's tree, deepest first, each identity-validated by the OS. */
-    private List<String> liveRecords(long rootPid) {
-        return recordsFrom(command("tree " + rootPid));
+    private List<String> liveRecords(OwnedProcess process) {
+        return descendantsCreatedAtOrAfterRoot(recordsFrom(command("tree " + process.rootPid())),
+                process.rootPid(), process.rootCreationIdentity());
     }
 
-    /** Parses a supervisor tree payload ("pid@created@depth;...") into records, deepest first. */
-    private static List<String> recordsFrom(String payload) {
+    /**
+     * F33: the tree's root boundary. A process can never be a child of a process
+     * created after it, so a record older than the run's root cannot be one of its
+     * writers. The supervisor already refuses to follow a stale parent link whose
+     * child predates its parent; this filter is the Java backstop that keeps such a
+     * record out of every read built on the tree even if the walker regresses. It
+     * also anchors the read on the identity the controller verified: a non-empty
+     * tree must contain the root pid carrying exactly the recorded creation
+     * identity, or the root died and its pid was reused between the anchor verdict
+     * and the enumeration -- an unanchored walk of the stranger's tree would
+     * otherwise pass every filter. The root itself sits exactly at the boundary and
+     * stays listed. A malformed record or an unreadable root identity fails the read
+     * closed: neither can be shown to be a descendant, and neither may be signalled
+     * on a guess. An {@code unverifiable:<pid>} gap is carried through unchanged --
+     * it is proof evidence, never a killable identity.
+     */
+    static List<String> descendantsCreatedAtOrAfterRoot(List<String> records, long rootPid,
+            String rootCreationIdentity) {
+        long recorded;
+        try {
+            recorded = Long.parseLong(rootCreationIdentity);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("a descendant filter needs the run root's creation ticks", e);
+        }
+        if (recorded <= 0) {
+            throw new IllegalArgumentException("a descendant filter needs the run root's creation ticks");
+        }
+        long floor = recorded - CREATION_ORDER_TOLERANCE_TICKS;
+        List<String> kept = new ArrayList<>(records.size());
+        boolean anchored = false;
+        for (String record : records) {
+            if (record == null) {
+                throw new IllegalStateException("Malformed tree record: null");
+            }
+            if (isTreeGap(record)) {
+                kept.add(record);
+                continue;
+            }
+            int at = record.lastIndexOf('@');
+            if (at <= 0 || at == record.length() - 1) {
+                throw new IllegalStateException("Malformed tree record: " + record);
+            }
+            long pid;
+            long created;
+            try {
+                pid = Long.parseLong(record.substring(0, at));
+                created = Long.parseLong(record.substring(at + 1));
+            } catch (NumberFormatException e) {
+                throw new IllegalStateException("Malformed tree record: " + record, e);
+            }
+            if (pid == rootPid) {
+                if (Math.abs(created - recorded) > CREATION_ORDER_TOLERANCE_TICKS) {
+                    throw new IllegalStateException("the tree root " + pid + " carries a different creation"
+                            + " identity than the run's recorded root; the pid was reused between the"
+                            + " ownership verdict and the enumeration");
+                }
+                anchored = true;
+            }
+            if (created >= floor) {
+                kept.add(record);
+            }
+        }
+        if (!records.isEmpty() && !anchored) {
+            throw new IllegalStateException("the tree does not contain the run root " + rootPid
+                    + "; it cannot be this run's tree");
+        }
+        return kept;
+    }
+
+    /** A tree read's marker for a subtree the OS could not identify (F33). */
+    static boolean isTreeGap(String record) {
+        return record != null && record.startsWith(UNVERIFIABLE + ":");
+    }
+
+    /**
+     * Test-visible: parses a supervisor tree payload ("pid@created@depth;..." plus
+     * "unverifiable:pid@depth" gaps) into records, deepest first.
+     */
+    static List<String> recordsFrom(String payload) {
         List<Map.Entry<String, Integer>> records = new ArrayList<>();
         for (String entry : payload.split(";", -1)) {
             if (entry.isEmpty()) {
                 continue;
             }
             String[] parts = entry.split("@", -1);
+            if (parts.length > 0 && parts[0].startsWith(UNVERIFIABLE + ":")) {
+                // "unverifiable:<pid>@<depth>" from the command handler; the raw walker
+                // form also carries the parent ticks ("unverifiable:<pid>@<parentTicks>@<depth>").
+                if (parts.length == 2) {
+                    records.add(Map.entry(parts[0], Integer.parseInt(parts[1])));
+                    continue;
+                }
+                if (parts.length == 3) {
+                    records.add(Map.entry(parts[0], Integer.parseInt(parts[2])));
+                    continue;
+                }
+                throw new IllegalStateException("Malformed supervisor tree entry: " + entry);
+            }
             if (parts.length != 3) {
                 throw new IllegalStateException("Malformed supervisor tree entry: " + entry);
             }
@@ -1273,12 +1428,45 @@ final class WindowsProcessController implements OwnedProcessController {
         return members;
     }
 
-    private Map<String, String> operate(String action, List<String> records) {
+    /**
+     * Runs one record batch on the supervision channel. Every mutating operation is
+     * guarded (F33): this controller's own JVM and its supervision channel are never
+     * signalled -- killing either strands the proof that asked for it and every later
+     * control action -- and a record created before the run's root cannot be one of
+     * its writers. A record that is not a well-formed {@code pid@positiveTicks} is
+     * refused too: a bare pid would otherwise match in {@code Test-Record} and be
+     * signalled. A refused record is reported as {@code refused:*}, never applied;
+     * because it stays live, the caller's verdict loop fails the proof closed over it
+     * rather than certifying a writer that was not stopped. A root identity that
+     * cannot be read fails the whole batch before anything is sent.
+     */
+    private Map<String, String> operate(OwnedProcess process, String action, List<String> records) {
         if (records.isEmpty()) {
             return Map.of();
         }
-        String payload = command(action + " " + String.join(";", records));
+        long rootTicks = rootCreationTicks(process);
+        if (rootTicks <= 0) {
+            throw new IllegalStateException("the run root's creation identity is not readable;"
+                    + " no control batch is safe");
+        }
+        long controllerPid = ProcessHandle.current().pid();
+        long supervisorPid = supervisorPid();
+        List<String> send = new ArrayList<>(records.size());
         Map<String, String> results = new LinkedHashMap<>();
+        for (String record : records) {
+            String refusal = refusalOf(record, controllerPid, supervisorPid, rootTicks);
+            if (refusal != null) {
+                results.put(record, refusal);
+                log.warn("Run {} control {} refused for record {} ({}); nothing was signalled",
+                        process.runId(), action, record, refusal);
+            } else {
+                send.add(record);
+            }
+        }
+        if (send.isEmpty()) {
+            return results;
+        }
+        String payload = command(action + " " + String.join(";", send));
         for (String entry : payload.split(";", -1)) {
             if (entry.isEmpty()) {
                 continue;
@@ -1290,6 +1478,62 @@ final class WindowsProcessController implements OwnedProcessController {
             results.put(entry.substring(0, at), entry.substring(at + 1));
         }
         return results;
+    }
+
+    /**
+     * Why a mutating operation must never reach this record, or {@code null} when it
+     * may. The controller pid guard is also the Java half of the supervisor's own
+     * self-kill refusal: the supervisor protects itself, the backend JVM can only be
+     * protected here. Anything that is not a well-formed {@code pid@positiveTicks}
+     * is refused rather than sent: {@code Test-Record} treats a bare pid as a match,
+     * so a malformed record would otherwise be signalled. The caller guarantees a
+     * readable root identity ({@link #operate} throws otherwise); a non-positive
+     * value disables only the predates-run classification for this pure helper.
+     */
+    static String refusalOf(String record, long controllerPid, long supervisorPid, long rootCreationTicks) {
+        if (record == null || isTreeGap(record)) {
+            return "refused:malformed";
+        }
+        int at = record.indexOf('@');
+        if (at <= 0 || at != record.lastIndexOf('@') || at == record.length() - 1) {
+            return "refused:malformed";
+        }
+        long pid;
+        try {
+            pid = Long.parseLong(record.substring(0, at));
+        } catch (NumberFormatException e) {
+            return "refused:malformed";
+        }
+        if (pid <= 0) {
+            return "refused:malformed";
+        }
+        // The identity guards precede the creation-time validation: a well-formed
+        // record that names this controller or its channel is refused for that reason
+        // even if its ticks are unusable.
+        if (pid == controllerPid) {
+            return "refused:controller";
+        }
+        if (pid == supervisorPid) {
+            return "refused:supervisor";
+        }
+        long created;
+        try {
+            created = Long.parseLong(record.substring(at + 1));
+        } catch (NumberFormatException e) {
+            return "refused:malformed";
+        }
+        if (created <= 0) {
+            return "refused:malformed";
+        }
+        if (rootCreationTicks > 0 && created < rootCreationTicks - CREATION_ORDER_TOLERANCE_TICKS) {
+            return "refused:predates-run";
+        }
+        return null;
+    }
+
+    /** Test-visible: one guarded kill batch through the same path the stop proof uses. */
+    Map<String, String> killRecords(OwnedProcess process, List<String> records) {
+        return operate(process, "kill", records);
     }
 
     private static String recordOf(OwnedProcess process) {
@@ -1677,7 +1921,32 @@ final class WindowsProcessController implements OwnedProcessController {
                 string identity = Identity(pid);
                 return identity == "gone" || identity.StartsWith("unverifiable") ? null : identity;
               }
-              // Identity-validated descendant tree of one root: "pid@created@depth" entries.
+              // 10 ms in FILETIME ticks (the same bound Test-Record uses). Creation order is
+              // exact at kernel resolution; the F32 measurement of the WMI/kernel delta was under
+              // 1 ms, so this is a wide margin against an unforeseen clock-source disagreement and
+              // never a real pid reuse (the live F33 reuse was 12 minutes). The Java
+              // CREATION_ORDER_TOLERANCE_TICKS carries the same value and the "link" protocol test
+              // pins the two together.
+              const long CreationOrderTolerance = 100000L;
+              public static bool IsCreationOrderLink(long childCreated, long parentCreated) {
+                return childCreated >= parentCreated - CreationOrderTolerance;
+              }
+              // Identity-validated descendant tree of one root: "pid@created@depth" entries, plus
+              // "unverifiable:<pid>@<depth>" for a subtree the OS cannot identify.
+              // th32ParentProcessID is the creator's pid at creation time, and a dead creator's
+              // pid may be reused by a newer, unrelated process (F33): the link then points at a
+              // stranger that predates the process it claims to have created. A process can never
+              // be a child of a process created after it, so a link whose child predates its
+              // parent is stale and its whole subtree is not this root's -- the live failure had
+              // the backend and its supervisor (12 minutes older than the run root) adopted this
+              // way and killed by the stop proof. A gone node's children are not followed either:
+              // an earlier holder of its pid may have created some of them (they are not ours),
+              // and with the node gone the link cannot be validated. A live but unreadable holder
+              // (protected/elevated) is reported as an "unverifiable:<pid>@<parentTicks>@<depth>"
+              // gap: the command handler applies the F32 handle-free creation probe and drops a
+              // stale link whose holder predates the parent, while a genuine child it cannot open
+              // stays a gap so the proof fails closed instead of silently omitting the subtree.
+              // The root itself must be identity-verified, or the tree is empty.
               public static string[] Tree(int root) {
                 IntPtr snapshot = CreateToolhelp32Snapshot(SnapProcess, 0);
                 if (snapshot == (IntPtr)(-1)) { throw new Exception("Process snapshot failed " + Marshal.GetLastWin32Error()); }
@@ -1695,17 +1964,43 @@ final class WindowsProcessController implements OwnedProcessController {
                     } while (Process32NextW(snapshot, ref entry));
                   }
                   var records = new List<string>();
-                  var queue = new Queue<int[]>();
+                  string rootIdentity = Identity(root);
+                  long rootTicks;
+                  if (rootIdentity == "gone" || rootIdentity.StartsWith("unverifiable")
+                      || !long.TryParse(rootIdentity, out rootTicks)) {
+                    return records.ToArray();
+                  }
+                  records.Add(root + "@" + rootIdentity + "@0");
+                  var queue = new Queue<long[]>();
                   var seen = new HashSet<int>();
-                  queue.Enqueue(new int[] { root, 0 });
+                  seen.Add(root);
+                  List<int> direct;
+                  if (children.TryGetValue(root, out direct)) {
+                    foreach (int child in direct) { queue.Enqueue(new long[] { child, 1, rootTicks }); }
+                  }
                   while (queue.Count > 0) {
-                    int[] node = queue.Dequeue();
-                    if (!seen.Add(node[0])) { continue; }
-                    string created = Creation(node[0]);
-                    if (created != null) { records.Add(node[0] + "@" + created + "@" + node[1]); }
+                    long[] node = queue.Dequeue();
+                    int pid = (int)node[0];
+                    int depth = (int)node[1];
+                    if (!seen.Add(pid)) { continue; }
+                    string identity = Identity(pid);
+                    if (identity == "gone") { continue; }
+                    if (identity.StartsWith("unverifiable")) {
+                      // The parent ticks travel with the gap: the command handler classifies it
+                      // with the F32 handle-free probe (older than the parent = stale link to a
+                      // stranger, newer = a genuine child we cannot open).
+                      records.Add("unverifiable:" + pid + "@" + node[2] + "@" + depth);
+                      continue;
+                    }
+                    long createdTicks;
+                    if (!long.TryParse(identity, out createdTicks)) { continue; }
+                    if (!IsCreationOrderLink(createdTicks, node[2])) { continue; }
+                    records.Add(pid + "@" + identity + "@" + depth);
                     List<int> list;
-                    if (children.TryGetValue(node[0], out list)) {
-                      foreach (int child in list) { queue.Enqueue(new int[] { child, node[1] + 1 }); }
+                    if (children.TryGetValue(pid, out list)) {
+                      foreach (int child in list) {
+                        queue.Enqueue(new long[] { child, depth + 1, createdTicks });
+                      }
                     }
                   }
                   return records.ToArray();
@@ -1788,6 +2083,11 @@ final class WindowsProcessController implements OwnedProcessController {
                 $verdict = Test-Record $record
                 if ($verdict -ne 'match') { $results += ('{0}:{1}' -f $record, $verdict); continue }
                 $targetPid = [int]($record.Split('@')[0])
+                # F33: the supervision channel never signals itself. It is the only way to
+                # stop the run, so a self-kill strands the proof that asked for it and every
+                # later control action. The record may have reached the batch through a stale
+                # parent-pid link; refuse it and report it, never apply it.
+                if ($targetPid -eq $PID) { $results += ('{0}:{1}' -f $record, 'refused:self'); continue }
                 $applied = [AriaHostControl]::Operate($targetPid, $op)
                 $results += ('{0}:{1}' -f $record, $applied)
               }
@@ -1826,7 +2126,34 @@ final class WindowsProcessController implements OwnedProcessController {
                   }
                   'identity' { $rec = Get-RecordOf ([int]$arg); if ($null -eq $rec) { $r = 'ok|gone' } else { $r = 'ok|' + $rec } }
                   'record'   { $r = 'ok|' + (Test-Record $arg) }
-                  'tree'     { $records = [AriaHostControl]::Tree([int]$arg); $r = 'ok|' + ($records -join ';') }
+                  # Test-visible classifier of one parent link: the same function Tree applies.
+                  'link'     {
+                    $pair = $arg.Split(' ', 2)
+                    $r = 'ok|' + $(if ([AriaHostControl]::IsCreationOrderLink([long]$pair[0], [long]$pair[1])) { 'descendant' } else { 'stale' })
+                  }
+                  'tree'     {
+                    $raw = [AriaHostControl]::Tree([int]$arg)
+                    $kept = @()
+                    foreach ($entry in $raw) {
+                      if ($entry.StartsWith('unverifiable:')) {
+                        # F33: a node the OS would not let us open is either a genuine child of
+                        # the parent (a live writer we cannot kill) or a stale parent link to a
+                        # stranger older than it. The F32 handle-free probe decides; only an
+                        # older holder is dropped, and a failed probe keeps the gap.
+                        $gap = $entry.Split('@')
+                        $gapPid = [int]$gap[0].Substring('unverifiable:'.Length)
+                        $probe = Get-CreationTicksWithoutHandle $gapPid
+                        if ($probe -eq 'absent') { continue }
+                        if ($probe -ne 'error') {
+                          if (-not [AriaHostControl]::IsCreationOrderLink([long]$probe, [long]$gap[1])) { continue }
+                        }
+                        $kept += ('unverifiable:' + $gapPid + '@' + $gap[2])
+                        continue
+                      }
+                      $kept += $entry
+                    }
+                    $r = 'ok|' + ($kept -join ';')
+                  }
                   'suspend'  { $results = Invoke-Records $arg 1; $r = 'ok|' + ($results -join ';') }
                   'resume'   { $results = Invoke-Records $arg 2; $r = 'ok|' + ($results -join ';') }
                   'kill'     { $results = Invoke-Records $arg 3; $r = 'ok|' + ($results -join ';') }

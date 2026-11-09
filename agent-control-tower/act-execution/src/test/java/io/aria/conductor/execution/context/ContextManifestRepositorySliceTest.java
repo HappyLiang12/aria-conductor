@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +56,30 @@ class ContextManifestRepositorySliceTest extends DataJpaTestBase {
         manifests.saveAndFlush(manifest(UUID.randomUUID(), 0));
 
         assertThat(manifests.count()).isEqualTo(2);
+    }
+
+    /**
+     * Housekeeping purges a run's children; the manifest is one of them and had no bulk
+     * delete, so the rows outlived their run. The delete must take exactly the named runs.
+     */
+    @Test
+    void deleteByRunIdInPurgesOnlyTheNamedRuns() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        UUID kept = UUID.randomUUID();
+        manifests.saveAndFlush(manifest(first, 0));
+        manifests.saveAndFlush(manifest(first, 1));
+        manifests.saveAndFlush(manifest(second, 0));
+        manifests.saveAndFlush(manifest(kept, 0));
+        flushAndClear();
+
+        manifests.deleteByRunIdIn(List.of(first, second));
+        flushAndClear();
+
+        assertThat(manifests.findByRunIdOrderByTurnNumberAsc(first)).isEmpty();
+        assertThat(manifests.findByRunIdOrderByTurnNumberAsc(second)).isEmpty();
+        assertThat(manifests.findByRunIdOrderByTurnNumberAsc(kept)).extracting(ContextManifest::getTurnNumber)
+                .containsExactly(0);
     }
 
     private ContextManifest manifest(UUID runId, int turnNumber) {

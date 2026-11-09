@@ -1,8 +1,11 @@
 # Agent OS S1 Delivery Ledger (2026-11-09)
 
-Status: Wave 1 merged at `a6fcfec4`; Gate A BLOCKED by a red full local gate
-(two stale integration assertions and one order-dependent IT). Evidence:
-`docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md`.
+Status: Wave 1 merged at `a6fcfec4` and closed at `62020f64` (Gate A PASS for the S1
+acceptance arm). Wave 2 (B, D, C2a, C2b, I) is merged at `7f6647ab`; **Gate B is BLOCKED**
+by one deterministic test-cleanup regression in the full local gate (F-B1), while the live
+memory acceptance arm is VERIFIED. Evidence:
+`docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md` and
+`docs/reviews/evidence/2026-11-09-gate-b/gate-b-evidence.md`.
 Spec: `docs/superpowers/specs/2026-11-09-aria-memory-context-design.md` (commits `6e2035c2`, `6664f779`)
 Plan: `docs/superpowers/plans/2026-11-09-aria-memory-context-s1.md` (commit `65285701`)
 Feature branch: `feat/agent-os-memory`
@@ -225,6 +228,64 @@ HEAD `a6fcfec4`, tree clean. Full transcript:
   delivered change is NOT VERIFIED. Full transcript in
   `docs/reviews/evidence/2026-11-09-gate-a/gate-a-evidence.md` §6.
 
+### Gate B evidence (Release QA, 2026-11-10)
+
+HEAD `7f6647ab`, branch `feat/agent-os-memory`, tree clean. Full transcript:
+`docs/reviews/evidence/2026-11-09-gate-b/gate-b-evidence.md`.
+
+- **Full local gate: RED.**
+  `mvn -B -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2`
+  is BUILD FAILURE in act-app failsafe after 07:21 min. Surefire 2919/0/0/8 (common 145,
+  agent 314, execution 1425, knowledge 269/4, memory 162, dashboard-api 122, aria 178/4,
+  mcp 209, app 95); failsafe 263/0/1/6 (agent 13, execution 97/6, knowledge 12, mcp 18,
+  app 123/0/1/0). The fat jar was packaged at 01:46:16 +0800 before the failing tier.
+  - **F-B1 product/deterministic:** `ReviewAskRepairMigrationIntegrationTest` errors on
+    `cleanup-all.sql` statement #11 "TRUNCATE TABLE context_manifests RESTART IDENTITY —
+    Table CONTEXT_MANIFESTS not found". `ae0c3aeb` added the line at
+    `act-app/src/test/resources/db/cleanup-all.sql:11`; the IT is the only class pinned to
+    `spring.flyway.target=65`, while `context_manifests` is V81. Re-run alone is 1/0/1/0 in
+    15.1 s. Owner: a lane that owns the test script (split the pinned-target cleanup or
+    make it schema-aware). Release QA changed no product code, test or migration.
+- **Non-Maven surfaces: GREEN.** Dashboard 662/662 (79 files) and `pnpm build` exit 0
+  (1.28 s); MCP server 157/157 (20 files); Qoder ACP bridge 62/62 (5 files) with the dist
+  rebuilt from source before Maven.
+- **Live memory acceptance: VERIFIED** on a fresh H2 (`gate-b-db`, V82) with the fat jar at
+  this head and the native opencode HOST executable. Six Aria runs, all
+  `Froze run … to core opencode/HOST`, no trusted-launch refusal, no orphaned core.
+  - Teach/recall: PERSON `a3255334-3895-4db7-93b8-c622731cb461` (timezone
+    `4a8e66a2…`, preferred_editor `8c66b2e9…`) and REPO
+    `12a8bfbe-a98b-4c85-953d-6158d64a5097`; `GET /recall?q=operator timezone` returns both
+    fact ids with origin/sensitivity.
+  - Restart (17:49:51Z stop, 17:50:10Z health) keeps the same ids and values.
+  - Run `2b0c53d4-48a7-48a8-9062-2572e207799d` (turn 1) manifest id
+    `2e98f0e7-1763-419f-9a4d-da15dfc8387d`: memory section sources are the entity + both
+    fact ids; one manifest row per run (6 runs → 6 rows, unique `(run_id, turn_number)`).
+    `session_trajectory` has 2 turns per run; the single assembly is recorded at turn 2
+    (Gate A §6.7 convention).
+  - PENDING: run `ba61eced-544f-48a5-9554-e1a41087f1ea` called the real MCP
+    `remember_fact` with the run-scoped worker bearer; proposal
+    `75d9fa1c-9349-454d-af4a-70bbd35a8a6a` (EXTRACTION) was created at 17:50:38Z with an
+    assertion `actor_type=EXTRACTION, actor_ref=ba61eced…` — no H2 fallback. Run
+    `19219b2d…` (17:50:54Z) answered "UNKNOWN" and its manifest omits the PENDING id.
+    `POST /proposals/75d9fa1c…/decide` (17:51:05Z, 200, ACTIVE) precedes run `5a9aef9c…`,
+    whose manifest includes the approved id and answers "teal".
+  - RESTRICTED: fact set to RESTRICTED in H2; run `c7af91a8…` (INTERNAL ceiling) omits it
+    and answers "UNKNOWN"; after `llm_providers.sensitivity_ceiling='RESTRICTED'` on the
+    active provider `ddb53e55-0d2e-4466-93cf-d2fbe03bb6a0` and a restart, run `34a2f7c5…`
+    includes it and answers "teal". Manifest `providerId` is null; the resolver falls back
+    to the single active provider (D-B4).
+  - Manifest hygiene: zero occurrences of `Asia/Hong_Kong`, `teal`, `preferred_widget` or
+    either prompt fragment in the API JSON and in `sections_json`/`dropped_json`/
+    `degraded_json`; the Aria prompt lists the six worker memory tools and not
+    `decide_memory_proposal`/`forget_fact`. Six V82 tables present on the fresh database.
+- **Deviations:** D-B1 the plan's `key`/`value` fact payload is `factKey`/`valueText` live;
+  D-B2 `q=timezone` alone is empty by spec §8.4's entity-mention recall (the plan example
+  and its intent diverge); D-B3 approval used the REST route named by Gate B step d while
+  creation used the real MCP worker path; D-B4 null manifest `providerId` with active-row
+  ceiling fallback; D-B5 turn number 2 for a run's single assembly.
+- **NOT VERIFIED:** hosted CI at this head (no dispatch in this task) and the live SDD
+  rerun (not delegated; the Gate A read-only-toolset blocker is unchanged).
+
 Gate B (after B, D, C2a, C2b, I merge):
 
 - fresh H2 database, teach two facts via REST, restart, recall in a new conversation;
@@ -361,6 +422,26 @@ Verify the run's provider id is the row that was updated; the default provider s
   get_context_manifest is global metadata. Lane I was APPROVED WITH FIXES: the ArchUnit
   canary did not exercise the real boundary selectors (fixed with a fixture-based
   violation proof), and the purge test lacked a pre-purge existence assertion.
+
+- 2026-11-10: Gate B full gate red. `ae0c3aeb` added `TRUNCATE TABLE context_manifests`
+  to the shared test cleanup script, but `ReviewAskRepairMigrationIntegrationTest` pins
+  Flyway to V65 and `context_manifests` is V81, so the class errors before any test. This
+  is a Wave 2 test-cleanup regression (deterministic, 1/0/1/0 in isolation), not an
+  environment or flake failure; it blocks Gate B under "any compile/test red". The fix
+  belongs to a lane that owns the test script: either split the pinned-target cleanup or
+  make the truncation schema-aware. Release QA changed no product code, test or migration.
+- 2026-11-10: Gate B live memory arm verified on a fresh H2 at `7f6647ab`: teach/recall
+  provenance (`a3255334…` PERSON; facts `4a8e66a2…`, `8c66b2e9…`; REPO `12a8bfbe…`),
+  restart persistence, six Aria runs each with one context manifest and no prompt text,
+  PENDING proposal `75d9fa1c…` created by the real MCP `remember_fact` worker actor
+  (EXTRACTION with the run id as actor_ref, no H2 fallback) and absent until approved, and
+  the RESTRICTED fact blocked at the INTERNAL ceiling then admitted after raising the
+  active provider's ceiling. Deviations D-B1..D-B5 are recorded in the evidence file; the
+  noteworthy ones are the plan's fact payload fields and the plan's `q=timezone` recall
+  example, both plan-text drift rather than product defects.
+- 2026-11-10: Gate B remains BLOCKED by F-B1 even though the memory arm is VERIFIED.
+  Hosted CI at `7f6647ab` and the live SDD rerun are NOT VERIFIED (not run in this task);
+  no release verdict is issued.
 
 ## Evidence to fill at each boundary
 

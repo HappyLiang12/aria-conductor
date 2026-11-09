@@ -32,6 +32,9 @@ final class ContextBudget {
 
     static final List<String> DROP_ORDER = List.of("workspace", "skills", "knowledge", "memory");
 
+    /** Never scaled, never dropped: the required sections of spec §8.2 step 6. */
+    private static final List<String> REQUIRED_GROUPS = List.of("identity", "policy", "goal");
+
     /** The last line of a section whose content was cut; a cap never splits a line. */
     static final String TRUNCATION_MARKER = "- ... (truncated)";
 
@@ -118,9 +121,6 @@ final class ContextBudget {
         int end = colon < 0 ? dot : (dot < 0 ? colon : Math.min(colon, dot));
         return end < 0 ? id : id.substring(0, end);
     }
-
-    /** Never scaled, never dropped: the required sections of spec §8.2 step 6. */
-    private static final List<String> REQUIRED_GROUPS = List.of("identity", "policy", "goal");
 
     /**
      * A section the proportional pass may shrink: optional and multi-line. A

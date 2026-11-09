@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -43,6 +44,11 @@ public class MemoryMentionExtractor {
     private static final Pattern TOKEN = Pattern.compile("[a-z0-9]+");
     private static final Pattern PATH_SEPARATOR = Pattern.compile("[\\\\/]");
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** Upper bound of compiled boundary patterns kept for reuse; bounded so it cannot grow. */
+    private static final int MAX_CACHED_PATTERNS = 2_048;
+
+    private static final Map<String, Pattern> BOUNDARY_PATTERNS = new ConcurrentHashMap<>();
 
     /**
      * Exact canonical-key candidates: every token and every adjacent 2-3 token phrase of
@@ -114,9 +120,25 @@ public class MemoryMentionExtractor {
         if (haystack.isEmpty() || normalized.isEmpty() || !haystack.contains(normalized)) {
             return false;
         }
-        return Pattern.compile("(?<![a-z0-9])" + Pattern.quote(normalized) + "(?![a-z0-9])")
-                .matcher(haystack)
-                .find();
+        return boundaryPattern(normalized).matcher(haystack).find();
+    }
+
+    /**
+     * The token-boundary pattern for one normalized needle, cached: recall matches every
+     * candidate entity's canonical key, display name, and aliases on every turn, and the
+     * same few needles repeat, so compiling per comparison would dominate the 200 ms
+     * budget. The cache is capped; past the cap it stops inserting and compiles instead.
+     */
+    private static Pattern boundaryPattern(String normalized) {
+        Pattern cached = BOUNDARY_PATTERNS.get(normalized);
+        if (cached != null) {
+            return cached;
+        }
+        Pattern compiled = Pattern.compile("(?<![a-z0-9])" + Pattern.quote(normalized) + "(?![a-z0-9])");
+        if (BOUNDARY_PATTERNS.size() < MAX_CACHED_PATTERNS) {
+            BOUNDARY_PATTERNS.putIfAbsent(normalized, compiled);
+        }
+        return compiled;
     }
 
     private static void addPhrases(Set<String> keys, String text) {

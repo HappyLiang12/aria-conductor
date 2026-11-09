@@ -15,8 +15,10 @@ import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -88,7 +91,7 @@ class MemoryRecallServiceTest {
         MemoryFact editor = fact(person.getId(), "editor", "vim", MemoryOrigin.OPERATOR, RECENT);
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(List.of());
-        when(entities.findAll()).thenReturn(List.of(person));
+        stubUniverse(person);
         when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
                 anyCollection(), eq(FactStatus.ACTIVE), any()))
                 .thenReturn(List.of(editor));
@@ -99,6 +102,44 @@ class MemoryRecallServiceTest {
         assertThat(recall.recall(query("ask jd")).facts())
                 .extracting(view -> view.factKey())
                 .containsExactly("editor");
+    }
+
+    /**
+     * The prompt hot path must not read the whole entity table, and must not load each
+     * neighbour with its own {@code findById}: the lexical universe is one bounded
+     * status-scoped page and the one-hop expansion is one {@code IN} query.
+     */
+    @Test
+    void recallOverMoreThanTwoHundredEntitiesStaysBoundedAndNeverScansTheTable() {
+        List<MemoryEntity> fixture = new ArrayList<>();
+        for (int i = 0; i < 250; i++) {
+            fixture.add(entity("entity-" + i, "Entity " + i, "PROJECT", MemoryOrigin.RUN, null));
+        }
+        MemoryEntity operator = operatorEntity();
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(fixture.subList(0, MemoryRecallService.LEXICAL_UNIVERSE_LIMIT));
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(operatorTimezone()));
+
+        RecallResult first = recall.recall(query("operator timezone"));
+        RecallResult second = recall.recall(query("operator timezone"));
+
+        assertThat(first.entities()).extracting(view -> view.canonicalKey()).containsExactly("operator");
+        assertThat(first.facts()).extracting(view -> view.factKey()).containsExactly("timezone");
+        assertThat(second.facts()).as("same input, same output").isEqualTo(first.facts());
+        verify(entities, never()).findAll();
+
+        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
+        verify(entities, times(2)).findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), page.capture());
+        assertThat(page.getAllValues()).allSatisfy(captured -> {
+            assertThat(captured.getPageSize())
+                    .as("the lexical universe is one bounded page")
+                    .isEqualTo(MemoryRecallService.LEXICAL_UNIVERSE_LIMIT);
+            assertThat(captured.getOffset()).isZero();
+        });
     }
 
     @Test
@@ -123,12 +164,13 @@ class MemoryRecallServiceTest {
         MemoryEntity repo = repoEntity();
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(List.of(operator));
-        when(entities.findAll()).thenReturn(List.of());
+        stubUniverse();
         when(relations.findByFromEntityIdAndStatus(operator.getId(), FactStatus.ACTIVE))
                 .thenReturn(List.of(relation(operator.getId(), repo.getId())));
         when(relations.findByToEntityIdAndStatus(operator.getId(), FactStatus.ACTIVE))
                 .thenReturn(List.of());
-        when(entities.findById(repo.getId())).thenReturn(Optional.of(repo));
+        when(entities.findByIdInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(repo));
         when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
                 anyCollection(), eq(FactStatus.ACTIVE), any()))
                 .thenReturn(List.of(operatorTimezone(), repoBranch()));
@@ -141,6 +183,8 @@ class MemoryRecallServiceTest {
                 .containsExactlyInAnyOrder("timezone", "branch");
         verify(relations, never()).findByFromEntityIdAndStatus(repo.getId(), FactStatus.ACTIVE);
         verify(relations, never()).findByToEntityIdAndStatus(repo.getId(), FactStatus.ACTIVE);
+        verify(entities, never()).findById(any());
+        verify(entities, times(1)).findByIdInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE));
     }
 
     @Test
@@ -157,7 +201,7 @@ class MemoryRecallServiceTest {
         restricted.setSensitivity(Sensitivity.RESTRICTED);
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(List.of(operator));
-        when(entities.findAll()).thenReturn(List.of());
+        stubUniverse();
         when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
                 anyCollection(), eq(FactStatus.ACTIVE), any()))
                 .thenReturn(List.of(current, pending, future, closed, restricted));
@@ -174,7 +218,7 @@ class MemoryRecallServiceTest {
         secret.setSensitivity(Sensitivity.CONFIDENTIAL);
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(List.of(operator, secret));
-        when(entities.findAll()).thenReturn(List.of());
+        stubUniverse();
         when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
                 anyCollection(), eq(FactStatus.ACTIVE), any()))
                 .thenReturn(List.of(operatorTimezone(),
@@ -194,7 +238,7 @@ class MemoryRecallServiceTest {
         }
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(many);
-        when(entities.findAll()).thenReturn(List.of());
+        stubUniverse();
 
         RecallResult result = recall.recall(query("entity"));
 
@@ -211,7 +255,7 @@ class MemoryRecallServiceTest {
         }
         when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
                 .thenReturn(List.of(operator));
-        when(entities.findAll()).thenReturn(List.of());
+        stubUniverse();
         when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
                 anyCollection(), eq(FactStatus.ACTIVE), any()))
                 .thenReturn(manyFacts);
@@ -230,7 +274,120 @@ class MemoryRecallServiceTest {
         verifyNoInteractions(entities, facts, relations);
     }
 
+    // ---------------------------------------------------------------- ranking contract
+
+    @Test
+    void sourceAuthorityOutranksRecency() {
+        MemoryEntity operator = operatorEntity();
+        MemoryFact operatorOld = fact(operator.getId(), "timezone", "Asia/Hong_Kong", MemoryOrigin.OPERATOR, OLD);
+        MemoryFact runRecent = fact(operator.getId(), "branch", "main", MemoryOrigin.RUN, RECENT);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        stubUniverse();
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(runRecent, operatorOld));
+
+        assertThat(recall.recall(query("operator")).facts())
+                .extracting(view -> view.factKey())
+                .as("OPERATOR+old beats RUN+recent: recency never outranks authority")
+                .containsExactly("timezone", "branch");
+    }
+
+    @Test
+    void confidenceThenIdBreakTheRemainingTies() {
+        MemoryEntity operator = operatorEntity();
+        MemoryFact lower = withConfidence(fact(operator.getId(), "a-low", "1", MemoryOrigin.OPERATOR, RECENT), "0.40");
+        MemoryFact higher = withConfidence(fact(operator.getId(), "b-high", "2", MemoryOrigin.OPERATOR, RECENT), "0.90");
+        MemoryFact tied = withConfidence(fact(operator.getId(), "c-tied", "3", MemoryOrigin.OPERATOR, RECENT), "0.40");
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        stubUniverse();
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(lower, higher, tied));
+
+        List<String> order = recall.recall(query("operator")).facts().stream()
+                .map(view -> view.factKey())
+                .toList();
+
+        String lowerId = lower.getId().toString();
+        String tiedId = tied.getId().toString();
+        String lowTieFirst = lowerId.compareTo(tiedId) <= 0 ? "a-low" : "c-tied";
+        String lowTieSecond = "a-low".equals(lowTieFirst) ? "c-tied" : "a-low";
+        assertThat(order)
+                .as("confidence decides first, and the last tie falls back to the id")
+                .containsExactly("b-high", lowTieFirst, lowTieSecond);
+    }
+
+    @Test
+    void aCanonicalKeyMentionOutranksADisplayNameMention() {
+        MemoryEntity named = entity("run-only", "Operator", "PERSON", MemoryOrigin.RUN, null);
+        MemoryEntity exact = entity("operator", "Old Name", "PERSON", MemoryOrigin.EXTRACTION, null);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(exact));
+        stubUniverse(named, exact);
+
+        assertThat(recall.recall(query("operator")).entities())
+                .extracting(view -> view.canonicalKey())
+                .as("mention source is the first key: an exact canonical key beats a display name")
+                .containsExactly("operator", "run-only");
+    }
+
+    @Test
+    void aPublicFactIsRecalledAtTheInternalCeiling() {
+        MemoryEntity operator = operatorEntity();
+        MemoryFact publicFact = fact(operator.getId(), "locale", "en", MemoryOrigin.RUN, RECENT);
+        publicFact.setSensitivity(Sensitivity.PUBLIC);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        stubUniverse();
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(publicFact));
+
+        assertThat(recall.recall(query("operator")).facts())
+                .as("the ceiling compares Sensitivity ordinals, not names: PUBLIC < INTERNAL")
+                .extracting(view -> view.factKey())
+                .containsExactly("locale");
+    }
+
+    @Test
+    void aNullSensitivityFailsClosedAsRestricted() {
+        MemoryEntity operator = operatorEntity();
+        MemoryFact unlabelled = fact(operator.getId(), "salary", "1", MemoryOrigin.OPERATOR, RECENT);
+        unlabelled.setSensitivity(null);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        stubUniverse();
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(unlabelled));
+
+        assertThat(recall.recall(query("operator")).facts())
+                .as("a fact with no sensitivity is never assumed to be safe")
+                .isEmpty();
+        assertThat(recall.recall(new RecallQuery("operator", Sensitivity.RESTRICTED, "")).facts())
+                .as("only a provider at the top of the scale may see it")
+                .hasSize(1);
+    }
+
+    @Test
+    void anEntityWithNullSensitivityIsNotRecalledBelowTheTopCeiling() {
+        MemoryEntity unlabelled = entity("unlabelled", "Unlabelled", "PROJECT", MemoryOrigin.OPERATOR, null);
+        unlabelled.setSensitivity(null);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(unlabelled));
+
+        assertThat(recall.recall(query("unlabelled")).entities()).isEmpty();
+    }
+
     // ---------------------------------------------------------------- fixtures
+
+    private void stubUniverse(MemoryEntity... rows) {
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(rows));
+    }
 
     private static RecallQuery query(String text) {
         return new RecallQuery(text, Sensitivity.INTERNAL, null);
@@ -286,6 +443,11 @@ class MemoryRecallServiceTest {
                 .createdAt(OLD)
                 .updatedAt(updatedAt)
                 .build();
+    }
+
+    private static MemoryFact withConfidence(MemoryFact fact, String confidence) {
+        fact.setConfidence(new BigDecimal(confidence));
+        return fact;
     }
 
     private static MemoryRelation relation(UUID from, UUID to) {

@@ -11,9 +11,11 @@ import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -153,6 +155,34 @@ class MemoryRecallQuerySliceTest extends MemorySliceTestSupport {
         assertThat(links.findByEntityId(entity.getId()))
                 .extracting(MemoryKnowledgeLink::getEntityId)
                 .containsOnly(entity.getId());
+    }
+
+    /**
+     * The recall hot path reads a bounded ACTIVE page, not the whole table, and expands one
+     * hop with one {@code IN} query. Both are proved with more rows than the page holds.
+     */
+    @Test
+    void recallReadsABoundedActivePageAndNeighboursInOneQuery() {
+        List<UUID> neighbourIds = new ArrayList<>();
+        for (int i = 0; i < 205; i++) {
+            MemoryEntity row = entities.saveAndFlush(entity("PROJECT", "project-" + i));
+            if (i % 2 == 0) {
+                neighbourIds.add(row.getId());
+            }
+        }
+        MemoryEntity retired = entity("PROJECT", "retired-project");
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryEntity retiredRow = entities.saveAndFlush(retired);
+        flushAndClear();
+
+        List<MemoryEntity> page = entities.findByStatusOrderByUpdatedAtDesc(
+                EntityStatus.ACTIVE, PageRequest.of(0, 200));
+        List<MemoryEntity> loaded = entities.findByIdInAndStatus(neighbourIds, EntityStatus.ACTIVE);
+
+        assertThat(page).hasSize(200);
+        assertThat(page).allMatch(row -> row.getStatus() == EntityStatus.ACTIVE);
+        assertThat(loaded).hasSize(neighbourIds.size());
+        assertThat(loaded).extracting(MemoryEntity::getId).doesNotContain(retiredRow.getId());
     }
 
     @Test

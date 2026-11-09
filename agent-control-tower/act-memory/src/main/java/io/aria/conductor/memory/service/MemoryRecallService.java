@@ -15,6 +15,7 @@ import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import io.aria.conductor.memory.service.MemoryMentionExtractor.MentionSource;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -24,7 +25,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -39,16 +39,23 @@ import java.util.UUID;
  * queries already filter: a query that ever returns a PENDING, closed, future, or
  * over-ceiling row must still not reach a prompt.
  * <p>
- * The alias/display-name lookup has no dedicated repository method on the frozen base, so
- * the candidate universe is read with {@code findAll()}. That is bounded at S1 scale and
- * covered by the caller's 200 ms recall budget; a status-scoped lookup method is the
- * follow-up that makes it a bounded query.
+ * Every read is bounded: the exact-key lookup is an {@code IN} over the extracted keys,
+ * the display-name/alias candidate set is one page of ACTIVE entities (newest first), the
+ * one-hop neighbours are one {@code IN} load rather than one {@code findById} per
+ * neighbour, and the facts are one {@code IN} load. Nothing here scans a whole table.
  */
 @Service
 public class MemoryRecallService {
 
     static final int MAX_ENTITIES = 12;
     static final int MAX_FACTS = 40;
+
+    /**
+     * Size of the bounded ACTIVE page recall matches display names and aliases against.
+     * Explicit aliases stay searchable through the extractor for this many newest entities;
+     * older rows remain reachable through their canonical key.
+     */
+    static final int LEXICAL_UNIVERSE_LIMIT = 200;
 
     private final MemoryEntityRepository entities;
     private final MemoryFactRepository facts;
@@ -83,9 +90,10 @@ public class MemoryRecallService {
                         new Ranked(entity, MentionSource.CANONICAL_KEY.rank(), 0));
             }
         }
-        // Display names and aliases have no lookup method, so the ACTIVE universe is
-        // scanned lexically and merged at its weaker mention ranks.
-        List<MemoryEntity> universe = safe(entities.findAll());
+        // Display names and aliases have no indexed lookup, so recall matches them against
+        // one bounded page of ACTIVE entities instead of the whole table.
+        List<MemoryEntity> universe = safe(entities.findByStatusOrderByUpdatedAtDesc(
+                EntityStatus.ACTIVE, PageRequest.of(0, LEXICAL_UNIVERSE_LIMIT)));
         Map<UUID, MentionSource> lexical = extractor.match(request.text(), request.focusRef(), universe);
         for (MemoryEntity entity : universe) {
             MentionSource source = lexical.get(entity.getId());
@@ -133,7 +141,7 @@ public class MemoryRecallService {
     /**
      * One hop only: the neighbours of the ranked direct matches are added, never the
      * neighbours of those neighbours. Relations are geometry; validity and the ceiling are
-     * enforced here.
+     * enforced here, and all neighbour ids are loaded in one query.
      */
     private List<Ranked> expandOneHop(List<Ranked> kept, Instant now, Sensitivity ceiling) {
         List<Ranked> direct = new ArrayList<>(kept);
@@ -142,18 +150,29 @@ public class MemoryRecallService {
         for (Ranked ranked : kept) {
             known.add(ranked.entity().getId());
         }
-        List<Ranked> neighbours = new ArrayList<>();
+        List<UUID> neighbourIds = new ArrayList<>();
         for (Ranked origin : direct) {
             for (MemoryRelation relation : liveRelations(origin.entity().getId(), now, ceiling)) {
                 UUID other = origin.entity().getId().equals(relation.getFromEntityId())
                         ? relation.getToEntityId()
                         : relation.getFromEntityId();
-                if (other == null || !known.add(other)) {
-                    continue;
+                if (other != null && known.add(other)) {
+                    neighbourIds.add(other);
                 }
-                Optional<MemoryEntity> neighbour = entities.findById(other);
-                if (neighbour.isPresent() && eligible(neighbour.get(), ceiling)) {
-                    neighbours.add(new Ranked(neighbour.get(), MentionSource.NEIGHBOUR.rank(), 1));
+            }
+        }
+        List<Ranked> neighbours = new ArrayList<>();
+        if (!neighbourIds.isEmpty()) {
+            Map<UUID, MemoryEntity> loaded = new LinkedHashMap<>();
+            for (MemoryEntity neighbour : safe(entities.findByIdInAndStatus(neighbourIds, EntityStatus.ACTIVE))) {
+                if (neighbour != null && neighbour.getId() != null) {
+                    loaded.put(neighbour.getId(), neighbour);
+                }
+            }
+            for (UUID id : neighbourIds) {
+                MemoryEntity neighbour = loaded.get(id);
+                if (eligible(neighbour, ceiling)) {
+                    neighbours.add(new Ranked(neighbour, MentionSource.NEIGHBOUR.rank(), 1));
                 }
             }
         }
@@ -210,8 +229,14 @@ public class MemoryRecallService {
                 && belowCeiling(fact.getSensitivity(), ceiling);
     }
 
+    /**
+     * Fail closed: a row with no sensitivity is treated as {@link Sensitivity#RESTRICTED},
+     * so a missing label can never widen what a provider is allowed to see.
+     */
     private static boolean belowCeiling(Sensitivity sensitivity, Sensitivity ceiling) {
-        return sensitivity == null || sensitivity.ordinal() <= ceiling.ordinal();
+        Sensitivity effective = sensitivity == null ? Sensitivity.RESTRICTED : sensitivity;
+        Sensitivity limit = ceiling == null ? Sensitivity.INTERNAL : ceiling;
+        return effective.ordinal() <= limit.ordinal();
     }
 
     private static Comparator<Ranked> entityOrder() {

@@ -38,6 +38,11 @@ public class LlmProvider {
     @Builder.Default
     private boolean active = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private Sensitivity sensitivityCeiling = Sensitivity.INTERNAL;
+
     @Column(nullable = false)
     private Instant createdAt;
 

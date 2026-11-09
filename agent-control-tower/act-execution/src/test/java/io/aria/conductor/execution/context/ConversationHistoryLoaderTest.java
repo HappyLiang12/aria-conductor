@@ -58,6 +58,85 @@ class ConversationHistoryLoaderTest {
     }
 
     @Test
+    void theQueryBoundsAreNotDegradationReasonsTheLoaderCouldNeverObserve() {
+        // The repository queries already cap at 20 runs and 200 turns per run, so
+        // the loader can never see more: those reasons are not emitted.
+        List<Run> newestFirst = IntStream.range(0, 25)
+                .mapToObj(i -> run(i, RunStatus.COMPLETED))
+                .toList();
+        when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(newestFirst);
+        when(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(any()))
+                .thenReturn(IntStream.range(0, 300)
+                        .mapToObj(i -> trajectory("user", "m" + (299 - i)))
+                        .toList());
+
+        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded("c", List.of());
+
+        assertThat(loaded.messages()).hasSize(40);
+        assertThat(loaded.degraded()).containsExactly("history:trimmed")
+                .doesNotContain("history:run-bound", "history:turn-bound");
+    }
+
+    @Test
+    void aNormalServerLoadRecordsNoDegradedReason() {
+        Run older = run(0, RunStatus.COMPLETED);
+        Run newer = run(1, RunStatus.COMPLETED);
+        when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c"))
+                .thenReturn(List.of(newer, older));
+        when(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(older.getId()))
+                .thenReturn(List.of(trajectory(1, "user", "question")));
+        when(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(newer.getId()))
+                .thenReturn(List.of(trajectory(1, "assistant", "answer")));
+
+        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded("c", List.of());
+
+        assertThat(loaded.messages()).extracting(ContextMessage::content)
+                .containsExactly("question", "answer");
+        assertThat(loaded.degraded()).isEmpty();
+    }
+
+    @Test
+    void anEmptyFallbackIsNotAClientHistoryDegradation() {
+        when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(List.of());
+
+        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded("c", List.of());
+
+        assertThat(loaded.messages()).isEmpty();
+        assertThat(loaded.degraded()).isEmpty();
+    }
+
+    @Test
+    void fallbackToolRowsDoNotConsumeTheFortyMessageCap() {
+        List<ContextMessage> fallback = new ArrayList<>();
+        for (int i = 0; i < 45; i++) {
+            fallback.add(new ContextMessage("user", "f" + i, null));
+        }
+        fallback.add(new ContextMessage("tool", "tool output", "call-1"));
+
+        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded(null, fallback);
+
+        List<ContextMessage> turns = loaded.messages().stream()
+                .filter(message -> !"tool".equals(message.role()))
+                .toList();
+        assertThat(turns).hasSize(40);
+        assertThat(turns.get(0).content()).isEqualTo("f5");
+        assertThat(loaded.messages()).extracting(ContextMessage::content).contains("tool output");
+    }
+
+    @Test
+    void aFortyOneMessageFallbackKeepsTheNewestForty() {
+        List<ContextMessage> fallback = IntStream.range(0, 41)
+                .mapToObj(i -> new ContextMessage("user", "f" + i, null))
+                .toList();
+
+        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded(null, fallback);
+
+        assertThat(loaded.messages()).hasSize(40);
+        assertThat(loaded.messages().get(0).content()).isEqualTo("f1");
+        assertThat(loaded.messages().get(39).content()).isEqualTo("f40");
+    }
+
+    @Test
     void reversesNewestFirstRowsIntoChronologicalOrder() {
         Run run = run(0, RunStatus.COMPLETED);
         when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(List.of(run));
@@ -158,21 +237,6 @@ class ConversationHistoryLoaderTest {
         verify(trajectories, never()).findTop200ByRunIdOrderByTurnNumberDesc(inFlight.getId());
     }
 
-    @Test
-    void hittingTheRunBoundIsReported() {
-        List<Run> newestFirst = IntStream.range(0, 25)
-                .mapToObj(i -> run(i, RunStatus.COMPLETED))
-                .toList();
-        when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(newestFirst);
-        when(trajectories.findTop200ByRunIdOrderByTurnNumberDesc(any()))
-                .thenReturn(List.of(trajectory(1, "user", "x")));
-
-        ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded("c", List.of());
-
-        assertThat(loaded.degraded()).contains("history:run-bound");
-        assertThat(loaded.messages()).hasSize(20);
-    }
-
     private static Run run(int age, RunStatus status) {
         return Run.builder()
                 .id(UUID.randomUUID())
@@ -198,7 +262,7 @@ class ConversationHistoryLoaderTest {
     }
 
     @Test
-    void moreThanTwoHundredTurnsInARunKeepsTheNewestAndSaysSo() {
+    void moreThanTwoHundredTurnsInARunKeepsTheNewestAndSaysOnlyTrimmed() {
         Run run = run(0, RunStatus.COMPLETED);
         when(runs.findTop20ByConversationIdOrderByCreatedAtDesc("c")).thenReturn(List.of(run));
         List<SessionTrajectory> rows = new ArrayList<>();
@@ -209,7 +273,7 @@ class ConversationHistoryLoaderTest {
 
         ConversationHistoryLoader.LoadedHistory loaded = loader.loadBounded("c", List.of());
 
-        assertThat(loaded.degraded()).contains("history:turn-bound");
+        assertThat(loaded.degraded()).containsExactly("history:trimmed");
         assertThat(loaded.messages()).hasSize(40);
         assertThat(loaded.messages().get(39).content()).isEqualTo("t300");
     }

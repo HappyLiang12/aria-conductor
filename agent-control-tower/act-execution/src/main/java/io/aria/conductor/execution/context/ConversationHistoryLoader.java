@@ -20,8 +20,10 @@ import java.util.Set;
  * failed-run note kept verbatim after that run's turns, and the most recent 40
  * user/assistant messages kept.
  *
- * <p>The client history is a fallback only when the server has none for the
- * conversation, capped at 40; the two are never concatenated.
+ * <p>The client history is a fallback only when the server has no usable rows
+ * for the conversation, capped at 40 user/assistant messages (tool rows never
+ * consume a slot); the two are never concatenated. {@code history:client-history}
+ * is recorded only when that fallback actually contributes messages.
  *
  * <p>A run that has not reached a terminal status is the conversation's
  * in-flight head: its rows are *this* run's own timeline, which the engine
@@ -64,24 +66,23 @@ public class ConversationHistoryLoader {
     public LoadedHistory loadBounded(String conversationId, List<ContextMessage> clientFallback) {
         List<ContextMessage> fallback = clientFallback == null ? List.of() : clientFallback;
         if (conversationId == null || conversationId.isBlank()) {
-            return new LoadedHistory(mostRecent(fallback), List.of("history:client-history"));
+            return fallbackHistory(fallback);
         }
 
         List<Run> newestFirst = runs.findTop20ByConversationIdOrderByCreatedAtDesc(conversationId);
         if (newestFirst == null || newestFirst.isEmpty()) {
-            return new LoadedHistory(mostRecent(fallback), List.of("history:client-history"));
+            return fallbackHistory(fallback);
         }
 
+        // The queries bound the load (20 runs, 200 turns each), so the loader can
+        // never observe more and has no reason to report a bound it did not hit.
         List<String> degraded = new ArrayList<>();
         List<Run> prior = newestFirst.stream()
                 .filter(run -> TERMINAL.contains(run.getStatus()))
                 .limit(MAX_RUNS)
                 .toList();
-        if (newestFirst.size() > MAX_RUNS) {
-            degraded.add("history:run-bound");
-        }
         if (prior.isEmpty()) {
-            return new LoadedHistory(mostRecent(fallback), List.of("history:client-history"));
+            return fallbackHistory(fallback);
         }
 
         List<Run> chronological = new ArrayList<>(prior);
@@ -93,9 +94,6 @@ public class ConversationHistoryLoader {
                     .findTop200ByRunIdOrderByTurnNumberDesc(run.getId());
             if (rows == null) {
                 rows = List.of();
-            }
-            if (rows.size() > MAX_TURNS_PER_RUN) {
-                degraded.add("history:turn-bound");
             }
             // newest first -> turn order
             for (int i = Math.min(rows.size(), MAX_TURNS_PER_RUN) - 1; i >= 0; i--) {
@@ -116,7 +114,7 @@ public class ConversationHistoryLoader {
         }
 
         if (history.isEmpty()) {
-            return new LoadedHistory(mostRecent(fallback), List.of("history:client-history"));
+            return fallbackHistory(fallback);
         }
         if (history.size() > MAX_MESSAGES) {
             degraded.add("history:trimmed");
@@ -124,12 +122,35 @@ public class ConversationHistoryLoader {
         return new LoadedHistory(mostRecent(history), degraded);
     }
 
-    /** The most recent {@link #MAX_MESSAGES} messages, in chronological order. */
+    /**
+     * The client-provided transcript, capped at {@link #MAX_MESSAGES}. Only a
+     * fallback that actually contributes messages degrades: an empty transcript
+     * (a conversation's first turn) is normal, not a fallback.
+     */
+    private static LoadedHistory fallbackHistory(List<ContextMessage> fallback) {
+        List<ContextMessage> capped = mostRecent(fallback);
+        return new LoadedHistory(capped,
+                capped.isEmpty() ? List.of() : List.of("history:client-history"));
+    }
+
+    /**
+     * The most recent {@link #MAX_MESSAGES} user/assistant messages, in
+     * chronological order, plus every tool row that trails them. Tool rows are
+     * results of the turns around them, so they never consume a cap slot.
+     */
     private static List<ContextMessage> mostRecent(List<ContextMessage> history) {
-        if (history.size() <= MAX_MESSAGES) {
-            return history;
+        int counted = 0;
+        int start = 0;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            start = i;
+            if (!"tool".equals(history.get(i).role())) {
+                counted++;
+                if (counted == MAX_MESSAGES) {
+                    break;
+                }
+            }
         }
-        return new ArrayList<>(history.subList(history.size() - MAX_MESSAGES, history.size()));
+        return new ArrayList<>(history.subList(start, history.size()));
     }
 
     /**

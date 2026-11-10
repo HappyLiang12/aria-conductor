@@ -5,11 +5,13 @@ release head. It exists because Gate A's SANDBOX arm was blocked by the podman m
 `memory.max` defect and its HOST arm by the governed read-only toolset; after both blockers
 were addressed on this host, the SANDBOX arm was run to conclusion.
 
-**Outcome: the orchestration works; the deliverable does not.** A pre-existing mainline
-policy denies `edit`/`write`/`patch`/`bash` to every opencode run and wires the platform
-MCP only to the Aria assistant, so SDD BA/DEV/QA workers are read-only in HOST and in
-SANDBOX. The chain was stopped after the second read-only DEV/QA cycle. This is a product
-blocker, not an S1 regression (finding F-E2E-1).
+**Outcome at the time of this attempt: the orchestration works; the deliverable does
+not.** A pre-existing mainline policy denies `edit`/`write`/`patch`/`bash` to every
+opencode run and wires the platform MCP only to the Aria assistant, so SDD BA/DEV/QA
+workers are read-only in HOST and in SANDBOX. The chain was stopped after the second
+read-only DEV/QA cycle. This is a product blocker, not an S1 regression (finding
+F-E2E-1). **Section 8 records the post-fix rerun of the same scenario, which reached
+COMPLETED with a real implementation and a `VERDICT=PASS` QA report.**
 
 ## 1. Provenance
 
@@ -192,3 +194,69 @@ alternative delivery path for opencode workers.
 
 No credential or `.env` value was printed at any point. The chain branch is a normal SDD
 artifact on the project repository; it was not merged.
+
+## 8. Post-fix rerun: the same scenario reaches COMPLETED
+
+F-E2E-1 was fixed in four commits on `feat/agent-os-memory`:
+
+- `e4aee2d7` — RED: the sandbox-worker read-only tools test.
+- `370513e9` — GREEN: a SANDBOX worker that is not the Aria assistant gets a second
+  governed document with `edit/write/patch/bash: allow` (and the same `*`, task,
+  question, `external_directory` refusals). Aria and every HOST run keep the shipped
+  document byte-for-byte (`governedConfigurationJson()` is unchanged);
+  `RunMcpWiring` is untouched, so a worker still gets no platform MCP block.
+- `629ce79e` — structural tests (exact 15 permission keys and order, the worker differs
+  from the shipped document in exactly the four flipped keys, Aria/HOST stay read-only,
+  the Aria sibling keeps its MCP URL/header/bearer) plus the truthful javadoc: the
+  container is the real security boundary and the uploaded config is a rewriteable
+  guardrail.
+- `89c565f1` — no-MCP case hardened; final HEAD of the lane.
+
+The live rerun used the fat jar rebuilt at `89c565f1`
+(`agent-control-tower/act-app/target/act-app-0.1.0-SNAPSHOT.jar`, 95,222,833 bytes,
+sha256 `3f14484b4d9f61326b8525590c3b7eb17d92ae7ba9bcbaed96d9423d61b58e0a`, built
+2026-11-10 20:25 +0800) on the same fresh-H2 `h2` profile and the same local
+OpenSandbox server and image as section 1.
+
+Chain `b3019551-f2f7-40f0-ab56-2e776c1ff2cb` (`development-workflow-instance`) reached
+`COMPLETED` at `2026-11-10T13:09:24Z`; `GET /api/v1/workflows/{id}` reports steps
+`[COMPLETED, COMPLETED, COMPLETED]`. All three executed runs are opencode/SANDBOX:
+
+| Step | Run | Status | Tokens | Completed (UTC) |
+|---|---|---|---|---|
+| BA | `0bad2637-6edb-421f-a390-0faa4dfc461f` | COMPLETED | 257 | 12:30:54 |
+| DEV | `e0eefcf3-ced0-4511-b7ba-e60f134f05c7` | COMPLETED | 627 | 12:49:51 |
+| QA | `2c942372-9266-4739-85db-46ed91c7ed1a` | COMPLETED | 397 | 13:09:23 |
+
+The SPEC_REVIEW approval was decided through the operator route (HTTP 200) and the spec
+was committed on the chain branch.
+
+- **DEV did the work for issue #112 in the sandbox.** It cloned `/workspace/repo`, found
+  the sandbox image carries no JDK or Maven, bootstrapped JDK 21.0.13 and Maven 3.9.9
+  under `/workspace/.tools`, implemented the spec-artifact locator (12 files,
+  +1,050/−38: `RunArtifactLocator`, `RunArtifactProperties`, `RunArtifactStartupCheck`,
+  `SpecArtifact`, `SpecReadResult`, the SDD coordinator wiring and tests), ran act-common
+  151 tests, act-execution 1,351 (11 skipped), act-knowledge 269 (4 skipped) and the
+  act-app subset, and pushed `8b5447cf` (`sdd dev`).
+- **QA verified the implementation.** Its report records the full unit tier
+  2,609 tests / 0 failures / 0 errors / 19 skipped, the integration tier for
+  act-common/act-execution/act-knowledge 109 / 0 / 0 / 10, and a green full
+  compile/install. One earlier integration run failed with 17 environment errors because
+  `packages/qoder-acp-bridge/dist/main.js` had not been built; the QA run recorded it as
+  failed and did not use it as evidence, then rebuilt the bridge and reran green. The
+  report is committed as `b4401f40` (`sdd qa report`) with only `qa_report.md` in
+  `git diff --stat HEAD~1`. Final text: `VERDICT=PASS`, `REPORT_ID=dc36ab84-a393-489f-8fdb-9ca8809d4c6f`.
+
+Branch `sdd/b3019551-f2f7-40f0-ab56-2e776c1ff2cb` now carries
+`b4401f40 sdd qa report`, `8b5447cf sdd dev`, `bac3aa5d sdd: approve spec`. It was not
+merged; the deliverable is the scenario's evidence, not a mainline change.
+
+This is the option-1 acceptance: the F-E2E-1 fix makes an opencode SDD worker able to
+deliver in its run workspace while Aria and every HOST run stay read-only, proven by a
+real chain that reached COMPLETED with no issue and no defect.
+
+Residual (recorded, not a blocker for this scenario): a bash-enabled worker can still
+reach the backend/MCP over loopback when `aria.mcp.auth-mode=none` (reviewer P2,
+INFERRED), and a worker can rewrite its own `launch-record.json` because it runs as the
+same unprivileged user (F-E2E-2). Both are documented in the QA report and are platform
+follow-ups.

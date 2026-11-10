@@ -326,9 +326,64 @@ Full transcript: `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evide
   worker write path either. The deny policy is mainline `fdff463d` (#92), not S1.
 - Consequence: S1 orchestration/context is verified live, the SDD deliverable is NOT
   VERIFIED (F-E2E-1). The qoder-core route remains untested (no credential).
+  **Superseded by the completion section below.**
 - Hosted CI at `48a28c26`: run `42771452139`, 17 jobs, 16 success, 1 skipped by the
   paths-filter (`TS MCP Server Tests + Coverage`, no TypeScript changes in the push),
   0 failures.
+
+### Live SDD completion after F-E2E-1 (2026-11-10)
+
+Full transcript: `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md`
+section 8 (opencode) and `docs/reviews/evidence/2026-11-10-e2e-qoder/` (qoder).
+
+- **Opencode fix lane:** `e4aee2d7` (RED), `370513e9` (GREEN), `629ce79e` (structural
+  tests plus the truthful javadoc), `89c565f1` (no-MCP case). A SANDBOX non-Aria worker
+  gets `edit/write/patch/bash: allow` plus the same refusals; Aria and every HOST run
+  keep the shipped document byte-for-byte; a worker still gets no platform MCP.
+- **Opencode chain `b3019551-f2f7-40f0-ab56-2e776c1ff2cb` COMPLETED** at
+  `2026-11-10T13:09:24Z`, steps 3/3, on fresh H2 and the live OpenSandbox with the fat
+  jar at `89c565f1` (sha256 `3f14484b…`). Runs: BA `0bad2637` (257 tokens), DEV
+  `e0eefcf3` (627), QA `2c942372` (397). Branch commits `bac3aa5d` (spec), `8b5447cf`
+  (dev, 12 files, +1,050/−38), `b4401f40` (qa report only); QA `VERDICT=PASS`,
+  `REPORT_ID=dc36ab84…`.
+- **Local full gate at `89c565f1`:** surefire 2,923/0/0/8, failsafe 263/0/0/6,
+  dashboard 662/662 plus build, MCP server 157/157, bridge 62/62.
+- **Hosted CI ledger.** Run `42816058320` at `89c565f1`: 16/17 success; only
+  `E2E Playwright (shard 1/4)`. Classification: flake rooted in a pre-existing product
+  race (F-E2E-3), not an S1 regression. Backend log: run `41a0c924` recorded COMPLETED
+  67 ms after the verified cancel; retry run `e2feb31f` finalized FAILED with
+  `StopProof[allWritersStopped=false]`. Fix `1a93edfb` (test-only: hold the first writer
+  on an unanswered ask and assert the honest settlement; the exact cancel-ack contract
+  stays in `core-execution-modes.spec.ts`). Local evidence: full `core-workspaces` spec
+  5/5, concurrency case 3/3 with `--repeat-each=3`, against the committed CI harness.
+  Run `42822170254` at `1a93edfb`: 16 success, 1 skipped (TS paths-filter), 0 failed.
+- **Qoder route brought up.** Fresh H2; the operator PAT stored through
+  `PUT /api/v1/cores/qoder/credential` (masked `****f1e1`, never printed or committed);
+  `qodercli` plus the built ACP bridge; the fleet converged with
+  `PUT /api/v1/agents/runtime` to `qoder/HOST`. A smoke run returned `READY`, and a
+  toolchain run proved `gh 2.90.0`, Maven 3.9.6 and Java 21.0.11 on the worker PATH.
+  Native qoder asks arrive as `ACP_PERMISSION` approvals and were approved by a loopback
+  driver that never touches the SPEC_REVIEW gate.
+- **Qoder chain `0525d3df-d50b-4de7-9238-cd5d3bdb4865`:** BA `ebf0172d` COMPLETED and
+  the SPEC_REVIEW gate approved 200. The first DEV `c06fd03d` was cancelled by the
+  admission-frozen 45-minute deadline after its module gates were already green
+  (`gate:act-common` rc=0, `gate:act-execution` rc=0, `gate:act-knowledge` rc=0,
+  `inner:act-app` rc=0) but before it could commit. The step was retried as run
+  `76981115` with `aria.tasks.deadline-minutes=120` (the operator remedy the deadline
+  message names). The retry completed at `14:45:51Z` and committed the implementation as
+  `da4282e3` (10 files, +1,204/−48: `RunArtifactReaderPort` in act-common,
+  `WorkspaceRunArtifactReader` in act-execution, the coordinator reduced to a port
+  consumer, `SddSpecReviewResultRootTest` in act-app). QA run `6c557916` completed at
+  `15:03:31Z`, and the chain reached `COMPLETED` with steps 3/3 at `15:03:34Z`. QA
+  independently reproduced the four lanes (act-common 136, act-execution 1,364,
+  act-knowledge 270 with 4 untouched skips, act-app 2 — 1,772 tests, every lane rc=0,
+  coverage met), mutation-checked AC2, reported `VERDICT=PASS` with
+  `REPORT_ID=db82f5ba-847e-4d4e-8a72-3da9e7c2cf03`, and committed `f3dbeb03` with only
+  `qa_report.md` in the diff. The branch carries `9829eef8`, `da4282e3` and `f3dbeb03`;
+  it was not merged. 140 `ACP_PERMISSION` approvals were granted to DEV and 57 to QA by
+  the driver; the SPEC_REVIEW gate stayed an operator decision. Security: the QA
+  credential check echoed the `gho_…` GitHub token into its run transcript, so that token
+  is treated as exposed and must be rotated; the value was never written to any artifact.
 
 ## Decision log
 
@@ -513,6 +568,33 @@ Full transcript: `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evide
   policy, (b) widen platform-MCP wiring to run-scoped worker actors, or (c) run SDD on the
   qoder core once an operator credential exists — a product decision, not an S1 merge
   gate.
+- 2026-11-10: option (a) was taken for F-E2E-1, scoped exactly: a SANDBOX worker that is
+  not the Aria assistant gets `edit/write/patch/bash: allow` in a second governed
+  document; Aria and every HOST run keep the shipped document byte-for-byte; a worker
+  still gets no platform MCP; `RunMcpWiring` is untouched. The container is the real
+  security boundary; the uploaded config is a rewriteable guardrail.
+- 2026-11-10: option 1's acceptance is the live opencode chain
+  `b3019551-f2f7-40f0-ab56-2e776c1ff2cb` reaching COMPLETED with a real DEV commit and a
+  QA `VERDICT=PASS` (evidence section 8), not a simulated or read-only run.
+- 2026-11-10: the CI red at `89c565f1` is a test-design flake over the pre-existing
+  cancel/finalize race F-E2E-3, not an S1 regression. The release-head response is the
+  test-only `1a93edfb` plus a recorded product follow-up; the engine's terminal
+  settlement and the API's `reachedWhileVerified` are not changed in S1.
+- 2026-11-10: option 3 runs the SDD scenario on the qoder HOST core. The operator
+  approves native `ACP_PERMISSION` asks through a loopback driver and keeps SPEC_REVIEW a
+  human decision; the run deadline is raised to 120 minutes because the 45-minute default
+  cancelled a real DEV after its module gates were already green.
+- 2026-11-10: the operator PAT supplied in the conversation is treated as exposed. It was
+  stored only through `PUT /api/v1/cores/qoder/credential`, never printed or committed,
+  and the local temp copy was deleted after storing; it should be rotated after this
+  exercise.
+- 2026-11-10: option 3's acceptance is the live qoder chain
+  `0525d3df-d50b-4de7-9238-cd5d3bdb4865` reaching COMPLETED with the real DEV commit
+  `da4282e3` and the QA `VERDICT=PASS` (`REPORT_ID=db82f5ba…`), not a smoke run. The
+  deadline raise to 120 minutes is an operator budget remedy, not a product change. The
+  qoder QA worker's own credential check echoed the `gho_…` GitHub token into its run
+  transcript, so that token is also treated as exposed and must be rotated; no credential
+  value was written to a committed file.
 
 ## Evidence to fill at each boundary
 

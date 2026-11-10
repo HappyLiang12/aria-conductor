@@ -122,9 +122,11 @@ class OpenCodeLaunchProfileTest {
     /**
      * A SANDBOX placement: the working directory is a sandbox path and the
      * endpoint is the real proxy shape ({@code http://<host>:<published>/proxy/<inner>}),
-     * which is what {@code SandboxBind} reads the placement from. The deadline is
-     * null unless the run is meant to be MCP-wired: {@code RunMcpWiring} mints the
-     * run bearer against it, so a wired Aria run needs a real future deadline.
+     * which is what {@code SandboxBind} reads the placement from. Callers that
+     * assert a run is <em>not</em> MCP-wired pass a real future deadline anyway:
+     * {@code RunMcpWiring} mints its run bearer against that deadline, so passing
+     * null would let a missing token pass for the wrong reason and leave the agent
+     * gate untested.
      */
     private Fixture sandboxFixture(UUID agentId, Instant deadline) throws IOException {
         root = Files.createTempDirectory("opencode-launch-profile");
@@ -184,19 +186,21 @@ class OpenCodeLaunchProfileTest {
      * refused, the policy is structurally the shipped policy with exactly those four
      * flipped, the provider block is the same resolved one as every other placement,
      * and the worker still receives no platform MCP -- here with a configured
-     * sandbox host, so the Aria-only gate (not a blank address) is what keeps it off.
+     * sandbox host and a real future deadline, so the Aria-only gate (not a blank
+     * address and not a null deadline) is what keeps it off.
      */
     @Test
     void sandboxWorkerRunAllowsWorkspaceTools() throws Exception {
-        // A configured sandbox host, so an unwired document cannot pass merely because
-        // the address was blank: this run is refused the MCP by the Aria-only gate.
+        // A configured sandbox host and a deadline the bearer could be minted
+        // against, so an unwired document cannot pass merely because the address was
+        // blank or the deadline absent: only the Aria-only gate refuses this run.
         mcp.setSandboxHostAddress("host.containers.internal");
         mcp.setPort(4815);
-        Fixture fixture = sandboxFixture(UUID.randomUUID(), null);
+        Fixture fixture = sandboxFixture(UUID.randomUUID(), Instant.now().plusSeconds(2700));
         OpenCodeCoreAdapter.ModelProvider provider = new OpenCodeCoreAdapter.ModelProvider(
                 "acme-gateway", "acme-flash", "https://gw.example.com/v1");
 
-        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, () -> provider));
+        LaunchProfile profile = launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, () -> provider));
 
         JsonNode document = governedConfig(fixture);
         JsonNode permission = document.path("permission");
@@ -233,6 +237,9 @@ class OpenCodeLaunchProfileTest {
         assertThat(document.has("mcp"))
                 .as("the Aria-only gate, not a blank sandbox address, keeps the platform MCP off a worker")
                 .isFalse();
+        assertThat(profile.env())
+                .as("a worker is never handed the run bearer, even with a deadline to mint it against")
+                .doesNotContainKey("ARIA_MCP_TOKEN");
         JsonNode providerBlock = document.path("provider").path("aria-acme-gateway");
         assertThat(document.path("model").asText()).isEqualTo("aria-acme-gateway/acme-flash");
         assertThat(providerBlock.path("npm").asText()).isEqualTo("@ai-sdk/openai-compatible");
@@ -289,7 +296,12 @@ class OpenCodeLaunchProfileTest {
                     .as("the wired Aria run stays read-only: %s", tool)
                     .isEqualTo("deny");
         }
-        assertThat(profile.env().get("ARIA_MCP_TOKEN")).isNotNull();
+        String token = profile.env().get("ARIA_MCP_TOKEN");
+        assertThat(token).isNotNull();
+        assertThat(actorTokens.resolveBearer("Bearer " + token))
+                .as("the sandbox Aria run's environment carries the run-scoped bearer minted for this run")
+                .get()
+                .satisfies(actor -> assertThat(actor.runId()).isEqualTo(fixture.runId()));
     }
 
     /**

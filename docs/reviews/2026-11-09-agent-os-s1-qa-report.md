@@ -98,9 +98,11 @@ Full transcript: `docs/reviews/evidence/2026-11-09-gate-b/gate-b-evidence.md`.
   `context_manifests` in the only V65-pinned IT. The V81 cleanup now lives in
   `cleanup-context-manifests.sql`, executed by full-schema consumers only; the pinned IT
   keeps the pre-V81 script. The full gate is green at the fixed head.
-- Hosted CI remains the release gate; the result at the final head is recorded in the
-  ledger. The live SDD rerun was executed at the final head and is recorded above: the
-  orchestration passed, the deliverable is blocked by F-E2E-1.
+- Hosted CI remains the release gate: run `42771452139` at `48a28c26` is green (17 jobs,
+  16 success, 1 skipped by the paths-filter for no TypeScript changes, 0 failures); the
+  run at the resulting documentation head is visible in the PR. The live SDD rerun was
+  executed at the release head and is recorded above: the orchestration passed, the
+  deliverable is blocked by F-E2E-1.
 - MariaDB execution of V81/V82 remains unverified (H2 only).
 - F-E2E-1 (open, pre-existing): the live SDD deliverable is blocked in both placements.
   The governed opencode configuration denies `edit/write/patch/bash`
@@ -131,4 +133,4 @@ deliverable remains blocked by F-E2E-1, the pre-existing opencode worker tool po
 confirmed on HOST and SANDBOX (the podman `memory.max` limitation was fixed for this
 attempt); MariaDB execution is unverified; q filtering, the lifecycle-service
 duplication, the proposal-reason gap and the lane-plan cost gaps are follow-ups. The
-hosted CI result at the final head is recorded in the ledger.
+hosted CI result is recorded in the ledger and the PR.

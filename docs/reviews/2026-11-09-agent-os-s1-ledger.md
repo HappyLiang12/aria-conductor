@@ -326,6 +326,9 @@ Full transcript: `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evide
   worker write path either. The deny policy is mainline `fdff463d` (#92), not S1.
 - Consequence: S1 orchestration/context is verified live, the SDD deliverable is NOT
   VERIFIED (F-E2E-1). The qoder-core route remains untested (no credential).
+- Hosted CI at `48a28c26`: run `42771452139`, 17 jobs, 16 success, 1 skipped by the
+  paths-filter (`TS MCP Server Tests + Coverage`, no TypeScript changes in the push),
+  0 failures.
 
 ## Decision log
 

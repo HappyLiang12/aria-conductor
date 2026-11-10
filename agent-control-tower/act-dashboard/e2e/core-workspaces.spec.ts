@@ -146,12 +146,18 @@ test('two concurrent Direct writers on one directory are exclusive', async ({ re
     workspaceMode: 'DIRECT',
     workspacePath: shared,
   });
-  await setScenario(request, agent.id, 'pause-resume');
+  // The first writer must hold the lease from admission until the cleanup
+  // cancel. The opencode `pause-resume` prompt completes by contract (only the
+  // detached writer survives; see core-execution-modes.spec.ts), so that
+  // scenario can reach COMPLETED between the RUNNING poll and the cancel and a
+  // completed run is honestly not cancelable (409). `cancel-pending` parks the
+  // run on its unanswered permission ask until the cancel aborts it -- the
+  // exact held state this cleanup's verified stop needs.
+  await setScenario(request, agent.id, 'cancel-pending');
 
   const first = await seedRun(request, agent.id, uniqueName('e2e-direct-a'));
-  // The first writer must hold the lease before the second launch can be
-  // observed as the refused one: admission is the run's own step (the lease is
-  // acquired before RUNNING), so wait for exactly RUNNING first.
+  // Admission is the run's own step (the lease is acquired before RUNNING), so
+  // wait for exactly RUNNING first: the second launch is then the refused one.
   await pollUntil(
     request,
     `/runs/${first.id}`,
@@ -180,11 +186,22 @@ test('two concurrent Direct writers on one directory are exclusive', async ({ re
   expect(conflict![1]).toBe(shared);
   expect(conflict![2]).toBe(first.id);
 
-  // Cleanup: the first run releases the lease only through the verified stop
-  // path (exact cancel ack).
+  // Cleanup: settling the first run releases its lease. The verified stop and
+  // the core's own finalize race here: the abort makes the harness peer answer
+  // with a normal completion, and when that answer lands first the run is
+  // already terminal and cancel answers 409 (reachedWhileVerified). Both
+  // outcomes release the lease; the exact cancel-ack contract is pinned by
+  // core-execution-modes.spec.ts ('cancelling a run is acknowledged...'). The
+  // cancel/finalize race itself is recorded as a pre-existing finding in the
+  // S1 QA report, not asserted here.
   const cancelled = await apiCall(request, 'POST', `/runs/${first.id}/cancel`);
-  expect(cancelled.status).toBe(200);
-  expect(cancelled.data?.status).toBe('CANCELLED');
+  if (cancelled.status === 200) {
+    expect(cancelled.data?.status).toBe('CANCELLED');
+  } else {
+    expect(cancelled.status, JSON.stringify(cancelled.data)).toBe(409);
+    const settled = await pollRunTerminal(request, first.id);
+    expect(['COMPLETED', 'CANCELLED']).toContain(settled.status);
+  }
 });
 
 test('workspace-diff preview answers for a run without a workspace and for an owned one', async ({ request }) => {

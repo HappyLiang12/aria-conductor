@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.agent.repository.LlmProviderRepository;
+import io.aria.conductor.common.port.RunArtifactReaderPort;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
@@ -110,6 +111,19 @@ public class CoreRuntimeConfiguration {
         } catch (IOException e) {
             throw new UncheckedIOException("Workspace root cannot be provisioned: " + path, e);
         }
+    }
+
+    /**
+     * The cross-module view of a finished run's retained artifacts (#112). It is built from
+     * the service's own canonical result root -- the exact instance {@code capture} writes
+     * under -- so the read side inherits the token expansion, provisioning and
+     * canonicalization of the write side instead of repeating them and drifting. A refused
+     * root therefore fails the context for both sides at once, naming
+     * {@code aria.workspaces.result-root}.
+     */
+    @Bean
+    public RunArtifactReaderPort runArtifactReaderPort(RunWorkspaceService workspaces) {
+        return new WorkspaceRunArtifactReader(workspaces.resultRoot());
     }
 
     @Bean

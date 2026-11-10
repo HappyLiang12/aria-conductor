@@ -1,5 +1,5 @@
 # act-execution shard fragment 4 of 4 - a surefire includes file (one FQCN per line).
-# cost=17.21s  classes=53
+# cost=17.21s  classes=54
 # measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
 # by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
 
@@ -40,6 +40,7 @@ io.aria.conductor.execution.runtime.RunFinalizerTest
 io.aria.conductor.execution.runtime.TaskDeadlinePropertiesTest
 io.aria.conductor.execution.runtime.WorkflowScratchBindingTest
 io.aria.conductor.execution.runtime.WorkspacePathsConfiguredRootTest
+io.aria.conductor.execution.runtime.WorkspaceRunArtifactReaderTest
 io.aria.conductor.execution.runtime.core.QoderCoreSessionReportedUsageTest
 io.aria.conductor.execution.runtime.host.CoreFailureTextTest
 io.aria.conductor.execution.runtime.host.HostAuthenticationFailureTextTest

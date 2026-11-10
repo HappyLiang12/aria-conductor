@@ -1,5 +1,9 @@
 package io.aria.conductor.knowledge.sdd;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
@@ -8,9 +12,12 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.common.port.RunArtifactReaderPort;
+import io.aria.conductor.common.port.RunArtifactReaderPort.RunArtifactText;
 import io.aria.conductor.execution.git.GitBranchException;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.execution.runtime.WorkspaceRunArtifactReader;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
@@ -18,6 +25,7 @@ import io.aria.conductor.knowledge.dto.UpdateKnowledgeRequest;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
 import io.aria.conductor.knowledge.service.KnowledgeService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +33,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -51,10 +61,15 @@ class SpecReviewCoordinatorTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PlatformTransactionManager transactionManager;
     @Mock GitBranchService gitBranchService;
+    @Mock ObjectProvider<RunArtifactReaderPort> artifactReaders;
 
     @TempDir Path runResultRoot;
 
+    /** The real execution-side reader over the temp root: the coordinator's contract is the port, not a fake. */
+    WorkspaceRunArtifactReader artifactReader;
+
     SpecReviewCoordinator coordinator;
+    ListAppender<ILoggingEvent> reviewLogs;
 
     final UUID chainId = UUID.randomUUID();
     final UUID baRunId = UUID.randomUUID();
@@ -69,6 +84,9 @@ class SpecReviewCoordinatorTest {
 
     @BeforeEach
     void setUp() {
+        artifactReader = new WorkspaceRunArtifactReader(runResultRoot);
+        lenient().when(artifactReaders.getIfAvailable()).thenReturn(artifactReader);
+
         specResponse = KnowledgeItemResponse.builder()
                 .id(specItemId)
                 .name("spec-" + chainId)
@@ -104,7 +122,16 @@ class SpecReviewCoordinatorTest {
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
                 chainRepository, workflowService, eventPublisher, transactionManager,
-                gitBranchService, runResultRoot.toString(), 1800000L);
+                gitBranchService, artifactReaders, 1800000L);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        if (reviewLogs != null) {
+            coordinatorLogger().detachAppender(reviewLogs);
+            reviewLogs.stop();
+            reviewLogs = null;
+        }
     }
 
     @Test
@@ -519,5 +546,149 @@ class SpecReviewCoordinatorTest {
         ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
         verify(approvalRepository).save(approvalCaptor.capture());
         assertThat(approvalCaptor.getValue().getContent()).isEqualTo(expected);
+    }
+
+    // ==================== #112: the result root is read through the artifact port ====================
+
+    @Test
+    void onBaStepCompleted_warnsWithTheResolvedPathRunIdAndFallbackWhenTheSpecFileIsAbsent() {
+        ListAppender<ILoggingEvent> logs = captureReviewLogs();
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        assertThat(warnCount(logs)).isEqualTo(1);
+        String warning = firstWarn(logs);
+        assertThat(warning).contains(artifactReader.resolve(baRunId, "spec.md").toString());
+        assertThat(warning).contains(baRunId.toString());
+        assertThat(warning).containsIgnoringCase("finalOutput");
+        assertThat(warning).contains(String.valueOf(specContent.length()));
+    }
+
+    @Test
+    void onBaStepCompleted_marksTheApprovalReasonWhenTheSpecFileIsAbsent() {
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        assertThat(capturedApproval().getReason())
+                .startsWith("Spec file unavailable (showing run output) - ")
+                .contains("spec-" + chainId);
+    }
+
+    @Test
+    void onBaStepCompleted_leavesTheApprovalReasonUnmarkedWhenTheSpecFileWasRead() throws Exception {
+        Path runDir = Files.createDirectories(runResultRoot.resolve(baRunId.toString()));
+        Files.writeString(runDir.resolve("spec.md"), "# Spec\n\nThe real artifact.");
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, "Spec ready. SPEC_ID=x"));
+
+        assertThat(capturedApproval().getReason())
+                .isEqualTo("Spec ready for review: spec-" + chainId)
+                .doesNotContain("Spec file unavailable");
+    }
+
+    @Test
+    void onBaStepCompleted_stillApprovesFromFinalOutputWhenTheArtifactReadThrows() {
+        when(artifactReaders.getIfAvailable()).thenReturn(throwingReader());
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        assertThat(capturedApproval().getContent()).isEqualTo(specContent);
+        verify(knowledgeService).submitKnowledge(argThat(r -> specContent.equals(r.getContent())));
+    }
+
+    @Test
+    void onBaStepCompleted_announcesAMissingReaderAtStartupOnly() {
+        ListAppender<ILoggingEvent> logs = captureReviewLogs();
+        when(artifactReaders.getIfAvailable()).thenReturn(null);
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        assertThat(capturedApproval().getContent()).isEqualTo(specContent);
+        assertThat(warnCount(logs)).isZero();
+
+        coordinator.warnWhenNoArtifactReader();
+
+        assertThat(warnCount(logs)).isEqualTo(1);
+        assertThat(firstWarn(logs))
+                .isEqualTo("SDD spec review will use run final output; no artifact reader is wired");
+    }
+
+    @Test
+    void onBaStepCompleted_boundsTheArtifactReadToTheStoredCap() throws Exception {
+        String oversized = "# Spec\n" + "x".repeat(60 * 1024);
+        Path runDir = Files.createDirectories(runResultRoot.resolve(baRunId.toString()));
+        Files.writeString(runDir.resolve("spec.md"), oversized);
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, "summary"));
+
+        assertThat(capturedApproval().getContent()).hasSize(50 * 1024);
+    }
+
+    @Test
+    void onBaStepCompleted_fallsBackWhenTheArtifactIsEmpty() throws Exception {
+        Path runDir = Files.createDirectories(runResultRoot.resolve(baRunId.toString()));
+        Files.writeString(runDir.resolve("spec.md"), "");
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        // A 0-byte spec.md must never produce a blank spec the reviewer approves blindly.
+        assertThat(capturedApproval().getContent()).isEqualTo(specContent);
+        assertThat(capturedApproval().getReason()).startsWith("Spec file unavailable");
+    }
+
+    private Approval capturedApproval() {
+        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(captor.capture());
+        return captor.getValue();
+    }
+
+    /** A port whose read fails the way a broken filesystem does: loudly, after the path was resolved. */
+    private static RunArtifactReaderPort throwingReader() {
+        return new RunArtifactReaderPort() {
+            @Override
+            public Path resolve(UUID runId, String fileName) {
+                return Path.of("/relocated/results").resolve(String.valueOf(runId)).resolve(fileName);
+            }
+
+            @Override
+            public Optional<RunArtifactText> read(UUID runId, String fileName, long maxChars) {
+                throw new IllegalStateException("Artifact read failed");
+            }
+        };
+    }
+
+    private ListAppender<ILoggingEvent> captureReviewLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        reviewLogs = appender;
+        coordinatorLogger().addAppender(appender);
+        return appender;
+    }
+
+    private static Logger coordinatorLogger() {
+        return (Logger) LoggerFactory.getLogger(SpecReviewCoordinator.class);
+    }
+
+    private static long warnCount(ListAppender<ILoggingEvent> logs) {
+        return logs.list.stream().filter(event -> event.getLevel() == Level.WARN).count();
+    }
+
+    private static String firstWarn(ListAppender<ILoggingEvent> logs) {
+        return logs.list.stream().filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage).findFirst().orElse("");
     }
 }

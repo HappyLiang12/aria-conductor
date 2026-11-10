@@ -8,6 +8,8 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.common.port.RunArtifactReaderPort;
+import io.aria.conductor.common.port.RunArtifactReaderPort.RunArtifactText;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -18,6 +20,7 @@ import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
@@ -27,9 +30,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -50,6 +50,10 @@ public class SpecReviewCoordinator {
     /** Upper bound on stored spec content (DB bloat guard): 50 KB. */
     private static final int MAX_SPEC_CONTENT_LENGTH = 50 * 1024;
     private static final String SPEC_ID_MARKER = "SPEC_ID=";
+    /** The artifact the BA step writes in its run workspace, read through the artifact port. */
+    private static final String SPEC_ARTIFACT_NAME = "spec.md";
+    /** Marks an approval whose body is the run output because the spec artifact was unavailable. */
+    private static final String DEGRADED_REASON_PREFIX = "Spec file unavailable (showing run output) - ";
     /** Matches a bare JSON tool-call object on a single trailing line (e.g. {@code {"name":...,"arguments":...}}). */
     private static final java.util.regex.Pattern TRAILING_TOOL_CALL_JSON =
             java.util.regex.Pattern.compile("^\\s*\\{.*\"name\"\\s*:.*\"arguments\".*}\\s*$");
@@ -63,7 +67,8 @@ public class SpecReviewCoordinator {
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final GitBranchService gitBranchService;
-    private final Path runResultRoot;
+    /** Served by act-execution; absent in a deployment without the run runtime wiring (#112). */
+    private final ObjectProvider<RunArtifactReaderPort> artifactReaders;
     private final Duration approvalTimeout;
 
     public SpecReviewCoordinator(KnowledgeService knowledgeService,
@@ -75,7 +80,7 @@ public class SpecReviewCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
                                  GitBranchService gitBranchService,
-                                 @Value("${aria.workspaces.result-root:./data/workspaces/results}") String runResultRoot,
+                                 ObjectProvider<RunArtifactReaderPort> artifactReaders,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -86,7 +91,7 @@ public class SpecReviewCoordinator {
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.gitBranchService = gitBranchService;
-        this.runResultRoot = Path.of(runResultRoot).toAbsolutePath().normalize();
+        this.artifactReaders = artifactReaders;
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -107,8 +112,10 @@ public class SpecReviewCoordinator {
         }
 
         String specName = specName(chainId);
-        String specContent = resolveSpecContent(chainId, event);
+        SpecSource spec = resolveSpec(event);
+        String specContent = cleanSpecContent(spec.content());
         UUID specItemId = upsertSpecKnowledge(specName, specContent);
+        String reason = "Spec ready for review: " + specName;
 
         Approval approval = Approval.builder()
                 .runId(baRunId)
@@ -117,7 +124,7 @@ public class SpecReviewCoordinator {
                 .contentKind(Approval.ContentKind.MARKDOWN)
                 .knowledgeItemId(specItemId)
                 .status(ApprovalStatus.PENDING)
-                .reason("Spec ready for review: " + specName)
+                .reason(spec.degraded() ? DEGRADED_REASON_PREFIX + reason : reason)
                 .expiresAt(Instant.now().plus(approvalTimeout))
                 .build();
         approvalRepository.save(approval);
@@ -183,6 +190,18 @@ public class SpecReviewCoordinator {
             workflowService.rescheduleStep(chain.getId(), baIdx,
                     "Spec was rejected: " + (approval.getReason() != null ? approval.getReason() : ""));
             log.info("SDD spec rejected: chain={} re-scheduling BA step", chain.getId());
+        }
+    }
+
+    /**
+     * No artifact reader is not a boot failure (a deployment without the run runtime has no
+     * spec artifacts to read), but it must not be silent either: every review then shows the
+     * run output. Said once here, so the per-review path stays quiet about it (#112).
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void warnWhenNoArtifactReader() {
+        if (artifactReaders.getIfAvailable() == null) {
+            log.warn("SDD spec review will use run final output; no artifact reader is wired");
         }
     }
 
@@ -271,47 +290,42 @@ public class SpecReviewCoordinator {
     }
 
     /**
-     * Resolve the spec content for a BA completion: prefer the full spec file the BA
-     * wrote as {@code spec.md} in its run workspace (captured verbatim into the run's
-     * result directory when the runtime finalizes); fall back to the BA run's
-     * finalOutput when the file is unavailable (or a BA that did not write it). Either
-     * way the content is cleaned before storage.
+     * Resolve the spec content for a BA completion: prefer the full spec file the BA wrote
+     * as {@code spec.md} in its run workspace, read through the execution module's artifact
+     * port so the location is the writer's own rather than a second resolution of the
+     * configured result root (#112). Fall back to the BA run's finalOutput when
+     * the artifact is unavailable, and warn with the path that was checked: a summary that
+     * survives {@link #cleanSpecContent} otherwise opens an approval that looks exactly like
+     * the artifact it replaced. Either way the content is cleaned before storage.
      */
-    private String resolveSpecContent(UUID chainId, BaStepCompletedEvent event) {
-        String fileSpec = readSpecFromRunWorkspace(event.getBaRunId());
-        if (fileSpec != null && !fileSpec.isBlank()) {
-            return cleanSpecContent(fileSpec);
+    private SpecSource resolveSpec(BaStepCompletedEvent event) {
+        RunArtifactReaderPort reader = artifactReaders.getIfAvailable();
+        UUID baRunId = event.getBaRunId();
+        if (reader == null) {
+            return new SpecSource(event.getFinalOutput(), true);
         }
-        return cleanSpecContent(event.getFinalOutput());
+        Path location = reader.resolve(baRunId, SPEC_ARTIFACT_NAME);
+        Optional<RunArtifactText> artifact;
+        try {
+            artifact = reader.read(baRunId, SPEC_ARTIFACT_NAME, MAX_SPEC_CONTENT_LENGTH);
+        } catch (RuntimeException e) {
+            // The BA step is already complete; a read failure must not cost the run its approval.
+            log.warn("Reading the SDD spec artifact {} for BA run {} failed: {}",
+                    location, baRunId, e.getMessage());
+            return new SpecSource(event.getFinalOutput(), true);
+        }
+        String content = artifact.map(RunArtifactText::content).orElse(null);
+        if (content != null && !content.isBlank()) {
+            return new SpecSource(content, false);
+        }
+        log.warn("SDD spec file {} is absent for BA run {}; reviewing the run finalOutput ({} characters) instead",
+                artifact.map(RunArtifactText::path).orElse(location), baRunId,
+                event.getFinalOutput() == null ? 0 : event.getFinalOutput().length());
+        return new SpecSource(event.getFinalOutput(), true);
     }
 
-    /**
-     * Reads at most {@link #MAX_SPEC_CONTENT_LENGTH} characters of the run's exported
-     * {@code spec.md}; the same bound the stored spec is truncated to. A missing or
-     * unreadable file falls back to the finalOutput.
-     */
-    private String readSpecFromRunWorkspace(UUID runId) {
-        if (runId == null) {
-            return null;
-        }
-        Path specFile = runResultRoot.resolve(runId.toString()).resolve("spec.md");
-        try {
-            if (!Files.isRegularFile(specFile)) {
-                return null;
-            }
-            char[] buffer = new char[MAX_SPEC_CONTENT_LENGTH];
-            int read = 0;
-            try (Reader reader = Files.newBufferedReader(specFile, StandardCharsets.UTF_8)) {
-                int n;
-                while (read < buffer.length && (n = reader.read(buffer, read, buffer.length - read)) > 0) {
-                    read += n;
-                }
-            }
-            return read == 0 ? null : new String(buffer, 0, read);
-        } catch (Exception e) {
-            log.warn("Cannot read spec.md from the BA run workspace for run {}: {}", runId, e.getMessage());
-            return null;
-        }
+    /** The content a SPEC_REVIEW approval is built from, and whether it degraded to run output. */
+    private record SpecSource(String content, boolean degraded) {
     }
 
     private UUID upsertSpecKnowledge(String name, String content) {

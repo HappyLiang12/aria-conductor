@@ -152,6 +152,16 @@ public class RunWorkspaceService implements WorkspaceService {
         }
     }
 
+    /**
+     * The canonical result root this service captures a run's artifacts into, as adopted
+     * at construction. {@code capture} writes {@code <resultRoot>/<runId>/}, so anything
+     * reading a retained artifact is given this instance rather than a second resolution
+     * of the configured property (#112).
+     */
+    public Path resultRoot() {
+        return resultRoot;
+    }
+
     // ------------------------------------------------------------------ acquire
 
     @Override

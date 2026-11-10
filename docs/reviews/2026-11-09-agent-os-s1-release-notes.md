@@ -1,9 +1,10 @@
 # Release note — S1 memory and context base (feat/agent-os-memory)
 
-Status: in delivery. This note is filled alongside the gates; every claim below is
-either shipped code at the recorded commit or a gate entry in
-`docs/reviews/2026-11-09-agent-os-s1-ledger.md`. Unfilled evidence stays visibly
-unfilled until the gate that produces it runs.
+Status: ready for operator merge. This note is filled alongside the gates; every claim
+below is either shipped code at the recorded commit or a gate entry in
+`docs/reviews/2026-11-09-agent-os-s1-ledger.md`. Hosted CI is green at code head
+`1a93edfb`; the run at the final documentation head is visible in PR #119. Merging is the
+operator's action (see the ledger decision log).
 
 ## What this release is
 
@@ -75,6 +76,10 @@ Memory page is the first S2 vertical slice.
 - Memory reads over REST keep the existing local-console posture; MCP memory reads are
   clamped at INTERNAL, so a CONFIDENTIAL/RESTRICTED fact is not readable through a worker
   tool even with a credential that asks for more.
+- A SANDBOX worker that is not the Aria assistant now receives `edit/write/patch/bash`
+  allow in a second governed opencode document, so an SDD DEV/QA step can implement,
+  build, commit and push in its run workspace. Aria and every HOST run keep the shipped
+  read-only document byte-for-byte, and no worker gets the platform MCP tools (F-E2E-1).
 
 ## Verification evidence (filled at each gate)
 
@@ -103,19 +108,25 @@ Memory page is the first S2 vertical slice.
   present afterwards, and a RESTRICTED fact absent at the INTERNAL ceiling and present
   after raising it. Full gate green at `e36958cb`; hosted CI at the final head is
   recorded in the ledger.
-- Live SDD retry, SANDBOX arm (2026-11-10): the podman `memory.max` blocker was cleared
-  with a rootful machine and the OpenSandbox server's bracketed-IPv6 `NO_PROXY` crash was
-  worked around, so the scenario finally ran on real sandbox cores at the release head:
-  chain `33862f08-9521-411d-b1b5-9b1b8ef25279` on issue #112, BA spec plus SPEC_REVIEW
-  approval 200, spec pushed to `sdd/33862f08...` at `e4d7aa29`, five executed runs with
-  five manifest rows (each carrying the memory section), all writer-control stops
-  reporting `writersStopped:true` (seven stop lines) and zero `StopProof` false. The deliverable remains blocked: the governed opencode policy
-  denies `edit/write/patch/bash` to every run and the platform MCP is Aria-only, so DEV
-  and QA are read-only in HOST and SANDBOX (F-E2E-1, mainline `fdff463d` #92, not an S1
-  regression). Full transcript:
-  `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md`.
-- Residual risks and follow-ups: recorded in the QA report and ledger. The live SDD
-  deliverable blocker predates this branch and is not an S1 regression; the podman memory
-  limitation was fixed for the retry above. MariaDB execution is unverified (H2 only); the
-  memory REST q-filter, the dashboard lifecycle-service duplication, the proposal-reason
-  channel and the lane-plan cost gaps are follow-ups.
+- Live SDD acceptance after F-E2E-1 (2026-11-10): the same issue #112 scenario ran to
+  COMPLETED on both cores at the release head. Opencode/SANDBOX chain
+  `b3019551-f2f7-40f0-ab56-2e776c1ff2cb` reached COMPLETED with steps 3/3 on a fresh H2
+  and a live OpenSandbox; DEV implemented 12 files (+1,050/−38) and pushed `8b5447cf`,
+  QA reported `VERDICT=PASS` (`REPORT_ID=dc36ab84…`) and committed `b4401f40`; the
+  earlier read-only block (F-E2E-1) was fixed in `89c565f1`. Qoder/HOST chain
+  `0525d3df-d50b-4de7-9238-cd5d3bdb4865` reached COMPLETED with steps 3/3; DEV pushed
+  `da4282e3` (10 files, +1,204/−48) with act-common 136, act-execution 1,364,
+  act-knowledge 270 and act-app 2 all rc=0, and QA independently reproduced every gate,
+  mutation-checked the core criterion, reported `VERDICT=PASS` (`REPORT_ID=db82f5ba…`)
+  and committed `f3dbeb03`. Neither SDD branch was merged. Transcripts:
+  `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md` section 8 and
+  `docs/reviews/evidence/2026-11-10-e2e-qoder/qoder-e2e-evidence.md`.
+- Residual risks and follow-ups: recorded in the QA report and ledger. F-E2E-2 (a worker
+  can rewrite its own launch record as the same unprivileged user), the unauthenticated
+  loopback reach with `aria.mcp.auth-mode=none` (INFERRED) and F-E2E-3 (a verified cancel
+  can lose the recorded terminal state to the core's own finalize) are platform
+  follow-ups, not S1 regressions; F-E2E-3's test-only containment ships in `1a93edfb`.
+  MariaDB execution is unverified (H2 only); the memory REST q-filter, the dashboard
+  lifecycle-service duplication, the proposal-reason channel and the lane-plan cost gaps
+  are follow-ups. The `gho_` token echoed by the qoder QA worker's own credential check
+  must be rotated.

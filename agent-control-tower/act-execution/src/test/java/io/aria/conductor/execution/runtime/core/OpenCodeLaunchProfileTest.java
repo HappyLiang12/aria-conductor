@@ -108,6 +108,25 @@ class OpenCodeLaunchProfileTest {
         return new Fixture(root, workspace, configuration, runId, spec, environment);
     }
 
+    /**
+     * A SANDBOX placement: the working directory is a sandbox path and the
+     * endpoint is the real proxy shape ({@code http://<host>:<published>/proxy/<inner>}),
+     * which is what {@code SandboxBind} reads the placement from.
+     */
+    private Fixture sandboxFixture(UUID agentId) throws IOException {
+        root = Files.createTempDirectory("opencode-launch-profile");
+        Path workspace = Files.createDirectories(root.resolve("workspace"));
+        Path configuration = Files.createDirectories(root.resolve("runtime").resolve("sandbox"));
+        UUID runId = UUID.randomUUID();
+        ExecutionSpec spec = new ExecutionSpec(runId, agentId, "opencode", ExecutionMode.SANDBOX,
+                new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
+                "opencode:provider-key", "rev-1", null);
+        PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.SANDBOX,
+                "sandbox-" + runId, "/workspace", configuration.toString(),
+                URI.create("http://localhost:40000/proxy/4096"));
+        return new Fixture(root, workspace, configuration, runId, spec, environment);
+    }
+
     private static OpenCodeCoreAdapter.OpenCodeProfile profile() {
         return new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(), Map.of(), "1.14.31", "efficient");
     }
@@ -142,6 +161,85 @@ class OpenCodeLaunchProfileTest {
                 .as("the production no-wiring document is the shipped one, byte for byte")
                 .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);
         assertThat(profile.env()).doesNotContainKey("ARIA_MCP_TOKEN");
+    }
+
+    /**
+     * A SANDBOX worker (any non-Aria agent) gets the run's own workspace tools:
+     * the run-owned container is the security boundary, so {@code edit},
+     * {@code write}, {@code patch} and {@code bash} are allowed inside it. The
+     * document still denies everything that leaves the run-owned workspace, hands
+     * control to another agent or is otherwise unknown, the provider block is the
+     * same resolved one as every other placement, and the worker still receives
+     * no platform MCP.
+     */
+    @Test
+    void sandboxWorkerRunAllowsWorkspaceTools() throws Exception {
+        Fixture fixture = sandboxFixture(UUID.randomUUID());
+        OpenCodeCoreAdapter.ModelProvider provider = new OpenCodeCoreAdapter.ModelProvider(
+                "acme-gateway", "acme-flash", "https://gw.example.com/v1");
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, () -> provider));
+
+        JsonNode document = governedConfig(fixture);
+        JsonNode permission = document.path("permission");
+        assertThat(permission.path("edit").asText())
+                .as("a sandbox worker must be able to edit the run's workspace").isEqualTo("allow");
+        assertThat(permission.path("write").asText()).isEqualTo("allow");
+        assertThat(permission.path("patch").asText()).isEqualTo("allow");
+        assertThat(permission.path("bash").asText())
+                .as("a sandbox worker must be able to run the project's build and tests").isEqualTo("allow");
+        assertThat(permission.path("read").asText()).isEqualTo("allow");
+        assertThat(permission.path("webfetch").asText()).isEqualTo("allow");
+        assertThat(permission.path("websearch").asText()).isEqualTo("allow");
+        assertThat(permission.path("*").asText())
+                .as("an unknown operation is still denied rather than auto-approved").isEqualTo("deny");
+        assertThat(permission.path("task").asText()).isEqualTo("deny");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        assertThat(permission.path("external_directory").asText())
+                .as("the write policy is bounded by the run-owned workspace").isEqualTo("deny");
+        assertThat(permission.path("aria-conductor*").asText()).isEqualTo("allow");
+        assertThat(document.has("mcp"))
+                .as("a worker run never receives the platform MCP").isFalse();
+        assertThat(document.path("model").asText()).isEqualTo("aria-acme-gateway/acme-flash");
+        assertThat(document.path("provider").path("aria-acme-gateway")
+                .path("options").path("baseURL").asText()).isEqualTo("https://gw.example.com/v1");
+    }
+
+    /**
+     * The Aria assistant stays read-only in every placement: a sandbox Aria run
+     * keeps the shipped refusals for the side-effecting tools.
+     */
+    @Test
+    void sandboxAriaRunStaysReadOnly() throws Exception {
+        Fixture fixture = sandboxFixture(AriaConstants.ARIA_AGENT_ID);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        assertThat(permission.path("edit").asText()).isEqualTo("deny");
+        assertThat(permission.path("write").asText()).isEqualTo("deny");
+        assertThat(permission.path("patch").asText()).isEqualTo("deny");
+        assertThat(permission.path("bash").asText()).isEqualTo("deny");
+        assertThat(permission.path("*").asText()).isEqualTo("deny");
+    }
+
+    /**
+     * A HOST worker stays read-only: only the sandbox container is accepted as the
+     * boundary that allows a worker's write and shell tools, so the sandbox
+     * worker policy must never leak onto the operator's own host.
+     */
+    @Test
+    void hostWorkerRunStaysReadOnly() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        assertThat(permission.path("edit").asText()).isEqualTo("deny");
+        assertThat(permission.path("write").asText()).isEqualTo("deny");
+        assertThat(permission.path("patch").asText()).isEqualTo("deny");
+        assertThat(permission.path("bash").asText()).isEqualTo("deny");
+        assertThat(permission.path("*").asText()).isEqualTo("deny");
     }
 
     /**

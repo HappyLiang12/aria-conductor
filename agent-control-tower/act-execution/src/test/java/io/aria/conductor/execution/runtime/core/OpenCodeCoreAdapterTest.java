@@ -7,6 +7,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.sun.net.httpserver.HttpServer;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -282,7 +283,10 @@ class OpenCodeCoreAdapterTest {
                 runMcp(), () -> provider);
         PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.SANDBOX, "env-1",
                 "/workspace", hostConfig.toString(), URI.create("http://127.0.0.1:40369/proxy/4096"));
-        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "opencode", ExecutionMode.SANDBOX,
+        // Aria in the sandbox: the placement whose governed document stays the shipped
+        // read-only one byte for byte. A SANDBOX non-Aria worker's document differs by
+        // design (OpenCodeLaunchProfileTest#sandboxWorkerRunAllowsWorkspaceTools).
+        ExecutionSpec spec = new ExecutionSpec(runId, AriaConstants.ARIA_AGENT_ID, "opencode", ExecutionMode.SANDBOX,
                 new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
                 null, null, Instant.now().plusSeconds(30));
 

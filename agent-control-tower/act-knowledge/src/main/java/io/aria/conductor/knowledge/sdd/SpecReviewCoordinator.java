@@ -2,6 +2,9 @@ package io.aria.conductor.knowledge.sdd;
 
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.artifact.RunArtifactLocator;
+import io.aria.conductor.common.artifact.SpecArtifact;
+import io.aria.conductor.common.artifact.SpecReadResult;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
@@ -27,10 +30,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -50,6 +49,8 @@ public class SpecReviewCoordinator {
     /** Upper bound on stored spec content (DB bloat guard): 50 KB. */
     private static final int MAX_SPEC_CONTENT_LENGTH = 50 * 1024;
     private static final String SPEC_ID_MARKER = "SPEC_ID=";
+    /** Stable, greppable marker for a spec artifact that could not be read. */
+    static final String SPEC_UNAVAILABLE_MARKER = "spec artifact unavailable";
     /** Matches a bare JSON tool-call object on a single trailing line (e.g. {@code {"name":...,"arguments":...}}). */
     private static final java.util.regex.Pattern TRAILING_TOOL_CALL_JSON =
             java.util.regex.Pattern.compile("^\\s*\\{.*\"name\"\\s*:.*\"arguments\".*}\\s*$");
@@ -63,7 +64,7 @@ public class SpecReviewCoordinator {
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final GitBranchService gitBranchService;
-    private final Path runResultRoot;
+    private final RunArtifactLocator runArtifacts;
     private final Duration approvalTimeout;
 
     public SpecReviewCoordinator(KnowledgeService knowledgeService,
@@ -75,7 +76,7 @@ public class SpecReviewCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
                                  GitBranchService gitBranchService,
-                                 @Value("${aria.workspaces.result-root:./data/workspaces/results}") String runResultRoot,
+                                 RunArtifactLocator runArtifacts,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -86,7 +87,7 @@ public class SpecReviewCoordinator {
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.gitBranchService = gitBranchService;
-        this.runResultRoot = Path.of(runResultRoot).toAbsolutePath().normalize();
+        this.runArtifacts = runArtifacts;
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -282,36 +283,42 @@ public class SpecReviewCoordinator {
         if (fileSpec != null && !fileSpec.isBlank()) {
             return cleanSpecContent(fileSpec);
         }
-        return cleanSpecContent(event.getFinalOutput());
+        String fallback = event.getFinalOutput();
+        if (fallback == null || fallback.isBlank()) {
+            log.error("{}: runId={} reason=unusable-input path={} (no spec artifact and no finalOutput)",
+                    SPEC_UNAVAILABLE_MARKER, event.getBaRunId(), runArtifacts.resultRoot());
+            throw new IllegalStateException("SPEC_REVIEW input is unusable: run " + event.getBaRunId()
+                    + " has no readable spec artifact and no finalOutput; refusing to submit an empty review.");
+        }
+        return cleanSpecContent(fallback);
     }
 
     /**
-     * Reads at most {@link #MAX_SPEC_CONTENT_LENGTH} characters of the run's exported
-     * {@code spec.md}; the same bound the stored spec is truncated to. A missing or
-     * unreadable file falls back to the finalOutput.
+     * Reads the run's exported {@code spec.md} through the shared
+     * {@link RunArtifactLocator}. When the artifact is unavailable, logs a
+     * greppable WARN with the run id, reason and fully resolved absolute path
+     * before the caller falls back to the BA finalOutput. Never logs content.
      */
     private String readSpecFromRunWorkspace(UUID runId) {
         if (runId == null) {
+            log.warn("{}: runId=null reason={} path={}",
+                    SPEC_UNAVAILABLE_MARKER, SpecReadResult.INVALID_RUN_ID, runArtifacts.resultRoot());
             return null;
         }
-        Path specFile = runResultRoot.resolve(runId.toString()).resolve("spec.md");
-        try {
-            if (!Files.isRegularFile(specFile)) {
-                return null;
-            }
-            char[] buffer = new char[MAX_SPEC_CONTENT_LENGTH];
-            int read = 0;
-            try (Reader reader = Files.newBufferedReader(specFile, StandardCharsets.UTF_8)) {
-                int n;
-                while (read < buffer.length && (n = reader.read(buffer, read, buffer.length - read)) > 0) {
-                    read += n;
-                }
-            }
-            return read == 0 ? null : new String(buffer, 0, read);
-        } catch (Exception e) {
-            log.warn("Cannot read spec.md from the BA run workspace for run {}: {}", runId, e.getMessage());
-            return null;
+        SpecReadResult result = runArtifacts.readSpecResult(runId.toString());
+        if (result.available()) {
+            SpecArtifact artifact = result.artifact();
+            return artifact.content();
         }
+        if (result.errorDetail() != null) {
+            log.warn("{}: runId={} reason={} path={} error={}",
+                    SPEC_UNAVAILABLE_MARKER, runId, result.reason(), result.attemptedPath(),
+                    result.errorDetail());
+        } else {
+            log.warn("{}: runId={} reason={} path={}",
+                    SPEC_UNAVAILABLE_MARKER, runId, result.reason(), result.attemptedPath());
+        }
+        return null;
     }
 
     private UUID upsertSpecKnowledge(String name, String content) {

@@ -2,6 +2,7 @@ package io.aria.conductor.knowledge.sdd;
 
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.artifact.RunArtifactLocator;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
@@ -104,7 +105,7 @@ class SpecReviewCoordinatorTest {
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
                 chainRepository, workflowService, eventPublisher, transactionManager,
-                gitBranchService, runResultRoot.toString(), 1800000L);
+                gitBranchService, RunArtifactLocator.forRoot(runResultRoot), 1800000L);
     }
 
     @Test

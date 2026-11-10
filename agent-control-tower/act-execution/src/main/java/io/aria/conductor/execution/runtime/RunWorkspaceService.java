@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.common.artifact.RunArtifactLocator;
 import io.aria.conductor.common.model.RunWorkspaceLease;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -104,7 +105,8 @@ public class RunWorkspaceService implements WorkspaceService {
 
     private final RunWorkspaceLeaseRepository leases;
     private final Path runtimeRoot;
-    private final Path resultRoot;
+    /** The canonical run artifact contract; the only source of the result root and its layout. */
+    private final RunArtifactLocator artifacts;
     private final List<String> gitCommand;
     private final Duration gitTimeout;
     /** The git credential a scratch checkout authenticates with; null in legacy construction. */
@@ -113,14 +115,21 @@ public class RunWorkspaceService implements WorkspaceService {
     private final ScratchWorkspaceProvisioner scratchProvisioner;
 
     public RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot) {
-        this(leases, runtimeRoot, resultRoot, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS), null,
+        this(leases, runtimeRoot, locator(resultRoot), List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS), null,
                 ScratchWorkspaceProvisioner.NONE);
+    }
+
+    /** Production wiring: the canonical artifact locator is the shared source of the result root. */
+    public RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, RunArtifactLocator artifacts,
+            GitTokenSource gitTokenSource, ScratchWorkspaceProvisioner scratchProvisioner) {
+        this(leases, runtimeRoot, artifacts, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS),
+                gitTokenSource, scratchProvisioner);
     }
 
     /** Production wiring: scratch checkouts follow the workflow's binding and the git-pack credential. */
     public RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
             GitTokenSource gitTokenSource, ScratchWorkspaceProvisioner scratchProvisioner) {
-        this(leases, runtimeRoot, resultRoot, List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS),
+        this(leases, runtimeRoot, locator(resultRoot), List.of("git"), Duration.ofSeconds(GIT_TIMEOUT_SECONDS),
                 gitTokenSource, scratchProvisioner);
     }
 
@@ -131,11 +140,17 @@ public class RunWorkspaceService implements WorkspaceService {
      */
     RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
             List<String> gitCommand, Duration gitTimeout) {
-        this(leases, runtimeRoot, resultRoot, gitCommand, gitTimeout, null,
+        this(leases, runtimeRoot, locator(resultRoot), gitCommand, gitTimeout, null,
                 ScratchWorkspaceProvisioner.NONE);
     }
 
     RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, Path resultRoot,
+            List<String> gitCommand, Duration gitTimeout, GitTokenSource gitTokenSource,
+            ScratchWorkspaceProvisioner scratchProvisioner) {
+        this(leases, runtimeRoot, locator(resultRoot), gitCommand, gitTimeout, gitTokenSource, scratchProvisioner);
+    }
+
+    RunWorkspaceService(RunWorkspaceLeaseRepository leases, Path runtimeRoot, RunArtifactLocator artifacts,
             List<String> gitCommand, Duration gitTimeout, GitTokenSource gitTokenSource,
             ScratchWorkspaceProvisioner scratchProvisioner) {
         this.leases = Objects.requireNonNull(leases, "Lease repository is required");
@@ -144,9 +159,18 @@ public class RunWorkspaceService implements WorkspaceService {
         this.gitTokenSource = gitTokenSource;
         this.scratchProvisioner = scratchProvisioner == null
                 ? ScratchWorkspaceProvisioner.NONE : scratchProvisioner;
+        this.artifacts = Objects.requireNonNull(artifacts, "Run artifact locator is required");
         try {
             this.runtimeRoot = canonicalDirectory(root(runtimeRoot, "runtime root"));
-            this.resultRoot = canonicalDirectory(root(resultRoot, "result root"));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Direct-construction test seam: the configured result root normalized to its real path. */
+    private static RunArtifactLocator locator(Path resultRoot) {
+        try {
+            return RunArtifactLocator.forRoot(canonicalDirectory(root(resultRoot, "result root")));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -438,7 +462,7 @@ public class RunWorkspaceService implements WorkspaceService {
             throw new IllegalArgumentException("Runtime handle run "
                     + (handle == null ? "null" : handle.runId()) + " does not match workspace lease run " + lease.runId());
         }
-        Path resultDir = resultRoot.resolve(lease.runId().toString());
+        Path resultDir = artifacts.resultDir(lease.runId().toString());
         try {
             Files.createDirectories(resultDir);
         } catch (IOException e) {
@@ -1007,6 +1031,7 @@ public class RunWorkspaceService implements WorkspaceService {
     }
 
     private void rejectRuntimeRootInsideSource(Path sourceRoot) {
+        Path resultRoot = artifacts.resultRoot();
         if (runtimeRoot.startsWith(sourceRoot) || resultRoot.startsWith(sourceRoot)
                 || sourceRoot.startsWith(runtimeRoot) || sourceRoot.startsWith(resultRoot)) {
             throw new IllegalArgumentException(

@@ -43,6 +43,22 @@ Sourced from the committed Gate A evidence and ledger; not re-run in the Gate B 
 - Classified failures and fixes: F-A1/F-A2 product test debt, fixed test-only; the
   opencode native-executable blocker resolved; the SANDBOX arm blocked by the podman
   machine's `memory.max` limitation (environment).
+- SANDBOX retry, 2026-11-10 (full transcript:
+  `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md`). After
+  `podman machine set --rootful` fixed the memory limit and the OpenSandbox server's
+  bracketed-IPv6 `NO_PROXY` crash was worked around, a fresh H2 (v82) ran chain
+  `33862f08-9521-411d-b1b5-9b1b8ef25279` on issue #112 with real sandbox cores: BA
+  produced a full spec, SPEC_REVIEW `e50cf86e...` was approved 200, the spec was pushed
+  to `sdd/33862f08...` at `e4d7aa29`, and five executed runs produced exactly five
+  manifest rows with the `memory` section present; every writer-control stop returned
+  `writersStopped:true` (seven stop lines) and there was zero `StopProof` false. The deliverable is still blocked, now classified as a pre-existing
+  product policy rather than an environment limit: the governed opencode configuration
+  denies `edit/write/patch/bash` to every run and `RunMcpWiring` wires the platform MCP
+  only to the Aria assistant, so DEV and QA are read-only in HOST and SANDBOX. DEV
+  refused to fabricate (455 and 22,276 tokens), QA submitted `VERDICT=DEFECT` twice, and
+  the second identical cycle was cancelled. Finding F-E2E-1; the deny policy is
+  mainline `fdff463d` (#92), not an S1 change. The qoder-core route (ACP permission
+  channel) remains NOT VERIFIED for lack of a credential.
 
 ## Gate B evidence
 
@@ -82,12 +98,18 @@ Full transcript: `docs/reviews/evidence/2026-11-09-gate-b/gate-b-evidence.md`.
   `context_manifests` in the only V65-pinned IT. The V81 cleanup now lives in
   `cleanup-context-manifests.sql`, executed by full-schema consumers only; the pinned IT
   keeps the pre-V81 script. The full gate is green at the fixed head.
-- Hosted CI and the live SDD rerun at the final head remain the release gates; CI result
-  is recorded in the ledger.
+- Hosted CI remains the release gate; the result at the final head is recorded in the
+  ledger. The live SDD rerun was executed at the final head and is recorded above: the
+  orchestration passed, the deliverable is blocked by F-E2E-1.
 - MariaDB execution of V81/V82 remains unverified (H2 only).
-- The Gate A live SDD deliverable remains blocked by the pre-existing governed HOST
-  toolset (non-Aria agents get read-only tools; the platform MCP is Aria-only) and the
-  SANDBOX arm by the podman machine's `memory.max` limitation; qoder still lacks a PAT.
+- F-E2E-1 (open, pre-existing): the live SDD deliverable is blocked in both placements.
+  The governed opencode configuration denies `edit/write/patch/bash`
+  (`OpenCodeCoreAdapter.java:115-149`) and the platform MCP is Aria-only
+  (`RunMcpWiring.java:51`; MCP design line 102), so non-Aria SDD workers have no write,
+  shell or git tool. Confirmed live on SANDBOX on 2026-11-10 after the podman
+  `memory.max` limitation was fixed with a rootful machine; the policy landed in mainline
+  `fdff463d` (#92) and is not an S1 regression. The qoder core (ACP permission channel)
+  remains an untested alternative because no qoder credential is available on this host.
 - Plan-text drift: the Gate B examples use `key`/`value` fact fields and a `q=timezone`
   recall query; the live contract is `factKey`/`valueText`, and recall is entity-mention
   based (spec §8.4). Both were applied correctly in the live run and recorded as
@@ -104,8 +126,9 @@ the sensitivity ceiling, the one tool catalog, code-owned Aria prompt, module bo
 and the full local gate (surefire 2919/0/0/8, failsafe 263/0/0/6, dashboard 662, MCP
 server 157, bridge 62). The live memory acceptance ran on a fresh H2 with the real
 opencode HOST core (teach, restart, recall, manifest, real worker-actor PENDING, approval,
-RESTRICTED ceiling). Residuals, not release blockers for S1: the live SDD deliverable
-remains blocked by the pre-existing read-only HOST toolset and the podman `memory.max`
-limitation; MariaDB execution is unverified; q filtering, the lifecycle-service
+RESTRICTED ceiling). Residuals, not release blockers for the S1 surface: the live SDD
+deliverable remains blocked by F-E2E-1, the pre-existing opencode worker tool policy
+confirmed on HOST and SANDBOX (the podman `memory.max` limitation was fixed for this
+attempt); MariaDB execution is unverified; q filtering, the lifecycle-service
 duplication, the proposal-reason gap and the lane-plan cost gaps are follow-ups. The
 hosted CI result at the final head is recorded in the ledger.

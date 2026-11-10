@@ -103,8 +103,19 @@ Memory page is the first S2 vertical slice.
   present afterwards, and a RESTRICTED fact absent at the INTERNAL ceiling and present
   after raising it. Full gate green at `e36958cb`; hosted CI at the final head is
   recorded in the ledger.
+- Live SDD retry, SANDBOX arm (2026-11-10): the podman `memory.max` blocker was cleared
+  with a rootful machine and the OpenSandbox server's bracketed-IPv6 `NO_PROXY` crash was
+  worked around, so the scenario finally ran on real sandbox cores at the release head:
+  chain `33862f08-9521-411d-b1b5-9b1b8ef25279` on issue #112, BA spec plus SPEC_REVIEW
+  approval 200, spec pushed to `sdd/33862f08...` at `e4d7aa29`, five executed runs with
+  five manifest rows (each carrying the memory section), all writer-control stops
+  reporting `writersStopped:true` (seven stop lines) and zero `StopProof` false. The deliverable remains blocked: the governed opencode policy
+  denies `edit/write/patch/bash` to every run and the platform MCP is Aria-only, so DEV
+  and QA are read-only in HOST and SANDBOX (F-E2E-1, mainline `fdff463d` #92, not an S1
+  regression). Full transcript:
+  `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md`.
 - Residual risks and follow-ups: recorded in the QA report and ledger. The live SDD
-  deliverable blocker and the podman memory limitation predate this branch and are not S1
-  regressions; MariaDB execution is unverified (H2 only); the memory REST q-filter,
-  the dashboard lifecycle-service duplication, the proposal-reason channel and the
-  lane-plan cost gaps are follow-ups.
+  deliverable blocker predates this branch and is not an S1 regression; the podman memory
+  limitation was fixed for the retry above. MariaDB execution is unverified (H2 only); the
+  memory REST q-filter, the dashboard lifecycle-service duplication, the proposal-reason
+  channel and the lane-plan cost gaps are follow-ups.

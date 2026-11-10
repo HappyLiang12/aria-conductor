@@ -304,6 +304,29 @@ Verify the run's provider id is the row that was updated; the default provider s
 `INTERNAL` from V81.
 - full local gate plus the live SDD scenario plus hosted CI at the Gate B HEAD.
 
+### Live SDD retry on the SANDBOX arm (2026-11-10)
+
+Full transcript: `docs/reviews/evidence/2026-11-10-e2e-sandbox/e2e-sandbox-evidence.md`.
+
+- Environment: `podman machine set --rootful` cleared the `memory.max` blocker; the
+  OpenSandbox server was recreated with a `NO_PROXY` that omits podman's bracketed IPv6
+  entries (`[::1]`), which its httpx build cannot parse (`Invalid port: ':1]'`).
+- Stack: fat jar sha256 `94a7fc4c…` (main code identical to HEAD), fresh H2 at v82,
+  OpenSandbox `/health` 200, sandbox image `aria-conductor/opencode-sandbox:1.1`.
+- Chain `33862f08-9521-411d-b1b5-9b1b8ef25279` on issue #112: BA COMPLETED (2,872
+  tokens, full spec), SPEC_REVIEW `e50cf86e...` approved 200, branch `sdd/33862f08...`
+  pushed at `e4d7aa29` (`spec/spec.md`), DEV 1 COMPLETED (455), QA 1 COMPLETED (5,640,
+  `VERDICT=DEFECT`), DEV 2 COMPLETED (22,276), QA 2 cancelled; chain CANCELLED.
+- Five executed runs produced five manifest rows, each with the `memory` section; every
+  writer-control stop returned `writersStopped:true` (seven stop lines) and there was
+  zero `StopProof` false.
+- **Blocked:** every DEV/QA output reports only `read/glob/grep/webfetch`; the uploaded
+  governed `opencode.json` denies `edit/write/patch/bash` and has no `mcp` block. Workers
+  are non-Aria, and `RunMcpWiring.forRun` is Aria-only by design, so SANDBOX offers no
+  worker write path either. The deny policy is mainline `fdff463d` (#92), not S1.
+- Consequence: S1 orchestration/context is verified live, the SDD deliverable is NOT
+  VERIFIED (F-E2E-1). The qoder-core route remains untested (no credential).
+
 ## Decision log
 
 - 2026-11-09: product direction is a platform-first governed Agent OS. The engineering
@@ -477,6 +500,16 @@ Verify the run's provider id is the row that was updated; the default provider s
 - 2026-11-10: Gate B remains BLOCKED by F-B1 even though the memory arm is VERIFIED.
   Hosted CI at `7f6647ab` and the live SDD rerun are NOT VERIFIED (not run in this task);
   no release verdict is issued.
+- 2026-11-10: the SANDBOX arm is not an unblock path for the live SDD deliverable. With
+  the podman `memory.max` and OpenSandbox `NO_PROXY` defects removed, the chain ran and
+  the context/manifest/orchestration arm is verified, but the governed opencode policy
+  still denies worker writes and the platform MCP remains Aria-only. Classified F-E2E-1
+  (product, pre-existing `fdff463d` #92). The S1 release verdict stays "PASS for the S1
+  surface with residuals"; the live SDD deliverable stays NOT VERIFIED rather than
+  simulated. Follow-up options are (a) give opencode worker runs a workspace-scoped write
+  policy, (b) widen platform-MCP wiring to run-scoped worker actors, or (c) run SDD on the
+  qoder core once an operator credential exists — a product decision, not an S1 merge
+  gate.
 
 ## Evidence to fill at each boundary
 

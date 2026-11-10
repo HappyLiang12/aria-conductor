@@ -169,11 +169,14 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * container and {@code external_directory} does not path-scope it, so this
      * document is a guardrail rather than an enforcement boundary: it is uploaded
      * writable (mode 644, owned by the unprivileged {@code aria} user) into
-     * {@code /home/aria/run/<runId>/config}, so a worker can read the credentials
-     * the launch injects and rewrite its own policy from inside its container. What
-     * it still keeps out of the model's reach is the refused tool surface
-     * ({@code external_directory}, {@code task}, {@code question} and the {@code *}
-     * wildcard), and a worker run still receives no platform MCP.
+     * {@code /home/aria/run/<runId>/config}, so the worker's shell can read the
+     * injected environment -- which is what carries the launch credentials -- and
+     * can rewrite the config file itself; the config file itself carries only its
+     * {@code {env:...}} placeholders. The shipped default still refuses the keys it
+     * lists ({@code external_directory}, {@code task}, {@code question} and the
+     * {@code *} wildcard), but a worker that rewrites the file can remove those
+     * refusals. What the launch keeps out of a worker's reach is the platform MCP
+     * block: the launch hands a worker none at all.
      *
      * <p>Aria stays read-only in every placement and every HOST run stays read-only
      * in both roles, because neither is bounded by a run-owned container: only a

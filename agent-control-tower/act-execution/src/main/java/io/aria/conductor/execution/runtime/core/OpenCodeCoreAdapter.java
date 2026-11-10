@@ -55,14 +55,14 @@ import java.util.Set;
  * file edits, shell execution, sub-agents, questions and directories outside
  * the workspace -- is refused in the core itself. The one governed exception is
  * a SANDBOX worker run ({@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}): its
- * write and shell tools are allowed because the run-owned sandbox container is
- * the security boundary, and {@code external_directory}, {@code task} and
- * {@code question} stay denied. The Aria assistant stays read-only in every
- * placement, a HOST run stays read-only because no container bounds it, and a
- * worker run still receives no platform MCP ({@code RunMcpWiring} stays
- * Aria-only). A run-bound approve-once decision is delivered by the run policy
- * and the permission coordinator (task 12) and is never implemented by
- * relaxing this file back into allow-all.
+ * write and shell tools are allowed because the run-owned container is the real
+ * boundary, and {@code external_directory}, {@code task} and {@code question}
+ * stay denied. Aria stays read-only in every placement, a HOST run stays
+ * read-only because no run-owned container bounds it, and a worker run still
+ * receives no platform MCP ({@code RunMcpWiring} stays Aria-only). A run-bound
+ * approve-once decision is delivered by the run policy and the permission
+ * coordinator (task 12) and is never implemented by relaxing this file back into
+ * allow-all.
  *
  * <p>Capabilities come from the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}): both recorded
@@ -161,18 +161,23 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * document as {@link #GOVERNED_CONFIGURATION_TEMPLATE} except that the run's
      * own workspace tools are allowed.
      *
-     * <p>The run-owned sandbox container is the security boundary here, so the
-     * four tools that do the work -- {@code edit}, {@code write}, {@code patch}
-     * and {@code bash} -- must be usable, or a worker can only read (observed: a
-     * live SDD DEV run refused to fabricate an implementation because its session
-     * exposed no Bash/Write/Edit tool). The allowance is bounded to the run-owned
-     * workspace: {@code external_directory}, {@code task}, {@code question} and
-     * the {@code *} wildcard stay denied, and a worker run still receives no
-     * platform MCP, so this permission block is its whole tool surface.
+     * <p>The four tools that do the work -- {@code edit}, {@code write},
+     * {@code patch} and {@code bash} -- must be usable, or a worker can only read
+     * (observed: a live SDD DEV run refused to fabricate an implementation because
+     * its session exposed no Bash/Write/Edit tool). The real boundary is the
+     * run-owned container, not the workspace. {@code bash} is a shell inside that
+     * container and {@code external_directory} does not path-scope it, so this
+     * document is a guardrail rather than an enforcement boundary: it is uploaded
+     * writable (mode 644, owned by the unprivileged {@code aria} user) into
+     * {@code /home/aria/run/<runId>/config}, so a worker can read the credentials
+     * the launch injects and rewrite its own policy from inside its container. What
+     * it still keeps out of the model's reach is the refused tool surface
+     * ({@code external_directory}, {@code task}, {@code question} and the {@code *}
+     * wildcard), and a worker run still receives no platform MCP.
      *
-     * <p>Aria stays read-only in every placement and a HOST run stays read-only in
-     * both roles, because neither is bounded by a container: only a SANDBOX worker
-     * renders this document.
+     * <p>Aria stays read-only in every placement and every HOST run stays read-only
+     * in both roles, because neither is bounded by a run-owned container: only a
+     * SANDBOX worker renders this document.
      */
     private static final String SANDBOX_WORKER_CONFIGURATION_TEMPLATE = """
             {

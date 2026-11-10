@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.runtime.core;
 
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
@@ -52,9 +53,16 @@ import java.util.Set;
  * denied rather than auto-approved, only the classified read-only tools and the
  * governed web research tools are automatic, and every side-effecting tool --
  * file edits, shell execution, sub-agents, questions and directories outside
- * the workspace -- is refused in the core itself. A run-bound approve-once
- * decision is delivered by the run policy and the permission coordinator
- * (task 12) and is never implemented by relaxing this file back into allow-all.
+ * the workspace -- is refused in the core itself. The one governed exception is
+ * a SANDBOX worker run ({@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}): its
+ * write and shell tools are allowed because the run-owned sandbox container is
+ * the security boundary, and {@code external_directory}, {@code task} and
+ * {@code question} stay denied. The Aria assistant stays read-only in every
+ * placement, a HOST run stays read-only because no container bounds it, and a
+ * worker run still receives no platform MCP ({@code RunMcpWiring} stays
+ * Aria-only). A run-bound approve-once decision is delivered by the run policy
+ * and the permission coordinator (task 12) and is never implemented by
+ * relaxing this file back into allow-all.
  *
  * <p>Capabilities come from the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}): both recorded
@@ -127,6 +135,60 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "write": "deny",
                 "patch": "deny",
                 "bash": "deny",
+                "task": "deny",
+                "question": "deny",
+                "external_directory": "deny",
+                "aria-conductor*": "allow"
+              }%s,
+              "model": "%s/%s",
+              "provider": {
+                "%s": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "%s"
+                  },
+                  "models": {
+                    "%s": {}
+                  }
+                }
+              }
+            }
+            """;
+
+    /**
+     * The governed policy of a SANDBOX worker run (a non-Aria agent): the same
+     * document as {@link #GOVERNED_CONFIGURATION_TEMPLATE} except that the run's
+     * own workspace tools are allowed.
+     *
+     * <p>The run-owned sandbox container is the security boundary here, so the
+     * four tools that do the work -- {@code edit}, {@code write}, {@code patch}
+     * and {@code bash} -- must be usable, or a worker can only read (observed: a
+     * live SDD DEV run refused to fabricate an implementation because its session
+     * exposed no Bash/Write/Edit tool). The allowance is bounded to the run-owned
+     * workspace: {@code external_directory}, {@code task}, {@code question} and
+     * the {@code *} wildcard stay denied, and a worker run still receives no
+     * platform MCP, so this permission block is its whole tool surface.
+     *
+     * <p>Aria stays read-only in every placement and a HOST run stays read-only in
+     * both roles, because neither is bounded by a container: only a SANDBOX worker
+     * renders this document.
+     */
+    private static final String SANDBOX_WORKER_CONFIGURATION_TEMPLATE = """
+            {
+              "$schema": "https://opencode.ai/config.json",
+              "permission": {
+                "*": "deny",
+                "read": "allow",
+                "list": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "edit": "allow",
+                "write": "allow",
+                "patch": "allow",
+                "bash": "allow",
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny",
@@ -378,7 +440,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         Path dataHome = createDirectory(configurationRoot.resolve(DATA_HOME_DIRECTORY));
         Path cacheHome = createDirectory(configurationRoot.resolve(CACHE_HOME_DIRECTORY));
         Optional<RunMcpWiring.Endpoint> workerMcp = runMcp.forRun(spec, environment);
-        writeGovernedConfiguration(configurationRoot, workerMcp);
+        // The ruled worker policy: only a SANDBOX placement is bounded by a container the
+        // run owns, so only there does a non-Aria agent receive the write and shell tools.
+        // Aria stays read-only in every placement and HOST stays read-only in both roles.
+        boolean sandboxWorker = SandboxBind.isSandboxProxy(environment)
+                && !AriaConstants.ARIA_AGENT_ID.equals(spec.agentId());
+        writeGovernedConfiguration(configurationRoot, workerMcp, sandboxWorker);
         // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
         // /workspace) and must not be host-absolutized: on Windows that turns it into
         // C:workspace, which the launch manifest rightly refuses.
@@ -583,7 +650,7 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     /** The governed configuration a launch pointing at {@code provider} writes. */
     public static String governedConfigurationJson(ModelProvider provider) {
         Objects.requireNonNull(provider, "provider");
-        return governedConfiguration(provider, "");
+        return governedConfiguration(provider, "", false);
     }
 
     /** The governed configuration of the documented fallback provider. */
@@ -591,9 +658,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         return governedConfigurationJson(ModelProvider.deepseekFallback());
     }
 
-    private static String governedConfiguration(ModelProvider provider, String mcpBlock) {
+    private static String governedConfiguration(ModelProvider provider, String mcpBlock, boolean sandboxWorker) {
         String providerKey = governedProviderKey(provider.providerId());
-        return GOVERNED_CONFIGURATION_TEMPLATE.formatted(mcpBlock,
+        String template = sandboxWorker
+                ? SANDBOX_WORKER_CONFIGURATION_TEMPLATE
+                : GOVERNED_CONFIGURATION_TEMPLATE;
+        return template.formatted(mcpBlock,
                 providerKey, provider.model(),
                 providerKey, provider.baseUrl(), provider.model());
     }
@@ -610,12 +680,13 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 : GOVERNED_PROVIDER_KEY_PREFIX + providerId;
     }
 
-    private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {
+    private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp,
+            boolean sandboxWorker) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
         ModelProvider provider = modelProviders.resolve();
         String document = workerMcp
-                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint)))
-                .orElseGet(() -> governedConfiguration(provider, ""));
+                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint), sandboxWorker))
+                .orElseGet(() -> governedConfiguration(provider, "", sandboxWorker));
         try {
             Files.createDirectories(target.getParent());
             Files.writeString(target, document, StandardCharsets.UTF_8);

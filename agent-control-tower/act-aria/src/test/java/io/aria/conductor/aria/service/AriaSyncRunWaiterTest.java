@@ -134,6 +134,28 @@ class AriaSyncRunWaiterTest {
         assertThat(reads).hasValue(4);
     }
 
+    /**
+     * F3/A4: a run that parks on a clarification is a returnable outcome for a
+     * sync caller — the question is the answer. The waiter must hand the parked
+     * snapshot back before sleeping, instead of polling the window away and
+     * reporting a timeout on a run that is waiting for the operator.
+     */
+    @Test
+    void aParkedRunReturnsWithoutExhaustingTheSyncWindow() {
+        UUID runId = UUID.randomUUID();
+        AriaRunStateRepository.RunSnapshot parked = snapshot(RunStatus.WAITING_INPUT, null, null, null);
+        when(states.findSnapshotById(runId)).thenReturn(Optional.of(parked));
+        AtomicInteger sleeps = new AtomicInteger();
+        AriaSyncRunWaiter waiter = new AriaSyncRunWaiter(states, template(),
+                millis -> { sleeps.incrementAndGet(); }, 500L, 120, 3_000L);
+
+        AriaSyncRunWaiter.Outcome outcome = waiter.await(runId);
+
+        assertThat(outcome.snapshot().getStatus()).isEqualTo(RunStatus.WAITING_INPUT);
+        assertThat(outcome.timedOut()).isFalse();
+        assertThat(sleeps.get()).isZero();
+    }
+
     @Test
     void await_handlesMissingRunAsNonTerminal() {
         UUID runId = UUID.randomUUID();

@@ -8,12 +8,16 @@ import io.aria.conductor.aria.dto.AriaChatRequest;
 import io.aria.conductor.aria.dto.AriaChatResponse;
 import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +61,7 @@ class AriaServiceChatTest {
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
     @Mock AriaRunStateRepository stateRepository;
+    @Mock ApprovalRepository approvalRepository;
 
     private AriaService ariaService;
     private Agent ariaAgent;
@@ -67,7 +72,7 @@ class AriaServiceChatTest {
         AriaSyncRunWaiter waiter = new AriaSyncRunWaiter(stateRepository,
                 AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L);
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                intentClassifier, toolCallRepository, waiter);
+                intentClassifier, toolCallRepository, waiter, approvalRepository);
 
         ariaAgent = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
@@ -381,5 +386,78 @@ class AriaServiceChatTest {
         assertThat(response.getMessage())
                 .contains("cancelled")
                 .doesNotContain("completed your request");
+    }
+
+    /**
+     * F3/A4: a run that parks on a clarification is answered with the question, not
+     * a "still WAITING_INPUT" stub. The pending CLARIFICATION approval carries the
+     * question in {@code content}, and its id is what an API client needs to answer.
+     */
+    @Test
+    void aParkedSyncChatCarriesTheQuestionAndTheApprovalId() {
+        UUID approvalId = UUID.randomUUID();
+        Approval ask = Approval.builder()
+                .id(approvalId)
+                .runId(RUN_ID)
+                .status(ApprovalStatus.PENDING)
+                .source(ApprovalSource.CLARIFICATION)
+                .content("Which PR should I review?")
+                .build();
+        when(stateRepository.findSnapshotById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+        when(approvalRepository.findByRunIdAndStatusAndSource(
+                RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of(ask));
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("WAITING_INPUT");
+        assertThat(response.getQuestion()).isEqualTo("Which PR should I review?");
+        assertThat(response.getApprovalId()).isEqualTo(approvalId.toString());
+        assertThat(response.getMessage()).isEqualTo("Which PR should I review?");
+        assertThat(response.getErrorCode()).isNull();
+    }
+
+    /**
+     * Negative control for the test above: with no pending ask there is no question
+     * to carry, so both fields stay null and the message keeps the honest live-status
+     * sentence. The service never fabricates a question from the run output.
+     */
+    @Test
+    void aParkedSyncChatWithoutAnAskInventsNoQuestion() {
+        when(stateRepository.findSnapshotById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+        when(approvalRepository.findByRunIdAndStatusAndSource(
+                RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("WAITING_INPUT");
+        assertThat(response.getQuestion()).isNull();
+        assertThat(response.getApprovalId()).isNull();
+        assertThat(response.getMessage())
+                .contains("WAITING_INPUT")
+                .doesNotContain("completed your request");
+    }
+
+    /**
+     * F2 failure containment: an approvals read that throws must not turn a parked
+     * reply into a failed request — the caller still learns the run is parked.
+     */
+    @Test
+    void aParkedSyncChatSurvivesAFailedApprovalLookup() {
+        when(stateRepository.findSnapshotById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+        when(approvalRepository.findByRunIdAndStatusAndSource(
+                RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenThrow(new RuntimeException("db down"));
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getStatus()).isEqualTo("WAITING_INPUT");
+        assertThat(response.getQuestion()).isNull();
+        assertThat(response.getApprovalId()).isNull();
+        assertThat(response.getMessage()).contains("WAITING_INPUT");
     }
 }

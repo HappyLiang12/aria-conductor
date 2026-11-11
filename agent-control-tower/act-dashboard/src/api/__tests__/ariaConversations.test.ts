@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import client from '../client';
-import { composeSynthesis, deleteConversation } from '../ariaConversations';
+import {
+  CLEAR_CONVERSATION_TIMEOUT_MS,
+  composeSynthesis,
+  deleteConversation,
+} from '../ariaConversations';
 import { OPERATOR_CSRF_HEADER, OPERATOR_SESSION_STORAGE_KEY } from '../operatorSession';
 
 /**
@@ -99,6 +103,24 @@ describe('ariaConversations mutations carry the operator CSRF header', () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0].headers[OPERATOR_CSRF_HEADER]).toBeUndefined();
+  });
+
+  // T49 (N-T48-4). The DELETE synchronously drives RunService.cancelRun, whose
+  // verified stop waits on the core, so on a slow or wedged backend it can hang.
+  // The panel reports a timeout as its own outcome, so the call must actually be
+  // bounded — an unbounded await would make that branch unreachable and the
+  // destructive control look dead.
+  it('bounds the DELETE so a hung Clear can answer, not hang the control', async () => {
+    storeSession('csrf-token-abc');
+    const seen = installAdapter(204);
+
+    await deleteConversation('conv-1');
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].timeout).toBe(CLEAR_CONVERSATION_TIMEOUT_MS);
+    // A bound, not zero/undefined: 0 means "no timeout" in axios.
+    expect(CLEAR_CONVERSATION_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(CLEAR_CONVERSATION_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
   });
 
   it('keeps treating a 404 as a successful delete (the conversation is already gone)', async () => {

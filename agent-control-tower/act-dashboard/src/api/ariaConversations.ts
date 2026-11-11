@@ -46,6 +46,16 @@ function responseStatus(error: unknown): number | undefined {
 }
 
 /**
+ * Upper bound on the Clear DELETE (T49 N-T48-4). The call synchronously drives
+ * `RunService.cancelRun`, whose verified stop waits on the core, so on a slow or
+ * wedged backend it can hang for as long as the server does. Unbounded, the panel's
+ * `Clearing…` state would be indistinguishable from a dead button, which is the worst
+ * possible outcome for the control an operator uses to escape a parked turn. 20 s
+ * leaves room for a legitimate verified stop and still answers.
+ */
+export const CLEAR_CONVERSATION_TIMEOUT_MS = 20_000;
+
+/**
  * `DELETE /api/v1/aria/conversations/{id}`: cancel this conversation's runs, then purge its
  * tool calls, trajectories and audit events.
  *
@@ -61,7 +71,9 @@ function responseStatus(error: unknown): number | undefined {
 export async function deleteConversation(conversationId: string): Promise<void> {
   applyOperatorHeaders();
   try {
-    await client.delete(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`);
+    await client.delete(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`, {
+      timeout: CLEAR_CONVERSATION_TIMEOUT_MS,
+    });
   } catch (error) {
     if (responseStatus(error) === 404) return;
     throw error;

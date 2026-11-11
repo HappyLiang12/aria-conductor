@@ -331,6 +331,12 @@ export function AriaPanel() {
   const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  // T49 (N-T48-4): Clear now waits for the server's destructive DELETE, which
+  // cancels runs through the verified stop path. That can take seconds, and a
+  // second click would issue a second delete, so the control is held and says
+  // what it is doing until the call answers or its bounded timeout expires.
+  const [clearing, setClearing] = useState(false);
+  const clearingRef = useRef(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   // Task 37 review fold-in: a reconcile read that was refused used to leave its
   // only trace in the console. Its outcomes are reported on the panel's own
@@ -1227,8 +1233,13 @@ export function AriaPanel() {
   }, [conversationId]);
 
   const handleNewConversation = useCallback(async () => {
+    // One destructive call at a time: the ref guard is synchronous, the state is
+    // only what the operator sees (a second click must not issue a second DELETE).
+    if (clearingRef.current) return;
     const clearedConversationId = conversationId;
     if (clearedConversationId) {
+      clearingRef.current = true;
+      setClearing(true);
       try {
         await deleteConversation(clearedConversationId);
       } catch (err) {
@@ -1239,6 +1250,12 @@ export function AriaPanel() {
         // transcript: it is still the server's conversation, and clearing it here
         // would claim a delete the server did not perform. The report names the
         // action, what did NOT happen, and the place that fixes it.
+        //
+        // T49 (N-T48-4): a bounded timeout is a third outcome. The request was
+        // sent, so "nothing was cleared" would be a guess — the server may still be
+        // clearing. That branch says so instead of claiming the call never landed.
+        const code = (err as { code?: string } | null)?.code;
+        const timedOut = code === 'ECONNABORTED' || code === 'ETIMEDOUT';
         const reason = isCrossOriginRejection(err)
           ? crossSiteSessionMessage('Clearing the conversation')
           : isOperatorRejection(err)
@@ -1250,11 +1267,17 @@ export function AriaPanel() {
           id: crypto.randomUUID(),
           // No retry control: a Retry here would re-send a prompt, and the action
           // that retries is the Clear button this bubble points at.
-          content: 'Clear failed: nothing was cleared, and this transcript is unchanged. '
-            + `${sentence} Press Clear again once that is in place.`,
+          content: timedOut
+            ? 'Clear did not answer in time. This transcript is kept, and the server may still '
+              + `be clearing it. ${sentence} Press Clear again to check.`
+            : 'Clear failed: nothing was cleared, and this transcript is unchanged. '
+              + `${sentence} Press Clear again once that is in place.`,
           noRetry: true,
         });
         return;
+      } finally {
+        clearingRef.current = false;
+        setClearing(false);
       }
     }
     const newConversationId = crypto.randomUUID();
@@ -1371,10 +1394,14 @@ export function AriaPanel() {
                 type="button"
                 className="ai-clear-btn"
                 onClick={handleNewConversation}
+                disabled={clearing}
+                aria-busy={clearing || undefined}
                 aria-label="Clear and start new conversation"
-                title="Clear and start new conversation — this cancels this conversation's runs and deletes its transcript"
+                title={clearing
+                  ? 'Clearing this conversation — waiting for the run stop and transcript purge to answer'
+                  : "Clear and start new conversation — this cancels this conversation's runs and deletes its transcript"}
               >
-                Clear
+                {clearing ? 'Clearing…' : 'Clear'}
               </button>
             </div>
             <button

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { streamMessage } from '../aria';
+import producerSource from '../../../../act-execution/src/main/java/io/aria/conductor/execution/engine/RunSignalSseListener.java?raw';
 
 /** Minimal SSE response double: a body whose reader yields the given chunks. */
 function sseResponse(chunks: string[]) {
@@ -131,6 +132,21 @@ describe('aria streamMessage decision signals', () => {
       valueText: 'email',
       sensitivity: 'INTERNAL',
     });
+  });
+
+  it('pins the memory_proposal payload keys against the producer source', () => {
+    // The fixture above is only as good as its key names: read the producer's
+    // own payload block so a rename on the Java side fails here too, not just a
+    // rename on this side of the wire.
+    const start = producerSource.indexOf('onMemoryProposalCreated');
+    expect(start).toBeGreaterThan(-1);
+    const emit = producerSource.indexOf('registry.emit(runId, "memory_proposal"', start);
+    expect(emit).toBeGreaterThan(start);
+    const keys = [...producerSource.slice(start, emit).matchAll(/payload\.put\("([^"]+)"/g)]
+      .map((match) => match[1]);
+    expect(keys.sort()).toEqual([
+      'entityId', 'factKey', 'proposalId', 'runId', 'sensitivity', 'subjectType', 'valueText',
+    ]);
   });
 
   it('does not dispatch a proposal frame with no decidable id', async () => {

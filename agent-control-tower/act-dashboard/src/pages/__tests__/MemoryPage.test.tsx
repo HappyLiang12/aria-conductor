@@ -442,8 +442,10 @@ describe('MemoryPage — entity detail and retirement', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
     expect(await screen.findByText('preferred_editor')).toBeInTheDocument();
 
-    // The default read is fail-closed ACTIVE-only and is a security boundary:
-    // the call must stay byte-identical, with no `params` key to widen it.
+    // The default read is fail-closed: the server withholds only PENDING, so an
+    // operator detail read returns any non-PENDING entity (ACTIVE, RETIRED or
+    // MERGED). The shape is still a security boundary: the call must stay
+    // byte-identical, with no `params` key to widen it.
     expect(get.mock.calls.filter(([url]) => url === '/api/v1/memory/entities/e1')).toEqual([
       ['/api/v1/memory/entities/e1'],
     ]);

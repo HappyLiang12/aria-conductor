@@ -121,9 +121,8 @@ function isProposalSubjectType(value: string): value is MemoryProposalSummary['s
 
 /**
  * A live `memory_proposal` signal as the reducer's summary, or null for a frame
- * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
- * counts a pending one), so an unclassifiable subject is dropped rather than
- * drawn as a blank card nobody can act on.
+ * the panel cannot classify. An unclassifiable subject would render a card no
+ * decision endpoint owns, so it is dropped rather than drawn blank.
  */
 function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
   const { id, subjectType } = signal;
@@ -358,8 +357,10 @@ export function AriaPanel() {
   );
 
   const items = state.items;
-  // A proposal is settled as `decided-elsewhere` inside the state, so it is no
-  // longer `pending` and cannot lock the composer.
+  // The composer waits for a PARKED turn only — a pending approval or
+  // clarification card (spec:229-234). A memory proposal is decided on its own
+  // card and parks nothing, so it must not gate: the proposal inbox is global,
+  // and gating on it let one conversation's proposal disable another's composer.
   const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
@@ -1376,11 +1377,10 @@ export function AriaPanel() {
               if (item.kind === 'proposal') {
                 // The card owns the decide call (Task 12a): the panel only mounts
                 // it and settles the item, so one decision renders one settlement.
-                // A pending proposal counts toward `hasUnansweredCard`, so it must
-                // be drawn with its own decision controls — gating the composer on
-                // a card the operator cannot act on is an invisible lock. A
-                // `decided-elsewhere` item renders the same card, which says why it
-                // settled and drops the controls that could only 409.
+                // A proposal does not gate the composer (T45 Item 1: it parks no
+                // turn), so an undecided one is a card to act on, never a lock.
+                // A `decided-elsewhere` item renders the same card, which says why
+                // it settled and drops the controls that could only 409.
                 return (
                   <AriaProposalCard
                     key={item.id}

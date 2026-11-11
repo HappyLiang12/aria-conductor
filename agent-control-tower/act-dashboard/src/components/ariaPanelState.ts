@@ -30,14 +30,17 @@ export type PanelItem =
    * read no longer listed it. The inbox is a bounded page with no by-id outcome
    * read, so it cannot say whether the departure was an approval, a rejection,
    * or a later retirement — the card says "decided elsewhere" instead of
-   * inventing a verdict. It is settled for gating (see `hasUnansweredCard`).
+   * inventing a verdict. It drops the card's controls.
    *
    * `blocked-on-entity` is the fourth, and it is neither a verdict nor a
    * departure: the server refused this proposal's decision because its parent
    * entity is still PENDING, so the decision that owns it is the ENTITY
-   * proposal's. It is settled for gating — the card's only remaining control
-   * could 409 forever — and it never reopens, because a listing that still
-   * carries the row would re-gate the composer on the same undecidable ask.
+   * proposal's. The card's only remaining control could 409 forever, so it is
+   * settled, and it never reopens, because a listing that still carries the row
+   * would hand the operator the same undecidable ask again.
+   *
+   * Neither state gates the composer: a proposal never does (see
+   * `hasUnansweredCard`).
    */
   | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' | 'blocked-on-entity' }
   | { kind: 'queued'; id: string; runIds: string[] };
@@ -101,12 +104,19 @@ export function emptyState(conversationId: string): PanelState {
   return { items: [], conversationId };
 }
 
-/** True while the conversation holds a decision the operator has not made yet. */
+/**
+ * True while the conversation holds a card the composer must wait for: an
+ * approval or a clarification, the two asks that PARK their turn (spec:229-234).
+ *
+ * A memory proposal is deliberately NOT here. It is decided on its own card and
+ * parks nothing, and the PENDING proposal inbox is global (see the scope note in
+ * `restore`), so counting a proposal gated this conversation's composer on an
+ * ask another conversation raised — one conversation's undecided proposal
+ * disabled another's composer (spec decision 2, T45 Item 1).
+ */
 export function hasUnansweredCard(state: PanelState): boolean {
   return state.items.some(
-    (item) =>
-      (item.kind === 'approval' || item.kind === 'clarification' || item.kind === 'proposal')
-      && item.state === 'pending',
+    (item) => (item.kind === 'approval' || item.kind === 'clarification') && item.state === 'pending',
   );
 }
 
@@ -401,7 +411,7 @@ function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
   // again instead of staying dead next to a live proposal.
   //
   // `blocked-on-entity` DOES stay closed: its parent is still PENDING, so every
-  // re-delivery would only re-gate the composer on an ask the server refuses.
+  // re-delivery would only hand the operator an ask the server refuses.
   if (existing.state !== 'pending' && existing.state !== 'decided-elsewhere') return state;
   return replaceItem(state, index, { ...existing, ...fields, state: patch.state });
 }

@@ -123,7 +123,7 @@ class MemoryCommandServiceTest {
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
         when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
                 .thenReturn(List.of());
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING)).thenReturn(List.of());
 
         MemoryFact active = command.addFact(entityId,
                 new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, null),
@@ -364,7 +364,7 @@ class MemoryCommandServiceTest {
         MemoryEntity pending = entity(pendingEntityId);
         pending.setStatus(EntityStatus.PENDING);
         when(entities.findById(pendingEntityId)).thenReturn(Optional.of(pending));
-        when(facts.findByEntityIdOrderByValidFromDesc(pendingEntityId)).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(pendingEntityId, FactStatus.PENDING)).thenReturn(List.of());
 
         MemoryFact fact = command.addFact(pendingEntityId,
                 new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, "run-1"),
@@ -730,7 +730,7 @@ class MemoryCommandServiceTest {
         UUID entityId = id("person");
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
         MemoryFact[] stored = new MemoryFact[1];
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId))
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
                 .thenAnswer(invocation -> stored[0] == null ? List.of() : List.of(stored[0]));
         when(facts.save(any(MemoryFact.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
@@ -747,10 +747,49 @@ class MemoryCommandServiceTest {
     }
 
     @Test
+    void aDecidedProposalDoesNotSwallowTheSameValueAgain() throws Exception {
+        UUID entityId = id("person");
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        // The RETIRED row of the rejected proposal keeps the very hash this command computes. The
+        // probe used to read the entity's whole history, so it returned this row, wrote no PENDING
+        // fact and answered ok: the entity card's batch was empty and the value was dropped.
+        String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(("EXTRACTION|" + entityId + "|editor|vim|run-1").getBytes(StandardCharsets.UTF_8)));
+        MemoryFact decided = MemoryFact.builder()
+                .id(id("f-decided"))
+                .entityId(entityId)
+                .factKey("editor")
+                .valueText("vim")
+                .valueType("STRING")
+                .status(FactStatus.RETIRED)
+                .origin(MemoryOrigin.EXTRACTION)
+                .sensitivity(Sensitivity.INTERNAL)
+                .proposalHash(hash)
+                .validFrom(VALID_FROM)
+                .validTo(VALID_FROM)
+                .build();
+        lenient().when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of(decided));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+
+        MemoryFact reproposed = command.addFact(entityId,
+                new AddFactCommand("editor", "vim", "STRING", Sensitivity.INTERNAL, "run-1"), EXTRACTION);
+
+        assertThat(reproposed.getId())
+                .as("a decided value re-proposed is a new open proposal, not the retired row")
+                .isNotEqualTo(decided.getId());
+        assertThat(reproposed.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(reproposed.getValidTo()).isNull();
+        verify(facts, times(1)).save(any(MemoryFact.class));
+        verify(assertions, times(1)).save(any(MemoryAssertion.class));
+    }
+
+    @Test
     void theProposalHashCoversOriginEntityKeyValueAndSource() throws Exception {
         UUID entityId = id("person");
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
 
         MemoryFact fact = command.addFact(entityId,
                 new AddFactCommand("editor", "vim", "STRING", Sensitivity.INTERNAL, "run-1"), EXTRACTION);
@@ -766,7 +805,7 @@ class MemoryCommandServiceTest {
         UUID entityId = id("person");
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
         MemoryFact[] stored = new MemoryFact[1];
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId))
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
                 .thenAnswer(invocation -> stored[0] == null ? List.of() : List.of(stored[0]));
         when(facts.save(any(MemoryFact.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
@@ -786,7 +825,8 @@ class MemoryCommandServiceTest {
     void theLoserOfAProposalRaceReturnsTheWinnersRowInsteadOfFailing() {
         UUID entityId = id("person");
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
         MemoryFact winner = MemoryFact.builder()
                 .id(id("f-winner"))
                 .entityId(entityId)
@@ -818,7 +858,7 @@ class MemoryCommandServiceTest {
     void aProposalRaceWithoutAReadableWinnerIsStillAGovernedResult() {
         UUID entityId = id("person");
         when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
-        when(facts.findByEntityIdOrderByValidFromDesc(entityId)).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING)).thenReturn(List.of());
         when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
                 .thenThrow(new DataIntegrityViolationException("uq_memory_fact_proposal violated"));
         when(proposalWriter.findExistingProposal(eq(entityId), any())).thenReturn(Optional.empty());
@@ -1224,7 +1264,7 @@ class MemoryCommandServiceTest {
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
                 .thenAnswer(invocation -> stored[0] == null ? Optional.empty() : Optional.of(stored[0]));
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
@@ -1235,7 +1275,7 @@ class MemoryCommandServiceTest {
                 new CreateEntityCommand("PERSON", "person:happy", "Happy", null), extraction);
 
         assertThat(second.getId()).isEqualTo(first.getId());
-        verify(entities, times(1)).save(any(MemoryEntity.class));
+        verify(entities, times(1)).saveAndFlush(any(MemoryEntity.class));
         verify(assertions, times(1)).save(any(MemoryAssertion.class));
     }
 
@@ -1497,19 +1537,26 @@ class MemoryCommandServiceTest {
     }
 
     @Test
-    void aLostUniqueRaceReadsTheWinningEntityBack() {
+    void aLostUniqueRaceNamesTheWinningEntityInAGovernedConflict() {
         MemoryEntity winner = entity(id("winner"));
-        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
-                .thenReturn(Optional.empty(), Optional.of(winner));
-        when(entities.save(any(MemoryEntity.class)))
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
+        // The INSERT has to be flushed inside the try: with `save` only, this stub is never reached
+        // and the raw violation surfaces at commit. The winner is read in its own transaction
+        // (proposalWriter.findExistingEntity), because the failed flush has already marked the
+        // loser's transaction for rollback and it can be neither committed nor read from.
+        when(entities.saveAndFlush(any(MemoryEntity.class)))
                 .thenThrow(new DataIntegrityViolationException("uq_memory_entity violated"));
+        when(proposalWriter.findExistingEntity("PERSON", "person:happy")).thenReturn(Optional.of(winner));
 
-        MemoryEntity returned = command.createEntity(
-                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), EXTRACTION);
-
-        assertThat(returned.getId())
-                .as("the loser of the unique constraint returns the winner instead of a raw 500")
-                .isEqualTo(winner.getId());
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), EXTRACTION))
+                .as("the loser names the winner in a governed conflict instead of a raw 500")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("created concurrently")
+                .hasMessageContaining(winner.getId().toString());
+        verify(entities, never()).save(any(MemoryEntity.class));
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
     }
 
     @Test
@@ -1557,12 +1604,12 @@ class MemoryCommandServiceTest {
         MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
         when(entities.findById(any())).thenAnswer(invocation -> Optional.ofNullable(stored[0]));
-        when(facts.findByEntityIdOrderByValidFromDesc(any(UUID.class))).thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(any(UUID.class), eq(FactStatus.PENDING))).thenReturn(List.of());
 
         MemoryFact fact = command.addFactByKey("PERSON", "person:happy",
                 new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, "run-ref"),
@@ -1590,7 +1637,7 @@ class MemoryCommandServiceTest {
     void anOperatorUnknownKeyWritesAnActiveEntityAndItsFirstActiveFact() {
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
@@ -1617,7 +1664,7 @@ class MemoryCommandServiceTest {
         assertThat(created.getStatus()).isEqualTo(EntityStatus.ACTIVE);
         assertThat(created.getOrigin()).isEqualTo(MemoryOrigin.OPERATOR);
         assertThat(created.getSensitivity()).isEqualTo(Sensitivity.INTERNAL);
-        verify(entities).save(created);
+        verify(entities).saveAndFlush(created);
         MemoryAssertion assertion = captureAssertions(1).get(0);
         assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.ENTITY);
         assertThat(assertion.getSubjectId()).isEqualTo(created.getId());
@@ -1754,7 +1801,7 @@ class MemoryCommandServiceTest {
     private void assertTheEventPublisherIsReachableFromThisService() {
         UUID runId = UUID.randomUUID();
         when(entities.findByKindAndCanonicalKey("AGENT", "agent:event-control")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         MemoryEntity proposed = command.createEntity(
                 new CreateEntityCommand("AGENT", "agent:event-control", "Event control", null),

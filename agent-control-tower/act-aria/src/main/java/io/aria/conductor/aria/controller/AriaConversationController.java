@@ -13,8 +13,12 @@ import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.execution.telemetry.RunTelemetryService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -38,19 +42,43 @@ public class AriaConversationController {
     private final ToolCallRepository toolCallRepository;
     private final AriaService ariaService;
     private final io.aria.conductor.agent.service.RunService runService;
+    private final OperatorAuthorityResolver operatorAuthority;
 
     public AriaConversationController(RunRepository runRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
                                        ToolCallRepository toolCallRepository,
                                        AriaService ariaService,
-                                       io.aria.conductor.agent.service.RunService runService) {
+                                       io.aria.conductor.agent.service.RunService runService,
+                                       OperatorAuthorityResolver operatorAuthority) {
         this.runRepository = runRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
         this.ariaService = ariaService;
         this.runService = runService;
+        this.operatorAuthority = operatorAuthority;
+    }
+
+    /**
+     * The same authority decision the other operator-gated controllers make: 403 for a worker
+     * credential (or a forged cookie mutation), 401 with no verifiable identity. Null means the
+     * caller is the operator; call this before any side effect.
+     */
+    private ResponseEntity<Object> rejectNonOperator(HttpServletRequest request, String action,
+                                                     String surface) {
+        try {
+            operatorAuthority.resolveOperator(request, true);
+        } catch (OperatorSessionService.ForbiddenMutationException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", refusal(action, surface)));
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", refusal(action, surface)));
+        }
+        return null;
+    }
+
+    private static String refusal(String action, String surface) {
+        return "Operator authority required: " + action + " is an operator decision. " + surface;
     }
 
     /**
@@ -150,9 +178,29 @@ public class AriaConversationController {
      * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
      * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
      */
+    /**
+     * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
+     * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
+     * <p>
+     * T42 Item 4: this route purges history and cancels runs, and it resolved no authority at all,
+     * so a run-scoped worker bearer was ignored and an anonymous remote caller was not refused
+     * either. It is reachable from a sandbox because {@code RunMcpWiring} gives the core the same
+     * host and port the REST API is served on. The same {@code resolveOperator} mechanism every
+     * other destructive route uses now gates it, before the first read and before any side effect.
+     * A worker bearer is refused 403 with the action named, so the operator never sees the surface
+     * as "uniformly closed" while a worker can wipe a conversation.
+     */
     @DeleteMapping("/{conversationId}")
     @Transactional
-    public ResponseEntity<Void> deleteConversation(@PathVariable String conversationId) {
+    public ResponseEntity<Object> deleteConversation(@PathVariable String conversationId,
+                                                     HttpServletRequest request) {
+        ResponseEntity<Object> refusal = rejectNonOperator(request,
+                "deleting a conversation",
+                "Deleting a conversation cancels its runs and destroys its history; do it from the "
+                        + "dashboard as the local operator.");
+        if (refusal != null) {
+            return refusal;
+        }
         List<Run> runs = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
         if (runs.isEmpty()) {
             return ResponseEntity.notFound().build();

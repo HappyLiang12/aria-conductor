@@ -71,10 +71,11 @@ aria:
     deadline-minutes: 45
   # Concurrent run execution (run admission queue): the rest wait PENDING with
   # their kanban cards in TODO. 0 disables a limit. Workers never consume the
-  # Aria reservation (default 6 + 1).
+  # Aria reservation (default 6 + 3); Aria runs serialize per conversation, so a
+  # parked turn blocks only its own conversation.
   runs:
     max-active: ${ARIA_RUNS_MAX_ACTIVE:6}
-    aria-reserved: ${ARIA_RUNS_ARIA_RESERVED:1}
+    aria-reserved: ${ARIA_RUNS_ARIA_RESERVED:3}
     # How often the deferred-stop worker re-drives a verified core stop that was refused
     # after its Kanban card move already committed (DeferredRunStop.retryPendingStops).
     # The run carries RUN_STOP_PENDING until the stop verifies or the run ends by itself.

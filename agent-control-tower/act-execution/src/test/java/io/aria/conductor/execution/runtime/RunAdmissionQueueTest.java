@@ -42,6 +42,22 @@ class RunAdmissionQueueTest {
         return thread;
     }
 
+    /** Same as acquiring, but carries the conversation the Aria turn belongs to. */
+    private Thread acquiringIn(RunAdmissionQueue queue, UUID runId, Instant createdAt, String conversationId,
+                               CountDownLatch admitted, List<Throwable> failures) {
+        Thread thread = new Thread(() -> {
+            try {
+                queue.acquire(runId, AriaConstants.ARIA_AGENT_ID, createdAt, conversationId);
+                admitted.countDown();
+            } catch (Throwable t) {
+                failures.add(t);
+            }
+        });
+        thread.start();
+        threads.add(thread);
+        return thread;
+    }
+
     private static final UUID WORKER = UUID.randomUUID();
 
     @AfterEach
@@ -201,6 +217,50 @@ class RunAdmissionQueueTest {
         queue.settle(holder); // idempotent
         queue.settle(UUID.randomUUID());
         assertThat(queue.activeWorkerCount()).isZero();
+    }
+
+    @Test
+    void aBusyConversationDoesNotBlockAnotherConversation() throws Exception {
+        RunAdmissionQueue queue = queue(6, 3);
+        List<Throwable> failures = new ArrayList<>();
+        CountDownLatch first = new CountDownLatch(1);
+        UUID parked = UUID.randomUUID();
+        acquiringIn(queue, parked, Instant.parse("2026-11-11T00:00:00Z"), "conv-a", first, failures);
+        assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Same conversation: must queue behind the parked run.
+        CountDownLatch sameConv = new CountDownLatch(1);
+        UUID sameConvRun = UUID.randomUUID();
+        acquiringIn(queue, sameConvRun, Instant.parse("2026-11-11T00:00:01Z"), "conv-a", sameConv, failures);
+        assertThat(sameConv.await(300, TimeUnit.MILLISECONDS)).isFalse();
+        assertThat(queue.isWaiting(sameConvRun)).isTrue();
+
+        // Different conversation: must be admitted even though conv-a is still parked.
+        CountDownLatch otherConv = new CountDownLatch(1);
+        acquiringIn(queue, UUID.randomUUID(), Instant.parse("2026-11-11T00:00:02Z"), "conv-b", otherConv, failures);
+        assertThat(otherConv.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(queue.activeAriaCount()).isEqualTo(2);
+
+        // Releasing the parked run admits the queued turn of the same conversation.
+        queue.release(parked);
+        assertThat(sameConv.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(failures).isEmpty();
+    }
+
+    @Test
+    void theGlobalAriaCapStillQueuesAcrossConversations() throws Exception {
+        RunAdmissionQueue queue = queue(6, 1);
+        List<Throwable> failures = new ArrayList<>();
+        CountDownLatch first = new CountDownLatch(1);
+        acquiringIn(queue, UUID.randomUUID(), Instant.parse("2026-11-11T00:00:00Z"), "conv-a", first, failures);
+        assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch second = new CountDownLatch(1);
+        UUID queued = UUID.randomUUID();
+        acquiringIn(queue, queued, Instant.parse("2026-11-11T00:00:01Z"), "conv-b", second, failures);
+        assertThat(second.await(300, TimeUnit.MILLISECONDS)).isFalse();
+        assertThat(queue.isWaiting(queued)).isTrue();
+        assertThat(failures).isEmpty();
     }
 
     @Test

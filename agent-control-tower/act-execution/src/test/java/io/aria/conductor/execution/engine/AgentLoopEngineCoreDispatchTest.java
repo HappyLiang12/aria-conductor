@@ -256,7 +256,7 @@ class AgentLoopEngineCoreDispatchTest {
                 manifestService, new ContextProperties(), workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, unlimitedAdmission(), null /* KanbanRepository */,
-                inputCoordinator);
+                inputCoordinator, new RunStreamRegistry());
     }
 
     /**

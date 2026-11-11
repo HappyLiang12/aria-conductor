@@ -166,7 +166,7 @@ class AgentLoopEngineAdmissionTest {
                 manifestService, new ContextProperties(), workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, recordingQueue, null /* KanbanRepository */,
-                inputCoordinator);
+                inputCoordinator, new RunStreamRegistry());
         lenient().when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
         stubStatusWrites();
         stubCompletionWrites();
@@ -454,7 +454,7 @@ class AgentLoopEngineAdmissionTest {
                 manifestService, new ContextProperties(), workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, queue, null /* KanbanRepository */,
-                inputCoordinator);
+                inputCoordinator, new RunStreamRegistry());
     }
 
     /** The production wiring of the queue's terminal listener, which the suite must not mock away. */

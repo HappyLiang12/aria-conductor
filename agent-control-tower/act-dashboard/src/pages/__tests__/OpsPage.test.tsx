@@ -192,3 +192,82 @@ describe('OpsPage responsive stacking (Task 10)', () => {
     expect(grid.style.gridTemplateColumns).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 37 / Item 6 (T35 audit row 14): the App KPIs pending panel is the Ops
+// approve/deny surface. A refusal used to reach the operator as an error toast
+// reading "Approve failed. Retry." — server text, no remedy, and advice that
+// cannot work when the route refused for want of the operator.
+//
+// Row 14 also claimed an "answer" refusal at :420. There is no answer mutation
+// on this page: a CLARIFICATION row points at the kanban card instead. That row
+// of the audit was wrong and nothing was invented for it.
+// ---------------------------------------------------------------------------
+
+/** The shared adapter, with the decide route answering the given failure. */
+function serveDecideFailure(approvals: Approval[], status: number, message: string) {
+  requests.length = 0;
+  client.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
+    requests.push(config);
+    if (config.method === 'get' && config.url === '/api/v1/approvals') {
+      return { data: approvals, status: 200, statusText: 'OK', headers: {}, config };
+    }
+    throw Object.assign(new Error('request failed'), {
+      response: { status, data: { message }, statusText: 'Refused', headers: {}, config },
+    });
+  };
+}
+
+describe('OpsPage operator refusals (Task 37)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('shows the operator notice in the pending panel for a refused approve, not a retry toast', async () => {
+    serveDecideFailure([gateAsk()], 403, 'OPS_RAW_SERVER_TEXT');
+    ui();
+
+    const panel = await screen.findByRole('region', { name: /pending approvals/i });
+    await userEvent.click(await within(panel).findByRole('button', { name: /approve/i }));
+
+    const notice = await within(panel).findByTestId('operator-session-notice');
+    expect(notice).toBeVisible();
+    expect(notice).toHaveTextContent(/approving the ask is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    // Neither the server's wording nor the dead-end "Retry." advice survives.
+    expect(screen.queryByText(/OPS_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Approve failed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Retry\./)).not.toBeInTheDocument();
+  });
+
+  it('names denying for a refused deny', async () => {
+    serveDecideFailure([gateAsk()], 401, 'OPS_RAW_SERVER_TEXT');
+    ui();
+
+    const panel = await screen.findByRole('region', { name: /pending approvals/i });
+    await userEvent.click(await within(panel).findByRole('button', { name: /deny/i }));
+
+    expect(await within(panel).findByTestId('operator-session-notice'))
+      .toHaveTextContent(/denying the ask is operator-only/i);
+  });
+
+  // Positive control: a 500 is a fault, not an authority problem.
+  it('keeps the server text in a toast for a 500 approve and shows no notice', async () => {
+    serveDecideFailure([gateAsk()], 500, 'approval store unavailable');
+    ui();
+
+    const panel = await screen.findByRole('region', { name: /pending approvals/i });
+    await userEvent.click(await within(panel).findByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByText('approval store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});

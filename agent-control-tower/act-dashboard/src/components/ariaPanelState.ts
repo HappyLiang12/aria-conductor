@@ -242,6 +242,9 @@ function settleApproval(
   const index = state.items.findIndex((item) => item.kind === 'approval' && item.approvalId === approvalId);
   if (index < 0) return state;
   const existing = state.items[index] as ApprovalItem;
+  // A decided card is the operator's decision; a late or racing settle (the expiry
+  // sweeper) must not rewrite it. Mirrors the guard in upsertApproval.
+  if (existing.state !== 'pending') return state;
   return replaceItem(state, index, {
     ...existing,
     state: nextState,

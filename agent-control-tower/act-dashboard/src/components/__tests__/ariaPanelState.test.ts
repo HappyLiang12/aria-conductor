@@ -411,6 +411,13 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: 'assistant', content: '回合執行失敗：boom', error: true, retryText: 'redo it', noRetry: false });
   });
+
+  it('never overwrites an already-decided approval with a later settle', () => {
+    let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'denied', reason: 'not on main' });
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'expired', reason: 'Auto-rejected: approval expired' });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ state: 'denied', reason: 'not on main' });
+  });
 });
 
 describe('panelReducer live clock', () => {

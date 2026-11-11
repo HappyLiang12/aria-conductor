@@ -336,7 +336,7 @@ class AgentLoopEngineContextTest {
                 workflowChainRepository, assembler, loader, manifests, new ContextProperties(),
                 workspaceManager, approvalRepository, coreExecutionServiceProvider,
                 null /* DoDService */, coreRunLauncherProvider, unlimitedAdmission(),
-                null /* KanbanRepository */, inputCoordinator);
+                null /* KanbanRepository */, inputCoordinator, new RunStreamRegistry());
     }
 
     private ConversationHistoryLoader loader() {

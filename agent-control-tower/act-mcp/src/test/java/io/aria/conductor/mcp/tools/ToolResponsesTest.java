@@ -81,9 +81,15 @@ class ToolResponsesTest {
 
     @Test
     void requireOperator_refusesAnAbsentActor() {
+        // T48 (rev-mcp m3): an absent actor is not a caller that was identified and found not
+        // to be the operator, so it does not get the "is an operator decision" sentence. The
+        // reachable path to it is McpActorContext.require (it refuses before this helper), and
+        // this branch keeps the same truth for the same reason.
         assertThatThrownBy(() -> ToolResponses.requireOperator(null, "retiring an agent", "Retire it on the Crew page."))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("Operator authority required: retiring an agent");
+                .hasMessageStartingWith("MCP authentication required")
+                .hasMessageEndingWith("Retire it on the Crew page.")
+                .hasMessageNotContaining("is an operator decision");
     }
 
     @Test

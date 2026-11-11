@@ -31,7 +31,12 @@ deployment to untrusted networks or the public internet.
 - **H2 console and dev SQL endpoints** are restricted to the `h2` dev profile and are
   not loaded in the production (`mariadb`) profile.
 - **MCP endpoint ships open by default** (`aria.mcp.auth-mode=none`), mirroring the
-  unauthenticated REST API posture; every tool call is audit-logged, and Bearer-token
-  mode (`ARIA_MCP_AUTH_MODE=token`) is available — see README "MCP endpoint (aria.mcp.*)".
+  unauthenticated REST API posture; every tool call is audit-logged. The ten `OPERATOR_ONLY`
+  tools still refuse a caller that presents no credential in that mode, so an anonymous client
+  cannot reach them. Credentialed modes: `ARIA_MCP_AUTH_MODE=actor` (every request must carry a
+  verifiable operator bearer credential or run-scoped worker token — the only mode in which all
+  tool classes are reachable) or the legacy `token` mode (static bearer only; it identifies no
+  actor, so the operator-only tools refuse every caller there). See README "MCP endpoint
+  (aria.mcp.*)".
 
 See the issues labelled `security` for hardening work in progress.

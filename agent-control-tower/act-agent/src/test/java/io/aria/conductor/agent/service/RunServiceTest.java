@@ -1111,6 +1111,32 @@ class RunServiceTest {
     }
 
     @Test
+    void cancelRun_whenTheCoordinatorAlreadyRecordedTheSameCancellation_answersTheStandingCANCELLED() {
+        // T49 item 2: the coordinator's terminal write for a cancelled turn can win this
+        // short writer. The requested state is what stands, so the endpoint answers the run
+        // (200) instead of a conflict; a run that reached COMPLETED still conflicts (above).
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run running = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        Run settled = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.CANCELLED).build();
+        // First read for the transition check, then the standing row the endpoint answers.
+        when(runRepository.findById(id)).thenReturn(Optional.of(running), Optional.of(settled));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        when(runRepository.cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses())))
+                .thenReturn(0);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.CANCELLED)));
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl).cancel(id);
+    }
+
+    @Test
     void cancelRun_whenANonOwnedRunFinalizesBeforeTheRecordedTransition_doesNotOverwriteTerminalState() {
         // C2: the run finalizes between the first read and the owns() check. There is no
         // verified stop on this branch, so the atomic update is the only guard.

@@ -670,6 +670,42 @@ describe('MemoryPage — mutation refusals (Task 30)', () => {
     // problem, so the dialog keeps the operator and the ordinary form error.
     expect(screen.getByRole('dialog', { name: /create memory entity/i })).toBeInTheDocument();
   });
+
+  // T48 Item 9 (T47 follow-up #1 — adjudicated P3, real). A taken kind+key
+  // answered through `POST /entities` (the operator route, `MemoryController:154-173`)
+  // is the memory CONFLICT envelope — `{ok:false,errorType:'CONFLICT',message}`
+  // served as a 409 by `MemoryExceptionHandler.handleConflict` — and the dialog
+  // renders that `message` through `apiErrorMessage`'s ordinary path
+  // (`MemoryPage.tsx:188`). The behaviour was correct and the wording was
+  // actionable, but nothing pinned it: a rewrite of that copy, or a new error
+  // branch, could have regressed it to an unactionable "retry" with a green suite.
+  it('renders the governed 409 wording from POST /entities inside the open dialog', async () => {
+    routeGets({});
+    const conflict = "an entity with kind PERSON and canonical key 'person:happy' already exists; "
+      + 'PATCH it to change its display name or sensitivity';
+    post.mockRejectedValue({
+      response: { status: 409, data: { ok: false, errorType: 'CONFLICT', message: conflict } },
+    });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:happy' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Happy' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+
+    // The server's own actionable wording, in the dialog the operator is looking at.
+    const dialog = screen.getByRole('dialog', { name: /create memory entity/i });
+    expect(await within(dialog).findByText(conflict)).toBeInTheDocument();
+    // It is a conflict, not an authority refusal: no operator-session notice…
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    // …and not the generic fallback, which would hide what the operator must do.
+    expect(screen.queryByText(/entity was not created — retry/i)).not.toBeInTheDocument();
+    // The dialog stays open with the submitted values, so the PATCH remedy is one
+    // edit away instead of a lost form.
+    expect(screen.getByLabelText('Canonical key')).toHaveValue('person:happy');
+    expect(screen.getByLabelText('Display name')).toHaveValue('Happy');
+    expect(screen.queryByText(/entity created/i)).not.toBeInTheDocument();
+  });
 });
 
 // Task 33 / Item 1: the create dialog's overlay (position:fixed, z-index 2000)

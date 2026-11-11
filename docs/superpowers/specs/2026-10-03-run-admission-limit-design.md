@@ -30,7 +30,7 @@ Under a large fan-out (the operator's hotel-research batch), the podman/OpenSand
 ### 2. Slots and configuration
 
 - `aria.runs.max-active` (default **6**; `0` = unlimited, today's behavior) — concurrent non-Aria runs.
-- `aria.runs.aria-reserved` (default **3**, amended 2026-11-11 from 1; `0` = unlimited) — concurrent Aria-assistant runs; Aria runs never consume the worker pool beyond this reservation, and workers never take the Aria reservation. At most one active Aria run per conversation: the queue enforces it as soon as the caller supplies `Run.conversationId` (that engine call site lands with Task 5; until then every caller passes `null`, which is never isolated).
+- `aria.runs.aria-reserved` (default **3**, amended 2026-11-11 from 1; `0` = unlimited) — concurrent Aria-assistant runs; Aria runs never consume the worker pool beyond this reservation, and workers never take the Aria reservation. At most one active Aria run per conversation: the queue enforces it from the `Run.conversationId` the caller supplies, and the engine call site that supplies it **shipped on 2026-11-11** — `AgentLoopEngine.java:281` passes `run.getConversationId()` to the four-argument `acquire`, not `null` — so the per-conversation rule is exhibitible rather than pending (corrected 2026-11-11; this sentence had repeated the pre-implementation claim).
 - Effective concurrency = up to `max-active` workers + `aria-reserved` Aria runs, with at most one active Aria run per conversation.
 
 ### 3. Card UX (waiting in TODO)

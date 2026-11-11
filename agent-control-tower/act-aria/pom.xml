@@ -62,6 +62,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- @DataJpaTest slice for the conversation-clear contract (H2 + JpaSliceConfig). -->
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
 

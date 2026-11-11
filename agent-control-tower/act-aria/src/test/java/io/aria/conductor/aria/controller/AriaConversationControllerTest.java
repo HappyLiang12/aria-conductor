@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.repository.ConversationRunRepository;
 import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.common.exception.GlobalExceptionHandler;
 import io.aria.conductor.common.model.Run;
@@ -50,6 +51,8 @@ class AriaConversationControllerTest {
 
     private MockMvc mockMvc;
     private final RunRepository runRepository = mock(RunRepository.class);
+    private final ConversationRunRepository conversationRunRepository =
+            mock(ConversationRunRepository.class);
     private final SessionTrajectoryRepository trajectoryRepository = mock(SessionTrajectoryRepository.class);
     private final AuditEventRepository auditEventRepository = mock(AuditEventRepository.class);
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
@@ -61,8 +64,8 @@ class AriaConversationControllerTest {
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AriaConversationController(
-                runRepository, trajectoryRepository, auditEventRepository, toolCallRepository,
-                ariaService, runService, operatorAuthority))
+                runRepository, conversationRunRepository, trajectoryRepository, auditEventRepository,
+                toolCallRepository, ariaService, runService, operatorAuthority))
                 .setControllerAdvice(new GlobalExceptionHandler(new MockEnvironment()))
                 .build();
         // The operator path is the default: every existing case below is the local operator.
@@ -448,6 +451,7 @@ class AriaConversationControllerTest {
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
         verify(trajectoryRepository, never()).deleteByRunIdIn(any());
         verify(auditEventRepository, never()).deleteByConversationId(any());
+        verify(conversationRunRepository, never()).detachFromConversation(any());
     }
 
     @Test
@@ -458,6 +462,7 @@ class AriaConversationControllerTest {
                 .andExpect(status().isNotFound());
 
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
+        verify(conversationRunRepository, never()).detachFromConversation(any());
     }
 
     @Test
@@ -482,6 +487,10 @@ class AriaConversationControllerTest {
         verify(toolCallRepository).deleteByRunIdIn(allIds);
         verify(trajectoryRepository).deleteByRunIdIn(allIds);
         verify(auditEventRepository).deleteByConversationId("conv-1");
+        // The conversation link is cleared for every run, so /latest and the timeline can no
+        // longer resolve this conversation (the end-to-end effect is pinned on the real
+        // repositories in ConversationClearContractTest).
+        verify(conversationRunRepository).detachFromConversation(allIds);
     }
 
     @Test
@@ -507,6 +516,7 @@ class AriaConversationControllerTest {
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
         verify(trajectoryRepository, never()).deleteByRunIdIn(any());
         verify(auditEventRepository, never()).deleteByConversationId(any());
+        verify(conversationRunRepository, never()).detachFromConversation(any());
     }
 
     @Test

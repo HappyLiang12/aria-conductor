@@ -137,6 +137,20 @@ describe('panelReducer restore parsing', () => {
     ]);
   });
 
+  it('renders a tool result row with no call row instead of dropping it', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'tool', content: 'orphaned output', runId: 'r9' })],
+      approvals: [], proposals: [],
+    });
+    expect(s.items).toHaveLength(1);
+    const strip = s.items[0];
+    if (strip.kind !== 'activity') throw new Error('activity strip missing');
+    expect(strip).toMatchObject({ kind: 'activity', turnId: 'r9', collapsed: true });
+    expect(strip.tools).toHaveLength(1);
+    expect(strip.tools[0]).toMatchObject({ name: '(tool output)', status: 'ok', result: 'orphaned output' });
+  });
+
   it('restores a failed turn as an assistant bubble with its retry prompt', () => {
     const s = panelReducer(base, {
       type: 'restore', conversationId: 'conv-1',
@@ -267,6 +281,58 @@ describe('panelReducer restore merge', () => {
     });
     expect(s.items.filter((i) => i.kind === 'user')).toHaveLength(1);
   });
+
+  it('keeps a live settled tool when the snapshot only holds its call row', () => {
+    let s = panelReducer(base, { type: 'toolCall', turnId: 'r1', name: 'recall_memory', now: 1_000 });
+    s = panelReducer(s, { type: 'toolResult', turnId: 'r1', name: 'recall_memory', result: '{"hits":1}', ok: true, now: 1_250 });
+    // The snapshot was read before the result row landed: it has the call row only.
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'user', content: 'recall it' }),
+        row({ role: 'tool', content: 'tool_call: recall_memory {"q":"x"}', timestamp: '2026-11-11T00:00:00.000Z' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const strips = s.items.filter((i) => i.kind === 'activity');
+    expect(strips).toHaveLength(1);
+    const strip = strips[0];
+    if (strip.kind !== 'activity') throw new Error('activity strip missing');
+    expect(strip.tools).toHaveLength(1);
+    expect(strip.tools[0]).toMatchObject({
+      name: 'recall_memory',
+      status: 'ok',
+      result: '{"hits":1}',
+      durationMs: 250,
+    });
+  });
+
+  it('shows one failure bubble when the live notice and the restored entry meet', () => {
+    let s = panelReducer(base, { type: 'turnFailed', id: 'live-fail', content: '⚠ 上一回合失敗：boom', retryText: 'retry' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'user', content: 'do it' }),
+        row({ role: 'assistant', content: '回合執行失敗：boom', error: true, retryPrompt: 'retry' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const failures = s.items.filter((i) => i.kind === 'assistant' && i.error === true);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ content: '回合執行失敗：boom' });
+  });
+
+  it('still carries a run-uncertain notice beside a restored failed turn', () => {
+    let s = panelReducer(base, { type: 'turnFailed', id: 'uncertain', content: 'run uncertain', noRetry: true });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'assistant', content: '回合執行失敗：boom', error: true })],
+      approvals: [], proposals: [],
+    });
+    const failures = s.items.filter((i) => i.kind === 'assistant' && i.error === true);
+    expect(failures).toHaveLength(2);
+    expect(failures.map((i) => (i.kind === 'assistant' ? i.content : ''))).toEqual(['回合執行失敗：boom', 'run uncertain']);
+  });
 });
 
 describe('panelReducer clarifications, proposals and queue', () => {
@@ -344,5 +410,29 @@ describe('panelReducer clarifications, proposals and queue', () => {
     const s = panelReducer(base, { type: 'turnFailed', id: 'm1', content: '回合執行失敗：boom', retryText: 'redo it' });
     expect(s.items).toHaveLength(1);
     expect(s.items[0]).toMatchObject({ kind: 'assistant', content: '回合執行失敗：boom', error: true, retryText: 'redo it', noRetry: false });
+  });
+
+  it('never overwrites an already-decided approval with a later settle', () => {
+    let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'denied', reason: 'not on main' });
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'expired', reason: 'Auto-rejected: approval expired' });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ state: 'denied', reason: 'not on main' });
+  });
+});
+
+describe('panelReducer live clock', () => {
+  it('reads the supplied clock for live timestamps instead of the wall clock', () => {
+    let s = panelReducer(base, { type: 'toolCall', turnId: 't1', name: 'list_agents', now: 1_000 });
+    const started = s.items.find((i) => i.kind === 'activity');
+    if (started?.kind !== 'activity') throw new Error('activity strip missing');
+    expect(started.tools[0].startedAt).toBe(1_000);
+
+    s = panelReducer(s, { type: 'toolResult', turnId: 't1', name: 'list_agents', result: '{}', ok: true, now: 1_750 });
+    const settled = s.items.find((i) => i.kind === 'activity');
+    if (settled?.kind !== 'activity') throw new Error('activity strip missing');
+    expect(settled.tools[0].durationMs).toBe(750);
+
+    const failed = panelReducer(base, { type: 'turnFailed', id: 'm1', content: 'boom', now: 0 });
+    expect(failed.items[0]).toMatchObject({ timestamp: '1970-01-01T00:00:00.000Z' });
   });
 });

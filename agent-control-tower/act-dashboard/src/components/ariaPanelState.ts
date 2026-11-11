@@ -12,9 +12,10 @@ import type { Approval } from '../types';
  * survives a reconnect instead of disappearing behind a raw JSON bubble.
  *
  * Pure in the React sense: the state is never mutated, and no event depends on
- * anything but the state and the event — except the two places where a live
- * event has to be timestamped (a live tool's start and a live failed turn),
- * because the event shape carries no clock.
+ * anything but the state and the event. The three events that a live plane has
+ * to timestamp (a tool's start, its result, a failed turn) accept an optional
+ * `now` clock so a caller — and a test — can supply one; it defaults to
+ * `Date.now()` inside the reducer.
  */
 
 export type ToolActivity = { name: string; status: 'running' | 'ok' | 'error'; startedAt: number; durationMs?: number; args?: string; result?: string };
@@ -30,8 +31,20 @@ export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
   | { type: 'restore'; conversationId: string; timeline: TimelineEntry[]; approvals: Approval[]; proposals: MemoryProposalSummary[] }
   | { type: 'userSent'; id: string; content: string; timestamp: string }
-  | { type: 'toolCall'; turnId: string; name: string; args?: string }
-  | { type: 'toolResult'; turnId: string; name: string; result: string; ok: boolean }
+  /**
+   * `turnId` IS the run id — the only turn identity a restored timeline carries.
+   * A caller must pass the run id (the `thinking` event's active run id), not a
+   * counter: anything else draws a second strip for a turn the snapshot already
+   * rendered, and the restored tool never settles.
+   */
+  | { type: 'toolCall'; turnId: string; name: string; args?: string; now?: number }
+  /** `turnId` IS the run id — the same value the matching `toolCall` carried. */
+  | { type: 'toolResult'; turnId: string; name: string; result: string; ok: boolean; now?: number }
+  /**
+   * Carries no turn id; the timeline re-delivers it by content. `turnId` on the
+   * tool events above IS the run id — the only turn identity a restored timeline
+   * carries.
+   */
   | { type: 'assistantMessage'; id: string; content: string; timestamp: string }
   | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
@@ -40,7 +53,7 @@ export type PanelEvent =
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
   | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' }
   | { type: 'queuedRuns'; runIds: string[] }
-  | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean };
+  | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean; now?: number };
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
 
 type RestoreEvent = Extract<PanelEvent, { type: 'restore' }>;
@@ -51,6 +64,8 @@ type ProposalItem = Extract<PanelItem, { kind: 'proposal' }>;
 
 /** The backend's trajectory rows prefix a tool invocation with this literal. */
 const TOOL_CALL_PREFIX = 'tool_call:';
+/** A tool result row whose call row is missing still names itself in the strip. */
+const ORPHAN_TOOL_NAME = '(tool output)';
 /** The single queued indicator is keyed by its kind, not by a run. */
 const QUEUED_ID = 'queued';
 
@@ -80,7 +95,7 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         kind: 'assistant',
         id: event.id,
         content: event.content,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date(event.now ?? Date.now()).toISOString(),
         error: true,
         ...(event.retryText !== undefined ? { retryText: event.retryText } : {}),
         noRetry: event.noRetry === true,
@@ -132,7 +147,7 @@ function applyToolCall(state: PanelState, event: Extract<PanelEvent, { type: 'to
   const tool: ToolActivity = {
     name: event.name,
     status: 'running',
-    startedAt: Date.now(),
+    startedAt: event.now ?? Date.now(),
     ...(event.args !== undefined ? { args: event.args } : {}),
   };
   if (index < 0) {
@@ -160,7 +175,7 @@ function applyToolResult(state: PanelState, event: Extract<PanelEvent, { type: '
     ...tool,
     status: event.ok ? 'ok' : 'error',
     result: event.result,
-    durationMs: Math.max(0, Date.now() - tool.startedAt),
+    durationMs: Math.max(0, (event.now ?? Date.now()) - tool.startedAt),
   };
   const tools = strip.tools.slice();
   tools[target] = settled;
@@ -239,6 +254,9 @@ function settleApproval(
   const index = state.items.findIndex((item) => item.kind === 'approval' && item.approvalId === approvalId);
   if (index < 0) return state;
   const existing = state.items[index] as ApprovalItem;
+  // A decided card is the operator's decision; a late or racing settle (the expiry
+  // sweeper) must not rewrite it. Mirrors the guard in upsertApproval.
+  if (existing.state !== 'pending') return state;
   return replaceItem(state, index, {
     ...existing,
     state: nextState,
@@ -338,7 +356,7 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
 function restore(state: PanelState, event: RestoreEvent): PanelState {
   const fromTimeline = itemsFromTimeline(event.timeline);
   const prior = state.conversationId === event.conversationId ? state.items : [];
-  const items = [...fromTimeline, ...carryOver(prior, fromTimeline)];
+  const items = mergeCarriedStrips(fromTimeline, carryOver(prior, fromTimeline));
   const runIds = new Set(event.timeline.map((entry) => entry.runId).filter((runId) => !!runId));
   const askIds = new Set(
     items.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
@@ -375,11 +393,12 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
 
 /**
  * Prior items the snapshot does not represent. A live frame for a turn the
- * timeline has not persisted yet has no snapshot counterpart, so it is kept;
- * one the timeline now holds is dropped in favour of the durable row.
+ * timeline has not persisted yet has no snapshot counterpart, so it is kept.
+ * A strip the snapshot does hold is kept too and merged by the caller: the
+ * snapshot may have been read before the result row landed, so only its call
+ * rows are visible and the live strip still holds the settled result.
  */
 function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
-  const turnIds = new Set(base.flatMap((item) => (item.kind === 'activity' ? [item.turnId] : [])));
   const askIds = new Set(
     base.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
   );
@@ -391,13 +410,15 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
       messageBudget.set(key, (messageBudget.get(key) ?? 0) + 1);
     }
   }
+  const carriedTurnIds = new Set<string>();
+  const baseHasError = base.some((item) => item.kind === 'assistant' && item.error === true);
   let queuedDrawn = base.some((item) => item.kind === 'queued');
 
   const carried: PanelItem[] = [];
   for (const item of prior) {
     if (item.kind === 'activity') {
-      if (turnIds.has(item.turnId)) continue;
-      turnIds.add(item.turnId);
+      if (carriedTurnIds.has(item.turnId)) continue;
+      carriedTurnIds.add(item.turnId);
     } else if (item.kind === 'approval' || item.kind === 'clarification') {
       if (askIds.has(item.approvalId)) continue;
       askIds.add(item.approvalId);
@@ -416,6 +437,11 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
         messageBudget.set(key, budget - 1);
         continue;
       }
+      // A failed turn is re-told in different words by the snapshot, so the budget
+      // cannot consume the live notice; once the snapshot shows a failure, the live
+      // duplicate is dropped. A run-uncertain notice (noRetry) is not in the
+      // snapshot and still carries.
+      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true && baseHasError) continue;
     }
     carried.push(item);
   }
@@ -425,6 +451,47 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
 function messageKey(item: Extract<PanelItem, { kind: 'user' | 'assistant' }>): string {
   if (item.kind === 'assistant') return `assistant\u0000${item.error === true ? 'error' : 'ok'}\u0000${item.content}`;
   return `user\u0000${item.content}`;
+}
+
+/**
+ * Fold a carried strip into the restored strip for the same turn. The snapshot
+ * cannot show a result written after it was read, so per tool the live plane's
+ * settled state wins over a restored `running` one; restored-only tools are
+ * kept, and a carried tool the snapshot lacks is kept too. The carried strip is
+ * dropped once its tools are merged, never whole.
+ */
+function mergeCarriedStrips(base: PanelItem[], carried: PanelItem[]): PanelItem[] {
+  const merged = base.slice();
+  const rest: PanelItem[] = [];
+  for (const item of carried) {
+    if (item.kind === 'activity') {
+      const at = merged.findIndex((candidate) => candidate.kind === 'activity' && candidate.turnId === item.turnId);
+      if (at >= 0) {
+        const target = merged[at] as ActivityItem;
+        merged[at] = { ...target, tools: mergeTools(target.tools, item.tools) };
+        continue;
+      }
+    }
+    rest.push(item);
+  }
+  return [...merged, ...rest];
+}
+
+/** Per-name, occurrence-ordered merge of two strips' tools. */
+function mergeTools(restored: ToolActivity[], carried: ToolActivity[]): ToolActivity[] {
+  const used = new Array<boolean>(carried.length).fill(false);
+  const merged = restored.map((tool) => {
+    const match = carried.findIndex((candidate, index) => !used[index] && candidate.name === tool.name);
+    if (match < 0) return tool;
+    used[match] = true;
+    const prior = carried[match];
+    // A settled prior tool knows the outcome; a running prior one does not.
+    return prior.status === 'running' ? tool : prior;
+  });
+  carried.forEach((tool, index) => {
+    if (!used[index]) merged.push(tool);
+  });
+  return merged;
 }
 
 function isClarificationAsk(approval: Approval): boolean {
@@ -512,8 +579,22 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
     }
 
     // Any other tool row is the result of the tool still running in this run.
-    if (at < 0) return;
+    // A result whose call row never landed is still audited output: render it
+    // as its own one-tool strip instead of dropping it. Its `ok` carries the
+    // same limit as the restored status below.
+    if (at < 0) {
+      items.push({
+        kind: 'activity',
+        id: activityId(turnId),
+        turnId,
+        tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: entry.content }],
+        collapsed: true,
+      });
+      return;
+    }
     const strip = items[at] as ActivityItem;
+    // Attribution is positional: TimelineEntry exposes no toolCallId. The core rows
+    // do persist `tool_call_id`, so identity matching arrives with that upstream field.
     let target = -1;
     for (let i = strip.tools.length - 1; i >= 0; i -= 1) {
       if (strip.tools[i].status === 'running') {
@@ -525,6 +606,10 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
     const tool = strip.tools[target];
     const durationMs = tool.startedAt > 0 && startedAt >= tool.startedAt ? startedAt - tool.startedAt : undefined;
     const tools = strip.tools.slice();
+    // `ok` means "the timeline does not say otherwise": TimelineEntry carries no
+    // failure flag, so a failed or denied tool is indistinguishable from a success
+    // after a reload. The honest status needs a field end-to-end (scheduled
+    // follow-up); do not invent a member for it here.
     tools[target] = {
       ...tool,
       status: 'ok',

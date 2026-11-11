@@ -5,6 +5,7 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.ConversationSummary;
 import io.aria.conductor.aria.dto.TimelineEntry;
 import io.aria.conductor.aria.service.AriaService;
+import io.aria.conductor.aria.service.RunFailureReason;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -131,7 +132,7 @@ public class AriaConversationController {
             if (run.getStatus() == RunStatus.FAILED) {
                 timeline.add(TimelineEntry.builder()
                         .role("assistant")
-                        .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                        .content("回合執行失敗：" + RunFailureReason.clip(run.getErrorMessage()))
                         .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
                         .runId(run.getId().toString())
                         .error(true)
@@ -141,15 +142,6 @@ public class AriaConversationController {
         }
 
         return ResponseEntity.ok(timeline);
-    }
-
-    private static final int MAX_ERROR_CHARS = 300;
-
-    private static String clipError(String message) {
-        if (message == null || message.isBlank()) {
-            return "原因不明";
-        }
-        return message.length() > MAX_ERROR_CHARS ? message.substring(0, MAX_ERROR_CHARS) : message;
     }
 
     /**

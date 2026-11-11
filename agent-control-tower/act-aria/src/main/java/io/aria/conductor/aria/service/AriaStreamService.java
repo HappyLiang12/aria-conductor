@@ -178,7 +178,8 @@ public class AriaStreamService {
      * Otherwise the payload keeps the legacy {@code {"message": ...}} shape.
      *
      * <p>{@code reason} is the run's error message, falling back to {@code causeMessage}
-     * when the run recorded none, clipped to {@link #MAX_ERROR_REASON_CHARS}.
+     * when the run recorded none, then to the shared {@link RunFailureReason} wording when
+     * neither is usable — so the live telling and the restored one agree.
      */
     static String errorPayloadJson(String message, Run failedRun, String causeMessage) {
         LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
@@ -190,7 +191,7 @@ public class AriaStreamService {
             }
             payload.put("turnFailed", true);
             payload.put("runId", failedRun.getId().toString());
-            payload.put("reason", clipReason(source));
+            payload.put("reason", RunFailureReason.clip(source));
         }
         try {
             return OBJECT_MAPPER.writeValueAsString(payload);
@@ -199,18 +200,6 @@ public class AriaStreamService {
             // literal rather than dropping the terminal error event.
             return "{\"message\":\"unknown error\"}";
         }
-    }
-
-    /** Max characters of a failed run's error carried in the terminal SSE error payload. */
-    private static final int MAX_ERROR_REASON_CHARS = 300;
-
-    private static String clipReason(String reason) {
-        if (reason == null || reason.isBlank()) {
-            return "unknown error";
-        }
-        return reason.length() > MAX_ERROR_REASON_CHARS
-                ? reason.substring(0, MAX_ERROR_REASON_CHARS)
-                : reason;
     }
 
     private void sendErrorSilent(SseEmitter emitter, String json) {

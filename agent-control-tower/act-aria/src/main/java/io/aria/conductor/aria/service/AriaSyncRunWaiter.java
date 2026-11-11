@@ -77,14 +77,15 @@ public class AriaSyncRunWaiter {
     }
 
     /**
-     * Polls the committed run state until it reaches a terminal status or the
-     * sync window expires. {@link Thread#interrupt()} ends the wait early and
-     * returns the last observed state.
+     * Polls the committed run state until it reaches a returnable status (terminal,
+     * or parked on a clarification) or the sync window expires.
+     * {@link Thread#interrupt()} ends the wait early and returns the last observed
+     * state.
      */
     public Outcome await(UUID runId) {
         for (int polls = 0; polls < maxPolls; polls++) {
             AriaRunStateRepository.RunSnapshot current = readCommittedState(runId);
-            if (isTerminal(current)) {
+            if (isTerminal(current) || isParked(current)) {
                 return new Outcome(current, false);
             }
             if (!sleep(pollIntervalMillis)) {
@@ -96,7 +97,7 @@ public class AriaSyncRunWaiter {
             return new Outcome(readCommittedState(runId), true);
         }
         AriaRunStateRepository.RunSnapshot finalCheck = readCommittedState(runId);
-        if (isTerminal(finalCheck)) {
+        if (isTerminal(finalCheck) || isParked(finalCheck)) {
             log.info("Aria sync chat: run {} reached {} during the grace wait",
                     runId, finalCheck.getStatus());
         } else {
@@ -120,6 +121,15 @@ public class AriaSyncRunWaiter {
                 || status == RunStatus.FAILED
                 || status == RunStatus.CANCELLED
                 || status == RunStatus.ABORTED;
+    }
+
+    /**
+     * A parked run is a returnable outcome for a sync caller: the run is waiting on
+     * an operator answer, so polling the sync window away cannot change it, and the
+     * question (carried by the pending clarification approval) is the answer.
+     */
+    private static boolean isParked(AriaRunStateRepository.RunSnapshot snapshot) {
+        return snapshot != null && snapshot.getStatus() == RunStatus.WAITING_INPUT;
     }
 
     /** @return false when the thread was interrupted (the wait must end). */

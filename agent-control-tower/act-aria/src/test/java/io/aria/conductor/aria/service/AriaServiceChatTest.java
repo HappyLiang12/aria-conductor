@@ -310,6 +310,9 @@ class AriaServiceChatTest {
                 .contains(RUN_ID.toString())
                 .doesNotContain("completed your request");
         assertThat(response.getErrorCode()).isNull();
+        // A live status is not parked: the approvals table must not be consulted at all.
+        verify(approvalRepository, never())
+                .findByRunIdAndStatusAndSource(any(), any(), any());
     }
 
     @Test
@@ -403,8 +406,10 @@ class AriaServiceChatTest {
                 .source(ApprovalSource.CLARIFICATION)
                 .content("Which PR should I review?")
                 .build();
+        // The run output is non-null and differs from the ask: the parked question
+        // must win, never the output a parked run happened to produce.
         when(stateRepository.findSnapshotById(RUN_ID))
-                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, "Draft answer that is not the question")));
         when(approvalRepository.findByRunIdAndStatusAndSource(
                 RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of(ask));
@@ -414,7 +419,9 @@ class AriaServiceChatTest {
         assertThat(response.getStatus()).isEqualTo("WAITING_INPUT");
         assertThat(response.getQuestion()).isEqualTo("Which PR should I review?");
         assertThat(response.getApprovalId()).isEqualTo(approvalId.toString());
-        assertThat(response.getMessage()).isEqualTo("Which PR should I review?");
+        assertThat(response.getMessage())
+                .isEqualTo("Which PR should I review?")
+                .doesNotContain("Draft answer that is not the question");
         assertThat(response.getErrorCode()).isNull();
     }
 
@@ -425,8 +432,10 @@ class AriaServiceChatTest {
      */
     @Test
     void aParkedSyncChatWithoutAnAskInventsNoQuestion() {
+        // Non-null output is the trap: a fabricating implementation would surface
+        // this text as the question, which is exactly what must never happen.
         when(stateRepository.findSnapshotById(RUN_ID))
-                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, "Ignore me, I am only run output")));
         when(approvalRepository.findByRunIdAndStatusAndSource(
                 RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
@@ -438,7 +447,8 @@ class AriaServiceChatTest {
         assertThat(response.getApprovalId()).isNull();
         assertThat(response.getMessage())
                 .contains("WAITING_INPUT")
-                .doesNotContain("completed your request");
+                .doesNotContain("completed your request")
+                .doesNotContain("Ignore me, I am only run output");
     }
 
     /**

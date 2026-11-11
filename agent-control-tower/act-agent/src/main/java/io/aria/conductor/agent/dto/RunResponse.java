@@ -22,9 +22,10 @@ public class RunResponse {
     private int maxIterations;
     /**
      * The usage the provider actually reported (F9), or null when this run never
-     * observed any. The stored total defaults to 0, so a primitive here claimed a
-     * zero cost for every run whose core reported nothing; a genuine reported zero
-     * still arrives as 0.
+     * reported a measurement. The stored total defaults to 0, so a primitive here
+     * claimed a zero cost for every run whose core reported nothing; Task 7 also
+     * classifies an all-zero placeholder report as unreported, so this is null unless
+     * the run has a real count.
      */
     private Long totalTokensUsed;
     /**

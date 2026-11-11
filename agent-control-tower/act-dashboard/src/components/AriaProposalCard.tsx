@@ -57,45 +57,28 @@ export const PROPOSAL_INBOX_LIMIT = 50;
 type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
 
 /**
- * The PENDING facts an ENTITY decision decides with the entity, read as that
- * entity's OWN batch (`GET /proposals?status=PENDING&entityId=`): the route
- * answers it complete and uncapped, so the card never has to guess from a
- * shared page whether the list it shows is the whole decision. Null while the
- * read is in flight, and undefined for any subject type that is not an entity —
- * only the entity proposal is a batch decision.
+ * This entity's own PENDING facts out of one `GET /proposals?status=PENDING&entityId=`
+ * read. The entity's own row (and, before the server's batch correction, a
+ * relation) is not part of what a decision promotes, so only FACT rows of THIS
+ * entity are kept.
  */
-function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
-  const entityId = item.entityId;
-  // Only a PENDING entity proposal decides a batch; a settled one (including
-  // `decided-elsewhere`, whose outcome this panel cannot know) must not read it.
-  const isEntity = item.subjectType === 'ENTITY' && item.state === 'pending';
-  const [batch, setBatch] = useState<BatchRead | null | undefined>(undefined);
+function entityFactsOf(rows: MemoryProposalView[], entityId: string): MemoryProposalView[] {
+  return rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId);
+}
 
-  useEffect(() => {
-    // An entity proposal without its entity id cannot be attributed a batch;
-    // listing every pending fact would misrepresent what this decision covers.
-    if (!isEntity || !entityId) {
-      setBatch(undefined);
-      return undefined;
-    }
-    let cancelled = false;
-    setBatch(null);
-    listMemoryProposals('PENDING', entityId)
-      .then((rows) => {
-        if (cancelled) return;
-        setBatch({
-          facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
-        });
-      })
-      .catch(() => {
-        // A refused or failed read proves nothing about the batch; say so rather
-        // than present an empty one, which would claim the entity stands alone.
-        if (!cancelled) setBatch({ unreadable: true });
-      });
-    return () => { cancelled = true; };
-  }, [isEntity, entityId]);
-
-  return batch;
+/**
+ * What the operator can actually see of the batch: the identity and value of
+ * every fact the decision would promote. Two reads with the same signature
+ * decide the same thing, so a decision may proceed against them; a different one
+ * has to be shown first. Null when no list is on screen (still reading, no
+ * entity id, or unreadable) — nothing was seen, so nothing may be decided.
+ */
+function batchSignature(batch: BatchRead | null | undefined): string | null {
+  if (!batch || !('facts' in batch)) return null;
+  return batch.facts
+    .map((fact) => `${fact.id}\u0000${fact.factKey ?? ''}\u0000${fact.valueText ?? ''}`)
+    .sort()
+    .join('\u0001');
 }
 
 
@@ -108,12 +91,17 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
  * `factKey`/`valueText` carry `canonicalKey`/`displayName` for an ENTITY
  * proposal (Task 10's mapping), so one card renders both shapes. An ENTITY
  * decision is the whole batch — it promotes (or retires) every PENDING fact of
- * the entity — so that card lists the batch before the decision. A decision is
- * authoritative on the server; the card flips to the settled state only after
- * the call resolves, and a 401/403 renders the local operator-session notice
- * instead of pretending the proposal was decided. A proposal settled as
- * `decided-elsewhere` (the panel's PENDING reconcile no longer listed it) has
- * no known outcome; the card reports exactly that and offers no decision.
+ * the entity — so that card lists the batch before the decision, and re-reads it
+ * when the operator clicks: the list is a mount-time snapshot while the decision
+ * runs at click time, and a background extraction can add a PENDING fact to the
+ * same entity in between (Task 32). A set that changed since it was rendered is
+ * shown and the decision waits for a fresh confirmation, so no value is ever
+ * promoted that the operator did not see. A decision is authoritative on the
+ * server; the card flips to the settled state only after the call resolves, and
+ * a 401/403 renders the local operator-session notice instead of pretending the
+ * proposal was decided. A proposal settled as `decided-elsewhere` (the panel's
+ * PENDING reconcile no longer listed it) has no known outcome; the card reports
+ * exactly that and offers no decision.
  */
 export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // Local settlement, layered over the item's own state: a re-render with a
@@ -121,7 +109,38 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   const [local, setLocal] = useState<'approved' | 'rejected' | 'decided-elsewhere' | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
   const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
-  const batch = useEntityBatch(item);
+  const entityId = item.entityId;
+  // Only a PENDING entity proposal decides a batch; a settled one (including
+  // `decided-elsewhere`, whose outcome this panel cannot know) must not read it.
+  const isBatchDecision = item.subjectType === 'ENTITY' && item.state === 'pending';
+  // The batch as rendered. Null while the read is in flight, undefined when this
+  // card decides no batch (a fact/relation, or an entity with no id to read).
+  const [batch, setBatch] = useState<BatchRead | null | undefined>(undefined);
+  // Set when the decision-time re-read found a different set than the card
+  // showed: the new set is on screen and the next click is its confirmation.
+  const [batchChanged, setBatchChanged] = useState(false);
+
+  useEffect(() => {
+    // An entity proposal without its entity id cannot be attributed a batch;
+    // listing every pending fact would misrepresent what this decision covers.
+    if (!isBatchDecision || !entityId) {
+      setBatch(undefined);
+      return undefined;
+    }
+    let cancelled = false;
+    setBatch(null);
+    listMemoryProposals('PENDING', entityId)
+      .then((rows) => {
+        if (cancelled) return;
+        setBatch({ facts: entityFactsOf(rows, entityId) });
+      })
+      .catch(() => {
+        // A refused or failed read proves nothing about the batch; say so rather
+        // than present an empty one, which would claim the entity stands alone.
+        if (!cancelled) setBatch({ unreadable: true });
+      });
+    return () => { cancelled = true; };
+  }, [isBatchDecision, entityId]);
 
   const state = local ?? item.state;
 
@@ -129,6 +148,33 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
     setInFlight(decision);
     setError(null);
     try {
+      // The batch is read at mount, the decision runs at click, and `decideEntity`
+      // promotes every PENDING fact of the entity — so re-read the batch HERE and
+      // post only against the set the card is showing. A set that changed since
+      // it was rendered is displayed and the decision waits for a fresh
+      // confirmation; a set that cannot be re-read is not decided at all.
+      if (isBatchDecision && entityId) {
+        let fresh: BatchRead;
+        try {
+          fresh = { facts: entityFactsOf(await listMemoryProposals('PENDING', entityId), entityId) };
+        } catch (err: unknown) {
+          setBatch({ unreadable: true });
+          setError({
+            text: apiErrorMessage(
+              err,
+              'The pending facts this decision also decides could not be re-read, so nothing was decided — retry.',
+            ),
+            operatorRejected: isOperatorRejection(err),
+          });
+          return;
+        }
+        if (batchSignature(fresh) !== batchSignature(batch)) {
+          setBatch(fresh);
+          setBatchChanged(true);
+          return;
+        }
+        setBatchChanged(false);
+      }
       // Operator-only route: carry the locally established session's CSRF token
       // at the moment of the click (the mutation also applies it; this is the
       // same belt-and-braces posture ReviewPanels takes for approvals).
@@ -209,6 +255,17 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
               </>
             )
           )}
+        </div>
+      )}
+      {/* The decision-time re-read (Task 32) found a set the operator has not
+          confirmed: the list above is the corrected one, and this click did not
+          decide anything. A second click re-reads and, if the set still matches,
+          decides exactly what is on screen. */}
+      {batchChanged && state === 'pending' && (
+        <div className="ask-ctx" role="alert" data-testid="proposal-batch-changed">
+          The pending facts this decision covers changed while this card was open — the list
+          above is what it covers now. Nothing has been decided: choose Approve or Reject again
+          to confirm it.
         </div>
       )}
       <div className="ask-meta">

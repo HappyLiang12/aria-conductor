@@ -1407,6 +1407,10 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
    ============================================================ */
 .panel-cache { display: none !important; }
 .view-zone { display: block; }
+/* Task 12a recorded this rule as the one thing the Memory page needed while
+   `index.css` was owned by another lane; Task 12b owns the file, so it lands
+   here instead of staying an inline style. Same metrics KnowledgePage uses. */
+.memory-page { display: block; padding: 16px; }
 
 .view-header {
   display: flex; align-items: center; gap: 14px;
@@ -2606,6 +2610,13 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-card:last-of-type { border-bottom: none; }
 .ask-q { font-weight: 600; margin-bottom: 4px; }
 .ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
+/* Task 12b: the pending facts an ENTITY proposal decides with it. One operator
+   decision promotes the whole batch, so the card lists it before the decision.
+   Field metrics follow the ask rows above — no new visual language. */
+.ask-facts { margin-bottom: 6px; }
+.ask-facts-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ask-facts-list li { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.ask-facts-list code { color: var(--text); }
 /* F7: approval toolName + redacted arguments (present only when the payload
    carries them). The block scrolls instead of stretching the row. */
 .ask-tool { margin: 6px 0 8px; }

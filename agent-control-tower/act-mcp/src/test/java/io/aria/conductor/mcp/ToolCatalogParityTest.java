@@ -295,6 +295,15 @@ class ToolCatalogParityTest {
      * {@code kind} + {@code canonicalKey} for an unknown key. A description that omits the second
      * shape (or implies a worker write) hides the producer Task 14 landed: the call proposes, it does
      * not write.
+     * <p>
+     * T39 Item 2 (P2): the second shape used to promise "creates a new entity with this first fact
+     * in the same transaction", which is true only for a new key. Read against
+     * {@code MemoryCommandService.addFactByKey} / {@code createEntity}: an existing ACTIVE or
+     * PENDING key attaches the fact to that entity (a PENDING entity takes only a worker's PENDING
+     * proposal), a RETIRED or MERGED key is re-proposed to PENDING by a worker's call, and an
+     * operator call on a decided key is refused as a conflict. Task 34 had already corrected the
+     * Aria prompt to state all three key states, so the description now states them too instead of
+     * contradicting the prompt that the model also reads.
      */
     @Test
     void rememberFactDescribesBothShapesAndTheProposalRatherThanWriteRule() {
@@ -302,7 +311,14 @@ class ToolCatalogParityTest {
                 .contains("exactly one of two shapes")
                 .contains("(entityId)")
                 .contains("(kind, canonicalKey)")
-                .contains("creates a new entity with this first fact in the same transaction")
+                .as("the new-key case, now scoped to a new key")
+                .contains("a new key creates the entity with this first fact in the same transaction")
+                .as("the existing-key case the old wording denied")
+                .contains("an existing ACTIVE or PENDING key adds the fact to that entity")
+                .as("the decided-key case, which only a worker's call re-proposes")
+                .contains("a RETIRED or MERGED key is re-proposed to PENDING by a worker's call")
+                .as("and the operator call on a decided key, which is refused")
+                .contains("an operator call on a decided key is refused as a conflict")
                 .contains("PENDING extraction proposal that an operator must approve");
     }
 

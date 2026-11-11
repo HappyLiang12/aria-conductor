@@ -728,7 +728,15 @@ public class AgentLoopEngine {
                 try {
                     updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
                 } catch (Exception e) {
-                    log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
+                    // The ask exists but the park does not: the loop is blocked on the
+                    // coordinator while the row still reads RUNNING, so a sync waiter spends
+                    // its whole window against a question the operator is never shown as a
+                    // park. Fail closed exactly like a failed ask write — wake the run so it
+                    // finalizes instead of parking on an unreachable ask.
+                    log.error("Failed to persist WAITING_INPUT for run {} - waking it so it does"
+                            + " not park on an ask the operator cannot see: {}",
+                            event.getRunId(), e.getMessage(), e);
+                    inputCoordinator.recordTerminationIntent(event.getRunId());
                 }
             }
             log.info("Run {} waiting for operator input", event.getRunId());

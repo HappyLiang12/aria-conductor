@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { decideMemoryProposal, listMemoryProposals, type MemoryProposalDecision, type MemoryProposalView } from '../api/memory';
+import { OPERATOR_REMEDY_COPY, operatorSessionMessage } from '../api/errorPresentation';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
@@ -354,20 +355,27 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
 }
 
 /**
- * The operator-session notice shared by this lane's decision surfaces
- * (`ReviewPanels.tsx`'s posture, reused verbatim in meaning). It lives here
- * because the split-task file ownership gives this lane no shared-component
- * file; MemoryPage imports it from this module.
+ * The operator-session notice every refusal surface shows: one component, one
+ * remedy (`OPERATOR_REMEDY_COPY`), so the copy can no longer drift into a
+ * second answer that does not work. MemoryPage and `ErrorNotice` render it too.
+ *
+ * `actionLabel` names the refused action ("Applying the fleet runtime"); a
+ * caller with no single action to name omits it and keeps the memory wording,
+ * which covers the Memory page's refused reads as well as its decisions.
+ *
+ * The root is a `<span>` rather than a `<div>` because one caller (the
+ * decide-proposal confirmation, `ConfirmDialog`) renders its message inside a
+ * `<p>`, where a block element is invalid HTML. Every other caller places it as
+ * the only child of a block container, so it still occupies its own line.
  */
-export function OperatorSessionNotice() {
+export function OperatorSessionNotice({ actionLabel }: { actionLabel?: string } = {}) {
   return (
-    <div className="ask-ctx" data-testid="operator-session-notice">
-      Memory decisions are operator-only. On this machine, loopback requests are the
-      operator automatically — reload the page and retry. From a remote machine, the
-      operator who runs the backend must grant access (the server's operator
-      credential); the dashboard has no remote token entry. Nothing was decided by the
-      refused call.
-    </div>
+    <span className="ask-ctx" data-testid="operator-session-notice">
+      {actionLabel === undefined
+        ? `Memory decisions are operator-only. ${OPERATOR_REMEDY_COPY}`
+        : operatorSessionMessage(actionLabel)}{' '}
+      Nothing was changed by the refused call.
+    </span>
   );
 }
 

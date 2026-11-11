@@ -96,6 +96,26 @@ describe('DecisionPanel', () => {
     expect(await screen.findByText('Action rejected — please retry.')).toBeInTheDocument();
   });
 
+  // Task 35: a refused decision names the one remedy that can work. The panel
+  // keeps its own sentence structure (the server's wording, "nothing was
+  // decided") but the remedy clause is the shared constant, not a reload.
+  it('names the remedy that can work when the operator session is refused', async () => {
+    mockedApprove.mockRejectedValue({
+      response: { status: 403, data: { message: 'Operator session required' } },
+    });
+    renderPanel(<DecisionPanel item={item} pendingAsks={[
+      { id: 'a1', askType: 'APPROVAL', content: 'spec v2', status: 'PENDING' } as Approval,
+    ]} />);
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0]);
+
+    const refusal = await screen.findByText(/Approvals are operator-only/i);
+    expect(refusal).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    expect(refusal).toHaveTextContent(/nothing was decided by the refused call/i);
+    expect(refusal).not.toHaveTextContent(/reload the page and retry/i);
+    expect(refusal).not.toHaveTextContent(/reload and try again/i);
+  });
+
   it('resolving an ask also invalidates the kanban-items cache', async () => {
     mockedApprove.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
     const qc = makeClient();

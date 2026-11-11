@@ -4,36 +4,7 @@ import {
   presentRunError,
   type PresentedError,
 } from '../api/errorPresentation';
-
-/**
- * What an operator reads when an operator-only route refused them (401/403).
- *
- * The resolver's documented deployment is a single operator on localhost: a
- * loopback request is the operator automatically, and a remote request has to
- * be granted access by the operator who runs the backend. There is no token
- * entry in this dashboard (`establishOperatorSession` has no caller), so
- * "sign in here" would be a UI that does not exist.
- *
- * The previous wording said "reload the page and retry". A reload does not
- * change who the server thinks the operator is, so that advice could not work:
- * the operator reloaded, was refused again, and the notice was indistinguishable
- * from a decoration. This names the one thing that does confer authority.
- *
- * It lives here, beside its only caller, because `src/api/` belongs to another
- * lane this wave. The phrases the existing pins assert ("<action> is
- * operator-only", "loopback requests are the operator automatically", "the
- * operator who runs the backend must grant access") are unchanged, so those pins
- * stay green unloosened.
- */
-function operatorRefusalMessage(actionLabel: string): string {
-  return (
-    `${actionLabel} is operator-only, so the server refused it. `
-    + 'Open the dashboard on the machine that runs the backend — loopback requests are the operator '
-    + 'automatically. From another machine, the operator who runs the backend must grant access with '
-    + 'the server\'s operator credential; the dashboard has no token entry. Reloading the page cannot '
-    + 'change who the server thinks you are, and nothing was changed by the refused call.'
-  );
-}
+import { OperatorSessionNotice } from './AriaProposalCard';
 
 /**
  * A path action is the only one that needs router state. It lives in its own
@@ -58,6 +29,11 @@ function PathActionButton({ action }: { action: { path: string; label: string } 
  * MemoryPage and AriaProposalCard use — instead of the server's text, because on
  * a refusal the server text points at no fix. Any other failure keeps the
  * ordinary path: a 500 is a fault, not an authority problem.
+ *
+ * Task 35: the notice itself (and the remedy in it) lives in
+ * `OperatorSessionNotice`, so this component no longer keeps a copy of the
+ * wording. The action label still names the refused action in its first
+ * sentence, which the existing pins assert.
  */
 export function ErrorNotice({ presented, className, operatorSession, actionLabel }: {
   presented: PresentedError;
@@ -68,11 +44,7 @@ export function ErrorNotice({ presented, className, operatorSession, actionLabel
 }) {
   const action = presented.action;
   if (operatorSession && presented.operatorRejected) {
-    return (
-      <div className="ask-ctx" data-testid="operator-session-notice">
-        {operatorRefusalMessage(actionLabel ?? 'This action')}
-      </div>
-    );
+    return <OperatorSessionNotice actionLabel={actionLabel ?? 'This action'} />;
   }
   return (
     <div

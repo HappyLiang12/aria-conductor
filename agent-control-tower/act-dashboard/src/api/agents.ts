@@ -1,4 +1,5 @@
 import client from './client';
+import { applyOperatorHeaders } from './operatorSession';
 import type { Agent, CreateAgentRequest, AgentTemplate } from '../types';
 
 export async function listAgents(): Promise<Agent[]> {
@@ -40,7 +41,9 @@ export async function applyFleetRuntime(
   return data;
 }
 
+/** Operator-only (server: 403 for a worker, 401 without a session): apply the session. */
 export async function retireAgent(id: string): Promise<void> {
+  applyOperatorHeaders();
   await client.post(`/api/v1/agents/${id}/retire`);
 }
 

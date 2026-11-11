@@ -1,4 +1,4 @@
-package io.aria.conductor.agent.controller;
+package io.aria.conductor.dashboard.agent;
 
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.AgentTemplateDTO;
@@ -8,19 +8,29 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.test.WebMvcTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -38,9 +48,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class AgentControllerCrudTest extends WebMvcTestBase {
 
+    private static final Instant NOW = Instant.parse("2026-11-11T10:00:00Z");
+    private static final String OPERATOR_AUTHORIZATION = "Bearer operator-bearer-secret";
+    private static final String WORKER_AUTHORIZATION = "Bearer worker-token";
+
     private final AgentService agentService = mock(AgentService.class);
     private final AgentTemplateService templateService = mock(AgentTemplateService.class);
-    private final MockMvc mvc = mockMvcFor(new AgentController(agentService, templateService));
+    private final ActorTokenService actorTokens = mock(ActorTokenService.class);
+    private final OperatorAuthorityResolver operatorAuthority =
+            new OperatorAuthorityResolver(
+                    new OperatorSessionService("operator-bearer-secret", Duration.ofHours(8),
+                            "http://localhost:5173", false, Clock.systemUTC()),
+                    actorTokens, "");
+    private final MockMvc mvc = mockMvcFor(
+            new AgentController(agentService, templateService, operatorAuthority));
 
     private AgentResponse sampleAgent(UUID id) {
         return AgentResponse.builder()
@@ -154,6 +175,67 @@ class AgentControllerCrudTest extends WebMvcTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.healthStatus").value("RETIRED"));
         verify(agentService).retireAgent(id);
+    }
+
+    // ------------------------------------------------------ retire authority boundary
+
+    /** The actionable refusal shared with MCP retire_agent (same action, same surface). */
+    private static final String RETIRE_REFUSAL = "Operator authority required: retiring an agent"
+            + " is an operator decision. Retire it on the Crew page.";
+
+    private static RequestPostProcessor remote() {
+        return request -> {
+            request.setRemoteAddr("203.0.113.7");
+            return request;
+        };
+    }
+
+    @Test
+    void retireAgent_workerBearerIsForbidden_andNeverRetires() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+        UUID id = UUID.randomUUID();
+
+        mvc.perform(post("/api/v1/agents/" + id + "/retire")
+                        .header("Authorization", WORKER_AUTHORIZATION))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(RETIRE_REFUSAL));
+
+        verify(agentService, never()).retireAgent(any());
+    }
+
+    @Test
+    void retireAgent_anonymousRemoteIsUnauthorized_andNeverRetires() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        mvc.perform(post("/api/v1/agents/" + id + "/retire").with(remote()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value(RETIRE_REFUSAL));
+
+        verify(agentService, never()).retireAgent(any());
+    }
+
+    /** Positive control: the operator bearer credential is honoured from a remote address. */
+    @Test
+    void retireAgent_operatorBearerFromRemoteSucceeds() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(agentService.retireAgent(id)).thenReturn(sampleAgent(id));
+
+        mvc.perform(post("/api/v1/agents/" + id + "/retire")
+                        .with(remote())
+                        .header("Authorization", OPERATOR_AUTHORIZATION))
+                .andExpect(status().isOk());
+
+        verify(agentService).retireAgent(id);
+    }
+
+    /** Reads stay open: the dashboard does not authenticate its inventory reads. */
+    @Test
+    void listAgents_anonymousRemoteIsStillReadable() throws Exception {
+        when(agentService.listAgents()).thenReturn(List.of(sampleAgent(UUID.randomUUID())));
+
+        mvc.perform(get("/api/v1/agents").with(remote()))
+                .andExpect(status().isOk());
     }
 
     @Test

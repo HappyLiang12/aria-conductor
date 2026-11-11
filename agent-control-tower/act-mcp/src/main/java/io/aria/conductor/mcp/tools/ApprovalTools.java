@@ -64,7 +64,10 @@ public class ApprovalTools implements McpTool {
             ActorPrincipal actor = McpActorContext.require(toolContext);
             // Reviewed tool policy: decide_approval is OPERATOR_ONLY, and an
             // unclassified tool name stays gated. The MCP surface is the worker
-            // surface, so this refuses every run-scoped credential.
+            // surface, so this refuses every run-scoped credential — with the
+            // actionable refusal that names where the operator decides, then the
+            // catalog check, so a future misclassification cannot widen authority.
+            ToolResponses.requireOperator(actor, "deciding an approval", "Decide it in the Review Queue.");
             toolPolicies.requireAuthority(DECIDE_APPROVAL, actor);
             log.info("MCP approval decision requested: id={}, approved={}, reason={}", approvalId, approved, reason);
             if (permissionCoordinator.isNativePermissionRequest(approvalId)) {

@@ -150,20 +150,30 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_entities",
-            description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200.")
+            description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.")
     public String listMemoryEntities(
             @ToolParam(description = "Entity kind or blank", required = false) String kind,
             @ToolParam(description = "ACTIVE, MERGED or RETIRED; default ACTIVE", required = false) String status,
             @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit,
             ToolContext toolContext) {
         try {
-            Sensitivity ceiling = readCeiling(actorOf(toolContext));
+            ActorPrincipal actor = actorOf(toolContext);
+            Sensitivity ceiling = readCeiling(actor);
             EntityStatus parsed = status == null || status.isBlank() ? null : parseEntityStatus(status);
+            if (parsed == EntityStatus.PENDING) {
+                // A pending entity is review material, not a read: the row exists and the
+                // operator reviews it, so a worker gets an actionable refusal rather than
+                // an empty list it might report as "nothing exists".
+                ToolResponses.requireOperator(actor, "listing pending memory entities",
+                        "Review them on the Memory page or in the Review Queue.");
+            }
             List<MemoryEntityView> entities = safe(queries.listEntities(kind, parsed, limit == null ? 0 : limit))
                     .stream()
                     .filter(entity -> withinCeiling(entity.sensitivity(), ceiling))
                     .toList();
             return ToolResponses.ok(entities);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (MemoryValidationException | IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -172,13 +182,21 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "get_memory_entity",
-            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity.")
+            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material and is not readable through this detail read.")
     public String getMemoryEntity(
             @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
             ToolContext toolContext) {
         try {
-            Sensitivity ceiling = readCeiling(actorOf(toolContext));
+            ActorPrincipal actor = actorOf(toolContext);
+            Sensitivity ceiling = readCeiling(actor);
             MemoryEntityView entity = queries.getEntity(entityId);
+            if ("PENDING".equals(entity.status())) {
+                // Defence in depth over the service's own PENDING exclusion: if a pending
+                // row ever reached this read, only the operator may see it, and everyone
+                // else gets the review surface rather than review material.
+                ToolResponses.requireOperator(actor, "reading a pending memory entity",
+                        "Review it on the Memory page or in the Review Queue.");
+            }
             if (!withinCeiling(entity.sensitivity(), ceiling)) {
                 // Over-ceiling entities are indistinguishable from missing ones: the
                 // refusal must not confirm that a CONFIDENTIAL entity exists.
@@ -191,6 +209,8 @@ public class MemoryTools implements McpTool {
             payload.put("entity", entity);
             payload.put("facts", facts);
             return ToolResponses.ok(payload);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (MemoryNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (MemoryValidationException | IllegalArgumentException e) {
@@ -217,8 +237,8 @@ public class MemoryTools implements McpTool {
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "retiring a fact", "Retire it on the Memory page.");
             toolPolicies.requireAuthority(FORGET_FACT, actor);
-            actor.requireOperator();
             MemoryFact fact = commands.retireFact(factId, memoryActor(actor));
             return ToolResponses.ok(retireAck(fact));
         } catch (SecurityException e) {
@@ -265,8 +285,9 @@ public class MemoryTools implements McpTool {
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "approving a memory proposal",
+                    "Approve it on the proposal card in the Aria conversation or on the Memory page.");
             toolPolicies.requireAuthority(DECIDE_MEMORY_PROPOSAL, actor);
-            actor.requireOperator();
             MemoryProposalView decided = proposals.decideProposal(proposalId,
                     approve ? ProposalDecision.APPROVE : ProposalDecision.REJECT,
                     memoryActor(actor));

@@ -363,6 +363,40 @@ class MemoryProposalServiceTest {
     }
 
     /**
+     * N2 (T10 fix round 1 re-review). The M1 guard compared only against PENDING, so a PENDING
+     * fact whose parent was retired between the proposal and the decision could still be approved:
+     * the fact became ACTIVE under a RETIRED parent, invisible to recall, the prompt, the default
+     * list and the detail read — the exact harm M1 refused for a PENDING parent. The refusal must
+     * cover every non-ACTIVE parent and name the case it found. The positive control is
+     * {@link #approvingWithoutAConflictWritesOneAssertion}: an ACTIVE parent still promotes.
+     */
+    @Test
+    void approvingAFactUnderANonActiveEntityIsRefusedNamingTheDeadParent() {
+        for (EntityStatus parentStatus : new EntityStatus[]{EntityStatus.RETIRED, EntityStatus.MERGED}) {
+            UUID entityId = UUID.randomUUID();
+            MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+            MemoryEntity parent = pendingEntity(entityId);
+            parent.setStatus(parentStatus);
+            when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+            when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+            assertThatThrownBy(() -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE,
+                    OPERATOR))
+                    .as("a fact may only become current under an ACTIVE parent")
+                    .isInstanceOf(MemoryConflictException.class)
+                    .hasMessageContaining(entityId.toString())
+                    .hasMessageContaining(parentStatus.name())
+                    .hasMessageContaining("no longer active");
+
+            assertThat(proposed.getStatus()).as("a refused approval promotes nothing")
+                    .isEqualTo(FactStatus.PENDING);
+            assertThat(proposed.getValidTo()).isNull();
+        }
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
      * Minor 4 (T10 fix round 1). The entity row carries its own {@code @Version}, but
      * {@code decideEntity} never flushed it: two operator clicks on the same card both pass the
      * PENDING check and the loser surfaces a raw optimistic-lock failure at commit (MCP answers

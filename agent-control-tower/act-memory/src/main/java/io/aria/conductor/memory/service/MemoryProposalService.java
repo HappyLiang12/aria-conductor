@@ -224,14 +224,22 @@ public class MemoryProposalService {
         // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
         // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
         // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        // N2 (T10 fix round 1 re-review): the invariant is "current memory has an ACTIVE parent",
+        // not "not PENDING". A proposal raised under an ACTIVE entity can survive its parent being
+        // retired or merged, and approving it then produced the same invisible ACTIVE value under a
+        // dead parent. Every non-ACTIVE parent is refused, and the message names which case it is.
         MemoryEntity parent = entities.findById(proposal.getEntityId())
                 .orElseThrow(() -> new MemoryNotFoundException(
                         "memory entity " + proposal.getEntityId() + " not found"));
-        if (parent.getStatus() == EntityStatus.PENDING) {
+        if (parent.getStatus() != EntityStatus.ACTIVE) {
+            String reason = parent.getStatus() == EntityStatus.PENDING
+                    ? "which is still PENDING; decide the entity proposal " + proposal.getEntityId()
+                    + " to promote or retire the whole batch instead of approving one fact"
+                    : "which is " + parent.getStatus()
+                    + "; the entity is no longer active, so approving this fact would make it "
+                    + "current memory under a parent no read path can see";
             throw new MemoryConflictException("memory fact " + proposal.getId()
-                    + " belongs to entity " + proposal.getEntityId()
-                    + ", which is still PENDING; decide the entity proposal " + proposal.getEntityId()
-                    + " to promote or retire the whole batch instead of approving one fact");
+                    + " belongs to entity " + proposal.getEntityId() + ", " + reason);
         }
 
         // An approval opens a current ACTIVE value, so it claims the same entity slot an

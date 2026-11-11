@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { AriaProposalCard } from '../AriaProposalCard';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
+import { AriaProposalCard, PROPOSAL_INBOX_LIMIT } from '../AriaProposalCard';
 import type { PanelItem } from '../ariaPanelState';
+// T48 Item 2: the two sides of the inbox-page pin are read from the shipped
+// sources (the same `?raw` technique `errorSurfaceContract.test.ts` uses), so a
+// drift on either side fails here instead of settling a live card.
+import proposalServiceSource from '../../../../act-memory/src/main/java/io/aria/conductor/memory/service/MemoryProposalService.java?raw';
+import ariaPanelSource from '../AriaPanel.tsx?raw';
 
 vi.mock('../../api/memory', () => ({
   decideMemoryProposal: vi.fn(),
@@ -640,5 +645,137 @@ describe('AriaProposalCard', () => {
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     // A refused read proves nothing about the entity itself.
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T48 Item 2 (P2, re-review N2). `PROPOSAL_INBOX_LIMIT` is the client's copy of
+// the server's PENDING-inbox page size (`MemoryProposalService.INBOX_LIMIT`), and
+// the panel decides "this page is the whole inbox" from `rows.length <
+// PROPOSAL_INBOX_LIMIT`. If the server page ever grows past the client's copy, a
+// CAPPED page reads as complete and the panel settles still-PENDING cards as
+// `decided-elsewhere` — the operator loses a live decision.
+//
+// The brief chooses a falsifiable cross-tier pin over raising the number, so the
+// two constants are read from source, one per side: changing EITHER alone fails.
+// The client constant is already single-sourced (the panel imports it), which the
+// second test holds in place — a second literal in the panel is the other way
+// this rule can go stale.
+// ---------------------------------------------------------------------------
+
+/** `MemoryProposalService.INBOX_LIMIT`, read from the shipped Java source. */
+function serverInboxLimit(): number {
+  const match = proposalServiceSource.match(/static final int INBOX_LIMIT = (\d+);/);
+  if (!match) {
+    throw new Error('no `static final int INBOX_LIMIT = <n>;` in MemoryProposalService.java');
+  }
+  return Number(match[1]);
+}
+
+describe('the client proposal-inbox cap equals the server page size', () => {
+  it('pins both sides of the inbox page size to one another', () => {
+    // Positive control: the parse really read the source, so the equality below
+    // cannot pass by comparing two values that were never read (absence != 0).
+    expect(proposalServiceSource).toContain('class MemoryProposalService');
+    expect(serverInboxLimit()).toBeGreaterThan(1);
+
+    expect(serverInboxLimit()).toBe(PROPOSAL_INBOX_LIMIT);
+  });
+
+  it('holds the client constant at one source, so the panel cannot carry a second copy', () => {
+    // The panel's completeness rule must keep reading the shared constant…
+    expect(ariaPanelSource).toContain('PROPOSAL_INBOX_LIMIT');
+    expect(ariaPanelSource).toMatch(/rows\.length < PROPOSAL_INBOX_LIMIT/);
+    // …and must not reintroduce the number it was copied from.
+    expect(ariaPanelSource).not.toMatch(/rows\.length\s*<\s*\d+/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T48 Item 3-8 (P3, re-review N5). The batch signature is null while the mount
+// read has not answered and when that read FAILED, and the decision-time re-read
+// was compared against that null — so the first click rendered "the pending facts
+// this decision covers CHANGED while this card was open" when nothing had
+// changed: the earlier read had simply not returned (or had failed). The decision
+// was correctly withheld, so this is a wording and control defect:
+//   - while the mount read is in flight the decision controls are disabled, so a
+//     click cannot be interpreted against a set the operator has not seen;
+//   - after a FAILED mount read the card says the earlier read failed, and the
+//     list it now shows is what a second click confirms.
+// The "really changed" case keeps its own copy (pinned above).
+// ---------------------------------------------------------------------------
+describe('a batch read in flight is not reported as a change (T48, seam Minor-2)', () => {
+  it('disables the decision while the mount read is answering, and claims no change', async () => {
+    let resolveMount: (rows: MemoryProposalView[]) => void = () => {};
+    // The set the mount read finally answers with. The decision-time re-read is a
+    // second call and MUST answer the same set here: otherwise this test would
+    // exercise the "changed" branch instead of the control it is about.
+    const onScreen = () => [
+      proposalRow(),
+      proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+    ];
+    vi.mocked(listMemoryProposals)
+      .mockReturnValueOnce(
+        new Promise<MemoryProposalView[]>((resolve) => { resolveMount = resolve; }),
+      )
+      .mockResolvedValueOnce(onScreen());
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    expect(within(batch).getByText(/reading its pending facts/i)).toBeInTheDocument();
+    // The operator cannot click a decision over a batch that is still arriving.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeDisabled();
+    expect(screen.queryByTestId('proposal-batch-changed')).not.toBeInTheDocument();
+
+    // Positive control: once the read answers, the same controls work and the
+    // first click decides with no "changed" friction.
+    await act(async () => {
+      resolveMount(onScreen());
+    });
+    await within(batch).findByTestId('proposal-batch-complete');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('ent-7', 'APPROVE'));
+    expect(screen.queryByTestId('proposal-batch-changed')).not.toBeInTheDocument();
+  });
+
+  it('says the earlier read failed instead of claiming the set changed', async () => {
+    vi.mocked(listMemoryProposals)
+      // The mount read fails: nothing was ever shown, so nothing can have changed.
+      .mockRejectedValueOnce({ response: { status: 503, data: {} } })
+      // The decision-time read answers with the real batch.
+      .mockResolvedValueOnce([
+        proposalRow(),
+        proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      ])
+      // The confirming click reads the same set the operator now sees.
+      .mockResolvedValueOnce([
+        proposalRow(),
+        proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      ]);
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={entityItem()} onSettled={onSettled} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    expect(await within(batch).findByText(/could not be read/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    const notice = await screen.findByTestId('proposal-batch-unread-on-open');
+    expect(notice).toHaveTextContent(/could not be read when this card opened/i);
+    expect(notice).toHaveTextContent(/nothing has been decided/i);
+    // The false claim this finding is about: nothing changed. The list is simply
+    // the first one the operator can see.
+    expect(notice).not.toHaveTextContent(/changed/i);
+    expect(screen.queryByTestId('proposal-batch-changed')).not.toBeInTheDocument();
+    expect(decideMemoryProposal).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
+
+    // The confirming click decides exactly the set now on screen.
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('ent-7', 'APPROVE'));
   });
 });

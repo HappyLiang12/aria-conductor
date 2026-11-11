@@ -77,19 +77,28 @@ public class MemoryProposalService {
     /** The review inbox page size: bounded, newest first. */
     static final int INBOX_LIMIT = 50;
 
-    /** The review inbox: the newest {@link #INBOX_LIMIT} facts and relations in {@code status}. */
+    /**
+     * The review inbox as a NON-operator (worker) caller sees it: the newest
+     * {@link #INBOX_LIMIT} FACT and RELATION rows in {@code status}, and no PENDING ENTITY row
+     * (T11 C1 — a worker cannot see a pending entity's key or display name through
+     * {@code list_memory_entities(status=PENDING)} either). Named for its authority so the read
+     * cannot be mistaken at the call site for the whole inbox: a caller that has an identity must
+     * use {@link #listProposals(FactStatus, MemoryActor)}.
+     */
     @Transactional(readOnly = true)
-    public List<MemoryProposalView> listProposals(FactStatus status) {
+    public List<MemoryProposalView> listWorkerProposals(FactStatus status) {
         return listProposals(status, INBOX_LIMIT, null);
     }
 
     /**
-     * One bounded page of the review inbox, newest first. Facts and relations are read with
-     * two status-scoped, page-limited queries instead of enumerating both tables, then merged
-     * into one page so the reviewer sees a single newest-first list.
+     * One bounded page of the review inbox, newest first, as a NON-operator (worker) caller sees
+     * it — see {@link #listWorkerProposals(FactStatus)} for the authority this name carries.
+     * Facts and relations are read with two status-scoped, page-limited queries instead of
+     * enumerating both tables, then merged into one page so the reviewer sees a single
+     * newest-first list.
      */
     @Transactional(readOnly = true)
-    public List<MemoryProposalView> listProposals(FactStatus status, int limit) {
+    public List<MemoryProposalView> listWorkerProposals(FactStatus status, int limit) {
         return listProposals(status, limit, null);
     }
 

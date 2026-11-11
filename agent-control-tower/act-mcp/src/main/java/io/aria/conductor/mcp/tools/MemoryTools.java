@@ -27,6 +27,7 @@ import io.aria.conductor.memory.service.MemoryQueryService;
 import io.aria.conductor.memory.service.MemoryRecallService;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -245,7 +246,8 @@ public class MemoryTools implements McpTool {
      * would be a value read above the deployment ceiling by another name.
      */
     @Tool(name = "forget_fact",
-            description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current.")
+            description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String forgetFact(
             @ToolParam(description = "Memory fact id (UUID)") UUID factId,
             ToolContext toolContext) {
@@ -294,7 +296,8 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "decide_memory_proposal",
-            description = "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value.")
+            description = "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String decideMemoryProposal(
             @ToolParam(description = "Subject id of the PENDING proposal (fact or relation)") UUID proposalId,
             @ToolParam(description = "true = approve, false = reject") boolean approve,
@@ -330,11 +333,31 @@ public class MemoryTools implements McpTool {
      * degraded reasons. The projection is a whitelist, so an unexpected field — in
      * particular prompt text, which is never stored here — cannot travel through.
      * <p>
-     * Decision (2026-11 review): the manifest stays <em>global metadata</em> — any caller
-     * the tool policy admits may read any run's manifest, not only the actor's own run. It
-     * reveals which sections were assembled and why, never their text, so the exposure is
-     * metadata rather than prompt content; scoping the read to {@code actor.runId()} is a
-     * possible follow-up, deliberately not taken here for an operator introspection tool.
+     * Decision (2026-11 review, reaffirmed by the 2026-11-11 operator amendment): the manifest
+     * stays <em>global metadata</em> — any caller the tool policy admits may read any run's
+     * manifest, not only the actor's own run. The read therefore resolves <em>no</em> actor on
+     * purpose: an actor would not narrow the answer, so identity here would be theatre, and
+     * admission is the reviewed {@code WORKER_READ} classification ({@code ToolCatalog}, the
+     * auto-approved memory reads) plus the reviewed auto-approve list
+     * ({@code McpProperties.autoApproveReadTools}) at the execution boundary. A caller with no
+     * credential reads the same metadata as an operator.
+     * <p>
+     * That is safe only because nothing per-run and secret is in the answer, VERIFIED at three
+     * points rather than assumed: <ol>
+     *   <li>the producer stores no text — {@code ContextManifestService.record} copies only
+     *       id/sources/chars/tokens/truncated per section plus the dropped/degraded reason strings
+     *       and counts, never {@code ContextSection.content}, pinned by
+     *       {@code ContextManifestServiceTest.theRecordCarriesIdsCountsReasonsAndNeverThePromptText};</li>
+     *   <li>{@code sources} are opaque ids only — memory entities/facts add their UUIDs
+     *       ({@code MemoryContextContributor}), never a key, display name or value;</li>
+     *   <li>this method's {@link #sections(String)} (like the REST twin's
+     *       {@code MemoryManifestView}) projects a fixed key set, so a field the assembler never
+     *       writes could not leak either.</li>
+     * </ol>
+     * The REST twin is operator-gated because it is the dashboard's operator surface, not because
+     * it returns more. If per-run scoping is ever decided, the seam is
+     * {@code McpActorContext.require(toolContext)} plus a filter on {@code actor.runId()}; until
+     * then the cross-run read is the reviewed behaviour, not an oversight.
      */
     @Tool(name = "get_context_manifest",
             description = "Read every context assembly recorded for a run, in turn order: turnNumber, adapter, section ids with source ids and estimates, dropped sections with reasons, and degraded sections with reasons. Metadata only — prompt content is never stored or returned.")

@@ -208,6 +208,19 @@ Soft guard: both Aria prompts (`AriaService.buildSystemPrompt` +
 `AriaDefaultAgentInitializer.ARIA_SYSTEM_PROMPT`) add: "NEVER use
 create_workflow for the BA->Dev->QA loop; always use instantiate_template."
 
+> **AMENDED 2026-11-12 (operator decision, Aria PA experience program).** The tool name mandated above
+> does not exist. The only registered tool is `instantiate_workflow_template(templateId, parameters)`
+> (`act-mcp/.../WorkflowTools.java:42`, `ToolCatalog.java:42`); `parameters` carries `issueRef`/`repoUrl`.
+> `instantiate_template` survives only as a seeded legacy `tool_definitions` row
+> (`V41__seed_instantiate_template_tool.sql`) that no production dispatcher reads, and in this prompt
+> wording. Two independent reviewers found that Aria's governed-workflow instruction therefore could
+> not resolve. The operator approved correcting the name and updating every pin in the same change.
+> **The DECISION is unchanged**: SDD steps must go through the governed template path so the
+> SPEC_REVIEW gate is enforced, and `create_workflow` must not be used for the BA->Dev->QA loop. The
+> hard guard's message and the prompt wording now name `instantiate_workflow_template`; the pins in
+> `AriaPromptContributorTest` and `WorkflowServiceSddGuardTest` were updated with them, not deleted.
+> The historical text above is preserved because it records what was approved on 2026-08-13.
+
 Tests:
 - `WorkflowToolHandlerTest.createWorkflow_rejectsSddKinds`
 - `WorkflowToolHandlerTest.createWorkflow_genericKindsStillAllowed` (regression)

@@ -233,6 +233,87 @@ class AgentControllerCrudTest extends WebMvcTestBase {
         verify(agentService).retireAgent(id);
     }
 
+    // --------------------- the deliberately ungated writes: worker positive controls
+
+    /**
+     * T47 item 5. {@code create_agent}, {@code update_agent} and the skill writes are
+     * {@code WORKER_WRITE} on the MCP surface, so their REST twins stay ungated by the parity
+     * argument the retire route's javadoc states. Nothing pinned that a worker SUCCEEDS, so a
+     * future gate would have shipped without a red test. These pin the success; they do not
+     * re-cover the skill endpoints' request binding (that is {@link AgentControllerTest}'s).
+     */
+    @Test
+    void createAgent_workerBearerStillCreates() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+        UUID id = UUID.randomUUID();
+        when(agentService.createAgent(any())).thenReturn(sampleAgent(id));
+
+        mvc.perform(post("/api/v1/agents")
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "triage-bot", "agentType", "ADK", "role", "dev"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(id.toString()));
+
+        verify(agentService).createAgent(any());
+    }
+
+    @Test
+    void updateAgent_workerBearerStillUpdates() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+        UUID id = UUID.randomUUID();
+        AgentResponse updated = sampleAgent(id);
+        updated.setModel("gpt-4o");
+        when(agentService.updateAgent(eq(id), any())).thenReturn(updated);
+
+        mvc.perform(put("/api/v1/agents/" + id)
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("model", "gpt-4o"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.model").value("gpt-4o"));
+
+        verify(agentService).updateAgent(eq(id), any());
+    }
+
+    @Test
+    void assignSkill_workerBearerStillAssigns() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+        UUID id = UUID.randomUUID();
+        when(agentService.getAgentSkills(id)).thenReturn(List.of());
+
+        mvc.perform(post("/api/v1/agents/" + id + "/skills")
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("skillId", "s1"))))
+                .andExpect(status().isCreated());
+
+        verify(agentService).assignSkill(id, "s1");
+    }
+
+    @Test
+    void setSkills_workerBearerStillReplacesTheList() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+        UUID id = UUID.randomUUID();
+        when(agentService.getAgentSkills(id)).thenReturn(List.of());
+
+        mvc.perform(put("/api/v1/agents/" + id + "/skills")
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("ids", List.of("s1")))))
+                .andExpect(status().isOk());
+
+        verify(agentService).setSkills(id, List.of("s1"));
+    }
+
     // ------------------------------------------- fleet runtime authority boundary
 
     /**

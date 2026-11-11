@@ -9,6 +9,7 @@ import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -134,7 +135,8 @@ public class AgentTools implements McpTool {
      * authority either.
      */
     @Tool(name = "retire_agent",
-            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active.")
+            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String retireAgent(@ToolParam(description = "Agent id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);

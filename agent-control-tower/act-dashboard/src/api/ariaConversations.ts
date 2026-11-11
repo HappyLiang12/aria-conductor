@@ -1,4 +1,5 @@
 import client from './client';
+import { applyOperatorHeaders } from './operatorSession';
 
 export interface ConversationSummary {
   conversationId: string;
@@ -39,12 +40,43 @@ export async function getConversationTimeline(conversationId: string): Promise<T
   return res.json();
 }
 
+/** The HTTP status an axios error answered with, or undefined when it did not answer. */
+function responseStatus(error: unknown): number | undefined {
+  return (error as { response?: { status?: number } } | undefined)?.response?.status;
+}
+
+/**
+ * Upper bound on the Clear DELETE (T49 N-T48-4). The call synchronously drives
+ * `RunService.cancelRun`, whose verified stop waits on the core, so on a slow or
+ * wedged backend it can hang for as long as the server does. Unbounded, the panel's
+ * `Clearing…` state would be indistinguishable from a dead button, which is the worst
+ * possible outcome for the control an operator uses to escape a parked turn. 20 s
+ * leaves room for a legitimate verified stop and still answers.
+ */
+export const CLEAR_CONVERSATION_TIMEOUT_MS = 20_000;
+
+/**
+ * `DELETE /api/v1/aria/conversations/{id}`: cancel this conversation's runs, then purge its
+ * tool calls, trajectories and audit events.
+ *
+ * Through the shared `client`, not a bare `fetch` (T48 Item 1): the route resolves operator
+ * authority for a MUTATION (`AriaConversationController.java:193-203`), and a browser that
+ * holds the operator session cookie has its request validated against `X-CSRF-Token` — which
+ * only the axios client's defaults carry (`operatorSession.ts:99-106`). `applyOperatorHeaders()`
+ * runs at call time so a reload (defaults empty, session in localStorage) cannot send the call
+ * without the token. The client also adds `X-Correlation-ID`, which the raw fetch never did.
+ *
+ * A 404 stays a success: the conversation is already gone, which is what the caller asked for.
+ */
 export async function deleteConversation(conversationId: string): Promise<void> {
-  const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`Failed to delete conversation: ${res.statusText}`);
+  applyOperatorHeaders();
+  try {
+    await client.delete(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`, {
+      timeout: CLEAR_CONVERSATION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (responseStatus(error) === 404) return;
+    throw error;
   }
 }
 
@@ -52,11 +84,17 @@ export async function deleteConversation(conversationId: string): Promise<void> 
  * One-click synthesis (Feature B2): composes the aggregated prompt for the
  * latest dispatch batch of the conversation. No body — an optional
  * `dispatchedByRunId` targets a specific batch, the default is the latest one.
+ *
+ * Through the shared `client` like the DELETE above (T48 Item 1): it was the last mutation
+ * outside the one transport, so it carried no `X-CSRF-Token` and no `X-Correlation-ID`. The
+ * route answers a worker or anonymous caller today (`AriaConversationController.java:245-261`
+ * resolves no authority), so this cannot change an outcome — it removes the class of call that
+ * breaks the day the route is gated, instead of re-deriving the header at that point.
  */
 export async function composeSynthesis(conversationId: string): Promise<{ prompt: string }> {
-  const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}/synthesize`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error(`Failed to compose synthesis prompt: ${res.statusText}`);
-  return res.json();
+  applyOperatorHeaders();
+  const { data } = await client.post<{ prompt: string }>(
+    `/api/v1/aria/conversations/${encodeURIComponent(conversationId)}/synthesize`,
+  );
+  return data;
 }

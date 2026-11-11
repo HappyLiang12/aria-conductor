@@ -184,6 +184,59 @@ describe('aria streamMessage decision signals', () => {
   });
 });
 
+describe('aria streamMessage tool call arguments', () => {
+  // The frame contract's authority is the producer, `CoreEventTelemetry#streamSignal`
+  // (act-execution/telemetry): a `tool.call` frame carries `runId`, `name`, `toolCallId`
+  // and `args` — the redacted text the audit row stores. The dispatcher used to drop
+  // `args`, so the activity strip could never show what a tool was called with.
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('forwards the redacted args of a tool_call frame verbatim', async () => {
+    const args = '{"path":"notes.md","content":"[REDACTED]"}';
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        `event: tool_call\ndata: ${JSON.stringify({ runId: 'r1', name: 'write_file', toolCallId: 'tc-1', args })}\n\n`,
+      ]),
+    );
+    const onToolCall = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onToolCall });
+
+    // Verbatim: the server redacted the values (T44); the client renders what it
+    // receives and adds no redaction of its own.
+    expect(onToolCall).toHaveBeenCalledWith('write_file', args);
+  });
+
+  it('still delivers a frame with no args, offering no argument to render', async () => {
+    // `args: null` is what the producer sends for a call with no input; a frame that
+    // omits the key entirely is an older backend. Neither is an error.
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: tool_call\ndata: {"runId":"r1","name":"read_file","toolCallId":null,"args":null}\n\n',
+        'event: tool_call\ndata: {"runId":"r1","name":"list_runs","toolCallId":"tc-2"}\n\n',
+      ]),
+    );
+    const onToolCall = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onToolCall });
+
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+    expect(onToolCall.mock.calls[0][0]).toBe('read_file');
+    expect(onToolCall.mock.calls[0][1]).toBeUndefined();
+    expect(onToolCall.mock.calls[1][0]).toBe('list_runs');
+    expect(onToolCall.mock.calls[1][1]).toBeUndefined();
+  });
+});
+
 describe('aria streamMessage tool result success flag', () => {
   // The frame contract's authority is the producer/consumer pair, not a document:
   // `CoreEventTelemetry.streamSignal` emits `tool_result` with `ok` (= !isError), and the

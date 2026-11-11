@@ -206,9 +206,12 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // The batch as rendered. Null while the read is in flight, undefined when this
   // card decides no batch (a fact/relation, or an entity with no id to read).
   const [batch, setBatch] = useState<BatchRead | null | undefined>(undefined);
-  // Set when the decision-time re-read found a different set than the card
-  // showed: the new set is on screen and the next click is its confirmation.
-  const [batchChanged, setBatchChanged] = useState(false);
+  // Set when the decision-time re-read did not match what the card showed: the
+  // set on screen is the one the next click confirms. Two reasons are kept apart
+  // because only one of them is a change — `changed` means the operator saw a
+  // different list, `unread-on-open` means the FIRST read had not answered (or
+  // had failed), so nothing changed and saying so would be false (T48 N5).
+  const [batchConfirm, setBatchConfirm] = useState<'changed' | 'unread-on-open' | null>(null);
 
   useEffect(() => {
     // An entity proposal without its entity id cannot be attributed a batch;
@@ -239,6 +242,10 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   const state = item.state === 'pending' ? local ?? 'pending' : item.state;
 
   const decide = async (decision: MemoryProposalDecision) => {
+    // A batch read still in flight means the operator has seen no set at all: the
+    // controls are disabled for it, and a click that arrives anyway (a stale
+    // event) must not be read as a decision over a set nobody saw (T48 N5).
+    if (isBatchDecision && batch === null) return;
     setInFlight(decision);
     setError(null);
     try {
@@ -265,10 +272,13 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
         }
         if (batchSignature(fresh) !== batchSignature(batch)) {
           setBatch(fresh);
-          setBatchChanged(true);
+          // Only a set the operator actually saw can have CHANGED. When the mount
+          // read had not answered or failed, this is the first list on screen and
+          // the copy says that instead of inventing a change (T48 N5).
+          setBatchConfirm(batchSignature(batch) === null ? 'unread-on-open' : 'changed');
           return;
         }
-        setBatchChanged(false);
+        setBatchConfirm(null);
       }
       // Operator-only route: carry the locally established session's CSRF token
       // at the moment of the click (the mutation also applies it; this is the
@@ -312,6 +322,11 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       setInFlight(null);
     }
   };
+
+  // A batch read still in flight has shown the operator no set, so neither
+  // control may be used over it (T48 N5) — the alternative was a click whose
+  // re-read then reported a "change" against a list that never existed.
+  const decideDisabled = inFlight !== null || (isBatchDecision && batch === null);
 
   return (
     <div
@@ -368,12 +383,23 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       {/* The decision-time re-read (Task 32) found a set the operator has not
           confirmed: the list above is the corrected one, and this click did not
           decide anything. A second click re-reads and, if the set still matches,
-          decides exactly what is on screen. */}
-      {batchChanged && state === 'pending' && (
+          decides exactly what is on screen. The copy differs from the first-read
+          case below because only one of the two is a change. */}
+      {batchConfirm === 'changed' && state === 'pending' && (
         <div className="ask-ctx" role="alert" data-testid="proposal-batch-changed">
           The pending facts this decision covers changed while this card was open — the list
           above is what it covers now. Nothing has been decided: choose Approve or Reject again
           to confirm it.
+        </div>
+      )}
+      {/* T48 N5: the mount read had not answered (or failed), so the operator is
+          seeing this batch for the first time. Nothing changed, and the card must
+          not ask them to confirm a change that never happened. */}
+      {batchConfirm === 'unread-on-open' && state === 'pending' && (
+        <div className="ask-ctx" role="alert" data-testid="proposal-batch-unread-on-open">
+          The pending facts this decision covers could not be read when this card opened — the
+          list above is what it covers now. Nothing has been decided: choose Approve or Reject
+          again to confirm it.
         </div>
       )}
       <div className="ask-meta">
@@ -388,7 +414,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           <button
             type="button"
             className="btn primary"
-            disabled={inFlight !== null}
+            disabled={decideDisabled}
             onClick={() => void decide('APPROVE')}
           >
             {inFlight === 'APPROVE' ? 'Approving…' : 'Approve'}
@@ -396,7 +422,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           <button
             type="button"
             className="btn"
-            disabled={inFlight !== null}
+            disabled={decideDisabled}
             onClick={() => void decide('REJECT')}
           >
             {inFlight === 'REJECT' ? 'Rejecting…' : 'Reject'}
@@ -425,7 +451,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
             <button
               type="button"
               className="btn"
-              disabled={inFlight !== null}
+              disabled={decideDisabled}
               onClick={() => void decide('REJECT')}
             >
               {inFlight === 'REJECT' ? 'Rejecting…' : 'Reject'}

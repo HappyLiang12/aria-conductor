@@ -69,14 +69,44 @@ public final class ToolResponses {
     }
 
     /**
+     * The refusal for a call that carried NO verifiable credential — as opposed to an
+     * authenticated caller that turned out not to be the operator.
+     *
+     * <p>It cannot use {@link #operatorOnly} (T48, re-review rev-mcp m3): that template's tail,
+     * "is an operator decision", asserted a decision the platform never made. Nothing was
+     * decided about authority — no caller was identified, and the transport refused the call
+     * before an actor existed. It read as though the caller had been identified and found
+     * wanting, and it told them the one thing that is not true of this path: that being the
+     * operator is what was missing. Same {@code FORBIDDEN} code, same named surface, its own
+     * sentence.
+     *
+     * @param surface where the caller can actually fix it, e.g.
+     *                {@code Reconnect the MCP client with an authenticated credential: ...}
+     */
+    public static String unauthenticated(String surface) {
+        return "MCP authentication required: this call carried no verifiable credential, so its "
+                + "caller was not identified and the tool refused it before any authority "
+                + "decision. " + surface;
+    }
+
+    /**
      * Applies the operator authority boundary before any service call: only the
      * transport-resolved OPERATOR passes, and an absent actor fails closed (there is no
      * credential to honour).
      *
-     * @throws SecurityException carrying {@link #operatorOnly} for a worker or an absent actor
+     * <p>{@link #operatorOnly}'s "is an operator decision" is reserved for the worker case, the
+     * one caller the platform actually identified and then refused (T48 / rev-mcp m3). An absent
+     * actor gets {@link #unauthenticated}: nothing was decided about it, because nothing
+     * identified it.
+     *
+     * @throws SecurityException carrying {@link #operatorOnly} for a worker, {@link #unauthenticated}
+     *                           for an absent actor
      */
     static void requireOperator(ActorPrincipal actor, String action, String surface) {
-        if (actor == null || actor.role() != ActorPrincipal.Role.OPERATOR) {
+        if (actor == null) {
+            throw new SecurityException(unauthenticated(surface));
+        }
+        if (actor.role() != ActorPrincipal.Role.OPERATOR) {
             throw new SecurityException(operatorOnly(action, surface));
         }
     }

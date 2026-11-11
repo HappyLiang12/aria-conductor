@@ -1,6 +1,7 @@
 package io.aria.conductor.mcp;
 
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.mcp.tools.ToolResponses;
 import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import org.junit.jupiter.api.Test;
@@ -18,17 +19,23 @@ import static org.mockito.Mockito.when;
 
 /**
  * The unauthenticated refusal is part of the one operator-authority voice (task-11
- * fix round 1, m1). {@code ToolResponses.requireOperator} can name an action and a
- * surface because it starts from an actor; this guard runs before an actor exists, so
- * it has to speak the same sentence shape itself — otherwise a call that carried no
- * credential is the one refusal on the surface with no next step in it.
+ * fix round 1, m1): it keeps the named surface, so a call that carried no credential
+ * is not the one refusal on the surface with no next step in it.
+ *
+ * <p>T48 (re-review rev-mcp m3) corrects the other half. The refusal used the
+ * operator-only template, whose tail reads "is an operator decision" — but this path
+ * runs before an actor exists, so no authority decision was made and the caller was
+ * never identified. The sentence is now its own ({@code ToolResponses.unauthenticated}),
+ * and the worker refusal keeps the clause because THAT one really is a decision about
+ * authority.
  */
 class McpActorContextTest {
 
-    private static final String REFUSAL = "Operator authority required: calling a tool without an "
-            + "authenticated credential is an operator decision. Reconnect the MCP client with an "
-            + "authenticated credential: the operator bearer credential "
-            + "(aria.operator.bearer-token) or a run-scoped worker token issued to the run.";
+    private static final String REFUSAL = "MCP authentication required: this call carried no "
+            + "verifiable credential, so its caller was not identified and the tool refused it "
+            + "before any authority decision. Reconnect the MCP client with an authenticated "
+            + "credential: the operator bearer credential (aria.operator.bearer-token) or a "
+            + "run-scoped worker token issued to the run.";
 
     private static final UUID RUN_ID = UUID.fromString("00000000-0000-0000-0000-000000000b01");
 
@@ -58,6 +65,26 @@ class McpActorContextTest {
         ActorPrincipal resolved = McpActorContext.require(contextWith(McpActorContext.transportContext(worker)));
 
         assertThat(resolved).isEqualTo(worker);
+    }
+
+    /**
+     * T48 (rev-mcp m3): an authentication failure must not be dressed as an authority
+     * decision. The negative here needs its positive control — the shape it rejects is
+     * still correct for the caller it was written for, an identified but non-operator
+     * caller — otherwise this test would pass by the template having no such clause at all.
+     */
+    @Test
+    void theUnauthenticatedRefusalDoesNotClaimAnAuthorityDecision() {
+        assertThatThrownBy(() -> McpActorContext.require(new ToolContext(Map.of())))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageNotContaining("is an operator decision")
+                .hasMessageNotContaining("Operator authority required");
+
+        // Positive control: the worker refusal keeps the clause, because there the
+        // platform did identify the caller and did decide about authority.
+        assertThat(ToolResponses.operatorOnly("retiring an agent", "Retire it on the Crew page."))
+                .contains("Operator authority required")
+                .contains("is an operator decision");
     }
 
     private static ToolContext contextWith(McpTransportContext transportContext) {

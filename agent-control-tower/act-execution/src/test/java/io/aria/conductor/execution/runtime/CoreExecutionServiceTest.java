@@ -912,6 +912,34 @@ class CoreExecutionServiceTest {
         verify(actorTokens, times(2)).revokeRun(RUN);
     }
 
+    /**
+     * T49 item 2 — the async ordering the deterministic harness hit: the cancel's own
+     * cooperative session cancel ends the prompt, so the core's prompt result reports
+     * {@code stopReason=cancelled} and the coordinator wakes BEFORE the control thread
+     * has recorded its verified stop on the runtime. The turn's own cancelled result is
+     * evidence in its own right; recomputing "cancelled" from the control record alone
+     * settled COMPLETED over a run the operator had just stopped, and the cancel
+     * endpoint's own terminal write then lost to that COMPLETED row (409, twice in the
+     * gate run).
+     */
+    @Test
+    void aTurnTheCoreReportsCancelledSettlesCancelledBeforeTheControlRecordLands() {
+        runOwnedInProcess();
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "partial answer", usage(), true)));
+        // The control record is deliberately never written: this is the interleaving where
+        // the prompt result (the peer's stopReason=cancelled) arrives first.
+        assertThat(runtimes.find(RUN).orElseThrow().controlState()).isEqualTo("RUNNING");
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.cancelled())
+                .as("the engine maps this to RunStatus.CANCELLED, not COMPLETED")
+                .isTrue();
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
     @Test
     void theRunDeadlineTimerCancelsAnInFlightPromptThroughTheVerifiedStopPath() {
         ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();

@@ -62,6 +62,62 @@ the operator can actually run from the conversation. Three waves, twelve defects
   the fleet-runtime convergence write, report regenerate/archive, and every memory read.
 - Refusals in the dashboard point at the operator session instead of rendering a raw HTTP message.
 
+**Operator safety and refusal honesty (added by the final whole-branch review's fix round)**
+- **The live tool frames carry what the audit row carries.** `CoreEventTelemetry` redacts the
+  `tool_call` `args` and `tool_result` `result` it streams, exactly as the persisted row is redacted, so
+  the activity strip can no longer show a credential the approval card shows as `[REDACTED]`.
+- **A memory proposal parks no turn**, so one conversation's undecided proposal no longer disables
+  another conversation's composer. The parked-approval and parked-clarification gates are unchanged.
+- **A refused clarification answer settles** instead of inviting a retry that can only 409, and the
+  composer unlocks. The in-flow approval card now **shows the arguments it is approving**, read through
+  the existing REST surface, so a governed write is no longer approved blind.
+- **A cross-site refusal is distinguished from an authority refusal on every surface.** The client
+  reads the marker from the field each controller actually sends (`message`, `error`, `reason`,
+  `detail`), and the tests use those measured body shapes rather than an invented one.
+- **A fact blocked on its still-PENDING entity keeps the Reject the server still accepts** (only
+  Approve is removed), and settles honestly once a provably-complete inbox page stops listing it.
+- **`update_llm_provider` keeps its promise**: a null OR blank optional argument leaves the stored
+  value unchanged, so a model sending `""` to mean "keep" can no longer blank a provider's base URL or
+  API key.
+- **Aria's prompt names a tool that exists**: `instantiate_workflow_template(templateId, parameters)`.
+  The governed-template decision is unchanged; the name and every pin were corrected together under an
+  operator-approved amendment to the 2026-08-13 spec. `remember_fact`'s description is now true for an
+  operator call on a PENDING key and states the re-proposal's retire side effect.
+- **Memory kernel atomicity**: the entity INSERT is forced inside the unique-violation catch so a
+  concurrent same-key write re-reads the winner instead of failing raw; a rejected fact can be
+  proposed again (the probe no longer matches a closed row); retiring an entity closes its open facts
+  so no proposal is left decide-less.
+- **`DELETE /api/v1/aria/conversations/{id}` resolves operator authority before any read or side
+  effect.** It purges trajectories, tool calls and audit rows and cancels runs, and it is reachable
+  from a sandbox, so it is now gated like the other destructive routes.
+- Clear's copy no longer claims a run keeps living server-side; the Memory page labels a capped page as
+  a page rather than a total; the operator notice keeps its 6px spacing as a block-level span; and the
+  shipped `aria-reserved: 3` is pinned from the real YAML resource, not only from the Java default.
+
+**The final scoped fix round (T48) — what it changed on the shipped surfaces**
+- **Clear now does what its title says for an operator with a session.** The DELETE and the synthesize
+  POST were the last mutations outside the shared axios transport, so they carried neither the operator
+  `X-CSRF-Token` (the cookie branch of `OperatorAuthorityResolver` runs BEFORE the loopback branch, so
+  the gate refuses a tokenless call) nor `X-Correlation-ID`. Both go through `client` now. The
+  synthesize route resolves no operator authority today, so rerouting it changes no outcome there; it
+  removes the class of call that would break the day that route is gated, and no backend gate was
+  invented for it. A refused or failed Clear **keeps the transcript** and says what refused it, why
+  nothing was cleared, and where the fix is — the old silent fallback cleared the panel while the
+  server still held the conversation.
+- **The client's PENDING-inbox cap is pinned to the server's page size** (`PROPOSAL_INBOX_LIMIT` vs
+  `MemoryProposalService.INBOX_LIMIT`), so the two can no longer drift into settling a live card as
+  decided elsewhere. The panel keeps one source for the number.
+- **A batch read still in flight is no longer reported as a change** in the memory proposal card: the
+  decision controls stay disabled until the read answers, and a failed first read says it failed
+  instead of asking the operator to confirm a change that never happened.
+- **An MCP call that presents no credential no longer claims it was an operator decision.** It reused
+  the operator-only template, whose tail says "is an operator decision" — a decision the platform
+  never made on that path, because nothing had identified the caller. It now says the call carried no
+  verifiable credential and was refused before any authority decision. The worker refusal keeps the
+  old clause, because there the caller was identified and refused.
+- **The ten operator-only descriptions state the auth-mode=none refusal** instead of naming only the
+  run-scoped worker (upgrade note 3 below).
+
 ## Schema and configuration changes
 
 **None.** No Flyway migration is added or required. No new configuration key, no environment variable,
@@ -70,7 +126,7 @@ no compose change, no Dockerfile change. The re-proposal path reuses the existin
 
 ## Upgrade notes
 
-Nothing to run. Two behaviour changes affect clients other than the dashboard:
+Nothing to run. Four behaviour changes affect clients other than the dashboard:
 
 1. **Operator authority is now resolved on routes that previously resolved none.** A call presenting a
    worker/run-scoped bearer is refused (403) even from loopback. An anonymous call from a non-loopback
@@ -80,6 +136,19 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    single-operator localhost deployment.
 2. **`GET /api/v1/memory/entities/{id}?status=`** now rejects any value other than `PENDING` with a 422
    VALIDATION naming the supported value. Previously four of the five values were silently ignored.
+3. **On the shipped default `aria.mcp.auth-mode: none`, a call that presents no MCP credential is
+   refused by all ten OPERATOR_ONLY tools — the operator included.** The mode requires no credential
+   and injects none, so no actor is published and `McpActorContext.require` fails closed before
+   `requireOperator`. The ten descriptions now say that instead of naming only the run-scoped worker.
+   This is about the credential a caller sends, not about a mode disabling authentication: a caller
+   that presents a valid operator bearer is resolved in every mode
+   (`McpServerConfig.actorTransportContext:176-180`; in `actor` mode the filter accepts any actor
+   `McpActorContext.resolveBearer` returns, `McpTokenFilter:124-129`). No configuration key changed.
+4. **An MCP call with no verifiable credential is refused with a new sentence.** The message used to
+   reuse the operator-only template ("… is an operator decision"), which claimed an authority decision
+   that path never makes. Same `errorType` (`FORBIDDEN`), same named surface (reconnect with an
+   authenticated credential), different wording. A client that matched on the old sentence text was
+   matching a claim that was not true; match on `errorType` and the code instead.
 
 ## Behaviour changes to watch
 
@@ -111,15 +180,16 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
 | Tier | Command | Result |
 | --- | --- | --- |
 | Start-script self-tests | `bash scripts/lib/workspace-roots.test.sh`; `pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1` | 15 passed / 0 failed; 38 assertions — PASS at `94955f56` |
-| Cross-lane frontend typecheck | `npx tsc --noEmit -p tsconfig.json` | rc=0, 0 bytes — PASS at `9cc22a6a`, `94955f56` |
+| Cross-lane frontend typecheck | `npx tsc --noEmit -p tsconfig.json` | rc=0, 0 bytes — PASS at `9cc22a6a`, `94955f56`; also rc=0 at the T48 head (`pnpm exec tsc --noEmit`) |
 | Cross-lane Java compile | `mvn -o -B -T 1C test-compile -DskipTests` | BUILD SUCCESS at `57689bdf` |
-| Frontend unit suite | `pnpm exec vitest run` | 90 files / 899 tests passed at `190f1bc8` (lane recovery, coverage OFF). **NOT RUN at the final head**; later lanes ran focused suites (T41: 24 files / 311 tests; T40 recovery: 1 test) |
+| Frontend unit suite | `pnpm exec vitest run` | 90 files / 899 tests passed at `190f1bc8` (lane recovery, coverage OFF). **NOT RUN at the pre-T48 final head**; later lanes ran focused suites (T41: 24 files / 311 tests; T40 recovery: 1 test). **PASS at the T48 head: 92 files / 964 tests, 0 failed** |
+| Per-lane module gates (T48) | `bash scripts/mvn-lane.sh inner act-mcp -am`; `... inner act-aria -am` | act-mcp: 273 tests, 0 failures, 0 skipped (ToolCatalogParityTest 19, including the 67/65/10 and 57-line/<3000-char pins; McpActorContextTest 4); act-aria: rc=0 — PASS at the T48 head |
 | Per-lane module gates | `bash scripts/mvn-lane.sh inner <modules> -am` | green per lane; counts in each task report |
 | Full unit tier | `wave-gate.sh` step `unit` | **NOT RUN** at the final head |
 | Failsafe tier | `wave-gate.sh` step `itg` | **NOT RUN** at the final head |
 | Frontend coverage ratchet | `pnpm test -- --coverage` | preflight at `df93716d`: **90 files / 882 tests passed**, coverage 79.91% lines / 82.28% branches / 66.44% functions against thresholds 5 / 60 / 40 — PASS, no threshold error. **NOT RUN at the final head** |
 | MCP server coverage | `pnpm test -- --coverage` | **NOT RUN** — the preflight covered the dashboard only; this tier has never been exercised |
-| Dashboard build | `pnpm build` | **NOT RUN** at the final head |
+| Dashboard build | `pnpm build` | **NOT RUN** at the pre-T48 final head; **PASS at the T48 head** (`tsc -b && vite build`, 254 modules, `dist/index.html` + 2 assets, rc=0) |
 | Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **NOT RUN** at the final head |
 | Clean-room | fresh worktree, no target/node_modules/dist, full gate | **NOT RUN** |
 | Artifact-first E2E | `e2e-gate.sh` — packaged harness + built dist + 5 smoke endpoints + Playwright `--repeat-each=2` | **NOT RUN** |
@@ -144,7 +214,9 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
      network-isolated from it. Mutating routes outside this program's gated set still resolve none; the
      per-route table in `.superpowers/sdd/2026-11-11-aria-pa-experience/final-review-rest.md` is the
      authoritative list. The most destructive of them, `DELETE /api/v1/aria/conversations/{id}` (purges
-     trajectories, tool calls and audit rows, and cancels runs), is being gated in the fix round.
+     trajectories, tool calls and audit rows, and cancels runs), is now gated — and the dashboard's
+     Clear, which drives it, carries the operator CSRF token through the shared transport (T48), so the
+     gate does not lock the operator out of the one route it protects.
    A SANDBOX worker's peer address is the bridge gateway rather than loopback, so it is refused on
    routes that DO resolve authority — that is not a protection on routes that resolve none. Closing the
    whole surface needs the filter registration or bind-address change the operator declined.

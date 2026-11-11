@@ -605,7 +605,16 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         }
 
         boolean deadlineReached = isDeadlineTimeout(failure, turnDeadline);
-        String state = deadlineReached || (runtime.writersVerifiedStopped()
+        // T49: the cancel's own cooperative session cancel is what ends the prompt, so the
+        // turn can report stopReason=cancelled and this thread can wake BEFORE the cancel
+        // thread records its verified stop on the runtime. The turn's own cancelled result
+        // is evidence in its own right: deriving the terminal state from the control record
+        // alone settled COMPLETED over a run the operator had just stopped, and the cancel
+        // endpoint's terminal write then lost to that COMPLETED row (the pinned "reached
+        // COMPLETED while the verified cancel completed" 409).
+        boolean cancelledTurn = result != null && result.cancelled();
+        String state = deadlineReached || cancelledTurn
+                || (runtime.writersVerifiedStopped()
                 && STATE_CANCELLED.equals(runtime.controlState()))
                 ? STATE_CANCELLED
                 : failure != null ? STATE_FAILED : STATE_COMPLETED;

@@ -147,6 +147,11 @@ export default function ExecutiveSummary() {
           }`;
 
   const summaryFresh = summaryPhase === 'success' || summaryPhase === 'stale';
+  // A zero total beside runs that reported nothing is a silence, not a
+  // measurement — name the silence instead of rendering a false zero.
+  const runsWithoutUsage = summary?.runsWithoutUsage ?? 0;
+  const tokensUnreported =
+    summaryFresh && summary?.totalTokensBurned === 0 && runsWithoutUsage > 0;
   const kanbanFresh = kanbanPhase === 'success' || kanbanPhase === 'stale';
   const runsFresh = runsPhase === 'success' || runsPhase === 'stale';
   const knowledgeFresh = knowledgePhase === 'success' || knowledgePhase === 'stale';
@@ -196,8 +201,19 @@ export default function ExecutiveSummary() {
         />
         <StatCell
           label="Recorded tokens"
-          value={summaryFresh ? formatNumber(summary?.totalTokensBurned) : '—'}
-          detail={phaseDetail(summaryPhase) ?? 'Cumulative recorded input + output over retained records'}
+          value={
+            summaryFresh
+              ? tokensUnreported
+                ? 'not reported'
+                : formatNumber(summary?.totalTokensBurned)
+              : '—'
+          }
+          detail={
+            phaseDetail(summaryPhase) ??
+            (tokensUnreported
+              ? `${runsWithoutUsage} runs reported no usage`
+              : 'Cumulative recorded input + output over retained records')
+          }
           variant="green"
         />
         <StatCell

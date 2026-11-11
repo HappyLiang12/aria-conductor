@@ -134,7 +134,7 @@ public class AgentTools implements McpTool {
      * authority either.
      */
     @Tool(name = "retire_agent",
-            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs.")
+            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active.")
     public String retireAgent(@ToolParam(description = "Agent id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);

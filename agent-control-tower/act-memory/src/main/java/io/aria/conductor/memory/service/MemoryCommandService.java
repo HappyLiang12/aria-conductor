@@ -2,6 +2,7 @@ package io.aria.conductor.memory.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.AddRelationCommand;
@@ -27,6 +28,7 @@ import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,6 +72,7 @@ public class MemoryCommandService {
     private final MemoryValueGuard guard;
     private final MemoryProposalWriter proposalWriter;
     private final MemoryCurrentValueSlot currentValueSlot;
+    private final ApplicationEventPublisher events;
 
     public MemoryCommandService(MemoryEntityRepository entities,
                                 MemoryFactRepository facts,
@@ -78,7 +81,8 @@ public class MemoryCommandService {
                                 MemoryAssertionRepository assertions,
                                 MemoryValueGuard guard,
                                 MemoryProposalWriter proposalWriter,
-                                MemoryCurrentValueSlot currentValueSlot) {
+                                MemoryCurrentValueSlot currentValueSlot,
+                                ApplicationEventPublisher events) {
         this.entities = entities;
         this.facts = facts;
         this.relations = relations;
@@ -87,6 +91,7 @@ public class MemoryCommandService {
         this.guard = guard;
         this.proposalWriter = proposalWriter;
         this.currentValueSlot = currentValueSlot;
+        this.events = events;
     }
 
     @Transactional
@@ -96,14 +101,19 @@ public class MemoryCommandService {
         guard.checkKey("canonicalKey", canonicalKey);
         guard.checkValue("displayName", command.displayName());
         MemoryOrigin origin = originOf(actor);
-        if (origin == MemoryOrigin.EXTRACTION) {
-            // Spec §7: the EXTRACTION row of the governance matrix covers preferences,
-            // identity facts, relations and new links — all PENDING. An entity is a
-            // structural row: an inference may never mint an immediately recallable
-            // ACTIVE entity, and a PENDING entity has no meaning (nothing could hang off
-            // it). Operator and run/backfill writes are the only entity creators.
-            throw new MemoryValidationException(
-                    "an EXTRACTION actor cannot create a memory entity; create it as OPERATOR and let the extraction propose facts, relations or links");
+        // 2026-11-11 operator decision (PA experience, spec §5.5 / C3 / F10): the EXTRACTION row of
+        // the governance matrix may now PROPOSE an entity, but only as PENDING. This amends the
+        // earlier reading that "a PENDING entity has no meaning": a PENDING entity is the parent a
+        // batch of PENDING facts hangs off, and one operator decision promotes (or retires) the
+        // whole batch. What keeps it safe is the read path, not the write — recall and the context
+        // contributor query ACTIVE only, listEntities defaults to ACTIVE, getEntity refuses a
+        // PENDING entity, and requireEntity refuses an ACTIVE fact against one. So an unapproved
+        // entity never reaches recall, a prompt or a default list, while the operator can still see
+        // it through the explicit PENDING filter and the proposal inbox.
+        EntityStatus status = origin == MemoryOrigin.EXTRACTION ? EntityStatus.PENDING : EntityStatus.ACTIVE;
+        Optional<MemoryEntity> existing = entities.findByKindAndCanonicalKey(kind, canonicalKey);
+        if (existing.isPresent()) {
+            return existing.get();
         }
         Instant now = Instant.now();
 
@@ -113,15 +123,23 @@ public class MemoryCommandService {
                 .canonicalKey(canonicalKey)
                 .displayName(isBlank(command.displayName()) ? canonicalKey : command.displayName())
                 .sensitivity(command.sensitivity() == null ? Sensitivity.INTERNAL : command.sensitivity())
-                .status(EntityStatus.ACTIVE)
+                .status(status)
                 .origin(origin)
                 .build();
-        entities.save(entity);
+        try {
+            entities.save(entity);
+        } catch (DataIntegrityViolationException e) {
+            // UNIQUE (kind, canonical_key) is the atomic guard; the loser reads the winner.
+            return entities.findByKindAndCanonicalKey(kind, canonicalKey)
+                    .orElseThrow(() -> new MemoryConflictException("entity " + kind + "/" + canonicalKey
+                            + " collided with a concurrent write that cannot be read back; retry"));
+        }
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.CREATE, actor,
                 null, now, null, audit(
                         "kind", kind,
                         "canonicalKey", canonicalKey,
-                        "status", EntityStatus.ACTIVE.name())));
+                        "status", status.name())));
+        publishEntityProposal(entity, actor);
         return entity;
     }
 
@@ -573,6 +591,38 @@ public class MemoryCommandService {
         }
         return entities.findById(entityId)
                 .orElseThrow(() -> new MemoryNotFoundException("memory entity " + entityId + " not found"));
+    }
+
+    /**
+     * A run-created PENDING entity is the only producer of
+     * {@link MemoryProposalCreatedEvent}: the card that asks the operator to decide it renders
+     * in the run's stream, so the event is published only when the entity stayed PENDING and the
+     * actor carries a run id. The actor reference of a worker is
+     * {@code ActorPrincipal.runId().toString()} (MemoryTools), so a reference that is not a UUID
+     * is not addressable to a stream and publishes nothing rather than a null-address event.
+     */
+    private void publishEntityProposal(MemoryEntity entity, MemoryActor actor) {
+        if (entity.getStatus() != EntityStatus.PENDING) {
+            return;
+        }
+        UUID runId = runIdOf(actor);
+        if (runId == null) {
+            return;
+        }
+        events.publishEvent(new MemoryProposalCreatedEvent(this, entity.getId(),
+                MemorySubjectType.ENTITY.name(), entity.getId(), null, null,
+                entity.getSensitivity() == null ? null : entity.getSensitivity().name(), runId));
+    }
+
+    private static UUID runIdOf(MemoryActor actor) {
+        if (actor == null || isBlank(actor.ref())) {
+            return null;
+        }
+        try {
+            return UUID.fromString(actor.ref().trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static MemoryOrigin originOf(MemoryActor actor) {

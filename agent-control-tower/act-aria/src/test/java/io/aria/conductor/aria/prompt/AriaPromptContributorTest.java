@@ -102,8 +102,13 @@ class AriaPromptContributorTest {
      * Task 22 / PA onboarding bar: the tool catalog lists {@code recall_memory} and
      * {@code remember_fact}, but a name in a list never tells the assistant it has a
      * memory, to recall before asking, or that an unapproved proposal is not yet a
-     * memory. This pins the guidance that makes onboarding-in-chat reachable: propose
-     * the entity and its first fact together, and never claim a PENDING proposal landed.
+     * memory. This pins the guidance that makes onboarding-in-chat reachable — how the
+     * unknown-key call behaves for a new key versus one that already exists — and that an
+     * unapproved proposal never counts as landed.
+     * <p>
+     * T29 Item 7 (P3): the pinned sentence used to promise that one call always proposes the
+     * entity and its first fact together, which is false when the canonical key already exists —
+     * then only the fact is proposed. The pin now holds the corrected meaning for both cases.
      */
     @Test
     void policyTellsAriaToRecallAndProposeDurableFacts() {
@@ -117,7 +122,9 @@ class AriaPromptContributorTest {
         assertThat(flat).contains("Recall before asking the operator something you may already know.");
         assertThat(flat).contains("propose it with remember_fact");
         assertThat(flat).contains("pass kind and canonicalKey (e.g. person / person:happy)");
-        assertThat(flat).contains("one call proposes the new entity and its first fact together");
+        assertThat(flat).contains("one call proposes the entity and its first fact together for a new key");
+        assertThat(flat).contains("and only the fact when the key already exists");
+        assertThat(flat).doesNotContain("one call proposes the new entity and its first fact together");
         assertThat(flat).contains("Never claim a fact is remembered, saved or known until it is approved");
         assertThat(flat).contains("say it is waiting for the operator");
         assertThat(flat).contains("Never decide, promote or approve your own proposals");

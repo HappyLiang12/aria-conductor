@@ -172,6 +172,59 @@ describe('CrewPage bulk retire (H3)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task 30 / Item 1: `retireAgent` is gated server-side now, so the page has to
+// turn a refusal into the operator-session notice instead of the axios text.
+// ---------------------------------------------------------------------------
+describe('CrewPage retire refusals (Task 30)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function retireOne() {
+    const { listAgents, retireAgent } = await import('../../api/agents');
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'a-1', name: 'e2e-agent-1', healthStatus: 'HEALTHY' },
+    ]);
+    ui();
+    await waitFor(() => expect(screen.getAllByTestId('agent-card')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /select leftovers/i }));
+    fireEvent.click(screen.getByRole('button', { name: /retire selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    return retireAgent as ReturnType<typeof vi.fn>;
+  }
+
+  it.each([401, 403])('renders the operator-session notice for a %i', async (status) => {
+    const retireAgent = await import('../../api/agents').then((m) => m.retireAgent);
+    (retireAgent as ReturnType<typeof vi.fn>).mockRejectedValue({
+      response: { status, data: { message: 'RETIRE_RAW_SERVER_TEXT' } },
+    });
+
+    await retireOne();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/retiring an agent is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    // Neither the axios transport text nor the server's own words may appear.
+    expect(screen.queryByText(/RETIRE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/some retires failed/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary failure note for a 500, not a session notice', async () => {
+    const retireAgent = await import('../../api/agents').then((m) => m.retireAgent);
+    (retireAgent as ReturnType<typeof vi.fn>).mockRejectedValue({
+      response: { status: 500, data: { message: 'agent store unavailable' } },
+    });
+
+    await retireOne();
+
+    expect(await screen.findByText(/some retires failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/agent store unavailable/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 15: governed core + explicit execution mode + Host workspace binding.
 // ---------------------------------------------------------------------------
 

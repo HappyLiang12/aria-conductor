@@ -155,11 +155,21 @@ public class MemoryController {
      * material and answers 404. An explicit {@code status=PENDING} is the operator's review
      * read (spec :309-313: the operator cannot approve what they cannot see), so authority is
      * resolved first and a worker credential is refused rather than silently downgraded.
+     * <p>
+     * {@code PENDING} is the only status this route honours. The parameter is typed as
+     * {@link EntityStatus}, but a detail read of an ACTIVE/MERGED/RETIRED row is just the detail
+     * read — accepting the word silently told the caller that {@code status=MERGED} had selected
+     * MERGED rows when it selected nothing. Any other value is therefore a VALIDATION error that
+     * names the only supported value; the dashboard already sends exactly {@code PENDING}.
      */
     @GetMapping("/entities/{id}")
     public MemoryEntityDetail getEntity(@PathVariable UUID id,
                                         @RequestParam(required = false) EntityStatus status,
                                         HttpServletRequest request) {
+        if (status != null && status != EntityStatus.PENDING) {
+            throw new MemoryValidationException("status=" + status
+                    + " is not supported by this route: the only supported value is PENDING");
+        }
         boolean includePending = status == EntityStatus.PENDING;
         if (includePending) {
             operatorAuthority.resolveOperator(request, false);

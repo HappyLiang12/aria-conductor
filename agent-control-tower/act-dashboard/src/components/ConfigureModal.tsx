@@ -8,6 +8,8 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { listSkills } from '../api/skills';
 import { applyFleetRuntime, listAgents } from '../api/agents';
 import { listAdkProviders } from '../api/adk';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from './ErrorNotice';
 import { composeRuntimes } from '../utils/runtimeComposition';
 import type { ExecutionMode } from '../types';
 import '../styles/configure-flow.css';
@@ -436,7 +438,9 @@ function RuntimePane() {
   const [coreId, setCoreId] = useState('');
   const [mode, setMode] = useState<ExecutionMode | ''>('');
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // PUT /api/v1/agents/runtime is operator-only server-side, so the failure is
+  // kept as the API error and rendered as a notice that names the fix.
+  const [applyError, setApplyError] = useState<unknown | null>(null);
 
   const liveAgents = agents ?? [];
   const composition = composeRuntimes(liveAgents);
@@ -450,13 +454,13 @@ function RuntimePane() {
     mutationFn: () => applyFleetRuntime(coreId, mode as ExecutionMode),
     onSuccess: () => {
       setConfirmOpen(false);
-      setError(null);
+      setApplyError(null);
       void queryClient.invalidateQueries({ queryKey: ['agents'] });
       void queryClient.invalidateQueries({ queryKey: ['runs'] });
       void queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
-    onError: (err: unknown) => setError(`Apply failed: ${String((err as Error)?.message ?? err)}`),
+    onError: (err: unknown) => setApplyError(err),
   });
 
   const canApply = coreId !== '' && mode !== '';
@@ -523,8 +527,14 @@ function RuntimePane() {
         keeps the runtime it was frozen with; answering a waiting run continues it on the
         agent&apos;s current core.
       </p>
-      {error && (
-        <div style={{ color: '#f87171', fontSize: 12, marginBottom: 8 }}>{error}</div>
+      {applyError != null && (
+        <div style={{ marginBottom: 8 }}>
+          <ErrorNotice
+            presented={presentError(applyError, 'The fleet runtime was not applied.')}
+            operatorSession
+            actionLabel="Applying the fleet runtime"
+          />
+        </div>
       )}
       <button
         type="button"

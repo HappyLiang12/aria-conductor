@@ -29,11 +29,13 @@ export interface ApplyRuntimeResult {
 }
 
 /** Converges every non-retired agent onto one core/mode pair (the only
- *  action that may cross the fleet's uniform runtime). */
+ *  action that may cross the fleet's uniform runtime). Operator-only
+ *  server-side, like every other gated mutation: apply the session first. */
 export async function applyFleetRuntime(
   adkProvider: string,
   executionMode: 'HOST' | 'SANDBOX',
 ): Promise<ApplyRuntimeResult> {
+  applyOperatorHeaders();
   const { data } = await client.put<ApplyRuntimeResult>('/api/v1/agents/runtime', {
     adkProvider,
     executionMode,

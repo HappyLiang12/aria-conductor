@@ -237,6 +237,57 @@ describe('KanbanBoard quick-clear (H2)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Task 30 / Item 1: the same gated `executeHousekeeping`, reached from the
+// board's quick-clear. A refusal must point at the operator session.
+// ---------------------------------------------------------------------------
+describe('KanbanBoard quick-clear refusals (Task 30)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [
+      { id: 'k-d', title: 'done', priority: 'MEDIUM', status: 'DONE', linkedAgentId: null, assignee: null, labels: null },
+    ];
+  });
+
+  async function clearFinished() {
+    const { executeHousekeeping } = await import('../../api/housekeeping');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const utils = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    act(() => { utils.getByRole('button', { name: /clear done & cancelled \(1\)/i }).click(); });
+    act(() => { utils.getByRole('button', { name: /approve|confirm/i }).click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return executeHousekeeping as ReturnType<typeof vi.fn>;
+  }
+
+  it.each([401, 403])('renders the operator-session notice for a %i', async (status) => {
+    const { executeHousekeeping } = await import('../../api/housekeeping');
+    (executeHousekeeping as ReturnType<typeof vi.fn>).mockRejectedValue({
+      response: { status, data: { message: 'CLEAR_RAW_SERVER_TEXT' } },
+    });
+
+    await clearFinished();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/clearing finished kanban cards is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText(/CLEAR_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error path for a 500', async () => {
+    const { executeHousekeeping } = await import('../../api/housekeeping');
+    (executeHousekeeping as ReturnType<typeof vi.fn>).mockRejectedValue({
+      response: { status: 500, data: { message: 'kanban purge unavailable' } },
+    });
+
+    await clearFinished();
+
+    expect(await screen.findByText('kanban purge unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
 describe('KanbanBoard live move feedback (S6)', () => {
   beforeEach(() => {
     mockCtx = { lastMessage: null, isConnected: false };

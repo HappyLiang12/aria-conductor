@@ -1255,9 +1255,13 @@ describe('AriaPanel shared WebSocket', () => {
 });
 
 describe('AriaPanel live tool results', () => {
-  // tool-event-contract.md: the panel used to dispatch every live tool result as
-  // `ok: true`, so a denied or failed tool rendered green (✓) in the strip — a
-  // false claim about the one governance-relevant field of the live strip.
+  // The `tool_result` frame is produced by
+  // `act-execution/.../telemetry/CoreEventTelemetry.java` `streamSignal`
+  // (`:160-190`, which maps `tool.result` → `tool_result` and always sends `ok`)
+  // and consumed by `src/api/aria.ts` (`onToolResult`). The panel used to
+  // dispatch every live result as `ok: true`, so a denied or failed tool
+  // rendered green (✓) in the strip — a false claim about the one
+  // governance-relevant field of the live strip.
   it('renders a failed live tool result as an error', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');

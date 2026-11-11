@@ -259,7 +259,7 @@ describe('AriaProposalCard', () => {
           },
         },
       })
-      .mockResolvedValueOnce({ ok: true });
+      .mockResolvedValueOnce(proposalRow({ status: 'RETIRED' }));
     const onSettled = vi.fn();
     render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
 

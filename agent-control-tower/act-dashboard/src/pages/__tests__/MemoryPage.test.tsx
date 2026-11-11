@@ -482,6 +482,59 @@ describe('MemoryPage — entity detail and retirement', () => {
       expect(patch).toHaveBeenCalledWith('/api/v1/memory/entities/e1', { retire: true }),
     );
   });
+
+  // Task 30 / Item 2: a PENDING detail was opened with the operator review read.
+  // The status used to be derived from the CURRENT tab's list, so switching tabs
+  // dropped `status=PENDING`, the detail re-read fail-closed and the open panel
+  // said "Failed to load this entity." The review status is now captured at
+  // selection time, so the open detail keeps the read it was opened with.
+  it('keeps an open PENDING detail across a tab change', async () => {
+    routeGets({
+      entities: (status) =>
+        status === 'PENDING'
+          ? [entity({ id: 'p9', status: 'PENDING', origin: 'EXTRACTION', displayName: 'Newfriend' })]
+          : [entity()],
+      detail: (status: string | undefined) =>
+        status === 'PENDING'
+          ? detail({
+              entity: entity({
+                id: 'p9',
+                status: 'PENDING',
+                origin: 'EXTRACTION',
+                displayName: 'Newfriend',
+              }),
+              facts: [
+                fact({
+                  id: 'f9',
+                  entityId: 'p9',
+                  factKey: 'proposed_nickname',
+                  valueText: 'Newf',
+                  status: 'PENDING',
+                }),
+              ],
+            })
+          : detail(),
+    });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pending entities' }));
+    expect(await screen.findByText('Newfriend')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('proposed_nickname')).toBeInTheDocument();
+
+    // The PENDING row is absent from the Active list the operator now sees.
+    fireEvent.click(screen.getByRole('button', { name: 'Active entities' }));
+    expect(await screen.findByText('Happy')).toBeInTheDocument();
+
+    // The open detail survives: entity, proposed fact and no fail-closed panel.
+    expect(screen.getByText('proposed_nickname')).toBeInTheDocument();
+    expect(screen.getByText('Newf')).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load this entity/)).not.toBeInTheDocument();
+    // The read was never re-issued without the review status.
+    expect(get.mock.calls.filter(([url]) => url === '/api/v1/memory/entities/p9')).toEqual([
+      ['/api/v1/memory/entities/p9', { params: { status: 'PENDING' } }],
+    ]);
+  });
 });
 
 // Task 30 / Item 1: the memory mutations resolve operator authority too, so a

@@ -80,7 +80,14 @@ export function MemoryPage() {
 
   const [entityStatus, setEntityStatus] = useState<MemoryEntityStatus>('ACTIVE');
   const [proposalStatus, setProposalStatus] = useState<MemoryFactStatus>('PENDING');
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  // The selected id AND the review status it was opened with. Deriving the status
+  // from the current tab's list meant a tab change dropped `status=PENDING`, the
+  // detail re-read fail-closed and the open panel said "Failed to load this
+  // entity". The read belongs to the selection, not to the tab showing now.
+  const [selection, setSelection] = useState<{
+    id: string;
+    reviewStatus: 'PENDING' | undefined;
+  } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<CreateMemoryEntityRequest>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
@@ -109,13 +116,11 @@ export function MemoryPage() {
 
   // A PENDING row is review material: it opens through the operator review read,
   // which asks for `status=PENDING` explicitly. An ACTIVE row keeps the
-  // fail-closed default read (no params at all). The status is part of the query
-  // key so a cached ACTIVE-shaped read can never answer a PENDING selection of
-  // the same id, or vice versa.
-  const selectedReviewStatus =
-    entities.find((row) => row.id === selectedEntityId)?.status === 'PENDING'
-      ? ('PENDING' as const)
-      : undefined;
+  // fail-closed default read (no params at all). Both the id and the status are
+  // part of the query key, so a cached ACTIVE-shaped read can never answer a
+  // PENDING selection of the same id, or vice versa.
+  const selectedEntityId = selection?.id ?? null;
+  const selectedReviewStatus = selection?.reviewStatus;
 
   const detailQuery = useQuery({
     queryKey: ['memory-entity', selectedEntityId, selectedReviewStatus ?? 'DEFAULT'],
@@ -154,7 +159,7 @@ export function MemoryPage() {
     mutationFn: (id: string) => patchMemoryEntity(id, { retire: true }),
     onSuccess: (changed) => {
       invalidateEntities();
-      if (selectedEntityId === changed.id) setSelectedEntityId(null);
+      if (selectedEntityId === changed.id) setSelection(null);
       setRetireTarget(null);
       setRefusal(null);
       setToast('Entity retired');
@@ -299,8 +304,9 @@ export function MemoryPage() {
               aria-label={`${page.label} entities`}
               aria-pressed={entityStatus === page.status}
               onClick={() => {
+                // The selection (and the read it opened with) outlives the tab:
+                // only the list under it changes.
                 setEntityStatus(page.status);
-                setSelectedEntityId(null);
               }}
             >
               {page.label}
@@ -358,7 +364,12 @@ export function MemoryPage() {
                       {(row.status === 'ACTIVE' || row.status === 'PENDING') && (
                         <button
                           className="btn btn-sm"
-                          onClick={() => setSelectedEntityId(row.id)}
+                          onClick={() =>
+                            setSelection({
+                              id: row.id,
+                              reviewStatus: row.status === 'PENDING' ? 'PENDING' : undefined,
+                            })
+                          }
                         >
                           Open
                         </button>
@@ -462,7 +473,7 @@ export function MemoryPage() {
             Entity Detail <span className="accent">/ {detail?.entity.displayName ?? selectedEntityId}</span>
             <button
               className="btn btn-sm"
-              onClick={() => setSelectedEntityId(null)}
+              onClick={() => setSelection(null)}
             >
               Close
             </button>

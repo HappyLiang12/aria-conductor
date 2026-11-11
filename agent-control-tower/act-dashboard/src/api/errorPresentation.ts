@@ -1,4 +1,4 @@
-import { apiErrorMessage } from './operatorSession';
+import { apiErrorMessage, isOperatorRejection } from './operatorSession';
 
 export type ConfigureTab = 'llm' | 'runtime' | 'config';
 
@@ -22,6 +22,13 @@ export interface PresentedError {
   action?: ErrorAction;
   /** The backend's stable failure identity, when it served one. */
   code?: string;
+  /**
+   * The route refused the call for want of the local operator (401/403). A
+   * caller whose action is operator-only renders the operator-session notice
+   * for this instead of `text`, which on a refusal points at nothing. Set only
+   * when the server refused, so every other presentation shape is unchanged.
+   */
+  operatorRejected?: true;
 }
 
 const LLM_ACTION: ErrorAction = { tab: 'llm', label: 'Open Configure → LLM Providers' };
@@ -113,5 +120,26 @@ export function presentError(error: unknown, fallback: string): PresentedError {
     text,
     action: errorActionForSurface(surface) ?? errorActionFor(text),
     code,
+    // Absent rather than false: a presented error keeps its exact previous shape
+    // unless the server actually refused, so no consumer reads a new key.
+    ...(isOperatorRejection(error) ? { operatorRejected: true as const } : {}),
   };
+}
+
+/**
+ * What an operator reads when an operator-only route refused them (401/403).
+ *
+ * The resolver's documented deployment is single-operator localhost, so a
+ * loopback request is the operator automatically; a remote operator is refused
+ * by design and there is no token entry in the dashboard. Saying both — and
+ * saying it once, for every gated mutation — is the point: the alternative was
+ * each page echoing a transport message that points at no fix.
+ */
+export function operatorSessionMessage(actionLabel: string): string {
+  return (
+    `${actionLabel} is operator-only, so the server refused it. `
+    + 'On this machine, loopback requests are the operator automatically — reload the page and retry. '
+    + 'From a remote machine, the operator who runs the backend must grant access with the server\'s '
+    + 'operator credential; the dashboard has no remote token entry.'
+  );
 }

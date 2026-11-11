@@ -118,3 +118,53 @@ describe('HousekeepingPanel (H1)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 30 / Item 1: `executeHousekeeping` is gated server-side now. A refusal
+// must point at the operator session, not echo the transport/server text.
+// ---------------------------------------------------------------------------
+describe('HousekeepingPanel execute refusals (Task 30)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+    scan.mockResolvedValue(SCAN_RESULT);
+  });
+
+  async function runCleanup() {
+    ui();
+    fireEvent.click(screen.getByRole('button', { name: /scan leftovers/i }));
+    await waitFor(() => expect(screen.getByText('2')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /execute cleanup/i }));
+    fireEvent.click(screen.getByRole('button', { name: /approve|confirm/i }));
+  }
+
+  it.each([401, 403])('renders the operator-session notice for a %i', async (status) => {
+    exec.mockRejectedValue({ response: { status, data: { message: 'CLEANUP_RAW_SERVER_TEXT' } } });
+
+    await runCleanup();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/running housekeeping is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText(/CLEANUP_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cleanup failed/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error path for a 500', async () => {
+    exec.mockRejectedValue({ response: { status: 500, data: { message: 'cleanup store unavailable' } } });
+
+    await runCleanup();
+
+    expect(await screen.findByText('cleanup store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  it('still reports the per-category receipt on success', async () => {
+    exec.mockResolvedValue({ categories: [{ key: 'runs', cleared: 2, failed: 0, skipped: 0 }], executedAt: 't' });
+
+    await runCleanup();
+
+    expect(await screen.findByText(/runs: cleared=2 failed=0 skipped=0/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});

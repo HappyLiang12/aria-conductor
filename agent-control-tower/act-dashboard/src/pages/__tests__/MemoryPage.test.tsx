@@ -483,3 +483,37 @@ describe('MemoryPage — entity detail and retirement', () => {
     );
   });
 });
+
+// Task 30 / Item 1: the memory mutations resolve operator authority too, so a
+// refusal reads as the operator-session notice, never as a retry line.
+describe('MemoryPage — mutation refusals (Task 30)', () => {
+  it('renders the operator-session notice for a 403 create', async () => {
+    routeGets({});
+    post.mockRejectedValue({ response: { status: 403, data: { message: 'CREATE_RAW_SERVER_TEXT' } } });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:x' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/creating a memory entity is operator-only/i);
+    expect(screen.queryByText(/CREATE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/entity was not created — retry/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary path for a 500 create', async () => {
+    routeGets({});
+    post.mockRejectedValue({ response: { status: 500, data: { message: 'memory store unavailable' } } });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:x' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+
+    expect(await screen.findByText('memory store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});

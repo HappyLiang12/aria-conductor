@@ -85,6 +85,9 @@ export function MemoryPage() {
   const [form, setForm] = useState<CreateMemoryEntityRequest>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // A refused memory mutation is an authority problem: it renders the
+  // operator-session notice instead of a retry line or a toast.
+  const [refusal, setRefusal] = useState<{ error: unknown; action: string } | null>(null);
   const [retireTarget, setRetireTarget] = useState<MemoryEntityView | null>(null);
   const [retireFactTarget, setRetireFactTarget] = useState<MemoryFactView | null>(null);
   const [pendingDecision, setPendingDecision] = useState<{
@@ -134,10 +137,17 @@ export function MemoryPage() {
       setShowCreate(false);
       setForm(EMPTY_FORM);
       setFormError(null);
+      setRefusal(null);
       setToast('Entity created');
     },
-    onError: (err: unknown) =>
-      setFormError(apiErrorMessage(err, 'The entity was not created — retry.')),
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setFormError(null);
+        setRefusal({ error: err, action: 'Creating a memory entity' });
+        return;
+      }
+      setFormError(apiErrorMessage(err, 'The entity was not created — retry.'));
+    },
   });
 
   const retireEntityMut = useMutation({
@@ -146,9 +156,17 @@ export function MemoryPage() {
       invalidateEntities();
       if (selectedEntityId === changed.id) setSelectedEntityId(null);
       setRetireTarget(null);
+      setRefusal(null);
       setToast('Entity retired');
     },
-    onError: (err: unknown) => setToast(apiErrorMessage(err, 'Retire failed — nothing changed.')),
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setRetireTarget(null);
+        setRefusal({ error: err, action: 'Retiring a memory entity' });
+        return;
+      }
+      setToast(apiErrorMessage(err, 'Retire failed — nothing changed.'));
+    },
   });
 
   const retireFactMut = useMutation({
@@ -157,9 +175,17 @@ export function MemoryPage() {
       queryClient.invalidateQueries({ queryKey: ['memory-entity'] });
       invalidateEntities();
       setRetireFactTarget(null);
+      setRefusal(null);
       setToast('Fact retired');
     },
-    onError: (err: unknown) => setToast(apiErrorMessage(err, 'Retire failed — nothing changed.')),
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setRetireFactTarget(null);
+        setRefusal({ error: err, action: 'Retiring a memory fact' });
+        return;
+      }
+      setToast(apiErrorMessage(err, 'Retire failed — nothing changed.'));
+    },
   });
 
   const decideMut = useMutation({
@@ -174,7 +200,6 @@ export function MemoryPage() {
     // The dialog stays open on failure so the operator can retry or cancel.
     onError: () => undefined,
   });
-
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 2600);
@@ -234,6 +259,15 @@ export function MemoryPage() {
       </div>
 
       {refused && <OperatorSessionNotice />}
+      {refusal != null && (
+        <div className="memory-notice">
+          <ErrorNotice
+            presented={presentError(refusal.error, 'The memory change was refused.')}
+            operatorSession
+            actionLabel={refusal.action}
+          />
+        </div>
+      )}
       {!refused && entitiesQuery.error && (
         <div className="memory-notice">
           <ErrorNotice
@@ -413,9 +447,12 @@ export function MemoryPage() {
           </div>
         ))}
         {decideMut.error && (
-          <ErrorNotice presented={presentError(decideMut.error, 'The proposal was not decided.')} />
+          <ErrorNotice
+            presented={presentError(decideMut.error, 'The proposal was not decided.')}
+            operatorSession
+            actionLabel="Deciding a memory proposal"
+          />
         )}
-        {isOperatorRejection(decideMut.error) && <OperatorSessionNotice />}
       </section>
 
       {/* ---------- Entity detail ---------- */}

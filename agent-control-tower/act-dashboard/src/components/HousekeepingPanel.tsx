@@ -6,7 +6,6 @@ import {
   type HousekeepingScanResult,
 } from '../api/housekeeping';
 import { useWebSocketContext } from './Layout';
-import { apiErrorMessage } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 
@@ -43,6 +42,9 @@ export default function HousekeepingPanel() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<string>('');
   const [receipt, setReceipt] = useState<string>('');
+  // `executeHousekeeping` is operator-only server-side: a refusal has to read as
+  // the operator-session notice, not as a transport message in the receipt line.
+  const [executeError, setExecuteError] = useState<unknown | null>(null);
 
   const scanQuery = useQuery<HousekeepingScanResult>({
     queryKey: ['housekeeping', 'scan', includeStuck],
@@ -76,6 +78,7 @@ export default function HousekeepingPanel() {
 
   const runExecute = async () => {
     setConfirmOpen(false);
+    setExecuteError(null);
     try {
       const result = await executeHousekeeping({
         categories: selected,
@@ -88,7 +91,10 @@ export default function HousekeepingPanel() {
           .join(' · '),
       );
     } catch (e) {
-      setReceipt('Cleanup failed: ' + apiErrorMessage(e, (e as Error)?.message ?? 'unknown error'));
+      // Nothing was confirmed as cleared, so the old receipt would be a claim
+      // this call cannot make.
+      setReceipt('');
+      setExecuteError(e);
     }
   };
 
@@ -152,6 +158,16 @@ export default function HousekeepingPanel() {
 
       {progress && <div style={{ marginTop: 8, fontFamily: 'var(--mono, monospace)', fontSize: 11 }}>{progress}</div>}
       {receipt && <div style={{ marginTop: 8, fontFamily: 'var(--mono, monospace)', fontSize: 11 }}>🧹 {receipt}</div>}
+      {executeError != null && (
+        <ErrorNotice
+          presented={presentError(
+            executeError,
+            'The cleanup batch failed — nothing was confirmed as cleared.',
+          )}
+          operatorSession
+          actionLabel="Running housekeeping"
+        />
+      )}
 
       {dryRunOpen && (
         <div className="modal-overlay" onClick={() => setDryRunOpen(false)}>

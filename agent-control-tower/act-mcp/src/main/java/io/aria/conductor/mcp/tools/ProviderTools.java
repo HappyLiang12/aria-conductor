@@ -119,12 +119,17 @@ public class ProviderTools implements McpTool {
             ToolResponses.requireOperator(actor, "changing an LLM provider",
                     "Edit it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(UPDATE_LLM_PROVIDER, actor);
+            // The description promises "Omitted (null/blank) arguments keep their current value", and
+            // that promise is the contract the model reads. LlmProviderService.update applies every
+            // non-null field, so a "" sent to mean "keep" used to blank the provider's name, base URL,
+            // API key or default model — configuration loss driven by our own false promise. Every
+            // optional string field is therefore blank-normalized here, exactly like type (T43).
             LlmProviderRequest request = LlmProviderRequest.builder()
-                    .name(name)
+                    .name(blankToNull(name))
                     .type(type == null || type.isBlank() ? null : parseType(type))
-                    .baseUrl(baseUrl)
-                    .apiKey(apiKey)
-                    .defaultModel(defaultModel)
+                    .baseUrl(blankToNull(baseUrl))
+                    .apiKey(blankToNull(apiKey))
+                    .defaultModel(blankToNull(defaultModel))
                     .maxTokens(maxTokens)
                     .build();
             LlmProviderResponse updated = llmProviderService.update(id, request);
@@ -195,6 +200,15 @@ public class ProviderTools implements McpTool {
         } catch (Exception e) {
             return ToolResponses.error("PROVIDER_TEST_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }
+    }
+
+    /**
+     * An omitted and a blank optional argument mean the same thing on this tool: keep the current
+     * value. {@code LlmProviderService.update} applies every non-null field, so a blank must never
+     * reach it as a value (T43).
+     */
+    private static String blankToNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw;
     }
 
     private static LlmProviderType parseType(String raw) {

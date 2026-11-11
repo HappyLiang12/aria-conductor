@@ -270,10 +270,14 @@ class SystemContributorsTest {
     }
 
     /**
-     * The real catalog shape (59 descriptors: 26 auto-approved reads, one
-     * non-auto-approved read, 24 writes, 8 operator-only) must fit the 3,000
-     * character tools cap without a cut, because each visible tool is one
-     * compact {@code - name (POLICY)} line and the order is the name order.
+     * The catalog shape this fixture models: 59 descriptors (26 auto-approved
+     * reads, one non-auto-approved read, 24 writes, 8 operator-only), the
+     * pre-2026-11-11 surface before the five memory reads and three memory
+     * writes joined the real catalog (now 67 descriptors: 31 auto-approved
+     * reads, one non-auto-approved read, 25 writes, 10 operator-only). The
+     * fixture must fit the 3,000 character tools cap without a cut, because
+     * each visible tool is one compact {@code - name (POLICY)} line and the
+     * order is the name order.
      */
     @Test
     void theToolsSectionRendersTheRealCatalogCompactSortedAndUnderTheCap() {

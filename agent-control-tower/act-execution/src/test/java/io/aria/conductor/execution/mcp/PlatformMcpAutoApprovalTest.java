@@ -42,7 +42,10 @@ class PlatformMcpAutoApprovalTest {
             "cancel_run", "housekeeping_scan", "housekeeping_execute", "init_dod",
             "submit_dod_review", "instantiate_workflow_template", "toggle_skill", "assign_skill",
             "unassign_skill", "mark_notification_read", "mark_all_notifications_read",
-            "create_scheduled_job", "cancel_scheduled_job");
+            "create_scheduled_job", "cancel_scheduled_job",
+            // The 2026-11-11 amendment auto-approved only the five memory reads; the
+            // three memory writes keep the per-call operator approval.
+            "remember_fact", "forget_fact", "decide_memory_proposal");
 
     private static PlatformMcpAutoApproval policy(McpProperties mcp) {
         return new PlatformMcpAutoApproval(mcp);

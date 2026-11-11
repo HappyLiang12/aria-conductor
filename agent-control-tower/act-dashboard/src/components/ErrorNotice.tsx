@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import {
   openConfigure,
+  operatorSessionMessage,
   presentRunError,
   type PresentedError,
 } from '../api/errorPresentation';
@@ -22,12 +23,28 @@ function PathActionButton({ action }: { action: { path: string; label: string } 
 /**
  * One error surface for the dashboard: the backend's own text plus, when the
  * failure names a configuration surface, the button that opens it.
+ *
+ * `operatorSession` is for callers whose action is operator-only. A 401/403 then
+ * renders the operator-session notice — the same `operator-session-notice` idiom
+ * MemoryPage and AriaProposalCard use — instead of the server's text, because on
+ * a refusal the server text points at no fix. Any other failure keeps the
+ * ordinary path: a 500 is a fault, not an authority problem.
  */
-export function ErrorNotice({ presented, className }: {
+export function ErrorNotice({ presented, className, operatorSession, actionLabel }: {
   presented: PresentedError;
   className?: string;
+  operatorSession?: boolean;
+  /** The refused action, named in the notice's first sentence. */
+  actionLabel?: string;
 }) {
   const action = presented.action;
+  if (operatorSession && presented.operatorRejected) {
+    return (
+      <div className="ask-ctx" data-testid="operator-session-notice">
+        {operatorSessionMessage(actionLabel ?? 'This action')}
+      </div>
+    );
+  }
   return (
     <div
       className={className ? `error-notice ${className}` : 'error-notice'}

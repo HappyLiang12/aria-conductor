@@ -140,6 +140,50 @@ describe('ConfigureModal runtime tab', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task 30 / Item 1: PUT /api/v1/agents/runtime is gated server-side now (the
+// fleet-runtime write). A refusal has to say who may apply it and what to do.
+// ---------------------------------------------------------------------------
+describe('ConfigureModal runtime apply refusals (Task 30)', () => {
+  beforeEach(() => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' })]);
+  });
+
+  async function applyRuntime() {
+    await renderOpenedModal();
+    await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
+    await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'HOST');
+    await userEvent.click(screen.getByRole('button', { name: /Apply to all agents/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Confirm$/ }));
+  }
+
+  it.each([401, 403])('renders the operator-session notice for a %i', async (status) => {
+    mockedApply.mockRejectedValue({
+      response: { status, data: { message: 'RUNTIME_RAW_SERVER_TEXT' } },
+    });
+
+    await applyRuntime();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/applying the fleet runtime is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    // The old pane printed `Apply failed: <axios message>`; neither half may survive.
+    expect(screen.queryByText(/Apply failed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/RUNTIME_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error path for a 500', async () => {
+    mockedApply.mockRejectedValue({
+      response: { status: 500, data: { message: 'runtime store unavailable' } },
+    });
+
+    await applyRuntime();
+
+    expect(await screen.findByText('runtime store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 12: Configure states what the build can actually enforce. Skills are a
 // read-only catalog (no invented permission model); gates stay visible as an
 // inert reference; Runtime / LLM / System Config keep their real mutations.

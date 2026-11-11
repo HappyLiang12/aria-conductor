@@ -4,6 +4,7 @@ import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentSkills,
 import { getAgentTelemetry } from '../api/dashboard';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
 import { presentError, type PresentedError } from '../api/errorPresentation';
+import { isOperatorRejection, apiErrorMessage } from '../api/operatorSession';
 import type {
   Agent,
   AgentCore,
@@ -163,6 +164,9 @@ export default function CrewPage() {
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [retireBusy, setRetireBusy] = useState(false);
   const [retireNote, setRetireNote] = useState<string | null>(null);
+  // retireAgent is operator-only server-side; a refusal is rendered as the
+  // operator-session notice (what to do), never as the transport message.
+  const [retireRefusal, setRetireRefusal] = useState<unknown | null>(null);
   // Bulk retire is destructive, so it is gated behind a confirmation: the
   // Retire selected… control only opens this flag, never the retire itself.
   const [confirmingRetire, setConfirmingRetire] = useState(false);
@@ -363,18 +367,34 @@ export default function CrewPage() {
   const retireSelected = async () => {
     setRetireBusy(true);
     setRetireNote(null);
+    setRetireRefusal(null);
     const failures: string[] = [];
+    let refusal: unknown | null = null;
     for (const id of [...selectedAgents]) {
       try {
         await retireAgent(id);
       } catch (e) {
-        failures.push(`${id.slice(0, 8)}: ${(e as Error)?.message ?? 'failed'}`);
+        // A refused call is an authority problem, not a failed agent: it gets the
+        // operator-session notice, and the transport text stays out of the note.
+        if (isOperatorRejection(e)) {
+          refusal = refusal ?? e;
+        } else {
+          // Not a refusal: the backend's own text, never the bare transport message.
+          failures.push(
+            `${id.slice(0, 8)}: ${apiErrorMessage(e, (e as Error)?.message ?? 'failed')}`,
+          );
+        }
       }
     }
     setSelectedAgents(new Set());
     setRetireBusy(false);
+    setRetireRefusal(refusal);
     setRetireNote(
-      failures.length ? `⚠ Some retires failed — ${failures.join('; ')}` : '🧹 Selected agents retired.',
+      failures.length
+        ? `⚠ Some retires failed — ${failures.join('; ')}`
+        : refusal
+          ? null
+          : '🧹 Selected agents retired.',
     );
     queryClient.invalidateQueries({ queryKey: ['agents'] });
   };
@@ -550,6 +570,15 @@ export default function CrewPage() {
             </div>
           )}
           {retireNote && <div style={{ marginTop: 8, fontSize: 11.5 }}>{retireNote}</div>}
+          {retireRefusal != null && (
+            <div style={{ marginTop: 8 }}>
+              <ErrorNotice
+                presented={presentError(retireRefusal, 'The retire was refused.')}
+                operatorSession
+                actionLabel="Retiring an agent"
+              />
+            </div>
+          )}
         </section>
 
         {/* Catalog */}

@@ -482,4 +482,91 @@ describe('MemoryPage — entity detail and retirement', () => {
       expect(patch).toHaveBeenCalledWith('/api/v1/memory/entities/e1', { retire: true }),
     );
   });
+
+  // Task 30 / Item 2: a PENDING detail was opened with the operator review read.
+  // The status used to be derived from the CURRENT tab's list, so switching tabs
+  // dropped `status=PENDING`, the detail re-read fail-closed and the open panel
+  // said "Failed to load this entity." The review status is now captured at
+  // selection time, so the open detail keeps the read it was opened with.
+  it('keeps an open PENDING detail across a tab change', async () => {
+    routeGets({
+      entities: (status) =>
+        status === 'PENDING'
+          ? [entity({ id: 'p9', status: 'PENDING', origin: 'EXTRACTION', displayName: 'Newfriend' })]
+          : [entity()],
+      detail: (status: string | undefined) =>
+        status === 'PENDING'
+          ? detail({
+              entity: entity({
+                id: 'p9',
+                status: 'PENDING',
+                origin: 'EXTRACTION',
+                displayName: 'Newfriend',
+              }),
+              facts: [
+                fact({
+                  id: 'f9',
+                  entityId: 'p9',
+                  factKey: 'proposed_nickname',
+                  valueText: 'Newf',
+                  status: 'PENDING',
+                }),
+              ],
+            })
+          : detail(),
+    });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pending entities' }));
+    expect(await screen.findByText('Newfriend')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('proposed_nickname')).toBeInTheDocument();
+
+    // The PENDING row is absent from the Active list the operator now sees.
+    fireEvent.click(screen.getByRole('button', { name: 'Active entities' }));
+    expect(await screen.findByText('Happy')).toBeInTheDocument();
+
+    // The open detail survives: entity, proposed fact and no fail-closed panel.
+    expect(screen.getByText('proposed_nickname')).toBeInTheDocument();
+    expect(screen.getByText('Newf')).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load this entity/)).not.toBeInTheDocument();
+    // The read was never re-issued without the review status.
+    expect(get.mock.calls.filter(([url]) => url === '/api/v1/memory/entities/p9')).toEqual([
+      ['/api/v1/memory/entities/p9', { params: { status: 'PENDING' } }],
+    ]);
+  });
+});
+
+// Task 30 / Item 1: the memory mutations resolve operator authority too, so a
+// refusal reads as the operator-session notice, never as a retry line.
+describe('MemoryPage — mutation refusals (Task 30)', () => {
+  it('renders the operator-session notice for a 403 create', async () => {
+    routeGets({});
+    post.mockRejectedValue({ response: { status: 403, data: { message: 'CREATE_RAW_SERVER_TEXT' } } });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:x' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/creating a memory entity is operator-only/i);
+    expect(screen.queryByText(/CREATE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/entity was not created — retry/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary path for a 500 create', async () => {
+    routeGets({});
+    post.mockRejectedValue({ response: { status: 500, data: { message: 'memory store unavailable' } } });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:x' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+
+    expect(await screen.findByText('memory store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
 });

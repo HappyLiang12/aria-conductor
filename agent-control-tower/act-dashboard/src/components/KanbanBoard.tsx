@@ -131,6 +131,9 @@ export default function KanbanBoard() {
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  // The quick-clear goes through the operator-gated housekeeping batch, so its
+  // failure is an API error, not a board message: a refusal must name the fix.
+  const [clearError, setClearError] = useState<unknown | null>(null);
   const [createError, setCreateError] = useState<{
     presented: PresentedError;
     details?: KanbanRejection['details'];
@@ -414,6 +417,14 @@ export default function KanbanBoard() {
         <div className="kanban-form-error" role="status" style={{ margin: '0 0 8px 4px' }}>
           {error}
         </div>
+      )}
+
+      {clearError != null && (
+        <ErrorNotice
+          presented={presentError(clearError, 'Clearing the finished cards failed.')}
+          operatorSession
+          actionLabel="Clearing finished kanban cards"
+        />
       )}
 
       {phase === 'loading' && <StateNotice kind="loading" title="Loading board…" />}
@@ -873,12 +884,14 @@ export default function KanbanBoard() {
                 className="btn danger"
                 onClick={async () => {
                   setClearConfirmOpen(false);
+                  setClearError(null);
                   try {
                     await executeHousekeeping({ categories: ['kanban'], confirm: true });
                   } catch (err) {
-                    // Single-flight conflict or bad request: say what the backend said,
-                    // then refresh anyway so the operator sees the current board state.
-                    setError(apiErrorMessage(err, 'Clearing the finished cards failed.'));
+                    // Single-flight conflict, bad request, or an operator refusal:
+                    // say what happened — and, on a refusal, what to do about it —
+                    // then refresh anyway so the operator sees the current board.
+                    setClearError(err);
                   } finally {
                     queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
                   }

@@ -348,6 +348,14 @@ public class MemoryCommandService {
         }
         MemoryEntity from = requireEntity(command.fromEntityId());
         MemoryEntity to = requireEntity(command.toEntityId());
+        // Decision (T10 review Minor 6): this path deliberately does NOT refuse a PENDING from/to
+        // entity. A relation is geometry, not read authority — recall expands relations only from
+        // ACTIVE matches and re-filters every neighbour through the ACTIVE-only findByIdInAndStatus,
+        // the context contributor reads through recall, and no write is authorised by a relation.
+        // So an OPERATOR relation into a PENDING entity cannot surface it (pinned by
+        // MemoryRecallServiceTest.anActiveRelationIntoAPendingEntityNeverSurfacesItInRecall); the
+        // only residue is a dangling relation an operator detail view shows. Refusing here would
+        // change an existing write contract for no read-path gain.
         FactStatus status = origin == MemoryOrigin.EXTRACTION ? FactStatus.PENDING : FactStatus.ACTIVE;
         Instant now = Instant.now();
 

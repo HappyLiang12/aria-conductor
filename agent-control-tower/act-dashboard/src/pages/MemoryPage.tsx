@@ -28,11 +28,13 @@ import { OperatorSessionNotice } from '../components/AriaProposalCard';
  * The memory operator page (spec C1/C2, F11).
  *
  * Two reads carry the whole surface: the entity list (filtered by lifecycle
- * status, so a PENDING entity proposal is visible even though its detail read
- * 404s by design) and the proposal inbox (the same PENDING rows Aria proposes
- * in the conversation). Every mutation goes through the operator-only memory
- * route, so a 401/403 renders the operator-session notice — never an empty list,
- * which would claim there is nothing to decide.
+ * status, so a PENDING entity proposal is visible) and the proposal inbox (the
+ * same PENDING rows Aria proposes in the conversation). A PENDING row opens
+ * through the operator review read (`status=PENDING`, spec :309-313), so the
+ * operator can see the very entity they are being asked to approve. Every
+ * mutation goes through the operator-only memory route, so a 401/403 renders the
+ * operator-session notice — never an empty list, which would claim there is
+ * nothing to decide.
  *
  * Layout uses only classes that already exist in `src/styles/index.css`; this
  * lane does not own that file.
@@ -98,14 +100,25 @@ export function MemoryPage() {
     queryKey: ['memory-proposals', proposalStatus],
     queryFn: () => listMemoryProposals(proposalStatus),
   });
-  const detailQuery = useQuery({
-    queryKey: ['memory-entity', selectedEntityId],
-    queryFn: () => getMemoryEntity(selectedEntityId as string),
-    enabled: selectedEntityId !== null,
-  });
 
   const entities = useMemo(() => entitiesQuery.data ?? [], [entitiesQuery.data]);
   const proposals = useMemo(() => proposalsQuery.data ?? [], [proposalsQuery.data]);
+
+  // A PENDING row is review material: it opens through the operator review read,
+  // which asks for `status=PENDING` explicitly. An ACTIVE row keeps the
+  // fail-closed default read (no params at all). The status is part of the query
+  // key so a cached ACTIVE-shaped read can never answer a PENDING selection of
+  // the same id, or vice versa.
+  const selectedReviewStatus =
+    entities.find((row) => row.id === selectedEntityId)?.status === 'PENDING'
+      ? ('PENDING' as const)
+      : undefined;
+
+  const detailQuery = useQuery({
+    queryKey: ['memory-entity', selectedEntityId, selectedReviewStatus ?? 'DEFAULT'],
+    queryFn: () => getMemoryEntity(selectedEntityId as string, selectedReviewStatus),
+    enabled: selectedEntityId !== null,
+  });
 
   const invalidateEntities = () => {
     queryClient.invalidateQueries({ queryKey: ['memory-entities'] });
@@ -303,24 +316,27 @@ export function MemoryPage() {
                     </td>
                     <td>{row.sensitivity ?? '—'}</td>
                     <td className="action-cell">
-                      {/* A PENDING entity's detail read 404s by design (it is not
-                          memory yet): its surface is the list row plus the inbox. */}
+                      {/* A PENDING row opens through the operator review read
+                          (`status=PENDING`, spec :309-313, review finding M2):
+                          the operator cannot approve what they cannot see. Retire
+                          stays ACTIVE-only — approving is the only way out of
+                          PENDING. */}
+                      {(row.status === 'ACTIVE' || row.status === 'PENDING') && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setSelectedEntityId(row.id)}
+                        >
+                          Open
+                        </button>
+                      )}
                       {row.status === 'ACTIVE' && (
-                        <>
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => setSelectedEntityId(row.id)}
-                          >
-                            Open
-                          </button>
-                          <button
-                            className="btn btn-sm"
-                            aria-label={`Retire entity ${row.displayName}`}
-                            onClick={() => setRetireTarget(row)}
-                          >
-                            Retire
-                          </button>
-                        </>
+                        <button
+                          className="btn btn-sm"
+                          aria-label={`Retire entity ${row.displayName}`}
+                          onClick={() => setRetireTarget(row)}
+                        >
+                          Retire
+                        </button>
                       )}
                     </td>
                   </tr>

@@ -124,7 +124,7 @@ class MemoryCommandServiceTransactionTest {
     @BeforeEach
     void setUp() {
         command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
-                new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities), event -> { });
+                new MemoryProposalWriter(facts, assertions, entities), new MemoryCurrentValueSlot(entities), event -> { });
         proposals = new MemoryProposalService(facts, relations, entities, assertions,
                 new MemoryCurrentValueSlot(entities));
         ownTransaction = new TransactionTemplate(transactionManager);
@@ -461,7 +461,7 @@ class MemoryCommandServiceTransactionTest {
     void theUnknownKeyPathProducesAProposalThatOneEntityDecisionPromotesIntoRecall() {
         List<ApplicationEvent> published = new ArrayList<>();
         MemoryCommandService producer = new MemoryCommandService(entities, facts, relations, links, assertions,
-                new MemoryValueGuard(), new MemoryProposalWriter(facts, assertions),
+                new MemoryValueGuard(), new MemoryProposalWriter(facts, assertions, entities),
                 new MemoryCurrentValueSlot(entities), event -> published.add((ApplicationEvent) event));
         MemoryProposalService reviewer = new MemoryProposalService(facts, relations, entities, assertions,
                 new MemoryCurrentValueSlot(entities));
@@ -754,7 +754,7 @@ class MemoryCommandServiceTransactionTest {
                                                          MemoryAssertionRepository assertions,
                                                          ApplicationEventPublisher events) {
             return new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
-                    new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities), events);
+                    new MemoryProposalWriter(facts, assertions, entities), new MemoryCurrentValueSlot(entities), events);
         }
 
         @Bean

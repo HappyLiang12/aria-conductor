@@ -9,6 +9,7 @@ import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.servlet.MockMvc;
@@ -68,7 +69,11 @@ class FailureReasonParityTest {
         AriaConversationController controller = new AriaConversationController(
                 runRepository, trajectoryRepository, mock(AuditEventRepository.class),
                 toolCallRepository, mock(AriaService.class),
-                mock(io.aria.conductor.agent.service.RunService.class));
+                mock(io.aria.conductor.agent.service.RunService.class),
+                // T42 item 4 added the authority resolver for the destructive DELETE route. This
+                // test exercises the timeline READ, which resolves no authority, so a bare mock is
+                // enough and no stub is added: an unnecessary stub would hide a future gate on reads.
+                mock(OperatorAuthorityResolver.class));
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler(new MockEnvironment()))
                 .build();

@@ -256,10 +256,14 @@ class MemoryCommandServiceTest {
     }
 
     /**
-     * T34 Item 2 (P3). The refusal appended "and a MERGED source is not reachable from its survivor"
-     * to every non-ACTIVE, non-PENDING parent, so a RETIRED parent was told about a merge that never
-     * happened. The program's error-copy rule is that a refusal names the case it found and the
-     * operator action that resolves it. The guard itself (and therefore this copy) is the positive
+     * T34 Item 2 (P3) named the case; Task 39 Item 1 (P2) names a remedy that actually resolves it.
+     * T34's copy told the reader to "re-propose the entity and approve it", but only an EXTRACTION
+     * actor re-proposes: {@code createEntity} lands PENDING for EXTRACTION and resets an existing
+     * row to PENDING only when that row is terminal, so an operator who repeats the same
+     * kind+canonicalKey receives the RETIRED row unchanged and {@code remember_fact} returns the
+     * identical conflict — a silent loop. The refusal therefore names the real producer (a run's
+     * extraction, i.e. a worker's {@code remember_fact} for that kind and key) and the operator's
+     * own step (approve the entity). The guard itself, and therefore this copy, is the positive
      * control of {@link #anActiveFactCannotBeAttachedToANonActiveParent}.
      */
     @Test
@@ -274,7 +278,13 @@ class MemoryCommandServiceTest {
                 new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
                 .isInstanceOf(MemoryConflictException.class)
                 .hasMessageContaining("RETIRED")
-                .hasMessageContaining("re-propose")
+                .as("the remedy names the only producer that can re-propose a decided key")
+                .hasMessageContaining("a run's extraction re-proposes")
+                .hasMessageContaining("remember_fact")
+                .as("and the operator's own half of the sequence")
+                .hasMessageContaining("approves the entity")
+                .as("the advice the operator could not follow is gone")
+                .hasMessageNotContaining("re-propose the entity")
                 .hasMessageNotContaining("merged")
                 .hasMessageNotContaining("MERGED")
                 .hasMessageNotContaining("surviving");
@@ -282,7 +292,9 @@ class MemoryCommandServiceTest {
 
     /**
      * The MERGED half: the refusal names the merge, points at the surviving entity by id, and does
-     * not borrow the retire case's wording. The mirrored control of
+     * not borrow the retire case's wording. The two branches stay distinct — this one tells the
+     * reader where to write (the survivor), while the RETIRED branch names the extraction
+     * re-proposal and the approval that are the only way back. The mirrored control of
      * {@link #aRetiredParentRefusalNamesThatCaseOnly}.
      */
     @Test
@@ -300,6 +312,9 @@ class MemoryCommandServiceTest {
                 .isInstanceOf(MemoryConflictException.class)
                 .hasMessageContaining("MERGED")
                 .hasMessageContaining("surviving entity " + survivor)
+                .as("the merge case does not borrow the retire remedy")
+                .hasMessageNotContaining("extraction")
+                .hasMessageNotContaining("re-propose")
                 .hasMessageNotContaining("retired")
                 .hasMessageNotContaining("RETIRED");
     }
@@ -537,6 +552,10 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
         verify(entities, never()).save(any());
         verify(events, never()).publishEvent(any(ApplicationEvent.class));
+        // T39 Item 3 (P3): the absence above is only falsifiable while this service reaches this
+        // publisher. Measured before the control existed: replacing the publisher mock in setUp
+        // left both absence assertions green, so they could not have failed.
+        assertTheEventPublisherIsReachableFromThisService();
     }
 
     /**
@@ -566,6 +585,8 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
         verify(entities, never()).save(any());
         verify(events, never()).publishEvent(any(ApplicationEvent.class));
+        // T39 Item 3 (P3): the mirrored positive control, so this half cannot be vacuously green.
+        assertTheEventPublisherIsReachableFromThisService();
     }
 
     /**
@@ -1719,5 +1740,29 @@ class MemoryCommandServiceTest {
         ArgumentCaptor<MemoryAssertion> captor = ArgumentCaptor.forClass(MemoryAssertion.class);
         verify(assertions, times(count)).save(captor.capture());
         return captor.getAllValues();
+    }
+
+    /**
+     * T39 Item 3 (P3): the positive control for a "the refused path published nothing" assertion.
+     * An absence assertion can only fail if the service under test can reach the publisher mock it
+     * is verified against; with the publisher replaced in {@code setUp} both
+     * {@code verify(events, never())} calls stayed green, which is what made them unfalsifiable.
+     * The same service instance therefore has to produce a publish it should produce — a
+     * run-created PENDING entity is the one producer of {@link MemoryProposalCreatedEvent} — and
+     * the mock has to observe it exactly once.
+     */
+    private void assertTheEventPublisherIsReachableFromThisService() {
+        UUID runId = UUID.randomUUID();
+        when(entities.findByKindAndCanonicalKey("AGENT", "agent:event-control")).thenReturn(Optional.empty());
+        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MemoryEntity proposed = command.createEntity(
+                new CreateEntityCommand("AGENT", "agent:event-control", "Event control", null),
+                new MemoryActor(MemoryActorType.EXTRACTION, runId.toString()));
+
+        assertThat(proposed.getStatus())
+                .as("a run-created entity is PENDING, so it proposes and publishes")
+                .isEqualTo(EntityStatus.PENDING);
+        verify(events, times(1)).publishEvent(any(ApplicationEvent.class));
     }
 }

@@ -142,4 +142,20 @@ describe('ErrorNotice operator-session refusal', () => {
     // Still the one notice, still saying nothing was changed.
     expect(notice).toHaveTextContent(/nothing was changed by the refused call/i);
   });
+
+  // Task 37 / Item 5b: the ordinary error path is `role="alert"`, so a refusal
+  // that replaced it must be announced too — otherwise the one outcome the
+  // operator has to act on is the silent one. The testid, the class and the text
+  // are unchanged; only the live region is new, and it is load-bearing.
+  it('announces the operator notice as a live region', () => {
+    renderOperatorNotice({ text: 'OPERATOR_ROUTE_RAW', operatorRejected: true });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('status')).toBe(notice);
+    // The pin above would still pass if the notice had quietly become a
+    // different element: keep its identity and its copy pinned here as well.
+    expect(notice).toHaveClass('ask-ctx');
+    expect(notice).toHaveTextContent('Applying the fleet runtime is operator-only');
+  });
 });

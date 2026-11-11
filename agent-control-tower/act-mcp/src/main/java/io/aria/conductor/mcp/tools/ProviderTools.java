@@ -27,7 +27,9 @@ import java.util.UUID;
  * <p>The five mutations (create, update, delete, activate, test) are OPERATOR_ONLY in the
  * reviewed catalog: they move the credential the whole installation runs on. Each one
  * re-checks the transport-resolved actor and refuses a run-scoped worker before the
- * service is reached, naming the Providers page (spec C4/F9).
+ * service is reached, naming the surface where the operator can actually act: the
+ * "LLM Providers" tab of the Configure modal ({@code ConfigureModal.tsx}), not the
+ * read-only {@code /providers} agent-core inventory (spec C4/F9).
  */
 @Component
 @RequiredArgsConstructor
@@ -78,7 +80,8 @@ public class ProviderTools implements McpTool {
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
-            ToolResponses.requireOperator(actor, "adding an LLM provider", "Add it on the Providers page.");
+            ToolResponses.requireOperator(actor, "adding an LLM provider",
+                    "Add it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(CREATE_LLM_PROVIDER, actor);
             LlmProviderResponse created = llmProviderService.create(LlmProviderRequest.builder()
                     .name(name)
@@ -113,7 +116,8 @@ public class ProviderTools implements McpTool {
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
-            ToolResponses.requireOperator(actor, "changing an LLM provider", "Edit it on the Providers page.");
+            ToolResponses.requireOperator(actor, "changing an LLM provider",
+                    "Edit it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(UPDATE_LLM_PROVIDER, actor);
             LlmProviderRequest request = LlmProviderRequest.builder()
                     .name(name)
@@ -141,7 +145,8 @@ public class ProviderTools implements McpTool {
     public String deleteLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
-            ToolResponses.requireOperator(actor, "deleting an LLM provider", "Delete it on the Providers page.");
+            ToolResponses.requireOperator(actor, "deleting an LLM provider",
+                    "Delete it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(DELETE_LLM_PROVIDER, actor);
             llmProviderService.delete(id);
             return ToolResponses.ok(Map.of("id", id.toString(), "deleted", true));
@@ -159,7 +164,8 @@ public class ProviderTools implements McpTool {
     public String activateLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
-            ToolResponses.requireOperator(actor, "activating an LLM provider", "Activate it on the Providers page.");
+            ToolResponses.requireOperator(actor, "activating an LLM provider",
+                    "Activate it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(ACTIVATE_LLM_PROVIDER, actor);
             LlmProviderResponse activated = llmProviderService.activate(id);
             return ToolResponses.ok(activated);
@@ -177,7 +183,8 @@ public class ProviderTools implements McpTool {
     public String testLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
-            ToolResponses.requireOperator(actor, "testing an LLM provider", "Test it on the Providers page.");
+            ToolResponses.requireOperator(actor, "testing an LLM provider",
+                    "Test it on the LLM Providers tab in Configure.");
             toolPolicies.requireAuthority(TEST_LLM_PROVIDER, actor);
             boolean reachable = llmProviderService.testConnection(id);
             return ToolResponses.ok(Map.of("id", id.toString(), "reachable", reachable));

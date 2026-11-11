@@ -61,13 +61,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Proves the "one transaction per mutation" rule with a real persistence context:
- * an assertion write that fails must take the entity insert with it.
+ * Proves the "one transaction per mutation" rule with a real persistence context: an assertion
+ * write that fails must take the write it audits with it.
  * <p>
- * The command runs in its own {@code REQUIRES_NEW} transaction, because
- * {@code @DataJpaTest} otherwise wraps the test method in a transaction and a
- * rollback-only mark inside it would not actually undo the insert. The success case is
- * the positive control for the rollback case.
+ * Two shapes live here, and the difference is the point:
+ * <ul>
+ *   <li><strong>boundary tests</strong> — the rollback of one service call — run with
+ *       {@code @Transactional(propagation = NOT_SUPPORTED)} through the service <em>bean</em>, so
+ *       no ambient transaction exists and the only boundary left is the service's own
+ *       {@code @Transactional}. A {@code new MemoryCommandService(...)} inside the test's own
+ *       {@code REQUIRES_NEW} template proves nothing: it has no proxy, and the rollback it
+ *       asserts is the template's. Deleting the production annotation must red these tests.</li>
+ *   <li><strong>sequence tests</strong> — several commits observed in order — spread those commits
+ *       over the test's own committed template and assert on the rows it can then read back.</li>
+ * </ul>
+ * Every rollback test has a success case here as its positive control, so "zero rows" cannot be
+ * confused with "the write never happened".
  */
 @DataJpaTest
 @ContextConfiguration(classes = MemoryJpaSliceConfig.class)
@@ -90,13 +99,18 @@ class MemoryCommandServiceTransactionTest {
     PlatformTransactionManager transactionManager;
 
     /**
-     * The service behind its Spring transaction proxy. The @Transactional annotation on a
+     * The command service behind its Spring transaction proxy. The @Transactional annotation on a
      * {@code new MemoryCommandService(...)} is inert, so the service-owned transaction boundary can
-     * only be tested through a bean: the rejected-first-fact test below drives this instance with
-     * no ambient transaction, so a rollback there can only come from the service's own annotation.
+     * only be tested through a bean: the rejected-first-fact test and the three rollback tests below
+     * drive this instance with no ambient transaction, so a rollback there can only come from the
+     * service's own annotation.
      */
     @Autowired
     MemoryCommandService transactionalCommand;
+
+    /** The proposal service behind its proxy: {@code decideProposal}'s boundary is the one below. */
+    @Autowired
+    MemoryProposalService transactionalProposals;
 
     @MockitoBean
     MemoryAssertionRepository assertions;
@@ -115,22 +129,34 @@ class MemoryCommandServiceTransactionTest {
         ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
+    /**
+     * The entity insert and its CREATE assertion are one transaction. Driven through the service
+     * <em>bean</em> with NO ambient transaction (the class-level {@code @DataJpaTest} transaction is
+     * suspended), so the rollback can only come from {@code createEntity}'s own
+     * {@code @Transactional}: the earlier version of this test wrapped the manually constructed
+     * service in its own {@code REQUIRES_NEW} template, and deleting the production annotation left
+     * it green because the template did the rolling back.
+     * <p>
+     * {@link #aSuccessfulCommandCommitsWithItsAssertion} is the positive control: the insert is
+     * otherwise observable, so a zero count here means "rolled back", not "never written".
+     */
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void aFailedAssertionWriteRollsBackTheEntityInsert() {
-        // The success case below commits for real, and @DataJpaTest only rolls back its own
-        // test transaction, so start from a known empty table in a committed transaction.
+        // The success case below commits for real, and this test runs outside the test transaction,
+        // so start from a known empty table in a committed transaction.
         ownTransaction.executeWithoutResult(status -> entities.deleteAll());
         assertThat(entities.count()).as("baseline").isZero();
         when(assertions.save(any(MemoryAssertion.class)))
                 .thenThrow(new IllegalStateException("assertion write failed"));
 
-        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> command.createEntity(
+        assertThatThrownBy(() -> transactionalCommand.createEntity(
                 new CreateEntityCommand("PERSON", "operator", "Operator", Sensitivity.INTERNAL),
-                new MemoryActor(MemoryActorType.OPERATOR, "local"))))
+                new MemoryActor(MemoryActorType.OPERATOR, "local")))
                 .isInstanceOf(IllegalStateException.class);
 
         assertThat(entities.count())
-                .as("the entity insert and its assertion share one transaction")
+                .as("the entity insert and its assertion share one transaction, and it is the service's")
                 .isZero();
     }
 
@@ -355,11 +381,17 @@ class MemoryCommandServiceTransactionTest {
     }
 
     /**
-     * The governed forget is one transaction: when the RETIRE assertion cannot be written,
-     * the fact row must stay current rather than committing a closed row with no audit
-     * entry (the regression the inline MCP repository write could not rule out).
+     * The governed forget is one transaction: when the RETIRE assertion cannot be written, the fact
+     * row must stay current rather than committing a closed row with no audit entry (the regression
+     * the inline MCP repository write could not rule out).
+     * <p>
+     * Same shape as {@link #aFailedAssertionWriteRollsBackTheEntityInsert}: the service bean, no
+     * ambient transaction, so {@code retireFact}'s own {@code @Transactional} is the boundary under
+     * test and deleting it reds this test. The committed row is the positive control — it is read
+     * back and asserted in both fields a retirement would change.
      */
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void aFailedRetireAssertionRollsBackTheRetirement() {
         UUID entityId = UUID.randomUUID();
         UUID factId = UUID.randomUUID();
@@ -367,16 +399,16 @@ class MemoryCommandServiceTransactionTest {
         when(assertions.save(any(MemoryAssertion.class)))
                 .thenThrow(new IllegalStateException("assertion write failed"));
 
-        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status ->
-                command.retireFact(factId, new MemoryActor(MemoryActorType.OPERATOR, "local"))))
+        assertThatThrownBy(() -> transactionalCommand.retireFact(factId,
+                new MemoryActor(MemoryActorType.OPERATOR, "local")))
                 .isInstanceOf(IllegalStateException.class);
 
         ownTransaction.executeWithoutResult(status -> {
             MemoryFact after = facts.findById(factId).orElseThrow();
             assertThat(after.getStatus())
-                    .as("the retirement and its assertion share one transaction")
+                    .as("the retirement and its assertion share one transaction, owned by the service")
                     .isEqualTo(FactStatus.ACTIVE);
-            assertThat(after.getValidTo()).isNull();
+            assertThat(after.getValidTo()).as("and the row is still current").isNull();
         });
     }
 
@@ -385,8 +417,14 @@ class MemoryCommandServiceTransactionTest {
      * cannot be written, the facts already retired in the same call and the entity row must roll
      * back, or the operator is left with a half-decided proposal. The success case in the mock
      * test is the positive control.
+     * <p>
+     * Same shape as {@link #aFailedAssertionWriteRollsBackTheEntityInsert}: the proposal service
+     * bean, no ambient transaction, so {@code decideProposal}'s own {@code @Transactional} is the
+     * boundary under test and deleting it reds this test (the first fact's retirement commits and
+     * the batch is no longer whole).
      */
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void aFailedFactAssertionRollsBackTheWholeEntityRejection() {
         UUID entityId = UUID.randomUUID();
         seedEntityAndPendingFacts(entityId, "timezone", "language");
@@ -394,8 +432,8 @@ class MemoryCommandServiceTransactionTest {
                 .thenAnswer(invocation -> invocation.getArgument(0))
                 .thenThrow(new IllegalStateException("assertion write failed"));
 
-        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> proposals.decideProposal(
-                entityId, ProposalDecision.REJECT, new MemoryActor(MemoryActorType.OPERATOR, "local"))))
+        assertThatThrownBy(() -> transactionalProposals.decideProposal(
+                entityId, ProposalDecision.REJECT, new MemoryActor(MemoryActorType.OPERATOR, "local")))
                 .isInstanceOf(IllegalStateException.class);
 
         ownTransaction.executeWithoutResult(status -> {
@@ -614,9 +652,9 @@ class MemoryCommandServiceTransactionTest {
     }
 
     /**
-     * Exposes {@link MemoryCommandService} as a bean so the container's transaction proxy applies
-     * its {@code @Transactional} annotations. The service has no interface, so the default
-     * CGLIB proxy of the auto-configuration is what makes the boundary real.
+     * Exposes the two services as beans so the container's transaction proxy applies their
+     * {@code @Transactional} annotations. Neither has an interface, so the default CGLIB proxy of
+     * the auto-configuration is what makes the boundary real.
      */
     @TestConfiguration
     static class TransactionalCommandServiceConfig {
@@ -630,6 +668,15 @@ class MemoryCommandServiceTransactionTest {
                                                          ApplicationEventPublisher events) {
             return new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
                     new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities), events);
+        }
+
+        @Bean
+        MemoryProposalService transactionalProposalService(MemoryFactRepository facts,
+                                                           MemoryRelationRepository relations,
+                                                           MemoryEntityRepository entities,
+                                                           MemoryAssertionRepository assertions) {
+            return new MemoryProposalService(facts, relations, entities, assertions,
+                    new MemoryCurrentValueSlot(entities));
         }
     }
 }

@@ -26,7 +26,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -805,6 +807,31 @@ class MemoryProposalServiceTest {
                 .containsExactly(MemoryAction.SUPERSEDE, MemoryAction.UPDATE);
         assertThat(written.getAllValues()).allSatisfy(
                 assertion -> assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.RELATION));
+    }
+
+    // ---------------------------------------------------------------- transaction boundary
+
+    /**
+     * {@code decideProposal} carries {@code @Transactional}. No pin covered it anywhere in the
+     * repo: a grep for the method found only callers, and the mutation probe (delete the
+     * annotation) left every test green, because the only behavioural test of its rollback drove a
+     * {@code new MemoryProposalService(...)} inside its own {@code REQUIRES_NEW} template.
+     * <p>
+     * The behavioural pin is
+     * {@link MemoryCommandServiceTransactionTest#aFailedFactAssertionRollsBackTheWholeEntityRejection}
+     * (the service bean, no ambient transaction, so only this annotation can roll the batch back).
+     * This static half is the second one the previous wave added for {@code addFactByKey}: the
+     * annotation must exist on the declared method itself, so removing it reds a test that never
+     * touches a database.
+     */
+    @Test
+    void decideProposalCarriesItsOwnTransactionBoundary() throws Exception {
+        Method decideProposal = MemoryProposalService.class.getMethod(
+                "decideProposal", UUID.class, ProposalDecision.class, MemoryActor.class);
+
+        assertThat(decideProposal.isAnnotationPresent(Transactional.class))
+                .as("decideProposal must run in one transaction")
+                .isTrue();
     }
 
     // ---------------------------------------------------------------- fixtures

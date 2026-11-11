@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEntry } from '../../api/ariaConversations';
+import type { PanelEvent } from '../ariaPanelState';
 import { emptyState, hasUnansweredCard, panelReducer } from '../ariaPanelState';
 
 const base = emptyState('conv-1');
@@ -606,6 +607,27 @@ describe('panelReducer clarifications, proposals and queue', () => {
     s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'answered' });
     expect(hasUnansweredCard(s)).toBe(false);
     expect(s.items.find((i) => i.kind === 'clarification')).toMatchObject({ state: 'answered' });
+  });
+
+  // T52 N-3: a clarification card without a run id would hand the render path a
+  // `.runId.slice` on nothing, the same crash class T51 closed on the approval side.
+  // The event type says `string`, but a WebSocket/SSE frame is untyped at runtime,
+  // so the reducer refuses to draw the card instead of trusting the frame.
+  it('draws no clarification card when the ask carries no run id', () => {
+    const absent = {
+      type: 'waitingInput', approvalId: 'c1', runId: undefined, question: 'Which repo?',
+    } as unknown as PanelEvent;
+    const s = panelReducer(base, absent);
+    expect(s).toBe(base);
+    expect(s.items).toHaveLength(0);
+    expect(hasUnansweredCard(s)).toBe(false);
+
+    // Positive control: the same ask WITH a run id draws the card it is about.
+    const drawn = panelReducer(base, { type: 'waitingInput', approvalId: 'c1', runId: 'r1', question: 'Which repo?' });
+    expect(drawn.items.find((i) => i.kind === 'clarification')).toMatchObject({
+      runId: 'r1', question: 'Which repo?', state: 'pending',
+    });
+    expect(hasUnansweredCard(drawn)).toBe(true);
   });
 
   // T45 Item 1 changed this pin: a pending proposal used to gate the composer,

@@ -87,9 +87,10 @@ class WorkflowTemplateServiceTest {
         when(knowledgeService.toResponseWithLatestVersion(t1)).thenReturn(r1);
         when(knowledgeService.toResponseWithLatestVersion(t2)).thenReturn(r2);
 
-        List<KnowledgeItemResponse> out = service.findMatchingTemplates(intent);
+        var out = service.findMatchingTemplates(intent);
 
-        assertThat(out).containsExactly(r1, r2);
+        assertThat(out.templates()).containsExactly(r1, r2);
+        assertThat(out.totalApproved()).isEqualTo(2);
     }
 
     @Test
@@ -101,9 +102,9 @@ class WorkflowTemplateServiceTest {
         KnowledgeItemResponse deployResponse = responseFor(deploy);
         when(knowledgeService.toResponseWithLatestVersion(deploy)).thenReturn(deployResponse);
 
-        List<KnowledgeItemResponse> out = service.findMatchingTemplates("DEPLOY");
+        var out = service.findMatchingTemplates("DEPLOY");
 
-        assertThat(out).containsExactly(deployResponse);
+        assertThat(out.templates()).containsExactly(deployResponse);
         verify(knowledgeService, never()).toResponseWithLatestVersion(report);
     }
 
@@ -116,9 +117,9 @@ class WorkflowTemplateServiceTest {
         KnowledgeItemResponse matched = responseFor(withDesc);
         when(knowledgeService.toResponseWithLatestVersion(withDesc)).thenReturn(matched);
 
-        List<KnowledgeItemResponse> out = service.findMatchingTemplates("invoice");
+        var out = service.findMatchingTemplates("invoice");
 
-        assertThat(out).containsExactly(matched);
+        assertThat(out.templates()).containsExactly(matched);
     }
 
     @Test
@@ -126,7 +127,12 @@ class WorkflowTemplateServiceTest {
         when(itemRepository.findByTypeAndStatus(KnowledgeType.WORKFLOW, KnowledgeStatus.APPROVED))
                 .thenReturn(List.of(approvedWorkflowTemplate("deploy-flow", "ship")));
 
-        assertThat(service.findMatchingTemplates("nonexistent-intent")).isEmpty();
+        var out = service.findMatchingTemplates("nonexistent-intent");
+
+        // B3: an empty match still reports the approved total, so a filter artifact is
+        // distinguishable from an empty catalog. The count is the loaded list's size.
+        assertThat(out.templates()).isEmpty();
+        assertThat(out.totalApproved()).isEqualTo(1);
         verifyNoInteractions(knowledgeService);
     }
 

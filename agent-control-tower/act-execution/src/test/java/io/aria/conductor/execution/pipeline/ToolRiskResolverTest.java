@@ -173,7 +173,8 @@ class ToolRiskResolverTest {
         ToolCatalogProvider catalog = () -> List.of(
                 new ToolDescriptor("remember_fact", "d", ToolPolicy.WORKER_WRITE, false),
                 new ToolDescriptor("decide_memory_proposal", "d", ToolPolicy.OPERATOR_ONLY, false),
-                new ToolDescriptor("list_agents", "d", ToolPolicy.WORKER_READ, true));
+                new ToolDescriptor("list_agents", "d", ToolPolicy.WORKER_READ, true),
+                new ToolDescriptor("gated_tool", "d", ToolPolicy.GATED, false));
         ToolRiskResolver resolver = new ToolRiskResolver(toolRepo, catalog);
 
         assertThat(resolver.resolve("mcp__aria-conductor__remember_fact")).isEqualTo(RiskTier.WRITE_LOCAL);
@@ -181,6 +182,11 @@ class ToolRiskResolverTest {
         assertThat(resolver.resolve("mcp__aria-conductor__list_agents")).isEqualTo(RiskTier.READ);
         assertThat(resolver.policyOf("mcp__aria-conductor__remember_fact")).isEqualTo(ToolPolicy.WORKER_WRITE);
         assertThat(resolver.policyOf("mcp__aria-conductor__decide_memory_proposal")).isEqualTo(ToolPolicy.OPERATOR_ONLY);
+        // The third switch arm is dead in the shipped catalog (no GATED entry today), so a wrong
+        // mapping would otherwise never be caught.
+        assertThat(resolver.resolve("mcp__aria-conductor__gated_tool")).isEqualTo(RiskTier.PUSH);
+        // A bare catalog name (no MCP prefix) is looked up unchanged, not rejected.
+        assertThat(resolver.policyOf("gated_tool")).isEqualTo(ToolPolicy.GATED);
     }
 
     /** A configured row is the operator's explicit override, so it still outranks the catalog. */

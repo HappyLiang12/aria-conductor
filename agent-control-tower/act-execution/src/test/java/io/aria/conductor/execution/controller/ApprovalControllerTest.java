@@ -4,6 +4,7 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -119,6 +120,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .thenReturn(new PageImpl<>(List.of(acpAsk)));
         when(toolCallRepository.findAllById(List.of())).thenReturn(List.of());
         when(toolRiskResolver.resolve(tool)).thenReturn(RiskTier.PUSH);
+        when(toolRiskResolver.policyOf(tool)).thenReturn(ToolPolicy.WORKER_WRITE);
 
         mvc.perform(get("/api/v1/approvals"))
                 .andExpect(status().isOk())
@@ -128,7 +130,9 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$[0].arguments")
                         .value(org.hamcrest.Matchers.not(
                                 org.hamcrest.Matchers.containsString("ghp_abcdefghijklmnopqrstuvwxyz012345"))))
-                .andExpect(jsonPath("$[0].riskTier").value("PUSH"));
+                .andExpect(jsonPath("$[0].riskTier").value("PUSH"))
+                // ApprovalQueryService.toDetail must map the catalog policy, not just serialize it.
+                .andExpect(jsonPath("$[0].toolPolicy").value("WORKER_WRITE"));
     }
 
     @Test
@@ -460,6 +464,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(toolCallRepository.findById(toolCallId)).thenReturn(Optional.of(
                 aToolCall().withId(toolCallId).withToolName("delete_branch").withArguments("{}").build()));
         when(toolRiskResolver.resolve("delete_branch")).thenReturn(RiskTier.DESTRUCTIVE);
+        when(toolRiskResolver.policyOf("delete_branch")).thenReturn(ToolPolicy.GATED);
 
         mvc.perform(get("/api/v1/approvals/" + id))
                 .andExpect(status().isOk())
@@ -467,7 +472,10 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.runId").value(runId.toString()))
                 .andExpect(jsonPath("$.reason").value("destructive op"))
                 .andExpect(jsonPath("$.toolName").value("delete_branch"))
-                .andExpect(jsonPath("$.riskTier").value("DESTRUCTIVE"));
+                .andExpect(jsonPath("$.riskTier").value("DESTRUCTIVE"))
+                // ApprovalController.toDetail must map the catalog policy too (GATED closes the
+                // third switch arm's mapping gap).
+                .andExpect(jsonPath("$.toolPolicy").value("GATED"));
     }
 
     @Test
@@ -480,7 +488,8 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(id.toString()))
                 .andExpect(jsonPath("$.toolName").isEmpty())
-                .andExpect(jsonPath("$.riskTier").isEmpty());
+                .andExpect(jsonPath("$.riskTier").isEmpty())
+                .andExpect(jsonPath("$.toolPolicy").isEmpty());
         verifyNoInteractions(toolCallRepository, toolRiskResolver);
     }
 

@@ -23,8 +23,11 @@ import java.util.UUID;
  * validity history for an operator view.
  * <p>
  * Only ACTIVE, still-open facts are "current": a PENDING extraction proposal is review
- * material and a closed row is history (spec §11). There is no model call and no ranking
- * here; retrieval ranking lives in {@link MemoryRecallService}.
+ * material and a closed row is history (spec §11). Entities follow the same rule by default —
+ * {@link #listEntities} lists ACTIVE unless the operator asks for another status explicitly,
+ * and {@link #getEntity} refuses a PENDING entity — so an unapproved proposal never reaches a
+ * prompt or an agent-facing read. There is no model call and no ranking here; retrieval ranking
+ * lives in {@link MemoryRecallService}.
  */
 @Service
 public class MemoryQueryService {
@@ -40,9 +43,17 @@ public class MemoryQueryService {
         this.facts = facts;
     }
 
+    /**
+     * One entity by id, with the proposal guard: a PENDING entity is review material, so this
+     * detail read (REST {@code GET /entities/{id}} and MCP {@code get_memory_entity}) reports it as
+     * not found instead of returning it. The operator-facing visibility is the explicit
+     * {@code status=PENDING} list and the proposal inbox, which is where the decision is addressed —
+     * a read path that cannot prove PENDING exclusion fails closed (spec §5.5, §9).
+     */
     public MemoryEntityView getEntity(UUID entityId) {
         UUID id = requireId(entityId);
         return entities.findById(id)
+                .filter(entity -> entity.getStatus() != EntityStatus.PENDING)
                 .map(MemoryEntityView::from)
                 .orElseThrow(() -> new MemoryNotFoundException("memory entity " + id + " not found"));
     }

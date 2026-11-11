@@ -75,7 +75,151 @@ class MemoryProposalServiceTest {
 
     @BeforeEach
     void setUp() {
-        proposals = new MemoryProposalService(facts, relations, assertions, new MemoryCurrentValueSlot(entities));
+        proposals = new MemoryProposalService(facts, relations, entities, assertions,
+                new MemoryCurrentValueSlot(entities));
+    }
+
+    // ---------------------------------------------------------------- entity proposals
+
+    /**
+     * The card test in Task 12 renders an ENTITY item with the canonical key in {@code factKey}
+     * and the display name in {@code valueText}, so the view must carry both: the proposal's own
+     * id is what the decision endpoint is addressed to.
+     */
+    @Test
+    void listProposalsIncludesPendingEntitiesWithTheirKeyAndDisplayName() {
+        MemoryEntity proposal = pendingEntity(UUID.randomUUID());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(proposal));
+
+        List<MemoryProposalView> inbox = proposals.listProposals(null);
+
+        assertThat(inbox).singleElement().satisfies(view -> {
+            assertThat(view.subjectType()).isEqualTo("ENTITY");
+            assertThat(view.id()).isEqualTo(proposal.getId().toString());
+            assertThat(view.entityId()).isEqualTo(proposal.getId().toString());
+            assertThat(view.factKey()).as("the canonical key is the display handle").isEqualTo("person:happy");
+            assertThat(view.valueText()).as("the display name is what the operator reads").isEqualTo("Happy");
+            assertThat(view.status()).isEqualTo("PENDING");
+            assertThat(view.origin()).isEqualTo("EXTRACTION");
+        });
+        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
+        verify(entities).findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), page.capture());
+        assertThat(page.getValue().getPageSize())
+                .as("the inbox query itself is bounded")
+                .isEqualTo(MemoryProposalService.INBOX_LIMIT);
+    }
+
+    @Test
+    void approvingAnEntityProposalPromotesEveryPendingFactOfItsBatch() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        MemoryFact timezone = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        MemoryFact language = fact(entityId, "language", FactStatus.PENDING, OLD);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        MemoryProposalView decided = proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(decided.subjectType()).isEqualTo("ENTITY");
+        assertThat(decided.status()).isEqualTo("ACTIVE");
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.ACTIVE);
+        assertThat(timezone.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        assertThat(language.getStatus()).isEqualTo(FactStatus.ACTIVE);
+
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions, times(3)).save(written.capture());
+        assertThat(written.getAllValues()).filteredOn(assertion ->
+                        assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.UPDATE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(entityId);
+                    assertThat(assertion.getBeforeJson()).contains("PENDING");
+                    assertThat(assertion.getAfterJson()).contains("ACTIVE");
+                });
+        assertThat(written.getAllValues()).filteredOn(assertion ->
+                        assertion.getSubjectType() == MemorySubjectType.FACT)
+                .extracting(MemoryAssertion::getSubjectId)
+                .containsExactlyInAnyOrder(timezone.getId(), language.getId());
+    }
+
+    @Test
+    void approvingAnEntityWithNoPendingFactsClaimsNoFactSlot() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.ACTIVE);
+        verify(entities, times(1)).save(entity);
+        verify(assertions, times(1)).save(any(MemoryAssertion.class));
+    }
+
+    @Test
+    void rejectingAnEntityProposalRetiresTheEntityAndItsPendingFacts() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        MemoryFact timezone = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        MemoryFact language = fact(entityId, "language", FactStatus.PENDING, OLD);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language));
+
+        MemoryProposalView decided = proposals.decideProposal(entityId, ProposalDecision.REJECT, OPERATOR);
+
+        assertThat(decided.status()).isEqualTo("RETIRED");
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.RETIRED);
+        assertThat(timezone.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(timezone.getValidTo()).as("a rejected proposal is closed, not current").isNotNull();
+        assertThat(language.getStatus()).isEqualTo(FactStatus.RETIRED);
+
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions, times(3)).save(written.capture());
+        assertThat(written.getAllValues()).extracting(MemoryAssertion::getAction)
+                .containsOnly(MemoryAction.RETIRE);
+        assertThat(written.getAllValues()).filteredOn(assertion ->
+                        assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> assertThat(assertion.getSubjectId()).isEqualTo(entityId));
+    }
+
+    @Test
+    void aRejectedEntityProposalCanNeverBeApprovedAfterwards() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.REJECT, OPERATOR);
+
+        assertThatThrownBy(() -> proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("RETIRED");
+    }
+
+    @Test
+    void decidingTheSameEntityOutcomeTwiceIsIdempotent() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+        MemoryProposalView again = proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(again.status()).isEqualTo("ACTIVE");
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.ACTIVE);
+        verify(assertions, times(1)).save(any(MemoryAssertion.class));
+        verify(entities, times(1)).save(entity);
     }
 
     @Test
@@ -359,6 +503,20 @@ class MemoryProposalServiceTest {
                 .sensitivity(Sensitivity.INTERNAL)
                 .status(EntityStatus.ACTIVE)
                 .origin(MemoryOrigin.OPERATOR)
+                .build();
+    }
+
+    private static MemoryEntity pendingEntity(UUID entityId) {
+        return MemoryEntity.builder()
+                .id(entityId)
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .createdAt(OLD)
+                .updatedAt(OLD)
                 .build();
     }
 

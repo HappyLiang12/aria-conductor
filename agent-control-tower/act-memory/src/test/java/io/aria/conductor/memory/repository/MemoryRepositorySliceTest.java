@@ -46,6 +46,21 @@ class MemoryRepositorySliceTest extends MemorySliceTestSupport {
     }
 
     @Test
+    void kindAndCanonicalKeyLookupResolvesTheProposalTarget() {
+        entities.saveAndFlush(entity("PERSON", "person:happy"));
+
+        assertThat(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
+                .as("a repeated proposal attaches to the row that already owns the key")
+                .isPresent()
+                .get()
+                .extracting(MemoryEntity::getCanonicalKey)
+                .isEqualTo("person:happy");
+        assertThat(entities.findByKindAndCanonicalKey("PROJECT", "person:happy"))
+                .as("identity is (kind, canonical key), not the key alone")
+                .isEmpty();
+    }
+
+    @Test
     void onlyOneActiveFactPerEntityAndKey() {
         MemoryEntity entity = entities.saveAndFlush(entity("PERSON", "operator"));
 

@@ -7,6 +7,7 @@ import io.aria.conductor.memory.dto.CreateEntityCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.ProposalDecision;
 import io.aria.conductor.memory.dto.SupersedeFactCommand;
+import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
@@ -82,8 +83,9 @@ class MemoryCommandServiceTransactionTest {
     @BeforeEach
     void setUp() {
         command = new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
-                new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities));
-        proposals = new MemoryProposalService(facts, relations, assertions, new MemoryCurrentValueSlot(entities));
+                new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities), event -> { });
+        proposals = new MemoryProposalService(facts, relations, entities, assertions,
+                new MemoryCurrentValueSlot(entities));
         ownTransaction = new TransactionTemplate(transactionManager);
         ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -318,6 +320,35 @@ class MemoryCommandServiceTransactionTest {
         });
     }
 
+    /**
+     * An entity decision is one transaction over a batch: when a later fact's RETIRE assertion
+     * cannot be written, the facts already retired in the same call and the entity row must roll
+     * back, or the operator is left with a half-decided proposal. The success case in the mock
+     * test is the positive control.
+     */
+    @Test
+    void aFailedFactAssertionRollsBackTheWholeEntityRejection() {
+        UUID entityId = UUID.randomUUID();
+        seedEntityAndPendingFacts(entityId, "timezone", "language");
+        when(assertions.save(any(MemoryAssertion.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0))
+                .thenThrow(new IllegalStateException("assertion write failed"));
+
+        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> proposals.decideProposal(
+                entityId, ProposalDecision.REJECT, new MemoryActor(MemoryActorType.OPERATOR, "local"))))
+                .isInstanceOf(IllegalStateException.class);
+
+        ownTransaction.executeWithoutResult(status -> {
+            assertThat(entities.findById(entityId).orElseThrow().getStatus())
+                    .as("the entity decision and its fact batch share one transaction")
+                    .isEqualTo(EntityStatus.PENDING);
+            assertThat(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                    entityId, FactStatus.PENDING))
+                    .as("a partially retired batch is never committed")
+                    .hasSize(2);
+        });
+    }
+
     private static boolean await(CountDownLatch latch) {
         try {
             return latch.await(30, TimeUnit.SECONDS);
@@ -325,6 +356,32 @@ class MemoryCommandServiceTransactionTest {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    private void seedEntityAndPendingFacts(UUID entityId, String... factKeys) {
+        ownTransaction.executeWithoutResult(status -> {
+            entities.saveAndFlush(MemoryEntity.builder()
+                    .id(entityId)
+                    .kind("PERSON")
+                    .canonicalKey("person-" + entityId)
+                    .displayName("Happy")
+                    .status(EntityStatus.PENDING)
+                    .origin(MemoryOrigin.EXTRACTION)
+                    .build());
+            for (String factKey : factKeys) {
+                facts.saveAndFlush(MemoryFact.builder()
+                        .id(UUID.randomUUID())
+                        .entityId(entityId)
+                        .factKey(factKey)
+                        .valueText("value")
+                        .valueType("STRING")
+                        .status(FactStatus.PENDING)
+                        .origin(MemoryOrigin.EXTRACTION)
+                        .sensitivity(Sensitivity.INTERNAL)
+                        .validFrom(Instant.now())
+                        .build());
+            }
+        });
     }
 
     private void seedEntityAndPendingProposal(UUID entityId, UUID proposalId, String factKey) {

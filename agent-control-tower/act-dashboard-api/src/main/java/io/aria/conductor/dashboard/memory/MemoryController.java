@@ -60,13 +60,15 @@ import java.util.UUID;
  * The memory operator surface (spec §9). All reads are deterministic views over the merged
  * act-memory services. Every route resolves operator authority before it reaches a service — reads
  * as a read, writes as a mutation — so a worker credential, a failed origin/CSRF check, or an
- * anonymous remote caller gets 403 {@code FORBIDDEN}. The one route that does not always resolve it
- * is the entity detail read, {@code GET /entities/{id}}: it resolves authority only for
- * {@code status=PENDING}, the operator's review read (see {@link #getEntity}). That asymmetry is
- * deliberate — the default detail read is fail-closed ACTIVE-only, so it cannot return PENDING data
- * at all — and this paragraph used to claim "every route" without it. Responses carry ids,
- * provenance, sensitivity and validity — never credentials and, on the manifest route, never
- * prompt content.
+ * anonymous remote caller gets 403 {@code FORBIDDEN}. That includes the entity detail read,
+ * {@code GET /entities/{id}}: it resolves authority on every request, because it also returns the
+ * entity's whole fact history, PENDING facts and over-ceiling values included. What the default
+ * detail read does withhold is the PENDING <em>entity</em> row, which answers 404 — the guard is
+ * "not PENDING", not "ACTIVE-only": a MERGED or RETIRED row is read like an ACTIVE one. An explicit
+ * {@code status=PENDING} selects the operator's review read of a PENDING entity row (spec :309-313:
+ * the operator cannot approve what they cannot see); it is the only status value this route
+ * honours, and any other value is a VALIDATION error. Responses carry ids, provenance, sensitivity
+ * and validity — never credentials and, on the manifest route, never prompt content.
  */
 @RestController
 @RequestMapping("/api/v1/memory")
@@ -156,10 +158,11 @@ public class MemoryController {
     }
 
     /**
-     * The detail read. The default stays fail-closed ACTIVE-only — a PENDING entity is review
-     * material and answers 404. An explicit {@code status=PENDING} is the operator's review
-     * read (spec :309-313: the operator cannot approve what they cannot see), so authority is
-     * resolved first and a worker credential is refused rather than silently downgraded.
+     * The detail read, operator-only like every other route: authority is resolved before anything
+     * is read, so a worker credential is refused instead of being served the entity and its whole
+     * history. A PENDING entity row is review material and answers 404 on the default read; an
+     * explicit {@code status=PENDING} is the operator's review read (spec :309-313: the operator
+     * cannot approve what they cannot see) and includes that row.
      * <p>
      * {@code PENDING} is the only status this route honours. The parameter is typed as
      * {@link EntityStatus}, but a detail read of an ACTIVE/MERGED/RETIRED row is just the detail

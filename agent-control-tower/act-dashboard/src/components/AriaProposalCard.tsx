@@ -49,12 +49,12 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
 export const PROPOSAL_INBOX_LIMIT = 50;
 
 /**
- * The batch read's outcome: the facts (and whether the whole batch is on
- * screen), or that the batch could not be read.
+ * The batch read's outcome: the facts of the decision, or that they could not be
+ * read. There is no "truncated" case: this read is the per-entity one, which the
+ * server answers complete (see `PROPOSAL_INBOX_LIMIT` for the page the GLOBAL
+ * inbox is bounded to, which this read is not).
  */
-type BatchRead =
-  | { facts: MemoryProposalView[]; complete: boolean }
-  | { unreadable: true };
+type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
 
 /**
  * The PENDING facts an ENTITY decision decides with the entity, read as that
@@ -85,9 +85,6 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
         if (cancelled) return;
         setBatch({
           facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
-          // The per-entity read is not the global inbox page: it is this
-          // entity's whole batch, so the list needs no truncation hedge.
-          complete: true,
         });
       })
       .catch(() => {

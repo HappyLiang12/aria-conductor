@@ -1196,6 +1196,59 @@ describe('AriaPanel deciding an ask in place', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Memory proposals (m5): a PENDING proposal counts as an unanswered card in
+// `hasUnansweredCard`, so it gates the composer. Rendering nothing for it would
+// lock the conversation behind an invisible control. Task 12 owns the full
+// proposal card (decide controls, linked fact); this pins the minimum — the
+// proposal is visible, names what it would write, and says it holds the turn.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel memory proposals', () => {
+  it('renders a live memory proposal instead of gating the composer invisibly', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onMemoryProposal?.({
+        id: 'p1',
+        subjectType: 'FACT',
+        factKey: 'release.channel',
+        valueText: 'email',
+        sensitivity: 'INTERNAL',
+      });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    // The proposal is on screen and names the write it proposes.
+    expect(await screen.findByText('Memory proposal')).toBeInTheDocument();
+    expect(screen.getByText('release.channel')).toBeInTheDocument();
+    expect(screen.getByText(/email/, { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('INTERNAL')).toBeInTheDocument();
+    // ...and it is the reason the composer is gated, not an invisible lock.
+    expect(screen.getByText(/holds new prompts/i)).toBeInTheDocument();
+    expect(screen.getByText('Answer the pending decision first.')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('ignores a proposal frame it cannot classify instead of drawing a blank card', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onMemoryProposal?.({ id: 'p2', subjectType: 'SOMETHING_NEW' });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    // Positive control: the turn rendered (its prompt is on screen).
+    expect(await screen.findByText('My schedule today')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Memory proposal')).not.toBeInTheDocument());
+    expect(textarea()).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Retry transcript shape (m6): a failed turn stays in the transcript as history
 // and the retried turn is appended below it. The old panel silently removed the
 // trailing failure; neither behaviour was pinned. This pins the chosen one.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
-import type { StreamError } from '../api/aria';
+import type { MemoryProposalSignal, StreamError } from '../api/aria';
 import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
 import { cancelRun, getRun } from '../api/runs';
@@ -11,7 +11,7 @@ import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import { useWebSocketContext } from './Layout';
 import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
-import type { PanelItem } from './ariaPanelState';
+import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
@@ -101,6 +101,26 @@ async function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | nul
 
 /** What an ask that left the PENDING list turned into, as its card must say it. */
 type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
+
+/**
+ * A live `memory_proposal` signal as the reducer's summary, or null for a frame
+ * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
+ * counts a pending one), so an unclassifiable subject is dropped rather than
+ * drawn as a blank card nobody can act on.
+ */
+function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
+  const { id, subjectType } = signal;
+  if (!id) return null;
+  if (subjectType !== 'FACT' && subjectType !== 'ENTITY' && subjectType !== 'RELATION') return null;
+  return {
+    id,
+    subjectType,
+    ...(signal.entityId !== undefined ? { entityId: signal.entityId } : {}),
+    ...(signal.factKey !== undefined ? { factKey: signal.factKey } : {}),
+    ...(signal.valueText !== undefined ? { valueText: signal.valueText } : {}),
+    ...(signal.sensitivity !== undefined ? { sensitivity: signal.sensitivity } : {}),
+  };
+}
 
 /**
  * Reads an ask the PENDING snapshot no longer lists (spec A2's by-id endpoint)
@@ -773,6 +793,12 @@ export function AriaPanel() {
               question: ask.question,
             });
           },
+          onMemoryProposal: (signal) => {
+            if (staleTurn()) return;
+            const proposal = proposalSummary(signal);
+            if (proposal === null) return;
+            dispatch({ type: 'proposalCreated', proposal });
+          },
           onDone: (data) => {
             if (staleTurn()) return;
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -1080,15 +1106,44 @@ export function AriaPanel() {
                 );
               }
               if (item.kind === 'proposal') {
-                // Wave C (Task 12) renders the memory-proposal card into this
-                // list. Until it exists this item renders nothing, while
-                // `hasUnansweredCard` in ariaPanelState.ts already counts a
-                // PENDING proposal as an unanswered card — so wiring
-                // `proposalCreated` without the card here would gate the
-                // composer with no visible control to clear it. The gate and
-                // this render must land together (ariaPanelState.ts is Task 4's
-                // module; this lane cannot exclude proposals from the gate).
-                return null;
+                // Task 12 (Wave C) owns the full proposal card — decide controls
+                // and the linked fact. The minimum here is visibility: a pending
+                // proposal already counts toward `hasUnansweredCard`, so drawing
+                // nothing would gate the composer behind an invisible control.
+                // The card names what would be written and says it holds the
+                // turn; it promises no button this panel does not have yet.
+                return (
+                  <div
+                    key={item.id}
+                    className={`ai-decision-card ask-card ai-decision-proposal ai-decision-${item.state}`}
+                  >
+                    <div className="ai-decision-head">
+                      <span className="ask-q ai-decision-tool">Memory proposal</span>
+                      <span className="ai-decision-tags">
+                        <span className="pill dim">{item.subjectType}</span>
+                        {item.sensitivity !== undefined && item.sensitivity !== '' && (
+                          <span className="pill risk">{item.sensitivity}</span>
+                        )}
+                      </span>
+                    </div>
+                    {(item.factKey !== undefined || item.valueText !== undefined) && (
+                      <div className="ask-meta ai-decision-meta">
+                        {item.factKey !== undefined && <code>{item.factKey}</code>}
+                        {item.factKey !== undefined && item.valueText !== undefined && ' = '}
+                        {item.valueText !== undefined && <span>{item.valueText}</span>}
+                      </div>
+                    )}
+                    {item.state === 'pending' ? (
+                      <div className="ask-meta ai-decision-meta">
+                        Awaiting a decision — a pending proposal holds new prompts.
+                      </div>
+                    ) : (
+                      <div className="ai-decision-settled">
+                        {item.state === 'approved' ? 'Approved' : 'Rejected'}
+                      </div>
+                    )}
+                  </div>
+                );
               }
               return (
                 <div key={item.id} className={`ai-msg ai-msg-${item.kind}`}>

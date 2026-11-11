@@ -101,9 +101,15 @@ class ApprovalToolsTest {
         String json = tools.listApprovals("PENDING");
 
         assertThat(json).contains("\"toolPolicy\":\"OPERATOR_ONLY\"");
-        assertThat(detail(id, "TOOL_CALL", "PENDING"))
+
+        // Negative on the same serialized path: an unclassified ask must not emit a policy string
+        // (the positive above is the control).
+        UUID unclassified = UUID.randomUUID();
+        when(approvalQueryService.list(ApprovalStatus.PENDING))
+                .thenReturn(List.of(detail(unclassified, "TOOL_CALL", "PENDING")));
+        assertThat(tools.listApprovals("PENDING"))
                 .as("an unclassified ask has no policy rather than an invented one")
-                .extracting(ApprovalDetail::toolPolicy).isNull();
+                .doesNotContain("\"toolPolicy\":\"");
     }
 
     @Test

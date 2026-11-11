@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -110,8 +111,9 @@ public class RunSignalSseListener {
                 return;
             }
             approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
-                            ApprovalSource.CLARIFICATION).stream()
-                    .findFirst()
+                            ApprovalSource.CLARIFICATION)
+                    .stream()
+                    .max(NEWEST_FIRST)
                     .ifPresent(ask -> registry.emit(runId, "waiting_input", Map.of(
                             "runId", runId.toString(),
                             "approvalId", ask.getId().toString(),
@@ -121,6 +123,26 @@ public class RunSignalSseListener {
                     event.getRunId(), e.getMessage(), e);
         }
     }
+
+    /**
+     * The ask a parked run names: the newest PENDING clarification row, ties
+     * broken by id.
+     *
+     * <p>The finder is a derived query with no {@code ORDER BY}, so picking
+     * {@code findFirst()} makes the emitted card depend on the row order the
+     * database happens to return. A run can briefly own two PENDING
+     * clarification rows — a duplicate waiting event, or the terminal-race ask
+     * of the recorded residual beside a live park — and then an arbitrary pick
+     * names a stale {@code approvalId} and question. The selection is resolved
+     * here from the row's own identity instead: newest {@code requestedAt}
+     * (the ask the operator is being asked now), and a total order even when
+     * two rows share an instant or carry no timestamp at all.
+     */
+    private static final Comparator<Approval> NEWEST_FIRST =
+            Comparator.comparing(Approval::getRequestedAt,
+                            Comparator.nullsFirst(Comparator.naturalOrder()))
+                    .thenComparing(Approval::getId,
+                            Comparator.nullsFirst(Comparator.naturalOrder()));
 
     /** The persisted question, never null (the panel renders the field as text). */
     private static String questionOf(Approval ask) {

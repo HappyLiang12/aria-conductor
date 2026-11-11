@@ -182,6 +182,57 @@ class RunSignalSseListenerTest {
     }
 
     @Test
+    void twoPendingAsksNameTheNewestOneNotWhicheverRowTheQueryReturnedFirst() {
+        // A run can briefly own two PENDING CLARIFICATION rows (the terminal-race ask of the
+        // recorded residual plus a live park, or a duplicate waiting event). The derived
+        // finder carries no ORDER BY, so the database may hand them back in any order and
+        // findFirst() names an arbitrary one. The card must name the ask the operator is
+        // being asked now: this fixture returns the STALE row first.
+        UUID runId = UUID.randomUUID();
+        Approval stale = clarification(runId, Instant.parse("2026-11-11T10:00:00Z"), "superseded question");
+        Approval live = clarification(runId, Instant.parse("2026-11-11T10:05:00Z"),
+                "Which database should the migration target?");
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
+                ApprovalSource.CLARIFICATION)).thenReturn(List.of(stale, live));
+        when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
+
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        ArgumentCaptor<Map<String, Object>> payload = mapCaptor();
+        verify(registry).emit(eq(runId), eq("waiting_input"), payload.capture());
+        assertThat(payload.getValue())
+                .containsEntry("approvalId", live.getId().toString())
+                .containsEntry("question", "Which database should the migration target?");
+    }
+
+    @Test
+    void twoAsksRequestedAtTheSameInstantStillResolveTheSameWayWhateverTheRowOrder() {
+        // The tie-break must be a property of the rows, not of the list order: the same two
+        // rows in the opposite order must name the same ask, or the card is nondeterministic.
+        UUID runId = UUID.randomUUID();
+        Instant sameInstant = Instant.parse("2026-11-11T10:00:00Z");
+        Approval lowerId = clarification(UUID.fromString("00000000-0000-4000-8000-000000000001"),
+                runId, sameInstant, "first question");
+        Approval higherId = clarification(UUID.fromString("00000000-0000-4000-8000-000000000002"),
+                runId, sameInstant, "second question");
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
+                ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of(lowerId, higherId), List.of(higherId, lowerId));
+        when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
+
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        ArgumentCaptor<Map<String, Object>> payload = mapCaptor();
+        verify(registry, times(2)).emit(eq(runId), eq("waiting_input"), payload.capture());
+        assertThat(payload.getAllValues())
+                .extracting(emitted -> emitted.get("approvalId"))
+                .containsExactly(higherId.getId().toString(), higherId.getId().toString());
+    }
+
+    @Test
     void aRepositoryFailureNeverEscapesIntoThePublisher() {
         // The ask is published from PermissionCoordinator.register inside its own
         // transaction and from the engine's waiting-input bookkeeping; an exception
@@ -297,6 +348,20 @@ class RunSignalSseListenerTest {
             }
         }
         throw new AssertionError("no " + name + " on " + type.getSimpleName());
+    }
+
+    private static Approval clarification(UUID runId, Instant requestedAt, String question) {
+        return clarification(UUID.randomUUID(), runId, requestedAt, question);
+    }
+
+    private static Approval clarification(UUID id, UUID runId, Instant requestedAt, String question) {
+        return Approval.builder()
+                .id(id).runId(runId).status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL).askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .requestedAt(requestedAt)
+                .content(question)
+                .build();
     }
 
     @SuppressWarnings("unchecked")

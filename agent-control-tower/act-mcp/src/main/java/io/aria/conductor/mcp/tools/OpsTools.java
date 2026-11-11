@@ -8,6 +8,7 @@ import io.aria.conductor.execution.housekeeping.HousekeepingModel.ScanResult;
 import io.aria.conductor.execution.housekeeping.HousekeepingService;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -58,7 +59,8 @@ public class OpsTools implements McpTool {
     // flag is caller-supplied, so without an operator credential the "only gate" would
     // be an argument the worker itself controls.
     @Tool(name = "housekeeping_execute",
-            description = "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and nothing is deleted.")
+            description = "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and nothing is deleted."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String housekeepingExecute(
             @ToolParam(description = "Category keys to clear: kanban, agents, approvals, stuck, runs") List<String> categories,
             @ToolParam(description = "Include stuck runs; required for the stuck category to act", required = false) boolean includeStuck,

@@ -7,6 +7,7 @@ import io.aria.conductor.execution.approval.PermissionChoice;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -53,7 +54,8 @@ public class ApprovalTools implements McpTool {
     }
 
     @Tool(name = "decide_approval",
-            description = "Decide a PENDING approval gate (approve or deny). Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no approval changes state.")
+            description = "Decide a PENDING approval gate (approve or deny). Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no approval changes state."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String decideApproval(
             @ToolParam(description = "Approval id") UUID approvalId,
             @ToolParam(description = "true = approve, false = deny") boolean approved,

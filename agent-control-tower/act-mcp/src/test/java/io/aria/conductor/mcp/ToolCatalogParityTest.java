@@ -273,6 +273,34 @@ class ToolCatalogParityTest {
     }
 
     /**
+     * T48 (re-review rev-mcp m2 / N3). The shipped default is
+     * {@code aria.mcp.auth-mode: none} ({@code act-app/src/main/resources/application.yml:85}):
+     * the filter requires no credential and injects none, so a caller presenting none publishes
+     * no actor, {@code McpActorContext.require} refuses it, and the ten OPERATOR_ONLY tools fail
+     * closed for an OPERATOR as well. Every one of those descriptions said only that a run-scoped
+     * worker is refused — half the truth on a default install, and the wrong half for the
+     * credential the tools are meant for.
+     *
+     * <p>Additive: the "worker is refused" pin above still holds, and the clause is one
+     * constant so the catalog and the {@code @Tool} copies cannot drift apart on it. The wording
+     * is deliberately not "no actor is ever published": a caller that DOES present a valid bearer
+     * is resolved in every mode ({@code McpServerConfig.actorTransportContext}), so the refusal
+     * is about the credential nobody sent, not about the mode disabling authentication.
+     */
+    @Test
+    void everyOperatorOnlyDescriptionStatesThatTheNoCredentialModeRefusesACredentiallessCall() {
+        assertThat(catalog.tools())
+                .filteredOn(tool -> tool.policy() == ToolPolicy.OPERATOR_ONLY)
+                .hasSize(10)
+                .allSatisfy(tool -> assertThat(tool.description())
+                        .as("description of '%s'", tool.name())
+                        .contains("requires an operator-authenticated MCP session")
+                        .contains("auth-mode=none")
+                        .contains("a call that presents none is refused")
+                        .endsWith(ToolCatalog.OPERATOR_SESSION_CLAUSE));
+    }
+
+    /**
      * The two entity reads refuse a PENDING view to a worker, so their descriptions must say that
      * PENDING is a review status with an operator-only listing/read rather than leaving the reader
      * with ACTIVE/MERGED/RETIRED as the whole status set. The detail read must also name where the

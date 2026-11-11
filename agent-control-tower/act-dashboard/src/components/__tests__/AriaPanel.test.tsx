@@ -133,6 +133,11 @@ function textarea() {
   return screen.getByPlaceholderText(/Ask Aria anything/);
 }
 
+/** The FULL conversation id: the header truncates the visible text, `title` carries it whole. */
+function conversationIdOf(container: HTMLElement): string {
+  return (container.querySelector('.ai-conversation-id') as HTMLElement | null)?.title ?? '';
+}
+
 async function openPanel() {
   await userEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
   return textarea();
@@ -1005,7 +1010,9 @@ describe('AriaPanel in-flow decisions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
     expect(await screen.findByText(TOOL)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    });
 
     // The card belonged to the conversation that was just cleared.
     expect(screen.queryByText(TOOL)).not.toBeInTheDocument();
@@ -1021,12 +1028,17 @@ describe('AriaPanel in-flow decisions', () => {
   // `DELETE /api/v1/aria/conversations/{id}`, whose route cancels every
   // RUNNING / PENDING / WAITING_INPUT run of that conversation and then purges
   // its tool calls, trajectories and audit events
-  // (`AriaConversationController.java:153-180`). The copy used to say the run
+  // (`AriaConversationController.java:193-235`). The copy used to say the run
   // "keeps living server-side", which is false, and it is the only wording the
   // operator gets at the moment they escape a parked turn.
-  it('describes Clear as the cancellation it is, and deletes the conversation it names', async () => {
+  //
+  // T48 Item 1 (P1): the button now WAITS for that call before it resets the
+  // local transcript, because the server can refuse it (the refusal cases are
+  // their own describe below). A resolved delete is therefore the only path that
+  // clears locally — which this test pins as the positive control beside them.
+  it('describes Clear as the cancellation it is, deletes the conversation it names, and clears once it answered', async () => {
     mockGetLatest.mockResolvedValue(summary('conv-1'));
-    renderPanel();
+    const { container } = renderPanel();
     await openPanelForTest();
 
     const clear = screen.getByRole('button', { name: 'Clear and start new conversation' });
@@ -1036,12 +1048,18 @@ describe('AriaPanel in-flow decisions', () => {
     // The false claim in every form it was written in: Clear does not keep a
     // run alive, so no copy may say it does.
     expect(title).not.toMatch(/stays? alive|keeps? living|server-side/i);
+    expect(conversationIdOf(container)).toBe('conv-1');
 
-    fireEvent.click(clear);
+    await act(async () => { fireEvent.click(clear); });
+
     // The remedy the copy promises is the call the button actually makes on the
-    // conversation it names — a refusal falls back to clearing locally, so only
-    // the call itself is pinned here.
-    await waitFor(() => expect(mockDeleteConversation).toHaveBeenCalledWith('conv-1'));
+    // conversation it names…
+    expect(mockDeleteConversation).toHaveBeenCalledWith('conv-1');
+    // …and an answered delete IS the local clear: a new conversation, no error.
+    await waitFor(() => expect(conversationIdOf(container)).not.toBe('conv-1'));
+    expect(conversationIdOf(container)).not.toBe('');
+    expect(screen.getByText(/How can I help/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('names the runs the timeline shows as still unanswered', async () => {
@@ -2066,7 +2084,10 @@ describe('AriaPanel cleared-conversation guard on the REST plane', () => {
     // The second read is the in-flight one (the mount read was the first), so the
     // resolution below is really the stale reconcile and not a no-op.
     expect(mockGetTimeline).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    // Clear waits for its DELETE to answer (T48 Item 1), so it is flushed inside act.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    });
     const clearedId = conversationIdText(container);
     expect(screen.queryByText('first turn')).not.toBeInTheDocument();
 
@@ -2157,7 +2178,9 @@ describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
     await reconcileOnce();
     expect(await screen.findByTestId('operator-session-notice')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    });
 
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
@@ -2188,5 +2211,113 @@ describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
 
     expect(await screen.findByText(/proposal inbox unavailable/)).toBeInTheDocument();
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T48 Item 1 (P1, re-review N1). Clear's DELETE resolves operator authority for
+// a MUTATION (`AriaConversationController.java:193-203`), and a browser holding
+// the operator session cookie has the call validated against `X-CSRF-Token`
+// (`OperatorAuthorityResolver`: the cookie branch runs before the loopback one).
+// The old call was a bare `fetch`, so it never carried the token, and the
+// panel's silent `.catch` cleared the transcript anyway — the title promised a
+// server-side purge that never happened and the operator saw no error at all.
+//
+// A refused (or failed) Clear now keeps this transcript, because the server
+// still holds it, and reports the refusal where the operator is looking: the
+// action, the fact that nothing was cleared, the remedy, and the control that
+// retries it (the Clear button itself — never a "Retry" that would resend a
+// prompt). The success path above is the positive control for the retention.
+// ---------------------------------------------------------------------------
+describe('AriaPanel Clear refusal (T48 Item 1)', () => {
+  async function openConversationWithOneTurn() {
+    mockGetLatest.mockResolvedValue(summary('conv-1'));
+    mockGetTimeline.mockResolvedValue([
+      {
+        role: 'user',
+        content: 'the turn the server still holds',
+        timestamp: '2026-11-11T09:00:00Z',
+        runId: 'r1',
+      },
+    ]);
+    const rendered = renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText('the turn the server still holds')).toBeInTheDocument();
+    return rendered;
+  }
+
+  async function clickClear() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    });
+  }
+
+  it('keeps the transcript and names the operator remedy when the server refuses Clear', async () => {
+    const { container } = await openConversationWithOneTurn();
+    mockDeleteConversation.mockRejectedValue({
+      response: {
+        status: 403,
+        data: {
+          error: 'Operator authority required: deleting a conversation is an operator decision. '
+            + 'Deleting a conversation cancels its runs and destroys its history; do it from the '
+            + 'dashboard as the local operator.',
+        },
+      },
+    });
+
+    await clickClear();
+
+    // Nothing was purged locally, so the transcript is still what the server holds.
+    expect(screen.getByText('the turn the server still holds')).toBeInTheDocument();
+    expect(conversationIdOf(container)).toBe('conv-1');
+
+    const bubble = await screen.findByText(/nothing was cleared/i);
+    // Names the action that was refused, as the authority contract does…
+    expect(bubble).toHaveTextContent(/clearing the conversation is operator-only/i);
+    // …and the remedy plus the control that retries, which is the point of not
+    // swallowing it: an error must point at the place that fixes it.
+    expect(bubble).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(bubble).toHaveTextContent(/press Clear again/i);
+    // No "Retry" that would resend a prompt: this failure is not a turn.
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    // The Clear control itself survives for the retry the copy asks for.
+    expect(screen.getByRole('button', { name: 'Clear and start new conversation' })).toBeEnabled();
+  });
+
+  it('keeps the transcript and shows the server text when Clear fails for its own reason', async () => {
+    const { container } = await openConversationWithOneTurn();
+    mockDeleteConversation.mockRejectedValue({
+      response: { status: 500, data: { message: 'conversation store unavailable' } },
+    });
+
+    await clickClear();
+
+    expect(screen.getByText('the turn the server still holds')).toBeInTheDocument();
+    expect(conversationIdOf(container)).toBe('conv-1');
+    const bubble = await screen.findByText(/conversation store unavailable/i);
+    expect(bubble).toHaveTextContent(/nothing was cleared/i);
+    // Positive control for the refusal test above: a fault is NOT an authority
+    // problem, so it must not be dressed in the operator-session remedy.
+    expect(bubble).not.toHaveTextContent(/operator-only/i);
+    expect(bubble).not.toHaveTextContent(/loopback requests are the operator automatically/i);
+  });
+
+  it('retries the delete on the next Clear and clears once it answers', async () => {
+    const { container } = await openConversationWithOneTurn();
+    mockDeleteConversation.mockRejectedValueOnce({
+      response: { status: 500, data: { message: 'conversation store unavailable' } },
+    });
+
+    await clickClear();
+    expect(await screen.findByText(/nothing was cleared/i)).toBeInTheDocument();
+    expect(conversationIdOf(container)).toBe('conv-1');
+
+    // The remedy the copy names: press Clear again. The route answers this time.
+    await clickClear();
+
+    expect(mockDeleteConversation).toHaveBeenCalledTimes(2);
+    expect(mockDeleteConversation).toHaveBeenLastCalledWith('conv-1');
+    await waitFor(() => expect(conversationIdOf(container)).not.toBe('conv-1'));
+    expect(screen.queryByText('the turn the server still holds')).not.toBeInTheDocument();
   });
 });

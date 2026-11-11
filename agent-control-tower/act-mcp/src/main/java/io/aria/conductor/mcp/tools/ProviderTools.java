@@ -8,6 +8,7 @@ import io.aria.conductor.common.model.LlmProviderType;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -69,7 +70,8 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "create_llm_provider",
-            description = "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no provider is created.")
+            description = "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no provider is created."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String createLlmProvider(
             @ToolParam(description = "Display name") String name,
             @ToolParam(description = "OPENAI, ANTHROPIC, AZURE or LOCAL") String type,
@@ -104,7 +106,8 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "update_llm_provider",
-            description = "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is unchanged.")
+            description = "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is unchanged."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String updateLlmProvider(
             @ToolParam(description = "Provider id") UUID id,
             @ToolParam(description = "New display name", required = false) String name,
@@ -146,7 +149,8 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "delete_llm_provider",
-            description = "Delete an LLM provider by id. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is kept.")
+            description = "Delete an LLM provider by id. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is kept."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String deleteLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
@@ -165,7 +169,8 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "activate_llm_provider",
-            description = "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the active provider is unchanged.")
+            description = "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the active provider is unchanged."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String activateLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
@@ -184,7 +189,8 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "test_llm_provider",
-            description = "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no request is sent.")
+            description = "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no request is sent."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String testLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);

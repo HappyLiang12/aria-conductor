@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { streamMessage } from '../api/aria';
 import type { MemoryProposalSignal, StreamError } from '../api/aria';
 import { listApprovals, getApproval } from '../api/approvals';
-import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
-import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
+import { apiErrorMessage, isCrossOriginRejection, isOperatorRejection } from '../api/operatorSession';
+import {
+  OPERATOR_REMEDY_COPY,
+  crossSiteSessionMessage,
+  operatorSessionMessage,
+} from '../api/errorPresentation';
 import { cancelRun, getRun } from '../api/runs';
 import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
@@ -1024,7 +1028,7 @@ export function AriaPanel() {
       // into the transcript on screen. Leaving one only stops drawing its frames
       // here; Clear also ends the turn at the server, because its route cancels
       // this conversation's runs and purges the transcript it belonged to
-      // (`AriaConversationController.java:153-180`). Neither case keeps the turn
+      // (`AriaConversationController.java:193-235`). Neither case keeps the turn
       // writing into this panel, and Clear does not keep the run alive at all.
       const turnConversationId = conversationId;
       const staleTurn = (): boolean => conversationIdRef.current !== turnConversationId;
@@ -1222,16 +1226,41 @@ export function AriaPanel() {
     });
   }, [conversationId]);
 
-  const handleNewConversation = useCallback(() => {
-    if (conversationId) {
-      deleteConversation(conversationId).catch(() => {
-        /* ignore backend errors — clear locally regardless */
-      });
+  const handleNewConversation = useCallback(async () => {
+    const clearedConversationId = conversationId;
+    if (clearedConversationId) {
+      try {
+        await deleteConversation(clearedConversationId);
+      } catch (err) {
+        // T48 Item 1 (P1): the route resolves operator authority for a mutation, so
+        // the server can refuse this call — and until now the refusal was swallowed
+        // and the transcript cleared anyway, while the button's title promised a
+        // purge that never happened. A refusal (or a fault) therefore keeps the
+        // transcript: it is still the server's conversation, and clearing it here
+        // would claim a delete the server did not perform. The report names the
+        // action, what did NOT happen, and the place that fixes it.
+        const reason = isCrossOriginRejection(err)
+          ? crossSiteSessionMessage('Clearing the conversation')
+          : isOperatorRejection(err)
+            ? operatorSessionMessage('Clearing the conversation')
+            : apiErrorMessage(err, 'The conversation could not be cleared');
+        const sentence = reason.endsWith('.') ? reason : `${reason}.`;
+        dispatch({
+          type: 'turnFailed',
+          id: crypto.randomUUID(),
+          // No retry control: a Retry here would re-send a prompt, and the action
+          // that retries is the Clear button this bubble points at.
+          content: 'Clear failed: nothing was cleared, and this transcript is unchanged. '
+            + `${sentence} Press Clear again once that is in place.`,
+          noRetry: true,
+        });
+        return;
+      }
     }
     const newConversationId = crypto.randomUUID();
     // Clear is destructive: the route it calls cancels every RUNNING / PENDING /
     // WAITING_INPUT run of this conversation and then purges its tool calls,
-    // trajectories and audit events (`AriaConversationController.java:153-180`).
+    // trajectories and audit events (`AriaConversationController.java:193-235`).
     // So this also stops reading the cleared conversation's turn: without it a
     // parked turn's frames would be drawn into the new transcript. Nothing here
     // keeps the run alive — the earlier "the run stays alive server-side" claim

@@ -31,8 +31,15 @@ export type PanelItem =
    * read, so it cannot say whether the departure was an approval, a rejection,
    * or a later retirement — the card says "decided elsewhere" instead of
    * inventing a verdict. It is settled for gating (see `hasUnansweredCard`).
+   *
+   * `blocked-on-entity` is the fourth, and it is neither a verdict nor a
+   * departure: the server refused this proposal's decision because its parent
+   * entity is still PENDING, so the decision that owns it is the ENTITY
+   * proposal's. It is settled for gating — the card's only remaining control
+   * could 409 forever — and it never reopens, because a listing that still
+   * carries the row would re-gate the composer on the same undecidable ask.
    */
-  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' }
+  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' | 'blocked-on-entity' }
   | { kind: 'queued'; id: string; runIds: string[] };
 export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
@@ -63,8 +70,12 @@ export type PanelEvent =
    * It is NOT a verdict: the bounded inbox cannot tell an approval from a
    * rejection, so a caller that only knows "it left the PENDING page" must use
    * this state and the card will say so.
+   *
+   * `blocked-on-entity` is the server's parent-still-PENDING refusal: the
+   * proposal is still pending, and the decision that owns it belongs to its
+   * entity's proposal. It is not a verdict and not a departure either.
    */
-  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' | 'decided-elsewhere' }
+  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' | 'decided-elsewhere' | 'blocked-on-entity' }
   | { type: 'queuedRuns'; runIds: string[] }
   | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean; now?: number };
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
@@ -388,6 +399,9 @@ function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
   // re-proposal returns the same id to PENDING (the server flips the same
   // entity row back to review), so that card becomes the operator's to decide
   // again instead of staying dead next to a live proposal.
+  //
+  // `blocked-on-entity` DOES stay closed: its parent is still PENDING, so every
+  // re-delivery would only re-gate the composer on an ask the server refuses.
   if (existing.state !== 'pending' && existing.state !== 'decided-elsewhere') return state;
   return replaceItem(state, index, { ...existing, ...fields, state: patch.state });
 }

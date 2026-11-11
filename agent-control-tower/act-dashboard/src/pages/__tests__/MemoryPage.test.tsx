@@ -177,7 +177,13 @@ describe('MemoryPage — entity list', () => {
     get.mockRejectedValue({ response: { status: 403, data: {} } });
     ui();
 
-    expect(await screen.findByTestId('operator-session-notice')).toBeInTheDocument();
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toBeInTheDocument();
+    // Task 37 Item 4: this call site is a refused READ, so the notice must name
+    // reading — the bare default would tell the operator their memory decisions
+    // were refused, and this page made no decision.
+    expect(notice).toHaveTextContent(/reading memory is operator-only/i);
+    expect(notice).not.toHaveTextContent(/memory decisions are operator-only/i);
     expect(screen.queryByText(/no memory entities yet/i)).not.toBeInTheDocument();
   });
 

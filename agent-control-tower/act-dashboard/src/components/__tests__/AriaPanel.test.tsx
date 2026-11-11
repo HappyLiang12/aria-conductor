@@ -37,11 +37,15 @@ const wsBridge = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../hooks/useWebSocket', () => ({
-  useWebSocket: () => ({
+// The panel is rendered inside `WebSocketProvider` in the app (Layout.tsx), so
+// it must consume the app-wide connection through the shared context — the same
+// socket ConnectionBanner reports — and never open one of its own. This mock is
+// that context; a panel that went back to `useWebSocket()` would subscribe to a
+// connection this bridge never sees, and every frame case below would fail.
+vi.mock('../Layout', () => ({
+  useWebSocketContext: () => ({
     lastMessage: null,
     isConnected: wsBridge.state.isConnected,
-    send: () => {},
     subscribe: wsBridge.subscribe,
   }),
 }));
@@ -872,5 +876,26 @@ describe('AriaPanel settle-on-reconcile for asks the snapshot no longer lists', 
     expect(await screen.findByText(/expired before a decision/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The panel used to call `useWebSocket()` directly, which builds a second
+// per-instance STOMP connection per tab: two server sessions, two
+// SUBSCRIBEs on /topic/events, two copies of every broadcast frame, and a
+// reconnect flag that can disagree with the one ConnectionBanner reports. It is
+// rendered inside `WebSocketProvider`, so the shared context is its socket.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel shared WebSocket', () => {
+  it('takes exactly one subscription from the shared context and releases it on unmount', async () => {
+    const { unmount } = renderPanel();
+    await act(async () => {}); // flush the conversation load
+
+    // One subscription, held through the app-wide connection the provider owns.
+    expect(wsBridge.handlers.size).toBe(1);
+
+    unmount();
+    expect(wsBridge.handlers.size).toBe(0);
   });
 });

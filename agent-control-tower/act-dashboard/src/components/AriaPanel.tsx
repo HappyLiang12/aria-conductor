@@ -9,7 +9,7 @@ import { getLatestConversation, getConversationTimeline, deleteConversation } fr
 import type { TimelineEntry } from '../api/ariaConversations';
 import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from './Layout';
 import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
 import type { PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
@@ -411,8 +411,14 @@ export function AriaPanel() {
    * taken in the Review Queue or in another tab settles the card here, and a
    * completed run re-reads this conversation's snapshot. Both are merged by ask
    * id, so a decision delivered twice is a no-op.
+   *
+   * The subscription rides the app-wide connection from `WebSocketProvider`
+   * (Layout.tsx), the same one ConnectionBanner reports: a per-instance
+   * `useWebSocket()` would open a second server session and a second
+   * `/topic/events` SUBSCRIBE per tab, and its reconnect flag could disagree
+   * with the banner about whether the feed came back.
    */
-  const { subscribe, isConnected } = useWebSocket();
+  const { subscribe, isConnected } = useWebSocketContext();
   useEffect(() => {
     const subscription = subscribe((event) => {
       switch (event.type) {

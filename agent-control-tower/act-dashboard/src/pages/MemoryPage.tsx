@@ -463,7 +463,11 @@ export function MemoryPage() {
                         </td>
                         <td>{row.sensitivity ?? '—'}</td>
                         <td className="action-cell">
-                          {row.status !== 'RETIRED' && (
+                          {/* A fact is mutable only once it is memory. A PENDING
+                              fact is review material: its decision belongs to the
+                              proposal card's approve/reject, and retiring it here
+                              would leave the proposal itself dangling. */}
+                          {row.status === 'ACTIVE' && (
                             <button
                               className="btn btn-sm"
                               aria-label={`Retire fact ${row.factKey}`}

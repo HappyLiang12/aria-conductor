@@ -9,11 +9,19 @@ export type ProposalPanelItem = Extract<PanelItem, { kind: 'proposal' }>;
 export interface AriaProposalCardProps {
   item: ProposalPanelItem;
   /**
-   * Called once a decision committed, so the panel can settle the card through
-   * the same state it merges every other plane into. A refused decision never
-   * calls it — nothing was decided.
+   * Called once the proposal settled locally, so the panel can settle the card
+   * through the same state it merges every other plane into. `decided-elsewhere`
+   * is reported for a 409: the server says the proposal is already settled, and
+   * the card cannot know by which verdict. A refused decision never calls it —
+   * nothing was decided.
    */
-  onSettled?: (proposalId: string, state: 'approved' | 'rejected') => void;
+  onSettled?: (proposalId: string, state: 'approved' | 'rejected' | 'decided-elsewhere') => void;
+}
+
+/** The HTTP status a failed call answered with, or null when it did not answer. */
+function responseStatus(error: unknown): number | null {
+  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+  return typeof status === 'number' ? status : null;
 }
 
 /** Human title per subject type; ENTITY and FACT are the two shipped today. */
@@ -29,23 +37,32 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
 }
 
 /**
- * The review inbox page size (`MemoryProposalService.INBOX_LIMIT`): one
- * newest-first page across ALL entities, so a full page cannot prove that an
- * entity's own facts are on it.
+ * `MemoryProposalService.INBOX_LIMIT` — the PENDING proposal inbox is ONE
+ * newest-first page of at most this many rows across ALL entities.
+ *
+ * This is the single client-side source of that number: `AriaPanel` imports it
+ * for the reconcile's completeness rule instead of keeping a second copy, so a
+ * lowered server cap cannot leave one surface claiming a truncated page is the
+ * whole inbox. This card's own batch read is the per-entity one, which the
+ * server does not cap — the number bounds the global inbox, not this card.
  */
-const INBOX_LIMIT = 50;
-
-/** The batch read's outcome: the facts (and whether the page was capped), or that the inbox could not be read. */
-type BatchRead =
-  | { facts: MemoryProposalView[]; truncated: boolean }
-  | { unreadable: true };
+export const PROPOSAL_INBOX_LIMIT = 50;
 
 /**
- * The PENDING facts an ENTITY decision decides with the entity, read from the
- * proposals inbox the operator decides from (there is no per-entity PENDING
- * read: a pending entity 404s the detail route). Null while the read is in
- * flight, and undefined for any subject type that is not an entity — only the
- * entity proposal is a batch decision.
+ * The batch read's outcome: the facts of the decision, or that they could not be
+ * read. There is no "truncated" case: this read is the per-entity one, which the
+ * server answers complete (see `PROPOSAL_INBOX_LIMIT` for the page the GLOBAL
+ * inbox is bounded to, which this read is not).
+ */
+type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
+
+/**
+ * The PENDING facts an ENTITY decision decides with the entity, read as that
+ * entity's OWN batch (`GET /proposals?status=PENDING&entityId=`): the route
+ * answers it complete and uncapped, so the card never has to guess from a
+ * shared page whether the list it shows is the whole decision. Null while the
+ * read is in flight, and undefined for any subject type that is not an entity —
+ * only the entity proposal is a batch decision.
  */
 function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
   const entityId = item.entityId;
@@ -63,14 +80,11 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
     }
     let cancelled = false;
     setBatch(null);
-    listMemoryProposals('PENDING')
+    listMemoryProposals('PENDING', entityId)
       .then((rows) => {
         if (cancelled) return;
         setBatch({
           facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
-          // A page at the cap may have been cut; only a shorter page is provably
-          // the whole inbox.
-          truncated: rows.length >= INBOX_LIMIT,
         });
       })
       .catch(() => {
@@ -104,7 +118,7 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
 export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // Local settlement, layered over the item's own state: a re-render with a
   // settled item wins, so the panel stays the single owner of restored history.
-  const [local, setLocal] = useState<'approved' | 'rejected' | null>(null);
+  const [local, setLocal] = useState<'approved' | 'rejected' | 'decided-elsewhere' | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
   const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
   const batch = useEntityBatch(item);
@@ -124,6 +138,18 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       setLocal(next);
       onSettled?.(item.proposalId, next);
     } catch (err: unknown) {
+      // A 409 is the server saying the proposal is ALREADY settled — decided on
+      // the Memory page, by another operator, or superseded by a re-proposal.
+      // Offering the decision again would retry something that cannot succeed,
+      // and the panel's item is now wrong: settle both as `decided-elsewhere`,
+      // the verdict-free state the reconcile already uses. Every other status is
+      // a real failure (the proposal may well still be pending) and keeps the
+      // error with its retry.
+      if (responseStatus(err) === 409) {
+        setLocal('decided-elsewhere');
+        onSettled?.(item.proposalId, 'decided-elsewhere');
+        return;
+      }
       setError({
         text: apiErrorMessage(err, 'The proposal was not decided — retry.'),
         operatorRejected: isOperatorRejection(err),
@@ -144,7 +170,9 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       <div className="ask-q">
         {titleOf(item.subjectType)} <span className="pill">{item.factKey ?? '—'}</span>
       </div>
-      {item.valueText && (
+      {/* An entity proposed without a display name carries its canonical key as
+          the value too; printing it again here would say the same thing twice. */}
+      {item.valueText && item.valueText !== item.factKey && (
         <div className="ask-ctx">
           <span data-testid="proposal-value">{item.valueText}</span>
         </div>
@@ -162,26 +190,13 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           )}
           {batch !== null && batch !== undefined && 'facts' in batch && (
             batch.facts.length === 0 ? (
-              batch.truncated ? (
-                // A page at the cap cannot prove the batch is empty. Naming the
-                // cap and the count is honest; "adds the entity alone" is not.
-                <div className="ask-ctx" data-testid="proposal-batch-truncated">
-                  The proposal inbox page is capped at {INBOX_LIMIT}, so this entity&apos;s
-                  pending facts may not be on it. Showing 0 pending facts of this entity here —
-                  approving still promotes its whole batch.
-                </div>
-              ) : (
-                <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
-              )
+              <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
             ) : (
               <>
-                {batch.truncated && (
-                  <div className="ask-ctx" data-testid="proposal-batch-truncated">
-                    The proposal inbox page is capped at {INBOX_LIMIT}, so this list may be
-                    truncated. Showing {batch.facts.length} pending facts of this entity here —
-                    approving promotes its whole batch.
-                  </div>
-                )}
+                <div className="ask-ctx" data-testid="proposal-batch-complete">
+                  This is the entity&apos;s complete pending batch: {batch.facts.length}{' '}
+                  fact{batch.facts.length === 1 ? '' : 's'} — one decision decides all of it.
+                </div>
                 <ul className="ask-facts-list">
                   {batch.facts.map((fact) => (
                     <li key={fact.id}>

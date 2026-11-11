@@ -81,6 +81,10 @@ import { decideApproval, getApproval, listApprovals } from '../../api/approvals'
 import { cancelRun, getRun } from '../../api/runs';
 import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
 import type { MemoryProposalView } from '../../api/memory';
+// The inbox page size has ONE client-side source (the card that renders a
+// proposal batch); the panel's reconcile imports it rather than carrying a
+// second copy that could disagree with the card about a full page.
+import { PROPOSAL_INBOX_LIMIT } from '../AriaProposalCard';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
@@ -1544,7 +1548,9 @@ describe('AriaPanel proposals decided elsewhere', () => {
   // (`MemoryProposalService.INBOX_LIMIT`), so a proposal can fall off it while it
   // is still pending. A capped read therefore cannot prove a departure, and the
   // panel must not claim "decided elsewhere" for a proposal it can still see.
-  it('does not call a proposal decided elsewhere when the PENDING page was capped', async () => {
+  // The page length is the SHARED source, so this stays true if the server cap
+  // is ever lowered: the rule is "below the cap", never a number of its own.
+  it('does not call a proposal decided elsewhere when the PENDING page filled the cap', async () => {
     mountWithPendingProposal();
     renderPanel();
     await openPanelForTest();
@@ -1552,7 +1558,9 @@ describe('AriaPanel proposals decided elsewhere', () => {
 
     // A full page of OTHER still-pending proposals: this one may simply be below it.
     mockListMemoryProposals.mockResolvedValue(
-      Array.from({ length: 50 }, (_, i) => proposalRow({ id: `other-${i}`, entityId: 'ent-other' })),
+      Array.from({ length: PROPOSAL_INBOX_LIMIT }, (_, i) =>
+        proposalRow({ id: `other-${i}`, entityId: 'ent-other' }),
+      ),
     );
     act(() => {
       window.dispatchEvent(new Event('focus'));
@@ -1560,7 +1568,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
     await act(async () => {});
 
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
-    // p1 is the proposal this test cares about (the page also lists 50 others —
+    // p1 is the proposal this test cares about (the page also lists a full page —
     // the restore is not conversation-scoped yet, m3): it is still pending.
     const card = screen.getAllByTestId('aria-proposal-card')
       .find((el) => el.getAttribute('data-proposal-id') === 'p1');
@@ -1568,6 +1576,30 @@ describe('AriaPanel proposals decided elsewhere', () => {
     // Still the operator's to decide, and still gating: the panel cannot prove it left.
     expect(within(card as HTMLElement).getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(textarea()).toBeDisabled();
+  });
+
+  // Positive control for the rule above, at the boundary: one row below the cap
+  // IS a provably complete page, so a departure may be claimed there.
+  it('settles a departure from a page that provably fits below the cap', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    mockListMemoryProposals.mockResolvedValue(
+      Array.from({ length: PROPOSAL_INBOX_LIMIT - 1 }, (_, i) =>
+        proposalRow({ id: `other-${i}`, entityId: 'ent-other' }),
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
+    const card = screen.getAllByTestId('aria-proposal-card')
+      .find((el) => el.getAttribute('data-proposal-id') === 'p1');
+    expect(card).toHaveAttribute('data-state', 'decided-elsewhere');
   });
 });
 

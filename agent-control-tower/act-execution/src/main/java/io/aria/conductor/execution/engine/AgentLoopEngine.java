@@ -665,11 +665,14 @@ public class AgentLoopEngine {
             if (ctx == null) {
                 return;
             }
-            try {
-                updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
-            } catch (Exception e) {
-                log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
-            }
+            // The ask is persisted BEFORE the run is committed as WAITING_INPUT, because
+            // that status is the sync waiter's return signal: AriaSyncRunWaiter returns as
+            // soon as it reads WAITING_INPUT and then names the PENDING CLARIFICATION ask,
+            // so a status committed first makes that read find nothing and the turn
+            // returns the old stub (F3, intermittently). Neither write has an ambient
+            // transaction here (the event is published from the run loop), so each
+            // repository call commits on its own and the order below is the commit order.
+            boolean askRaised = false;
             try {
                 String cardId = kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
                         .findFirst().map(KanbanItem::getId).orElse(null);
@@ -683,6 +686,7 @@ public class AgentLoopEngine {
                         .content(event.getQuestion())
                         .build();
                 approvalRepository.save(ask);
+                askRaised = true;
                 eventPublisher.publishEvent(new ApprovalRequestedEvent(this, ask.getId(), event.getRunId(),
                         null, Approval.ApprovalType.TOOL_CALL.name(), ApprovalSource.CLARIFICATION.name()));
             } catch (Exception e) {
@@ -690,10 +694,19 @@ public class AgentLoopEngine {
                 // from, /decide refuses the source, housekeeping skips it) — a
                 // swallowed failure here would park it forever with the operator
                 // seeing nothing. Wake it instead: the finalize path ends the run
-                // honestly and the completion sweep settles any partial state.
+                // honestly and the completion sweep settles any partial state. The
+                // run is deliberately left un-parked, so no reader can observe
+                // WAITING_INPUT without a question to answer.
                 log.error("Failed to create the clarification ask for {} - waking the parked run"
                         + " so it does not strand unreachable: {}", event.getRunId(), e.getMessage(), e);
                 inputCoordinator.recordTerminationIntent(event.getRunId());
+            }
+            if (askRaised) {
+                try {
+                    updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
+                } catch (Exception e) {
+                    log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
+                }
             }
             log.info("Run {} waiting for operator input", event.getRunId());
         } catch (Exception e) {

@@ -394,6 +394,13 @@ public class MemoryCommandService {
             throw new MemoryConflictException("fact " + factId + " moved from the expected version "
                     + command.expectedVersion() + " to " + current.getVersion() + "; re-read before superseding");
         }
+        // T34 Item 1 (P2): a supersede opens a fresh ACTIVE value, so it is a producer of current
+        // memory and owes the same dependent-read guard an addFact owes (T29 Item 2). Without it a
+        // fact whose parent was retired or merged gained an ACTIVE value no read path can see —
+        // recall matches ACTIVE entities only, the context contributor reads through recall, the
+        // default list is ACTIVE-only, and a MERGED source is not reachable from its survivor.
+        // Before any side effect: before the slot claim, the retire and the insert.
+        requireEntityForFact(current.getEntityId(), FactStatus.ACTIVE);
         if (origin == MemoryOrigin.RUN) {
             requireStructuralKey(current.getFactKey());
             requireProvenance(command.sourceRef());

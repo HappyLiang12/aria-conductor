@@ -457,6 +457,94 @@ class MemoryCommandServiceTest {
     }
 
     /**
+     * T34 Item 1 (P2). {@code supersedeFact} validated the fact row and built a fresh ACTIVE value
+     * without asking whether the fact's parent can carry current memory. A fact whose entity was
+     * retired therefore gained an ACTIVE value that no read path can see — recall matches ACTIVE
+     * entities only, the context contributor reads through recall and the default list is
+     * ACTIVE-only. The refusal must happen before any side effect (the current-value slot, the
+     * retire, the insert) and it must leave the old value current. The positive control is
+     * {@link #supersedeWithTheCurrentVersionRetiresTheOldFactAndWritesBothAssertions}.
+     */
+    @Test
+    void aSupersedeUnderARetiredParentIsRefusedAndLeavesTheOldValueCurrent() {
+        UUID entityId = id("person");
+        MemoryFact old = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.RETIRED);
+        when(facts.findById(old.getId())).thenReturn(Optional.of(old));
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.supersedeFact(old.getId(),
+                new SupersedeFactCommand("Asia/Hong_Kong", 3, null), OPERATOR))
+                .as("a supersede may only open a current value under an ACTIVE parent")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("RETIRED");
+
+        assertThat(old.getStatus())
+                .as("the refused supersede leaves the old value current, not retired")
+                .isEqualTo(FactStatus.ACTIVE);
+        assertThat(old.getValidTo()).as("the old value is still the live one").isNull();
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+        verify(entities, never()).save(any());
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
+    /**
+     * The MERGED half of the same defect: merge moves the source's facts to the survivor, so a new
+     * ACTIVE value written on the merged source is unreachable from the survivor too. Pinned
+     * separately from the RETIRED case because the refusal message tells the two apart.
+     */
+    @Test
+    void aSupersedeUnderAMergedParentIsRefusedAndLeavesTheOldValueCurrent() {
+        UUID entityId = id("merged-person");
+        UUID survivor = id("survivor");
+        MemoryFact old = currentFact(id("f1"), entityId, "timezone", "UTC", 3);
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.MERGED);
+        parent.setMergedInto(survivor);
+        when(facts.findById(old.getId())).thenReturn(Optional.of(old));
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.supersedeFact(old.getId(),
+                new SupersedeFactCommand("Asia/Hong_Kong", 3, null), OPERATOR))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("MERGED");
+
+        assertThat(old.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        assertThat(old.getValidTo()).isNull();
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+        verify(entities, never()).save(any());
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
+    /**
+     * The boundary audit of T34 Item 1 pins the other ACTIVE producer that reaches the guard
+     * indirectly: {@code addFactByKey} returns the existing identity row for a decided key unchanged
+     * (no re-proposal for an operator) and then takes the {@code addFact} ACTIVE branch. The refusal
+     * proves the guard, not the caller, is what stops a current value under a dead parent.
+     */
+    @Test
+    void anOperatorUnknownKeyOnARetiredEntityConflictsAndWritesNothing() {
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setCanonicalKey("person:happy");
+        retired.setStatus(EntityStatus.RETIRED);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(entities.findById(retired.getId())).thenReturn(Optional.of(retired));
+
+        assertThatThrownBy(() -> command.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("RETIRED");
+
+        verify(entities, never()).save(any());
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
      * The fact row carries its own {@code @Version}: two supersedes of the same row can pass
      * the service's expected-version check and still collide on the UPDATE. That loss is
      * raised by the flush, and it must be translated in the same method instead of escaping

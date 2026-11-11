@@ -31,8 +31,20 @@ export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
   | { type: 'restore'; conversationId: string; timeline: TimelineEntry[]; approvals: Approval[]; proposals: MemoryProposalSummary[] }
   | { type: 'userSent'; id: string; content: string; timestamp: string }
+  /**
+   * `turnId` IS the run id — the only turn identity a restored timeline carries.
+   * A caller must pass the run id (the `thinking` event's active run id), not a
+   * counter: anything else draws a second strip for a turn the snapshot already
+   * rendered, and the restored tool never settles.
+   */
   | { type: 'toolCall'; turnId: string; name: string; args?: string; now?: number }
+  /** `turnId` IS the run id — the same value the matching `toolCall` carried. */
   | { type: 'toolResult'; turnId: string; name: string; result: string; ok: boolean; now?: number }
+  /**
+   * Carries no turn id; the timeline re-delivers it by content. `turnId` on the
+   * tool events above IS the run id — the only turn identity a restored timeline
+   * carries.
+   */
   | { type: 'assistantMessage'; id: string; content: string; timestamp: string }
   | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
@@ -568,7 +580,8 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
 
     // Any other tool row is the result of the tool still running in this run.
     // A result whose call row never landed is still audited output: render it
-    // as its own one-tool strip instead of dropping it.
+    // as its own one-tool strip instead of dropping it. Its `ok` carries the
+    // same limit as the restored status below.
     if (at < 0) {
       items.push({
         kind: 'activity',
@@ -580,6 +593,8 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
       return;
     }
     const strip = items[at] as ActivityItem;
+    // Attribution is positional: TimelineEntry exposes no toolCallId. The core rows
+    // do persist `tool_call_id`, so identity matching arrives with that upstream field.
     let target = -1;
     for (let i = strip.tools.length - 1; i >= 0; i -= 1) {
       if (strip.tools[i].status === 'running') {
@@ -591,6 +606,10 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
     const tool = strip.tools[target];
     const durationMs = tool.startedAt > 0 && startedAt >= tool.startedAt ? startedAt - tool.startedAt : undefined;
     const tools = strip.tools.slice();
+    // `ok` means "the timeline does not say otherwise": TimelineEntry carries no
+    // failure flag, so a failed or denied tool is indistinguishable from a success
+    // after a reload. The honest status needs a field end-to-end (scheduled
+    // follow-up); do not invent a member for it here.
     tools[target] = {
       ...tool,
       status: 'ok',

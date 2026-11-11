@@ -13,8 +13,11 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +33,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -51,14 +56,18 @@ class AriaConversationControllerTest {
     private final AriaService ariaService = mock(AriaService.class);
     private final io.aria.conductor.agent.service.RunService runService =
             mock(io.aria.conductor.agent.service.RunService.class);
+    private final OperatorAuthorityResolver operatorAuthority = mock(OperatorAuthorityResolver.class);
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AriaConversationController(
                 runRepository, trajectoryRepository, auditEventRepository, toolCallRepository,
-                ariaService, runService))
+                ariaService, runService, operatorAuthority))
                 .setControllerAdvice(new GlobalExceptionHandler(new MockEnvironment()))
                 .build();
+        // The operator path is the default: every existing case below is the local operator.
+        lenient().when(operatorAuthority.resolveOperator(any(), anyBoolean()))
+                .thenReturn(ActorPrincipal.operator(null));
     }
 
     private Run run(String conversationId, RunStatus status, Instant createdAt) {
@@ -416,6 +425,29 @@ class AriaConversationControllerTest {
                 .andExpect(jsonPath("$[0].toolStatus").doesNotExist())
                 .andExpect(jsonPath("$[0].toolCallId").value("call-d"))
                 .andExpect(jsonPath("$[1].toolStatus").doesNotExist());
+    }
+
+    @Test
+    void delete_refusesAWorkerCredentialAndPurgesNothing() throws Exception {
+        when(operatorAuthority.resolveOperator(any(), anyBoolean()))
+                .thenThrow(new OperatorSessionService.ForbiddenMutationException("Operator authority required"));
+
+        mockMvc.perform(delete("/api/v1/aria/conversations/conv-1")
+                        .header("Authorization", "Bearer worker-run-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(
+                        "Operator authority required: deleting a conversation is an operator decision. "
+                                + "Deleting a conversation cancels its runs and destroys its history; do it "
+                                + "from the dashboard as the local operator."));
+
+        // Before the first read: a refused caller cannot even enumerate the conversation's runs,
+        // let alone cancel one or destroy its history.
+        verify(runRepository, never()).findByConversationIdOrderByCreatedAtAsc(any());
+        verify(runService, never()).cancelRun(any());
+        verify(runRepository, never()).save(any(Run.class));
+        verify(toolCallRepository, never()).deleteByRunIdIn(any());
+        verify(trajectoryRepository, never()).deleteByRunIdIn(any());
+        verify(auditEventRepository, never()).deleteByConversationId(any());
     }
 
     @Test

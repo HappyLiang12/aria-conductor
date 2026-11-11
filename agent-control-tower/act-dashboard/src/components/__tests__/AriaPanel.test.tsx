@@ -1412,6 +1412,38 @@ describe('AriaPanel memory proposals', () => {
     expect(textarea()).toBeEnabled();
   });
 
+  // Task 37 Item 1, panel level: the card settles, so the composer must be usable
+  // again. Before this, a fact whose parent entity is still PENDING kept the gate
+  // ("Answer the pending decision first.") on an ask this card can never decide.
+  it('releases the composer when a fact decision is blocked on its pending entity', async () => {
+    streamProposal();
+    mockDecideMemoryProposal.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message:
+            'memory fact p1 belongs to entity ent-7, which is still PENDING; decide the entity '
+            + 'proposal ent-7 to promote or retire the whole batch instead of approving one fact',
+        },
+      },
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    const notice = await screen.findByTestId('aria-proposal-blocked-on-entity');
+    expect(notice).toHaveTextContent(/decide the entity proposal ent-7/i);
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+  });
+
   it('restores the PENDING proposals the memory inbox lists, after the transcript they belong to', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([

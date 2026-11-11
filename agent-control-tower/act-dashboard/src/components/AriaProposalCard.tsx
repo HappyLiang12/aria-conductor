@@ -7,6 +7,9 @@ import type { PanelItem } from './ariaPanelState';
 /** Task 4's in-panel proposal item; this card adds no contract of its own. */
 export type ProposalPanelItem = Extract<PanelItem, { kind: 'proposal' }>;
 
+/** The settled reasons a proposal card can report without a verdict. */
+export type ProposalSettledState = 'approved' | 'rejected' | 'decided-elsewhere' | 'blocked-on-entity';
+
 export interface AriaProposalCardProps {
   item: ProposalPanelItem;
   /**
@@ -15,9 +18,11 @@ export interface AriaProposalCardProps {
    * is reported for a 409 whose body says the proposal was ALREADY decided: the
    * server says it is settled, and the card cannot know by which verdict. A 409
    * the handler serves for a retryable lock conflict does not settle anything,
-   * and a refused decision never calls it — nothing was decided.
+   * `blocked-on-entity` is reported for the non-retryable parent-still-PENDING
+   * refusal (the entity proposal owns the decision), and a refused decision
+   * never calls it — nothing was decided.
    */
-  onSettled?: (proposalId: string, state: 'approved' | 'rejected' | 'decided-elsewhere') => void;
+  onSettled?: (proposalId: string, state: ProposalSettledState) => void;
 }
 
 /** The HTTP status a failed call answered with, or null when it did not answer. */
@@ -43,6 +48,18 @@ function responseStatus(error: unknown): number | null {
  */
 const ALREADY_DECIDED_MARKER = 'a decided proposal cannot be reopened';
 
+/**
+ * The parent-still-PENDING refusal, also a non-retryable 409 (same status, same
+ * `errorType`): `MemoryProposalService.decideFact` refuses to promote one fact
+ * under a PENDING entity, because the ENTITY proposal is the batch that owns it.
+ * The message names that entity ("... which is still PENDING; decide the entity
+ * proposal <entityId> to promote or retire the whole batch"). Retrying this
+ * card's decision re-sends the same refused call, so it settles instead — on the
+ * entity decision, which is the action that actually resolves it.
+ */
+const PARENT_PENDING_MARKER = 'which is still PENDING; decide the entity proposal';
+const PARENT_PENDING_ENTITY = /decide the entity proposal\s+(\S+)/;
+
 function isAlreadyDecidedConflict(error: unknown): boolean {
   if (responseStatus(error) !== 409) return false;
   const data = (error as {
@@ -50,6 +67,22 @@ function isAlreadyDecidedConflict(error: unknown): boolean {
   } | undefined)?.response?.data;
   if (data?.errorType !== 'CONFLICT') return false;
   return typeof data.message === 'string' && data.message.includes(ALREADY_DECIDED_MARKER);
+}
+
+/**
+ * The entity id named by a parent-still-PENDING 409, or null when the body is not
+ * that refusal. An empty string means the marker matched but the id could not be
+ * read: the card still says the entity decision owns it, without inventing one.
+ */
+function parentPendingEntityId(error: unknown): string | null {
+  if (responseStatus(error) !== 409) return null;
+  const data = (error as {
+    response?: { data?: { errorType?: unknown; message?: unknown } };
+  } | undefined)?.response?.data;
+  if (data?.errorType !== 'CONFLICT') return null;
+  if (typeof data.message !== 'string' || !data.message.includes(PARENT_PENDING_MARKER)) return null;
+  const match = PARENT_PENDING_ENTITY.exec(data.message);
+  return match ? match[1] : '';
 }
 
 /** Human title per subject type; ENTITY and FACT are the two shipped today. */
@@ -61,6 +94,23 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
       return 'New relation';
     default:
       return 'New fact';
+  }
+}
+
+/**
+ * The state pill's wording. `decided-elsewhere` and `blocked-on-entity` are not
+ * the raw state names an operator can read: one says the proposal left the
+ * PENDING queue without a known verdict, the other says its own decision is
+ * owned by its entity's proposal.
+ */
+function stateLabel(state: ProposalPanelItem['state'] | ProposalSettledState): string {
+  switch (state) {
+    case 'decided-elsewhere':
+      return 'decided elsewhere';
+    case 'blocked-on-entity':
+      return 'blocked on its entity';
+    default:
+      return state;
   }
 }
 
@@ -134,9 +184,12 @@ function batchSignature(batch: BatchRead | null | undefined): string | null {
 export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // Local settlement, layered over the item's own state: a re-render with a
   // settled item wins, so the panel stays the single owner of restored history.
-  const [local, setLocal] = useState<'approved' | 'rejected' | 'decided-elsewhere' | null>(null);
+  const [local, setLocal] = useState<ProposalSettledState | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
   const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
+  // The entity whose pending proposal owns this card's decision, when the server
+  // refused it for that reason. Empty string: the marker matched, the id did not.
+  const [blockedEntityId, setBlockedEntityId] = useState<string | null>(null);
   const entityId = item.entityId;
   // Only a PENDING entity proposal decides a batch; a settled one (including
   // `decided-elsewhere`, whose outcome this panel cannot know) must not read it.
@@ -225,6 +278,17 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
         onSettled?.(item.proposalId, 'decided-elsewhere');
         return;
       }
+      // The parent-still-PENDING refusal is the other non-retryable 409: the
+      // proposal is still pending, but the ENTITY proposal owns the decision, so
+      // this card settles on that action instead of keeping a Retry that can
+      // only be refused again (and would keep the composer gated behind it).
+      const blockedOnEntity = parentPendingEntityId(err);
+      if (blockedOnEntity !== null) {
+        setBlockedEntityId(blockedOnEntity);
+        setLocal('blocked-on-entity');
+        onSettled?.(item.proposalId, 'blocked-on-entity');
+        return;
+      }
       setError({
         text: apiErrorMessage(err, 'The proposal was not decided — retry.'),
         operatorRejected: isOperatorRejection(err),
@@ -299,7 +363,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       )}
       <div className="ask-meta">
         <span className={`pill ${state === 'pending' ? 'warn' : state === 'approved' ? 'ok' : 'dim'}`}>
-          {state === 'decided-elsewhere' ? 'decided elsewhere' : state}
+          {stateLabel(state)}
         </span>
         {item.sensitivity && <span className="pill dim">{item.sensitivity}</span>}
       </div>
@@ -322,6 +386,22 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           >
             {inFlight === 'REJECT' ? 'Rejecting…' : 'Reject'}
           </button>
+        </div>
+      ) : state === 'blocked-on-entity' ? (
+        // The server refused this decision because the proposal's parent entity
+        // is still PENDING: the ENTITY proposal is the batch that owns it. This
+        // card's own decision can only be refused again, so it offers none — and
+        // it never claims the proposal left the queue, which is what
+        // `decided-elsewhere` means and would be false here.
+        <div className="ask-ctx" role="status" data-testid="aria-proposal-blocked-on-entity">
+          {blockedEntityId
+            ? <>Approving this on its own was refused: its entity{' '}
+              <span className="cell-mono">{blockedEntityId}</span> is still pending. Decide the entity
+              proposal {blockedEntityId} first — that one decision promotes or retires its whole batch.
+              Nothing was decided here.</>
+            : <>Approving this on its own was refused: its entity is still pending. Decide the entity
+              proposal first — that one decision promotes or retires its whole batch. Nothing was
+              decided here.</>}
         </div>
       ) : state === 'decided-elsewhere' ? (
         // A PENDING inbox read no longer listed it, and that inbox is a bounded

@@ -378,6 +378,16 @@ public class RunService {
                     .map(RunRepository.RunStateView::getStatus)
                     .orElse(null);
             if (committed != null && TERMINAL_STATUSES.contains(committed)) {
+                if (verified && committed == RunStatus.CANCELLED) {
+                    // T49: the requested terminal state is the state that stands. The
+                    // coordinator's own terminal write for a turn its core reported as
+                    // cancelled can beat this short writer (it stops the writers first and
+                    // the core's cancelled prompt result wakes it before the control record
+                    // lands). The operator's cancel DID take effect, so answering a conflict
+                    // here would be false; only a run that reached a different terminal state
+                    // keeps the pinned settlement below.
+                    return toResponse(findRunOrThrow(id));
+                }
                 // A verified stop that lost the write is not "nothing was stopped": the
                 // runtime was stopped and only the recorded state was refused.
                 throw verified

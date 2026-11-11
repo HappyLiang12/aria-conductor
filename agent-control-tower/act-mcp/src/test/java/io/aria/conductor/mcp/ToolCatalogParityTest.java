@@ -346,6 +346,24 @@ class ToolCatalogParityTest {
                 .contains(clause);
     }
 
+    /**
+     * T29 Item 6 (P3). {@code get_memory_entity} described only the not-found outcome, but the read
+     * has a FORBIDDEN fallback for a PENDING row that reaches it without operator authority. Both
+     * outcomes are stated, on both copies.
+     */
+    @Test
+    void getMemoryEntityDescriptionStatesBothTheNotFoundAndTheForbiddenOutcome() {
+        String clause = "Should a PENDING row still reach this read, an operator credential may see it "
+                + "and any other credential is refused with FORBIDDEN.";
+
+        assertThat(catalog.find("get_memory_entity").orElseThrow().description())
+                .as("catalog mirror")
+                .contains(clause);
+        assertThat(registeredDescription("get_memory_entity"))
+                .as("registered @Tool annotation")
+                .contains(clause);
+    }
+
     private static String registeredRememberFactDescription() {
         return registeredDescription("remember_fact");
     }

@@ -75,7 +75,7 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.",
                     true),
             read("get_memory_entity",
-                    "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page.",
+                    "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page. Should a PENDING row still reach this read, an operator credential may see it and any other credential is refused with FORBIDDEN.",
                     true),
             operatorOnly("forget_fact",
                     "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."),

@@ -358,15 +358,20 @@ function settleClarification(
 
 type ProposalPatch = MemoryProposalSummary & { state: ProposalItem['state'] };
 
+/** The display fields a summary carries onto its card, when it carries them. */
+function proposalFields(proposal: MemoryProposalSummary): Omit<ProposalItem, 'kind' | 'id' | 'proposalId' | 'state'> {
+  return {
+    subjectType: proposal.subjectType,
+    ...(proposal.entityId !== undefined ? { entityId: proposal.entityId } : {}),
+    ...(proposal.factKey !== undefined ? { factKey: proposal.factKey } : {}),
+    ...(proposal.valueText !== undefined ? { valueText: proposal.valueText } : {}),
+    ...(proposal.sensitivity !== undefined ? { sensitivity: proposal.sensitivity } : {}),
+  };
+}
+
 function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'proposal' && item.proposalId === patch.id);
-  const fields = {
-    subjectType: patch.subjectType,
-    ...(patch.entityId !== undefined ? { entityId: patch.entityId } : {}),
-    ...(patch.factKey !== undefined ? { factKey: patch.factKey } : {}),
-    ...(patch.valueText !== undefined ? { valueText: patch.valueText } : {}),
-    ...(patch.sensitivity !== undefined ? { sensitivity: patch.sensitivity } : {}),
-  };
+  const fields = proposalFields(patch);
   if (index < 0) {
     const card: ProposalItem = {
       kind: 'proposal',
@@ -378,9 +383,13 @@ function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
     return { items: [...state.items, card], conversationId: state.conversationId };
   }
   const existing = state.items[index] as ProposalItem;
-  // A decided proposal is never reopened by a re-delivered creation signal.
-  if (existing.state !== 'pending') return state;
-  return replaceItem(state, index, { ...existing, ...fields });
+  // The operator's own verdict is closed for good. `decided-elsewhere` is not a
+  // verdict — it only reported that the inbox had dropped the row — and a
+  // re-proposal returns the same id to PENDING (the server flips the same
+  // entity row back to review), so that card becomes the operator's to decide
+  // again instead of staying dead next to a live proposal.
+  if (existing.state !== 'pending' && existing.state !== 'decided-elsewhere') return state;
+  return replaceItem(state, index, { ...existing, ...fields, state: patch.state });
 }
 
 function settleProposal(state: PanelState, proposalId: string, nextState: ProposalItem['state']): PanelState {
@@ -418,9 +427,6 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
   const askIds = new Set(
     items.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
   );
-  const proposalIds = new Set(
-    items.flatMap((item) => (item.kind === 'proposal' ? [item.proposalId] : [])),
-  );
 
   for (const approval of event.approvals) {
     if (approval.status !== 'PENDING' || !runIds.has(approval.runId)) continue;
@@ -442,17 +448,23 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
     // `act-memory/.../dto/MemoryProposalView.java`, mirror it in
     // `src/api/memory.ts` (`MemoryProposalView`) and in `MemoryProposalSummary`
     // below, and this loop becomes `if (!runIds.has(proposal.runId)) continue;`.
-    if (proposalIds.has(proposal.id)) continue;
-    proposalIds.add(proposal.id);
+    const at = items.findIndex((item) => item.kind === 'proposal' && item.proposalId === proposal.id);
+    if (at >= 0) {
+      const existing = items[at] as ProposalItem;
+      // The operator's own verdict stands, whatever the listing says. A
+      // `decided-elsewhere` card only ever reported that the inbox had dropped
+      // the row, and the server re-proposes a decided id back to PENDING — so a
+      // listing that carries the same id again is a live decision, not a
+      // re-delivery, and the card must reopen instead of staying dead.
+      if (existing.state !== 'decided-elsewhere') continue;
+      items[at] = { ...existing, ...proposalFields(proposal), state: 'pending' };
+      continue;
+    }
     items.push({
       kind: 'proposal',
       id: `proposal:${proposal.id}`,
       proposalId: proposal.id,
-      subjectType: proposal.subjectType,
-      ...(proposal.entityId !== undefined ? { entityId: proposal.entityId } : {}),
-      ...(proposal.factKey !== undefined ? { factKey: proposal.factKey } : {}),
-      ...(proposal.valueText !== undefined ? { valueText: proposal.valueText } : {}),
-      ...(proposal.sensitivity !== undefined ? { sensitivity: proposal.sensitivity } : {}),
+      ...proposalFields(proposal),
       state: 'pending',
     });
   }

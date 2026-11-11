@@ -560,21 +560,70 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(hasUnansweredCard(s)).toBe(false);
   });
 
-  it('never reopens a decided-elsewhere proposal, nor downgrades it to a verdict', () => {
-    const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
-    let s = panelReducer(base, { type: 'proposalCreated', proposal });
-    s = panelReducer(s, { type: 'proposalSettled', proposalId: 'p1', state: 'decided-elsewhere' });
-    // A re-delivered creation signal…
-    s = panelReducer(s, { type: 'proposalCreated', proposal });
-    // …and a restore that lists it again (an off-page proposal that came back)
-    // must not resurrect an actionable card behind a claim it is still pending.
-    s = panelReducer(s, {
-      type: 'restore', conversationId: 'conv-1',
-      timeline: [], approvals: [], proposals: [proposal],
+  // The server re-proposes a decided entity id (a re-proposal returns the SAME
+  // id to PENDING), so a card that only ever said "decided elsewhere" is a live
+  // decision again. The operator's own verdict is not: an approved or rejected
+  // card is theirs, and no listing may hand it back.
+  describe('a re-proposed id reopens only what the operator did not decide', () => {
+    const reproposed = { id: 'ent-1', subjectType: 'ENTITY' as const, entityId: 'ent-1', factKey: 'person:happy' };
+
+    function settledAs(state: 'approved' | 'rejected' | 'decided-elsewhere') {
+      const created = panelReducer(base, { type: 'proposalCreated', proposal: reproposed });
+      return panelReducer(created, { type: 'proposalSettled', proposalId: 'ent-1', state });
+    }
+
+    it('reopens a decided-elsewhere card the PENDING listing lists again', () => {
+      let s = settledAs('decided-elsewhere');
+      expect(hasUnansweredCard(s)).toBe(false);
+
+      s = panelReducer(s, {
+        type: 'restore', conversationId: 'conv-1',
+        timeline: [], approvals: [], proposals: [reproposed],
+      });
+
+      expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
+      expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({
+        proposalId: 'ent-1', subjectType: 'ENTITY', state: 'pending',
+      });
+      // Actionable again: the row is PENDING, so the operator must be able to act.
+      expect(hasUnansweredCard(s)).toBe(true);
     });
-    expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
-    expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'decided-elsewhere' });
-    expect(hasUnansweredCard(s)).toBe(false);
+
+    it('reopens a decided-elsewhere card on the live re-proposal signal', () => {
+      let s = settledAs('decided-elsewhere');
+
+      s = panelReducer(s, { type: 'proposalCreated', proposal: reproposed });
+
+      expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'pending' });
+      expect(hasUnansweredCard(s)).toBe(true);
+    });
+
+    it('never reopens an approved card, nor downgrades it to a verdict it is not', () => {
+      let s = settledAs('approved');
+
+      s = panelReducer(s, { type: 'proposalCreated', proposal: reproposed });
+      s = panelReducer(s, {
+        type: 'restore', conversationId: 'conv-1',
+        timeline: [], approvals: [], proposals: [reproposed],
+      });
+
+      expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
+      expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'approved' });
+      expect(hasUnansweredCard(s)).toBe(false);
+    });
+
+    it('never reopens a rejected card', () => {
+      let s = settledAs('rejected');
+
+      s = panelReducer(s, { type: 'proposalCreated', proposal: reproposed });
+      s = panelReducer(s, {
+        type: 'restore', conversationId: 'conv-1',
+        timeline: [], approvals: [], proposals: [reproposed],
+      });
+
+      expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'rejected' });
+      expect(hasUnansweredCard(s)).toBe(false);
+    });
   });
 
   it('replaces the single queued item and removes it on an empty list', () => {

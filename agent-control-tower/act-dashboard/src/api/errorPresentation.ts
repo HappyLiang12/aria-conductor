@@ -1,4 +1,4 @@
-import { apiErrorMessage, isOperatorRejection } from './operatorSession';
+import { apiErrorMessage, isCrossOriginRejection, isOperatorRejection } from './operatorSession';
 
 export type ConfigureTab = 'llm' | 'runtime' | 'config';
 
@@ -29,6 +29,13 @@ export interface PresentedError {
    * when the server refused, so every other presentation shape is unchanged.
    */
   operatorRejected?: true;
+  /**
+   * The 403 carried the cross-origin marker: the request came from a page the
+   * backend does not trust, which is not an authority problem. Callers that
+   * render the operator-session notice render the cross-site remedy for this
+   * instead. Absent (never false) on every other presentation.
+   */
+  crossOriginRejected?: true;
 }
 
 const LLM_ACTION: ErrorAction = { tab: 'llm', label: 'Open Configure → LLM Providers' };
@@ -123,6 +130,7 @@ export function presentError(error: unknown, fallback: string): PresentedError {
     // Absent rather than false: a presented error keeps its exact previous shape
     // unless the server actually refused, so no consumer reads a new key.
     ...(isOperatorRejection(error) ? { operatorRejected: true as const } : {}),
+    ...(isCrossOriginRejection(error) ? { crossOriginRejected: true as const } : {}),
   };
 }
 
@@ -155,4 +163,25 @@ export const OPERATOR_REMEDY_COPY = (
  */
 export function operatorSessionMessage(actionLabel: string): string {
   return `${actionLabel} is operator-only, so the server refused it. ${OPERATOR_REMEDY_COPY}`;
+}
+
+/**
+ * The OTHER refusal the operator routes serve with a 403: the request's Origin
+ * named a page the backend does not trust (`CROSS_ORIGIN_REJECTION_MARKER`). It
+ * is not an authority problem, so the operator remedy — "the operator who runs
+ * the backend must grant access" — answers the wrong question: no grant makes a
+ * forged cross-site request trusted. The fix is to use an origin the backend
+ * allows, which is what this says. One copy, composed by every refusal surface
+ * that distinguishes the two cases.
+ */
+export const CROSS_SITE_REMEDY_COPY = (
+  'The request came from a page whose origin the backend does not trust, so it refused the change '
+  + '— this is not a missing operator session. Open the dashboard on the origin the backend trusts '
+  + '(the front end it was started with) and make the change there.'
+);
+
+/** The cross-site refusal for a named action; builds on `CROSS_SITE_REMEDY_COPY`. */
+export function crossSiteSessionMessage(actionLabel: string): string {
+  return `${actionLabel} was refused as a cross-site request, not for want of the operator. `
+    + CROSS_SITE_REMEDY_COPY;
 }

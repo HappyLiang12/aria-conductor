@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { LlmProvider } from '../../types';
@@ -17,12 +17,14 @@ import {
   listProviders,
   createProvider,
   activateProvider,
+  deleteProvider,
 } from '../../api/llmProviders';
 import { SettingsPage } from '../SettingsPage';
 
 const list = vi.mocked(listProviders);
 const create = vi.mocked(createProvider);
 const activate = vi.mocked(activateProvider);
+const remove = vi.mocked(deleteProvider);
 
 function provider(over: Partial<LlmProvider> = {}): LlmProvider {
   return {
@@ -125,5 +127,46 @@ describe('SettingsPage LLM-provider refusals (Task 30)', () => {
     expect(notice).toHaveTextContent(/changing llm providers is operator-only/i);
     expect(screen.queryByText(/CREATE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Failed to create provider/)).not.toBeInTheDocument();
+  });
+
+  // Task 37 / Item 6 (T35 audit row 11): delete only closes the Confirm Delete
+  // dialog on success, so a refusal rendered at page level sat behind the
+  // still-open dialog — present in the document, invisible to the operator.
+  async function openDeleteDialog() {
+    ui();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    return screen.getByRole('dialog', { name: /confirm delete/i });
+  }
+
+  it('shows the delete refusal inside the Confirm Delete dialog that caused it', async () => {
+    remove.mockRejectedValue({
+      response: { status: 403, data: { message: 'DELETE_RAW_SERVER_TEXT' } },
+    });
+
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    const notice = await within(dialog).findByTestId('operator-session-notice');
+    expect(notice).toBeVisible();
+    expect(notice).toHaveTextContent(/deleting the llm provider is operator-only/i);
+    // The refusal is not the server's raw wording, and it is not a toast.
+    expect(within(dialog).queryByText(/DELETE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Failed to delete provider/)).not.toBeInTheDocument();
+    // The dialog is still up: the operator is deciding here, not on the page.
+    expect(screen.getByRole('dialog', { name: /confirm delete/i })).toBeInTheDocument();
+  });
+
+  // Positive control: a 500 is a fault, not a session problem. It keeps the
+  // ordinary toast and must not fabricate an operator-session notice.
+  it('keeps the ordinary toast for a 500 delete and shows no session notice', async () => {
+    remove.mockRejectedValue({
+      response: { status: 500, data: { message: 'provider store unavailable' } },
+    });
+
+    const dialog = await openDeleteDialog();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('provider store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });

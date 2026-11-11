@@ -35,14 +35,18 @@ the operator can actually run from the conversation. Three waves, twelve defects
   status/result identity keyed by the producer's own row-id derivation.
 
 **Truth surface**
-- `usageState` (`REPORTED` / `NOT_REPORTED` / `NEVER_OBSERVED`) and `runsWithoutUsage` on the shared
-  summary payload; the aggregate and the classifier share one expression.
+- `usageState` (`REPORTED` / `NOT_REPORTED`) and the nullable token total on `RunResponse`
+  (`RunResponse.java:44`, classified by `RunService.usageStateOf:526`); `runsWithoutUsage` on the
+  dashboard summary. The aggregate (`RunRepository.sumReportedUsage`) and the classifier share one
+  expression, so a measured zero and a silence are never conflated.
 - The token KPI reads "not reported" with the count of runs that reported nothing.
 - `TemplateListing(templates, totalApproved)` replaces the false "no template is approved" claim.
 
 **Memory operation**
-- `remember_fact` accepts either `entityId` or `kind` + `canonicalKey`; the unknown-key shape proposes
-  a PENDING entity and its first fact in ONE transaction, and one operator decision promotes both.
+- `remember_fact` accepts either `entityId` or `kind` + `canonicalKey`. Only the **new-key** shape
+  creates a PENDING entity together with its first PENDING fact in one transaction, and one operator
+  decision promotes both. An existing ACTIVE or PENDING key adds a fact to that entity; a RETIRED or
+  MERGED key is re-proposed to PENDING by a worker call, with the fact waiting on that proposal.
 - A proposal batch is the entity's PENDING facts (spec `:116-117`, `:323-324`). The `entityId` filter on
   `GET /api/v1/memory/proposals` returns exactly the set the decision promotes, uncapped.
 - The Memory page lists and opens PENDING entities through an operator-authorised review read; the
@@ -89,10 +93,16 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
 - **A PENDING entity is invisible to every agent-facing read** — recall, the context contributor, the
   default list, the default detail, `get_memory_entity`, and the proposals inbox (which withholds ENTITY
   rows from a non-operator). The operator sees it through the explicit review read.
-- **A 409 on a proposal decision is disambiguated** *(in flight, task T32 — not yet merged)*: an
-  already-decided conflict settles the card as decided elsewhere; a retryable optimistic-lock conflict
-  keeps a retry that can succeed. Until T32 lands, every 409 settles the card, which is wrong for a lock
-  conflict.
+- **A 409 on a proposal decision is disambiguated**: an already-decided conflict settles the card as
+  decided elsewhere; a retryable optimistic-lock conflict keeps a retry that can succeed. The
+  discrimination is a POSITIVE marker, not a substring of the retryable text: the card settles only
+  when the body is `errorType = CONFLICT` **and** its message contains
+  `a decided proposal cannot be reopened` (`AriaProposalCard.tsx:54,68-75`). Every other 409 — including
+  the current-value slot's `another writer won the race` and the command service's
+  `re-read before retrying` — keeps the ordinary error path and its retry, so an unknown wording fails
+  safe toward retryable. The parent-still-PENDING refusal has its own marker and settles on the entity
+  decision (`:65-66`). The REST envelope is closed to four error codes, so no new code or field was
+  added; the server-side mutual-exclusion pins keep the markers disjoint.
 - **A re-proposal returns the same identity row to PENDING.** An ACTIVE row is never demoted, and a
   re-proposal retires the retired entity's stale live graph so a new batch cannot inherit old values.
 
@@ -135,5 +145,15 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    is weaker in one known way: OS/Node/browser portability and the Docker image job are untested locally.
 4. **MariaDB execution** is unverified; every local tier runs the H2 profile.
 5. **The qoder usage spike outcome** is to be measured in the live phase and recorded here.
-6. **Coverage ratchets have never been exercised in this program.** A threshold failure at the full gate
-   is a real possibility and must be triaged, not suppressed.
+6. **Coverage ratchets were exercised once, ahead of the full gate.** A non-`~/.m2`-writing coverage
+   preflight at `df93716d` passed with a wide margin (log:
+   `.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`). The full clean-room
+   gate re-runs both threshold-enforcing tiers; a threshold failure there is a real failure to triage,
+   not to suppress.
+7. **The retryable-409 wordings are not all pinned server-side.** The card's positive-marker rule
+   (above) means a divergent retryable tail cannot mis-settle it: `MemoryCurrentValueSlot.java:50-51`
+   says `another writer won the race — re-read before writing` and `MemoryCommandService.java:781` says
+   `re-read before retrying`, and neither carries the already-decided marker, so both keep a retry.
+   The residual is TEST COVERAGE, not behaviour: the taxonomy pins in `MemoryProposalServiceTest` cover
+   the two proposal flushes, and a fix round is extending them to the slot-claim wording reachable from
+   `decideFact`. Until that lands, a future edit to the slot wording would not be caught by a pin.

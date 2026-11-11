@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
-import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
+import { applyOperatorHeaders } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 import DiffPreview from './DiffPreview';
@@ -27,7 +27,12 @@ function timeAgo(iso: string): string {
 
 export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string | null>(null);
+  // Task 37 / Item 6: the refusal keeps the error itself, not its message, so the
+  // shared operator notice can classify it. A 401/403 is a session problem with
+  // a remedy; anything else renders the server's text.
+  const [actionError, setActionError] = useState<
+    { error: unknown; action: string; fallback: string } | null
+  >(null);
 
   const { data: approvals, isLoading, error } = useQuery({
     queryKey: ['approvals', 'PENDING', runId ?? 'all'],
@@ -46,7 +51,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
-    onError: (err: unknown) => setActionError(apiErrorMessage(err, 'Approve failed.')),
+    onError: (err: unknown) => setActionError({
+      error: err,
+      action: 'Approving the ask',
+      fallback: 'Approve failed.',
+    }),
   });
 
   const rejectMutation = useMutation({
@@ -59,7 +68,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
-    onError: (err: unknown) => setActionError(apiErrorMessage(err, 'Reject failed.')),
+    onError: (err: unknown) => setActionError({
+      error: err,
+      action: 'Denying the ask',
+      fallback: 'Reject failed.',
+    }),
   });
 
   const items = (approvals ?? []).filter((a) => !runId || a.runId === runId);
@@ -71,7 +84,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
         <span className="accent">· {items.length} pending</span>
       </h2>
       {actionError && (
-        <div className="error-state" role="alert">{actionError}</div>
+        <ErrorNotice
+          presented={presentError(actionError.error, actionError.fallback)}
+          operatorSession
+          actionLabel={actionError.action}
+        />
       )}
       <div className="queue">
         {isLoading && (

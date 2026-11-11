@@ -626,6 +626,65 @@ describe('panelReducer clarifications, proposals and queue', () => {
     });
   });
 
+  // Task 37 Item 1: a FACT proposal whose parent entity is still PENDING cannot
+  // be decided from its own card — the decision that owns it is the entity's. That
+  // refusal is settled and non-retryable, so it needs a settled reason of its own:
+  // "blocked on the entity decision" is neither a verdict (approved/rejected) nor
+  // "decided elsewhere" (which would claim the proposal left the PENDING queue
+  // while it is still there).
+  it('settles a proposal blocked on its pending entity without inventing a verdict', () => {
+    const proposal = { id: 'f1', subjectType: 'FACT' as const, entityId: 'ent-7', factKey: 'timezone', valueText: 'Asia/Shanghai' };
+    let s = panelReducer(base, { type: 'proposalCreated', proposal });
+    expect(hasUnansweredCard(s)).toBe(true);
+
+    s = panelReducer(s, { type: 'proposalSettled', proposalId: 'f1', state: 'blocked-on-entity' });
+
+    const card = s.items.find((i) => i.kind === 'proposal');
+    expect(card).toMatchObject({ state: 'blocked-on-entity', entityId: 'ent-7' });
+    expect(card).not.toMatchObject({ state: 'approved' });
+    expect(card).not.toMatchObject({ state: 'rejected' });
+    expect(card).not.toMatchObject({ state: 'decided-elsewhere' });
+    // Settled for gating: the card's only remaining control could 409 forever.
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
+  // Reachability: this reason comes from ONE event — the card's own classification
+  // of the parent-PENDING 409. No listing, re-delivery or other settle event may
+  // produce it, and a listing that still carries the row must not reopen it: the
+  // parent is still pending, so reopening would re-gate the composer on a decision
+  // that can only be refused again.
+  it('reaches blocked-on-entity only through its settle event, and never reopens it', () => {
+    const proposal = { id: 'f1', subjectType: 'FACT' as const, entityId: 'ent-7', factKey: 'timezone', valueText: 'Asia/Shanghai' };
+    let s = panelReducer(base, { type: 'proposalCreated', proposal });
+    const settled = panelReducer(s, { type: 'proposalSettled', proposalId: 'f1', state: 'blocked-on-entity' });
+
+    // Every other event leaves the pending card pending — only the settle event
+    // above can name this reason.
+    for (const event of [
+      { type: 'proposalCreated' as const, proposal },
+      { type: 'restore' as const, conversationId: 'conv-1', timeline: [], approvals: [], proposals: [proposal] },
+    ]) {
+      expect(panelReducer(s, event).items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'pending' });
+    }
+    for (const state of ['approved', 'rejected', 'decided-elsewhere'] as const) {
+      const other = panelReducer(s, { type: 'proposalSettled', proposalId: 'f1', state });
+      expect(other.items.find((i) => i.kind === 'proposal')).toMatchObject({ state });
+    }
+
+    // A listing that still carries the pending row keeps the blocked card blocked.
+    s = panelReducer(settled, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [], approvals: [], proposals: [proposal],
+    });
+    expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'blocked-on-entity' });
+    expect(hasUnansweredCard(s)).toBe(false);
+
+    // Nor may a live re-delivery of the same id reopen it.
+    s = panelReducer(settled, { type: 'proposalCreated', proposal });
+    expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'blocked-on-entity' });
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
   it('replaces the single queued item and removes it on an empty list', () => {
     let s = panelReducer(base, { type: 'queuedRuns', runIds: ['r1', 'r2'] });
     expect(s.items.filter((i) => i.kind === 'queued')).toHaveLength(1);

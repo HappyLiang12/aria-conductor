@@ -70,6 +70,7 @@ describe('ErrorNotice operator-session refusal', () => {
     text: string;
     action?: { tab: 'llm' | 'runtime' | 'config'; label: string } | { path: string; label: string };
     operatorRejected?: true;
+    crossOriginRejected?: true;
   }) {
     render(
       <MemoryRouter initialEntries={['/runs']}>
@@ -121,5 +122,40 @@ describe('ErrorNotice operator-session refusal', () => {
     expect(notice).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
     // The advice that cannot work must be gone, not merely softened.
     expect(notice).not.toHaveTextContent(/reload the page and retry/i);
+  });
+
+  // Task 37 / Item 2: a 403 carrying the cross-origin marker is not an authority
+  // refusal. Telling the operator to "grant access" for a forged cross-site page
+  // is advice about the wrong problem, so that sentence must not appear.
+  it('renders the cross-site remedy, not the operator-grant remedy, for a cross-origin 403', () => {
+    renderOperatorNotice({
+      text: 'Cross-origin operator mutation rejected',
+      operatorRejected: true,
+      crossOriginRejected: true,
+    });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/cross-site request/i);
+    expect(notice).toHaveTextContent(/origin the backend trusts/i);
+    expect(notice).not.toHaveTextContent(/must grant access/i);
+    expect(notice).not.toHaveTextContent(/loopback requests are the operator automatically/i);
+    // Still the one notice, still saying nothing was changed.
+    expect(notice).toHaveTextContent(/nothing was changed by the refused call/i);
+  });
+
+  // Task 37 / Item 5b: the ordinary error path is `role="alert"`, so a refusal
+  // that replaced it must be announced too — otherwise the one outcome the
+  // operator has to act on is the silent one. The testid, the class and the text
+  // are unchanged; only the live region is new, and it is load-bearing.
+  it('announces the operator notice as a live region', () => {
+    renderOperatorNotice({ text: 'OPERATOR_ROUTE_RAW', operatorRejected: true });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('status')).toBe(notice);
+    // The pin above would still pass if the notice had quietly become a
+    // different element: keep its identity and its copy pinned here as well.
+    expect(notice).toHaveClass('ask-ctx');
+    expect(notice).toHaveTextContent('Applying the fleet runtime is operator-only');
   });
 });

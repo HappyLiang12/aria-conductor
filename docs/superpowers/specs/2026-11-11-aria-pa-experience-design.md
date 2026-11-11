@@ -88,8 +88,46 @@ Two refinements made after the section approvals, both explicit:
 - **Reuse `aria.runs.aria-reserved` instead of adding a new property.** Section 1 named a
   new `aria.runs.max-active-conversations`. The 2026-10-03 admission spec already defines
   `aria-reserved` as the concurrent-Aria-run cap, so a second knob would duplicate it.
-  This design raises its default from 1 to 3 and adds a per-conversation mutex. The
-  operator may reject this refinement at spec review.
+  This design raises its default from 1 to 3 and adds a per-conversation mutex.
+
+### 2.1 Planning amendments (2026-11-11 reconnaissance)
+
+Four read-only scouts verified the seams against shipped code at `a752acef` and refuted
+several premises above. The operator ruled on the three material ones; the fourth is a
+simplification that preserves the approved intent.
+
+8. **F12 is a real enforcement gap and is fixed in Wave C.** Seven of the ten
+   OPERATOR_ONLY tools perform no actor check at all: `retire_agent`,
+   `housekeeping_execute`, and `create_llm_provider`, `update_llm_provider`,
+   `delete_llm_provider`, `activate_llm_provider`, `test_llm_provider`. They take no
+   `ToolContext`, and `McpServerConfig.identityGuarded` only rejects identity-smuggling
+   arguments, not policy. A worker credential reaches the MCP server (the S1 Gate B
+   acceptance used a worker actor), so these are callable today. C4 therefore adds
+   enforcement to those seven and consistent actionable refusals to all ten.
+9. **No engine change for queueing.** `admission.acquire` runs at
+   `AgentLoopEngine.java:256`, before the virtual thread is spawned at `:291`, so both the
+   sync and streaming HTTP threads block until a slot frees; a queued turn cannot receive
+   an SSE signal. Instead the panel gates the composer while its conversation has an
+   unanswered card, and derives a queued indicator from PENDING runs in the timeline.
+10. **`list_workflow_templates` changes its envelope.** `ToolResponses.ok(list)` emits
+    `{"ok":true,"data":[...]}` with no room for a sibling field, so `data` becomes
+    `{"templates":[...],"totalApproved":N}`. The consumers are the model and the tests,
+    not an external contract.
+11. **A proposal batch is the entity's PENDING facts.** `memory_facts` has no batch
+    column and `proposal_hash` is per fact, so "the same batch" is defined as every
+    PENDING fact belonging to the PENDING entity. This is equivalent by construction (a
+    PENDING entity's facts are all proposals) and needs no migration.
+
+Further verified corrections folded into the design below: the ask arrives on the bridge
+reader thread inside a transaction, so the emitter registry is concurrent and the SSE
+listener is after-commit; an ACP ask's `ApprovalRequestedEvent` uses the four-argument
+constructor and is therefore tagged `LEGACY_GATE`, so the listener reads the Approval row
+rather than trusting the event; `PlatformMcpAutoApprovalTest.DEFAULT_READ_TOOLS` is a
+third pin on the auto-approve list; `AriaPromptContributorTest` forbids the prompt from
+containing the string `decide_approval`; `ApprovalDetail` is mapped in two places and the
+same payload feeds MCP `list_approvals`; the panel uses no WebSocket today and mutations
+must call `applyOperatorHeaders()`; a clarification's question text is `ask.content`;
+there is no `QUEUED` run status; and there is no conversation-scoped approvals endpoint.
 
 ## 3. Non-goals
 
@@ -121,8 +159,10 @@ live stack at `ec995a98`; the evidence appendix carries the commands and identif
 | F9 | Low | OPERATOR_ONLY tools advertised to Aria's core; refusal not actionable | `McpServerConfig.java:86-92`, `MemoryTools` |
 | F10 | Medium | No assistant or UI path to create the first memory entity | `MemoryCommandService.createEntity` |
 | F11 | High | No memory UI; Aria advertises a review queue that does not exist | `act-dashboard/src/pages`, `src/api` |
+| F12 | High | Seven OPERATOR_ONLY tools perform no actor check, so a worker credential can call them | `AgentTools.java:121`, `OpsTools.java:50-72`, `ProviderTools.java:54-149` |
 
-F11 was found during this design dialog and was not in the original acceptance report.
+F11 and F12 were found during the design dialog and were not in the original acceptance
+report.
 
 ## 5. Architecture
 
@@ -149,10 +189,24 @@ from two or three planes renders once. No plane is authoritative on its own; the
 is.
 
 The engine's emitter lives only in its call stack today (no `SseEmitter` appears anywhere
-else in act-execution). Wave A adds a `runId -> SseEmitter` registry inside
-`AgentLoopEngine`, registered when a stream starts and removed on every terminal path.
-One listener consumes the existing domain events and emits the new SSE events to a
-registered emitter. This is the only new backend structure in Wave A.
+else in act-execution). Wave A adds a small concurrent `runId -> SseEmitter` registry
+component, registered when a stream starts and removed on every terminal path, plus one
+listener that consumes the existing domain events and emits the new SSE events to a
+registered emitter. These are the only new backend structures in Wave A.
+
+Three verified constraints shape that listener. The ask arrives on the core session's
+bridge reader thread (`CoreExecutionService.java:1534-1543`), not the engine's virtual
+thread, so the registry must be a `ConcurrentHashMap`. `PermissionCoordinator.register` is
+transactional and publishes inside the transaction, so the listener must be a
+`@TransactionalEventListener(phase = AFTER_COMMIT)`; emitting earlier would let the panel
+fetch an approval row that is not yet committed. And an ACP ask's `ApprovalRequestedEvent`
+uses the four-argument constructor, which defaults the source to `LEGACY_GATE` while the
+Approval row itself says `ACP_PERMISSION`, so the listener reads the row for tool name,
+risk tier, source and content instead of trusting the event.
+
+The sync path has no emitter at all (`AriaService.chat` calls `startRun` with a null
+emitter), so its parked-question answer comes from a database read of the CLARIFICATION
+approval, never from the registry.
 
 Module boundaries are preserved: act-memory depends on act-common only, so it publishes
 a `MemoryProposalCreatedEvent` in act-common rather than reaching for an emitter. The
@@ -168,8 +222,13 @@ conversation. Granting scans the FIFO deque and **skips** a waiter whose convers
 busy instead of stopping at the head, so one parked conversation cannot block the others.
 The worker pool, its cap, and its FIFO order are untouched.
 
-A queued Aria run is visible in the panel as a queued state, never as silence. Cancelling
-a queued run keeps the existing ABORTED refusal path.
+Queueing is surfaced without touching the engine. `admission.acquire` runs at
+`AgentLoopEngine.java:256`, before the virtual thread is spawned at `:291`, so both the
+sync and streaming HTTP threads block until a slot frees and a queued turn can receive no
+SSE signal. Instead the panel gates its composer while the conversation has an unanswered
+approval or clarification card, with an explicit "answer or cancel first" hint, and
+derives a queued indicator from PENDING runs in the conversation timeline for the
+global-cap case. Cancelling a queued run keeps the existing ABORTED refusal path.
 
 ### 5.3 Governance labels come from the catalog
 
@@ -232,23 +291,38 @@ surfaces returns PENDING entities, because the operator cannot approve what they
 see. The default (no status filter) stays ACTIVE-only, and no agent-facing read path may
 request PENDING.
 
-Two semantics are fixed here so implementation does not invent them:
+Three semantics are fixed here so implementation does not invent them:
 
-- **Identity.** A proposal is keyed by canonical key. A second `remember_fact` against a
-  key that already has a PENDING entity attaches a new PENDING fact to that entity; it
-  never creates a duplicate entity.
-- **Rejection.** Rejecting an entity proposal retires the PENDING entity and every PENDING
-  fact proposed with it in the same batch, and records the retire assertions. Rejecting a
-  single fact proposal leaves its entity untouched.
+- **Identity.** Uniqueness is `UNIQUE (kind, canonical_key)` (`V81__memory_kernel.sql:30`),
+  enforced only by the database; there is no service or repository pre-check today. A
+  proposal is therefore resolved per `(kind, canonicalKey)` before insert: an existing
+  ACTIVE entity takes a new PENDING fact, an existing PENDING entity takes another PENDING
+  fact, and only a genuinely absent key creates a PENDING entity. A concurrent insert that
+  loses the unique constraint is caught and re-read, never surfaced as a duplicate.
+- **Batch.** `memory_facts` has no batch column and `proposal_hash` is per fact, so "the
+  same batch" means every PENDING fact belonging to the PENDING entity. This is equivalent
+  by construction and needs no migration.
+- **Rejection.** Rejecting an entity proposal retires the PENDING entity and all of its
+  PENDING facts, recording the retire assertions. Rejecting a single fact proposal leaves
+  its entity untouched.
+
+The read-path audit was performed at `a752acef` and narrows the work: recall, the memory
+context contributor and MCP `recall_memory` already hard-filter ACTIVE and re-check
+eligibility, so they are PENDING-safe by construction. The actual holes are MCP
+`get_memory_entity` (no status guard at all), MCP `list_memory_entities` (accepts an
+explicit PENDING from a worker actor), and `MemoryCommandService.requireEntity` (lets any
+actor attach an ACTIVE fact to a PENDING entity). The REST list and detail views already
+honour an explicit status filter, which is exactly the operator-facing visibility the
+approval flow needs.
 
 ## 6. Wave A — conversation flow and approvals
 
 Covers F1, F2, F3, F4, F7, plus B1 (F5) moved in from Wave B.
 
 **A1 Admission.** As described in 5.2. `aria-reserved` default 1 -> 3, per-conversation
-mutex, skip-and-continue granting, queued state surfaced. Amends the 2026-10-03 spec's D2
-and its accepted "Aria replies become slower" UX note; that spec is updated in the same
-change.
+mutex, skip-and-continue granting, composer gating plus a timeline-derived queued
+indicator instead of an engine change. Amends the 2026-10-03 spec's D2 and its accepted
+"Aria replies become slower" UX note; that spec is updated in the same change.
 
 **A2 Ordered signals.** The emitter registry and listener from 5.1. New SSE payloads:
 
@@ -260,17 +334,25 @@ The WebSocket payloads are unchanged; the panel fetches approval detail by id wh
 event arrives, because `approval.requested` carries no tool name or tier.
 
 **A3 Panel state machine.** `PanelMessage` becomes a discriminated union: `user`,
-`assistant`, `activity`, `approval`, `clarification`, `queued`, `error`.
+`assistant`, `activity`, `approval`, `clarification`, `queued`, `error`. The pure reducer
+lives in a new module so it can be tested without rendering; `AriaPanel.tsx` keeps only
+wiring and layout.
 
 - The activity strip groups a turn's tool calls with name, status and duration, collapsed
   by default, expandable to arguments and result. Timeline tool rows map to the same
   structure, which removes the raw JSON bubbles.
 - The approval card shows tool name, risk tier, tool policy and an argument summary, with
-  Allow once and Deny calling the existing operator endpoints.
-- The clarification card shows the question and an answer field calling
-  `/api/v1/approvals/{id}/answer`.
-- Reconciliation on mount, focus and WS reconnect merges by approval id and message
-  identity.
+  Allow once and Deny calling the existing operator endpoints. Every mutation calls
+  `applyOperatorHeaders()` first, which the panel does not do today.
+- The clarification card shows the question, which ships as `ask.content`, and an answer
+  field calling `/api/v1/approvals/{id}/answer`.
+- The composer is disabled while the conversation has an unanswered card, with an explicit
+  hint naming the pending decision. A queued indicator is derived from PENDING runs in the
+  timeline; there is no `QUEUED` run status.
+- The panel subscribes to the WebSocket for the first time (it uses none today) and
+  reconciles on mount, focus and reconnect, merging by approval id and message identity.
+  There is no conversation-scoped approvals endpoint, so pending asks are filtered
+  client-side by intersecting `Approval.runId` with the timeline's run ids.
 
 **A4 Sync contract.** `AriaSyncRunWaiter` treats WAITING_INPUT as a returnable outcome and
 returns immediately instead of polling to exhaustion. `AriaChatResponse` gains `question`
@@ -290,26 +372,37 @@ cost. The qoder usage spike is scheduled but does not gate the wave.
 
 **B3 Capability honesty.** Two measured false claims are fixed at three places:
 
-- `list_workflow_templates` returns an additive `totalApproved` count so an empty match
-  is distinguishable from an empty catalog, and its description states that an empty
-  result may be a filter artifact and requires a blank retry before concluding absence.
+- `list_workflow_templates` changes its envelope from `{"ok":true,"data":[...]}` to
+  `{"ok":true,"data":{"templates":[...],"totalApproved":N}}`, so an empty match is
+  distinguishable from an empty catalog. The producer already exists:
+  `WorkflowTemplateService.findMatchingTemplates` loads
+  `KnowledgeItemRepository.findByTypeAndStatus(WORKFLOW, APPROVED)` before filtering, so
+  its size is the count. The filter itself is one lowercased literal `contains` on name OR
+  description with no tokenization, which is why a multi-word intent matched nothing; the
+  description in both `WorkflowTools` and `ToolCatalog` states that an empty result may be
+  a filter artifact and requires a blank retry before concluding absence.
 - `AriaPromptCatalog` gains a capability-claims rule: distinguish "exists but refuses"
   from "absent", and retry an empty filter unfiltered before concluding.
 - Operator-only refusals become actionable (shared with C4).
 
 **B4 Memory-read auto-approval amendment.** The five memory read tools
 (`recall_memory`, `list_memory_entities`, `get_memory_entity`, `list_memory_proposals`,
-`get_context_manifest`) flip to `autoApproveRead = true` in `ToolCatalog`, join the
-`McpProperties.autoApproveReadTools` default list, and the two parity assertions that pin
-the old decision are rewritten to pin the new one. The catalog comment records the
-2026-11-11 operator amendment and its reasoning, and the delivery ledger carries the same
-entry. Writes and operator-only tools are unchanged. The INTERNAL ceiling and manifest
-recording are unchanged.
+`get_context_manifest`) flip to `autoApproveRead = true` in `ToolCatalog` and join the
+`McpProperties.autoApproveReadTools` default list. Three pins move together:
+`ToolCatalogParityTest.theMemoryReadToolsAreWorkerReadButNeverAutoApproved` is rewritten to
+pin the new decision, the same test's equality assertion between the configured list and
+`catalog.autoApproveReadNames()` only passes if both sides move, and
+`PlatformMcpAutoApprovalTest.DEFAULT_READ_TOOLS` hardcodes the 26 default names and must
+gain the five. The descriptor, name, operator-only and prompt-line counts (67/65/10/57) do
+not move, and the generated prompt section is unchanged because the contributor renders
+name and policy only. The catalog comment records the 2026-11-11 operator amendment and
+its reasoning, and the delivery ledger carries the same entry. Writes and operator-only
+tools are unchanged. The INTERNAL ceiling and manifest recording are unchanged.
 
-The policy applies to ACP asks from run-owned cores, and only Aria's runs have
-platform-MCP wiring today, so the practical scope is the Aria assistant. Planning must
-re-verify that premise before the flip; if a worker run can reach platform MCP, the
-amendment needs an explicit actor gate instead.
+The actor-scope premise is verified, not assumed: `RunMcpWiring.forRun` returns empty
+unless the agent is Aria (`RunMcpWiring.java:59-61`), both core adapters go through that
+gate, and `RunMcpWiringTest` pins that a non-Aria spec gets no wiring. A worker run cannot
+reach platform MCP, so the amendment's practical scope is the Aria assistant.
 
 ## 8. Wave C — memory operation surface and authority honesty
 
@@ -339,12 +432,23 @@ read-path audit is a deliverable of this wave: every entity read path is enumera
 tested for PENDING exclusion, and the operator-facing explicit PENDING filter is tested
 separately so approval stays possible.
 
-**C4 Authority honesty.** OPERATOR_ONLY tools stay advertised. `AriaPromptCatalog` states
-that these tools exist but refuse, must never be called, and that promoting a proposal
-means surfacing an operator decision card. Every operator-only refusal message becomes
-actionable with a stable error code naming the operator action and surface. The whole
-class of operator-only refusals is audited for consistent wording, not just the one that
-was exercised.
+**C4 Authority honesty and enforcement.** OPERATOR_ONLY tools stay advertised to the
+operator's own assistant, but the class is made safe rather than merely well-worded.
+
+- Enforcement (F12): `retire_agent`, `housekeeping_execute`, `create_llm_provider`,
+  `update_llm_provider`, `delete_llm_provider`, `activate_llm_provider` and
+  `test_llm_provider` gain a `ToolContext` parameter and the same operator-authority check
+  the three memory/approval tools already use, so a worker credential is refused instead
+  of served. Each gets a negative test with a worker actor and a positive control with an
+  operator actor.
+- Wording: all ten refusals share one stable error code and an actionable message naming
+  the operator action and the surface that performs it. The three existing refusals
+  (`decide_approval`, `forget_fact`, `decide_memory_proposal`) are aligned with the seven
+  new ones.
+- Prompt: `AriaPromptCatalog` states that operator-only tools exist but refuse, must never
+  be called, and that promoting a proposal means surfacing an operator decision card. The
+  rule must not name `decide_approval`, because `AriaPromptContributorTest:30-33` asserts
+  the prompt does not contain that string.
 
 ## 9. Error handling and fail-closed rules
 
@@ -389,37 +493,54 @@ changes run every consumer tier at the final head.
 
 **Wave C**
 - Unit: PENDING exclusion on every enumerated entity read path, the operator-facing
-  explicit PENDING filter returning rows while the default excludes them, canonical-key
-  identity (a repeated proposal attaches instead of duplicating), atomic entity-plus-fact
-  proposal, one decision promoting both, rejection retiring the entity with its batch,
-  assertion rows, and operator-only refusal codes and messages for every such tool.
+  explicit PENDING filter returning rows while the default excludes them, `(kind,
+  canonicalKey)` identity (a repeated proposal attaches instead of duplicating, and a
+  losing concurrent insert is re-read), atomic entity-plus-fact proposal, one decision
+  promoting both, rejection retiring the entity with its PENDING facts, assertion rows,
+  and for each of the ten operator-only tools a worker-actor refusal plus an operator
+  positive control and the shared error code.
 - Frontend: Memory page vitest and Playwright with a real operator session, including the
   403 path; proposal card idempotency and post-approval state.
 - Live acceptance, the program's bar: a brand-new operator with no PERSON entity completes
   onboarding entirely in chat (Aria proposes entity and fact, the operator approves on the
   card), and the whole PA scenario runs with zero curl and zero page switches.
 
-## 11. Risks and open verification steps
+## 11. Risks and verification status
 
-These are pinned during planning, not assumed here.
+Resolved by the 2026-11-11 reconnaissance, with citations:
 
-1. **Ask emission seam.** The registry-plus-listener design is chosen, but the exact point
-   where an ACP ask becomes visible to the engine must be confirmed so the SSE event
-   carries the registered approval's id, tool name and tier rather than a guess.
-2. **Platform-MCP actor scope.** B4's amendment assumes only Aria's runs reach platform
-   MCP. Re-verify against the shipped wiring; if a worker can reach it, add an actor gate.
-3. **Entity read-path enumeration.** C3's audit list must be produced from the code at the
-   implementation head, not from this document, and every path needs a test.
-4. **`totalApproved` producer.** The additive count needs a service method that exists or
-   is added in the same change; the plan must name it.
-5. **Admission semantics drift.** Changing the Aria cap default alters an accepted UX
-   decision recorded in the 2026-10-03 spec. That spec and any test pinning the old
-   default are updated together.
+1. **Ask emission seam.** The ask arrives on the bridge reader thread inside
+   `PermissionCoordinator.register`'s transaction; the engine's virtual thread is parked
+   in a join. A concurrent registry plus an after-commit event listener is therefore
+   required, and emission from `executeCoreRun` is impossible.
+2. **Platform-MCP actor scope.** `RunMcpWiring.forRun` gates on the Aria agent id, so the
+   auto-approve amendment cannot reach a worker run.
+3. **Entity read paths.** Enumerated at `a752acef`; recall and the contributor are already
+   ACTIVE-only, and the holes are MCP entity detail/list plus `requireEntity` (see 5.5).
+4. **`totalApproved` producer.** `findByTypeAndStatus(WORKFLOW, APPROVED)` is already
+   loaded inside `findMatchingTemplates`; no new repository method is needed.
+
+Remaining risks, each with a required mitigation in the plan:
+
+5. **Admission semantics drift.** Raising the Aria cap default alters an accepted UX
+   decision recorded in the 2026-10-03 spec, and `RunAdmissionIntegrationTest` and
+   `CoreE2eApplicationTest` pin `aria-reserved` values. That spec and those pins are
+   updated in the same change.
 6. **Governance reversal.** B4 flips a decision a test was written to protect. The test,
-   the catalog comment and the ledger change in one commit, with the operator decision
-   cited, so a later tidy-up cannot silently flip it back.
-7. **qoder usage capability.** The spike may conclude the CLI cannot report usage. That
-   outcome is acceptable and must be documented, not papered over with an estimate.
+   the hardcoded default list, the catalog comment and the ledger change in one commit,
+   citing the operator decision, so a later tidy-up cannot silently flip it back.
+7. **Shared approval payload.** `ApprovalDetail` is mapped in both `ApprovalQueryService`
+   and `ApprovalController`, and the same payload feeds MCP `list_approvals`. Adding
+   `toolPolicy` is a shared-payload change: every consumer tier runs at the final head,
+   and `ApprovalToolsTest`'s positional constructor call is updated.
+8. **Resolver constructor break.** Adding a catalog dependency to `ToolRiskResolver`
+   breaks `new ToolRiskResolver(toolRepo)` in its own test; the test is updated in the same
+   task.
+9. **Panel refactor regression.** `AriaPanel.test.tsx` (456 lines) pins slash-skill
+   dispatch by call index, timeout copy and failed-turn copy. The reducer extraction must
+   keep those behaviors; the existing suite is a gate, not something to rewrite.
+10. **qoder usage capability.** The spike may conclude the CLI cannot report usage. That
+    outcome is acceptable and must be documented, not papered over with an estimate.
 
 ## 12. Evidence appendix
 
@@ -479,3 +600,17 @@ and Aria concluded no template was approved.
 Panel staleness. Before a reload the open panel showed only the three rows that existed
 when it mounted; after a reload the same conversation rendered all 22 persisted messages,
 including every assistant final answer. Persistence was complete; the panel was stale.
+
+Missing operator enforcement (F12). `AgentTools.retireAgent` (`AgentTools.java:121`) takes
+only a `UUID id` and no `ToolContext`; `OpsTools.housekeeping_execute` (`OpsTools.java:50-72`)
+and the five `ProviderTools` mutations (`ProviderTools.java:54-149`) are the same shape.
+`McpServerConfig.identityGuarded` (`:186-210`) rejects identity-smuggling arguments only.
+By contrast `decide_approval`, `forget_fact` and `decide_memory_proposal` do call
+`requireOperator` and return `FORBIDDEN`. Seven of ten operator-only tools are therefore
+unenforced.
+
+Admission ordering. `admission.acquire` is called at `AgentLoopEngine.java:256`; the
+virtual thread that owns the run loop is spawned at `:291`. Both the sync and streaming
+callers therefore block on the HTTP thread before an emitter can carry any signal, which
+is why queueing is surfaced through composer gating and the timeline rather than a new
+engine event.

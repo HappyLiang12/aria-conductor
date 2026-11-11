@@ -267,7 +267,7 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_proposals",
-            description = "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. A PENDING entity row is also listed, with its canonical key in factKey, but only for an operator credential; a worker read receives facts and relations only.")
+            description = "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. An entity row is listed for status ACTIVE or RETIRED to any credential; a PENDING entity row, with its canonical key in factKey, is returned to an operator credential only.")
     public String listMemoryProposals(
             @ToolParam(description = "PENDING, ACTIVE or RETIRED; default PENDING", required = false) String status,
             ToolContext toolContext) {

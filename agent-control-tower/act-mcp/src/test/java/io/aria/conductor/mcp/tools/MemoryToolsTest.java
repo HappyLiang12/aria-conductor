@@ -15,6 +15,7 @@ import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryActorType;
+import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryRelation;
@@ -141,6 +142,20 @@ class MemoryToolsTest {
     private static MemoryEntityView pendingEntityView() {
         return new MemoryEntityView(ENTITY_ID.toString(), "PERSON", "candidate", "Candidate",
                 Sensitivity.INTERNAL.name(), "PENDING", "EXTRACTION", null, 0L, VALID_FROM, VALID_FROM);
+    }
+
+    /** A decided entity, the row a non-PENDING proposal listing carries for any credential. */
+    private static MemoryEntity activeEntity() {
+        return MemoryEntity.builder()
+                .id(ENTITY_ID)
+                .kind("PERSON")
+                .canonicalKey("operator")
+                .displayName("Operator")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .createdAt(VALID_FROM)
+                .build();
     }
 
     @Test
@@ -510,6 +525,31 @@ class MemoryToolsTest {
         assertThat(reviewer.getAllValues().get(1).type())
                 .as("the operator keeps the entity proposal on the card")
                 .isEqualTo(MemoryActorType.OPERATOR);
+    }
+
+    /**
+     * T34 Item 3 (P3). The entity branch of {@code MemoryProposalService.listProposals} excludes only
+     * a PENDING entity row for a non-operator (MemoryProposalService.java:130-134), so with
+     * {@code status=ACTIVE} or {@code status=RETIRED} a worker DOES receive entity rows. The tool is
+     * an AUTO-APPROVED worker read, so this pins its half of that truth: the requested status and
+     * the transport identity are forwarded unchanged and an entity row the service returned stays in
+     * the response. The description states the same contract (ToolCatalogParityTest).
+     */
+    @Test
+    void aWorkerListOfActiveProposalsKeepsTheEntityRow() {
+        when(proposals.listProposals(eq(FactStatus.ACTIVE), any(MemoryActor.class)))
+                .thenReturn(List.of(MemoryProposalView.fromEntity(activeEntity())));
+
+        String json = tools.listMemoryProposals("ACTIVE", workerContext());
+
+        ArgumentCaptor<MemoryActor> reviewer = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(proposals).listProposals(eq(FactStatus.ACTIVE), reviewer.capture());
+        assertThat(reviewer.getValue().type())
+                .as("the read still carries the worker identity; only a PENDING entity row is operator-only")
+                .isEqualTo(MemoryActorType.EXTRACTION);
+        assertThat(json).contains("\"ok\":true")
+                .contains("\"subjectType\":\"ENTITY\"")
+                .contains("\"factKey\":\"operator\"");
     }
 
     // ---------------------------------------------------------------- read ceiling

@@ -195,14 +195,13 @@ describe('AriaProposalCard', () => {
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'decided-elsewhere');
   });
 
-  // Task 37 Item 1: a FACT proposal whose parent entity is still PENDING answers
-  // its own 409 — `MemoryProposalService.decideFact` refuses the single-fact
-  // approval with "which is still PENDING; decide the entity proposal <id>".
-  // That is not retryable: the same click 409s until the ENTITY proposal is
-  // decided. The card must say so, name the decision that resolves it (the
-  // message carries the entity id), offer no control that can only fail again,
-  // and stop gating the composer.
-  it('settles a parent-still-PENDING 409 on the entity decision, naming it and offering no retry', async () => {
+  // Task 37 Item 1 / Task 41 Major 2: a FACT proposal whose parent entity is
+  // still PENDING answers its own 409 only on the APPROVE path —
+  // `MemoryProposalService.decideFact` returns for REJECT at :298-309, before the
+  // parent-status check at :326-335, so rejecting that one fact is still accepted.
+  // The card must remove only the control that can only fail again (Approve),
+  // keep Reject working, and say exactly which refusal happened.
+  it('settles a parent-still-PENDING 409 on the entity decision, naming it and keeping Reject', async () => {
     vi.mocked(decideMemoryProposal).mockRejectedValue({
       response: {
         status: 409,
@@ -225,6 +224,10 @@ describe('AriaProposalCard', () => {
     // comes from the served message, not from a guess.
     expect(notice).toHaveTextContent(/ent-7/);
     expect(notice).toHaveTextContent(/decide the entity proposal/i);
+    // The refusal is specific: approving THIS fact alone. Rejecting it alone still
+    // works, and the copy must say so instead of claiming the whole card is dead.
+    expect(notice).toHaveTextContent(/approving (this fact|it) on its own was refused/i);
+    expect(notice).toHaveTextContent(/rejecting this fact alone still works/i);
     // The proposal itself is still pending on the server: this card must not
     // claim it left the queue (that copy belongs to `decided-elsewhere`).
     expect(notice).not.toHaveTextContent(/no longer pending/i);
@@ -234,9 +237,43 @@ describe('AriaProposalCard', () => {
       'blocked-on-entity',
     );
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^reject$/i })).toBeEnabled();
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'blocked-on-entity');
+  });
+
+  // The surviving half: the same blocked card's Reject reaches the server (which
+  // accepts it under a PENDING parent) and settles the card as rejected — never
+  // as approved, and never back to pending.
+  it('rejects the fact from the blocked state and settles it rejected', async () => {
+    vi.mocked(decideMemoryProposal)
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            ok: false,
+            errorType: 'CONFLICT',
+            message:
+              'memory fact e4d7 belongs to entity ent-7, which is still PENDING; decide the entity '
+              + 'proposal ent-7 to promote or retire the whole batch instead of approving one fact',
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await screen.findByTestId('aria-proposal-blocked-on-entity');
+
+    fireEvent.click(screen.getByRole('button', { name: /^reject$/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(decideMemoryProposal)).toHaveBeenLastCalledWith('e4d7', 'REJECT'),
+    );
+    await waitFor(() => expect(onSettled).toHaveBeenLastCalledWith('e4d7', 'rejected'));
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'rejected');
+    expect(screen.queryByTestId('aria-proposal-blocked-on-entity')).not.toBeInTheDocument();
   });
 
   // The same marker on the ENTITY batch card would be a contradiction (an entity

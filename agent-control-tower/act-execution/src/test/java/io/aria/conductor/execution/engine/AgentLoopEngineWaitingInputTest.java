@@ -341,6 +341,38 @@ class AgentLoopEngineWaitingInputTest {
     }
 
     @Test
+    void whenTheWaitingInputWriteIsRefusedTheRunIsWokenInsteadOfParked() {
+        // F3: the same write can also fail WITHOUT throwing. updateRunStatusDirect reports a
+        // refusal with `false` when the conditional UPDATE matched no row — the run is
+        // terminal (a COMPLETED/FAILED transition does not wake the coordinator) or the row
+        // is gone (no event at all). Round 2 honoured only the thrown path, so a refusal left
+        // the loop blocked on the coordinator forever, with a PENDING ask and no park to show.
+        UUID runId = UUID.randomUUID();
+        Run run = runIn(runId, UUID.randomUUID(), RunStatus.RUNNING);
+        engine.addToActiveContextsForTest(runId, run.getAgentId());
+        // Positive control: the ask itself did persist, so the failure is the status write.
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(invocation -> {
+            Approval ask = invocation.getArgument(0);
+            if (ask.getId() == null) {
+                ask.setId(UUID.randomUUID());
+            }
+            return ask;
+        });
+        // doReturn (not when) so the setup's mirroring answer is not executed while stubbing.
+        doReturn(0).when(runRepository).updateStatusUnlessTerminal(eq(runId),
+                eq(RunStatus.WAITING_INPUT), any(), anyList());
+
+        engine.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which DB?"));
+
+        verify(approvalRepository).save(any(Approval.class));
+        // The write was attempted (a mutant that skips it cannot claim the park either)...
+        verify(runRepository).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
+                any(), anyList());
+        // ...and its refusal woke the run, exactly like a thrown one.
+        verify(inputCoordinator).recordTerminationIntent(runId);
+    }
+
+    @Test
     void turnCompletedAccumulatesUsageIterationAndTrajectory() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());

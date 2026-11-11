@@ -394,6 +394,7 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
     }
   }
   const carriedTurnIds = new Set<string>();
+  const baseHasError = base.some((item) => item.kind === 'assistant' && item.error === true);
   let queuedDrawn = base.some((item) => item.kind === 'queued');
 
   const carried: PanelItem[] = [];
@@ -419,6 +420,11 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
         messageBudget.set(key, budget - 1);
         continue;
       }
+      // A failed turn is re-told in different words by the snapshot, so the budget
+      // cannot consume the live notice; once the snapshot shows a failure, the live
+      // duplicate is dropped. A run-uncertain notice (noRetry) is not in the
+      // snapshot and still carries.
+      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true && baseHasError) continue;
     }
     carried.push(item);
   }

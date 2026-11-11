@@ -292,6 +292,33 @@ describe('panelReducer restore merge', () => {
       durationMs: 250,
     });
   });
+
+  it('shows one failure bubble when the live notice and the restored entry meet', () => {
+    let s = panelReducer(base, { type: 'turnFailed', id: 'live-fail', content: '⚠ 上一回合失敗：boom', retryText: 'retry' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'user', content: 'do it' }),
+        row({ role: 'assistant', content: '回合執行失敗：boom', error: true, retryPrompt: 'retry' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const failures = s.items.filter((i) => i.kind === 'assistant' && i.error === true);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ content: '回合執行失敗：boom' });
+  });
+
+  it('still carries a run-uncertain notice beside a restored failed turn', () => {
+    let s = panelReducer(base, { type: 'turnFailed', id: 'uncertain', content: 'run uncertain', noRetry: true });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'assistant', content: '回合執行失敗：boom', error: true })],
+      approvals: [], proposals: [],
+    });
+    const failures = s.items.filter((i) => i.kind === 'assistant' && i.error === true);
+    expect(failures).toHaveLength(2);
+    expect(failures.map((i) => (i.kind === 'assistant' ? i.content : ''))).toEqual(['回合執行失敗：boom', 'run uncertain']);
+  });
 });
 
 describe('panelReducer clarifications, proposals and queue', () => {

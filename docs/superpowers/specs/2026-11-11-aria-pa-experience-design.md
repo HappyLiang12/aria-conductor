@@ -348,8 +348,20 @@ indicator instead of an engine change. Amends the 2026-10-03 spec's D2 and its a
 **A2 Ordered signals.** The emitter registry and listener from 5.1. New SSE payloads:
 
 - `approval_required`: `runId`, `approvalId`, `toolName`, `riskTier`, `toolPolicy`,
-  `options`, `expiresAt`.
+  `optionsJson`, `expiresAt`. `optionsJson` is the approval's options as a JSON string.
+  (Amended 2026-11-11 during execution: the field was written `options` here; the implemented
+  wire name is `optionsJson`, agreed by both the producer and the panel consumer.)
 - `waiting_input`: `runId`, `approvalId`, `question`.
+
+**One approval, one card** (added 2026-11-11 during execution). A CLARIFICATION ask emits only
+`waiting_input`; every other source emits only `approval_required`. Emitting both for one
+`approvalId` renders two decision surfaces for a single decision.
+
+**Tool activity events** (added 2026-11-11 during execution). F7's activity strip needs a producer,
+and none existed: the only SSE names emitted were `thinking` and the two above. `CoreEventTelemetry`
+now also emits, after the telemetry write succeeds, `tool_call` = `{runId, name, args, toolCallId}`
+and `tool_result` = `{runId, name, result, ok, toolCallId}` with `ok = !isError` always present. The
+panel must pass that `ok` through; a hardcoded success renders a denied tool green.
 
 The WebSocket payloads are unchanged; the panel fetches approval detail by id when a WS
 event arrives, because `approval.requested` carries no tool name or tier.

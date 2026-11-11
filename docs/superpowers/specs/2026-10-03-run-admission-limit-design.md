@@ -1,6 +1,6 @@
 # 2026-10-03 Run admission limit: bounded concurrent runs with Aria's reserved slot
 
-Status: design approved by the operator (2026-10-03); implementation not started.
+Status: design approved by the operator (2026-10-03); implemented 2026-11-11 (`RunAdmissionQueue`, see the amendment below); the engine call site that supplies the conversation id is pending Task 5.
 
 Amended 2026-11-11 (operator decision, Aria PA experience design, section 2 item 2):
 the Aria reservation's default rises from 1 to 3 and Aria runs serialize per
@@ -30,7 +30,7 @@ Under a large fan-out (the operator's hotel-research batch), the podman/OpenSand
 ### 2. Slots and configuration
 
 - `aria.runs.max-active` (default **6**; `0` = unlimited, today's behavior) — concurrent non-Aria runs.
-- `aria.runs.aria-reserved` (default **3**, amended 2026-11-11 from 1; `0` = unlimited) — concurrent Aria-assistant runs; Aria runs never consume the worker pool beyond this reservation, and workers never take the Aria reservation. One additional Aria run per conversation, enforced by the queue.
+- `aria.runs.aria-reserved` (default **3**, amended 2026-11-11 from 1; `0` = unlimited) — concurrent Aria-assistant runs; Aria runs never consume the worker pool beyond this reservation, and workers never take the Aria reservation. At most one active Aria run per conversation: the queue enforces it as soon as the caller supplies `Run.conversationId` (that engine call site lands with Task 5; until then every caller passes `null`, which is never isolated).
 - Effective concurrency = up to `max-active` workers + `aria-reserved` Aria runs, with at most one active Aria run per conversation.
 
 ### 3. Card UX (waiting in TODO)
@@ -40,7 +40,7 @@ Under a large fan-out (the operator's hotel-research batch), the podman/OpenSand
 
 ### 4. Edge cases
 
-- `max-active=0` and `aria-reserved=0` reproduce today's unbounded behavior.
+- `max-active=0` removes the worker cap; `aria-reserved=0` removes the Aria slot cap only (amended 2026-11-11: the Aria pool is no longer fully unbounded, the per-conversation rule still applies, so one conversation stays serialized at `0`).
 - Aria chat UX (amended 2026-11-11): a turn that parks on an approval holds only its own conversation; a turn in another conversation is admitted under the global cap while the first waits, and the parked turn's *slot* is not released (the run still owns a live core process, so releasing it would make the resource accounting lie). Within one conversation — or once the global Aria cap of 3 is reached — a new chat turn queues, so Aria replies become slower instead of piling up sandboxes or hiding behind a question nobody can see; recorded as an accepted UX change, originally with a single Aria slot.
 - Interaction with the review-flow batch (spec 2026-10-03-review-flow-ux-design): "Rework all failed" dispatches many runs — they will now queue behind the admission limit; the confirm dialog's "N runs will be dispatched" stays accurate (they are dispatched, then queued).
 
@@ -49,7 +49,7 @@ Under a large fan-out (the operator's hotel-research batch), the podman/OpenSand
 - Unit (admission queue): cap enforcement, FIFO order, Aria reservation, release on each terminal status, cancel-while-queued, boot re-enqueue, `0`-unlimited.
 - Integration: engine launch respects the cap; binding deadline freezes at admission (not queue entry).
 - Card: run-born-TODO + start-signal moves to IN_PROGRESS; queued run keeps TODO; end states unchanged.
-- Live: with defaults (6 workers + 3 Aria slots) dispatch 8 worker runs → 6 execute, 2 queue as PENDING with TODO cards; completing one starts the next; verify no daemon 500s under the capped fan-out. For the Aria pool, park one conversation's run on an approval and confirm a second conversation's turn is admitted while the first waits.
+- Live: with defaults (6 workers + 3 Aria slots) dispatch 8 worker runs → 6 execute, 2 queue as PENDING with TODO cards; completing one starts the next; verify no daemon 500s under the capped fan-out. For the Aria pool, park one conversation's run on an approval and confirm a second conversation's turn is admitted while the first waits — this check lands with the Task 5 engine call site that supplies `Run.conversationId`; until then every run arrives with a null conversation, so the guarantee cannot yet be exhibited.
 
 ## Out of scope
 

@@ -8,7 +8,6 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.AuditEvent;
 import io.aria.conductor.common.model.HealthStatus;
-import io.aria.conductor.common.model.PromptCall;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.PromptCallRepository;
@@ -23,6 +22,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -57,10 +58,6 @@ class DashboardControllerTest {
                 .build();
     }
 
-    private PromptCall promptCall(int in, int out) {
-        return PromptCall.builder().inputTokens(in).outputTokens(out).build();
-    }
-
     @Test
     void getSummary_reportsHealthyAndDegradedAgentsSeparately() throws Exception {
         when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(3L);
@@ -68,8 +65,10 @@ class DashboardControllerTest {
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(4L);
         when(approvalRepository.findByStatus(ApprovalStatus.PENDING))
                 .thenReturn(List.of(new Approval(), new Approval()));
-        when(promptCallRepository.findAll())
-                .thenReturn(List.of(promptCall(100, 50), promptCall(10, 5)));
+        // Task 7: usage comes from the runs' reported counters, not the prompt_calls table
+        // (whose only production writer is self-improvement, so it is blind to agent runs).
+        when(runRepository.sumReportedUsage()).thenReturn(165L);
+        when(runRepository.countWithoutReportedUsage()).thenReturn(2L);
 
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isOk())
@@ -79,7 +78,9 @@ class DashboardControllerTest {
                 .andExpect(jsonPath("$.degradedAgents").value(2))
                 .andExpect(jsonPath("$.runningRuns").value(4))
                 .andExpect(jsonPath("$.pendingApprovals").value(2))
-                .andExpect(jsonPath("$.totalTokensBurned").value(165));
+                .andExpect(jsonPath("$.totalTokensBurned").value(165))
+                .andExpect(jsonPath("$.runsWithoutUsage").value(2));
+        verify(promptCallRepository, never()).findAll();
     }
 
     @Test
@@ -88,12 +89,12 @@ class DashboardControllerTest {
         when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(0L);
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(0L);
         when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of());
-        when(promptCallRepository.findAll()).thenReturn(List.of());
 
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.activeAgents").value(0))
-                .andExpect(jsonPath("$.totalTokensBurned").value(0));
+                .andExpect(jsonPath("$.totalTokensBurned").value(0))
+                .andExpect(jsonPath("$.runsWithoutUsage").value(0));
     }
 
     @Test

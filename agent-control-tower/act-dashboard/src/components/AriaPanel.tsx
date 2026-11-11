@@ -998,8 +998,11 @@ export function AriaPanel() {
     (rawText: string, skillIdOverride?: string | undefined) => {
       const text = rawText.trim();
       // An unanswered decision owns the turn: a second prompt would pile another
-      // turn onto a parked conversation.
-      if (!text || busy || gated) return;
+      // turn onto a parked conversation. A Clear in flight owns the conversation:
+      // its DELETE reads the runs, drives the verified stops and then detaches by
+      // conversation, so a turn sent into that window would be written against a
+      // conversation the operator is clearing (T50 F-2).
+      if (!text || busy || gated || clearingRef.current) return;
 
       const skillId = skillIdOverride ?? pendingSkillId;
 
@@ -1172,7 +1175,7 @@ export function AriaPanel() {
   const tail = items[items.length - 1];
 
   const handleRetry = useCallback(() => {
-    if (busy || gated) return;
+    if (busy || gated || clearingRef.current) return;
     // A failed-turn timeline entry knows its own prompt; a stream-sourced failure
     // resends the prompt this tab last sent.
     const retryText = (tail?.kind === 'assistant' ? tail.retryText : undefined) ?? lastSentMessage;
@@ -1583,7 +1586,7 @@ export function AriaPanel() {
                     type="button"
                     className="ai-sg"
                     onClick={() => sendStreamed(s)}
-                    disabled={busy || gated}
+                    disabled={busy || gated || clearing}
                   >
                     {s}
                   </button>
@@ -1627,7 +1630,7 @@ export function AriaPanel() {
               onKeyDown={handleKeyDown}
               placeholder="Ask Aria anything…  (type / for skills)"
               rows={2}
-              disabled={busy || gated}
+              disabled={busy || gated || clearing}
               aria-controls={slash.open ? 'slash-command-listbox' : undefined}
               aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
             />
@@ -1646,7 +1649,7 @@ export function AriaPanel() {
                 type="button"
                 className="ai-action-btn"
                 onClick={handleSend}
-                disabled={!input.trim() || gated}
+                disabled={!input.trim() || gated || clearing}
                 aria-label="Send message"
               >
                 <span className="ai-action-glyph" aria-hidden="true">↗</span>

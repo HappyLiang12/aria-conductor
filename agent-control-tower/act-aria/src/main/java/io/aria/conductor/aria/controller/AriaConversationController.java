@@ -179,9 +179,14 @@ public class AriaConversationController {
     }
 
     /**
-     * Clear a conversation: cancel all its live runs, purge its transcript (trajectories,
-     * tool calls, audit log entries), then detach every run of the conversation from it
-     * ({@code conversation_id = null}). Returns 404 if no runs found for the conversationId.
+     * Clear a conversation: cancel the runs that are running, pending or parked on input,
+     * purge its transcript (trajectories, tool calls, audit log entries), then detach every
+     * run that still carries the conversation id ({@code conversation_id = null}). Returns
+     * 404 if no runs found for the conversationId.
+     * <p>
+     * The cancel set is exactly RUNNING / PENDING / WAITING_INPUT, which is what the loop
+     * below does: a PAUSED run is not cancelled (a pre-existing gap, recorded as a follow-up
+     * rather than widened here) and a terminal run is not relabelled.
      * <p>
      * The detach is what makes "Clear" true on every read surface: {@code /latest} picks
      * the newest run that still carries a conversation id, and the timeline resolves runs
@@ -191,6 +196,13 @@ public class AriaConversationController {
      * reports read, and deleting them would have to purge eleven run-keyed tables (four
      * with a foreign key to {@code runs}) to avoid orphans. Only the conversation link,
      * which is what a conversation is, is forgotten.
+     * <p>
+     * The detach is keyed to the conversation, not to the run ids read above: the verified
+     * stops can take seconds, and a run created for this conversation in that window is not
+     * in the read list. A detach keyed to the stale list left the late run's link alive and
+     * {@code /latest} answered the cleared conversation again. The statement below therefore
+     * also detaches a run this request never read; such a run keeps its record and its
+     * transcript (Clear purges only what it read, and it is never cancelled here).
      * <p>
      * T42 Item 4: this route purges history and cancels runs, and it resolved no authority at all,
      * so a run-scoped worker bearer was ignored and an anonymous remote caller was not refused
@@ -243,11 +255,13 @@ public class AriaConversationController {
         auditEventRepository.deleteByConversationId(conversationId);
 
         // The conversation itself: a set-based UPDATE (never a load-and-save, which
-        // would flush a status read before the verified cancels committed).
-        conversationRunRepository.detachFromConversation(runIds);
+        // would flush a status read before the verified cancels committed). Keyed to
+        // the conversation so a run created while the cancels above were running is
+        // detached too; the purge stays keyed to the ids read before the cancels.
+        int detached = conversationRunRepository.detachByConversationId(conversationId);
 
-        log.info("Conversation {} cleared: {} runs cancelled as needed, {} runIds detached",
-                conversationId, runs.size(), runIds.size());
+        log.info("Conversation {} cleared: {} runs considered, {} runIds detached by conversation",
+                conversationId, runs.size(), detached);
 
         return ResponseEntity.noContent().build();
     }

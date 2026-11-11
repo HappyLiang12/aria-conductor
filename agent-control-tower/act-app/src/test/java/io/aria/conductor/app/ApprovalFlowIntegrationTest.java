@@ -168,6 +168,28 @@ class ApprovalFlowIntegrationTest extends BaseH2IntegrationTest {
         assertThat(findById(listPending(), approval.getId())).isNull();
     }
 
+    // ==================== catalog-derived governance (L2 / B1) ====================
+
+    /**
+     * B1 (spec §5.3): the shipped {@code ToolCatalog} is a live bean in the application
+     * context, and the same {@code ToolRiskResolver} the approval mappers use must receive
+     * it. Without the catalog a platform MCP tool falls back to READ / no policy, so these
+     * exact values are what pins the production wiring rather than merely the mapper.
+     */
+    @Test
+    void pendingPlatformTool_carriesTheCatalogDerivedTierAndPolicy() {
+        Approval approval = seedPendingApproval("mcp__aria-conductor__decide_memory_proposal", "{}");
+
+        Map<String, Object> detail = findById(listPending(), approval.getId());
+        assertThat(detail).as("seeded approval must appear in pending list").isNotNull();
+        assertThat(detail.get("riskTier"))
+                .as("catalog OPERATOR_ONLY maps to PUSH; the no-catalog fallback is READ")
+                .isEqualTo("PUSH");
+        assertThat(detail.get("toolPolicy"))
+                .as("the catalog's policy is carried; the no-catalog fallback is null")
+                .isEqualTo("OPERATOR_ONLY");
+    }
+
     // ==================== DENY path ====================
 
     @Test

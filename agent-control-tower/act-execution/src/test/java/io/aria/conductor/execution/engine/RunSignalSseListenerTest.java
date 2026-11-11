@@ -31,7 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -195,6 +197,61 @@ class RunSignalSseListenerTest {
             listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, runId, null));
             listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
         }).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aClarificationAskProducesOnlyTheWaitingInputSignal() {
+        // The engine publishes ApprovalRequestedEvent for the CLARIFICATION ask it has just
+        // persisted AND the run parks on RunWaitingForInputEvent. Both name the same approvalId,
+        // so a second card would render one decision twice: exactly one signal per approval.
+        UUID runId = UUID.randomUUID();
+        UUID askId = UUID.randomUUID();
+        Approval ask = Approval.builder()
+                .id(askId).runId(runId).status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL).askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .content("Which database should the migration target?")
+                .build();
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(approvals.findById(askId)).thenReturn(Optional.of(ask));
+        when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
+                ApprovalSource.CLARIFICATION)).thenReturn(List.of(ask));
+        when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
+        // Stubbed leniently on purpose: the pre-fix producer also emits approval_required here,
+        // and Mockito's strict stubbing would fail that call before the never() assertion below
+        // can. The fixed producer must not reach this stub at all.
+        lenient().when(registry.emit(eq(runId), eq("approval_required"), any())).thenReturn(true);
+
+        listener.onApprovalRequested(new ApprovalRequestedEvent(this, askId, runId, null));
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        // Positive control: the clarification branch does reach the stream.
+        verify(registry).emit(eq(runId), eq("waiting_input"), any());
+        // Negative: and approval_required is never a second card for this same approval.
+        verify(registry, never()).emit(eq(runId), eq("approval_required"), any());
+        verify(registry, times(1)).emit(any(), any(), any());
+    }
+
+    @Test
+    void aNonClarificationAskProducesOnlyTheApprovalRequiredSignal() {
+        // The positive control for the branch the clarification filter must not touch.
+        UUID runId = UUID.randomUUID();
+        UUID approvalId = UUID.randomUUID();
+        Approval row = Approval.builder()
+                .id(approvalId).runId(runId).status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL).askType(Approval.AskType.APPROVAL)
+                .source(ApprovalSource.ACP_PERMISSION)
+                .toolName("mcp__aria-conductor__remember_fact").riskTier("WRITE_LOCAL").build();
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(approvals.findById(approvalId)).thenReturn(Optional.of(row));
+        when(resolver.policyOf("mcp__aria-conductor__remember_fact")).thenReturn(ToolPolicy.WORKER_WRITE);
+        when(registry.emit(eq(runId), eq("approval_required"), any())).thenReturn(true);
+
+        listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, runId, null));
+
+        verify(registry).emit(eq(runId), eq("approval_required"), any());
+        verify(registry, never()).emit(eq(runId), eq("waiting_input"), any());
+        verify(registry, times(1)).emit(any(), any(), any());
     }
 
     @Test

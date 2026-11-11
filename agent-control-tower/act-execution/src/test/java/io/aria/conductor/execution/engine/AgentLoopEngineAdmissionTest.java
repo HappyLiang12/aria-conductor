@@ -382,9 +382,22 @@ class AgentLoopEngineAdmissionTest {
         }, "aria-second-turn");
         secondThread.start();
         try {
-            assertThat(secondRunning.await(1, TimeUnit.SECONDS))
+            // Deterministic, not a wall-clock window: wait (bounded, generously) until the
+            // second thread is provably parked INSIDE RunAdmissionQueue.acquire — in the
+            // monitor wait that only the not-granted path reaches — and only then assert,
+            // synchronously, that it holds no slot and was never launched. A fixed window
+            // cannot prove this: 1 s against a 5 s control budget is a race the mutant can
+            // win on a contended box. A state observation cannot.
+            await().atMost(Duration.ofSeconds(15))
+                    .untilAsserted(() -> assertThat(parkedInAdmission(secondThread))
+                            .as("the second turn of the SAME conversation waits inside acquire")
+                            .isTrue());
+            assertThat(secondRunning.getCount())
                     .as("a second turn of the SAME conversation must not run beside the first")
-                    .isFalse();
+                    .isEqualTo(1);
+            assertThat(second.getStatus())
+                    .as("and the queue never admitted it: the run is still PENDING")
+                    .isEqualTo(RunStatus.PENDING);
             releaseFirst.countDown();
             assertThat(secondRunning.await(15, TimeUnit.SECONDS))
                     .as("and it runs as soon as the first turn releases the conversation")
@@ -441,6 +454,24 @@ class AgentLoopEngineAdmissionTest {
             otherThread.join(15_000);
         }
         assertThat(otherThread.isAlive()).isFalse();
+    }
+
+    /**
+     * True only while the thread is blocked in {@code RunAdmissionQueue.acquire}'s
+     * {@code monitor.wait} — the state the parked branch reaches and a granted one
+     * never does (a grant leaves the {@code while} loop without waiting).
+     */
+    private static boolean parkedInAdmission(Thread thread) {
+        if (thread.getState() != Thread.State.TIMED_WAITING) {
+            return false;
+        }
+        for (StackTraceElement frame : thread.getStackTrace()) {
+            if (frame.getClassName().equals(RunAdmissionQueue.class.getName())
+                    && frame.getMethodName().equals("acquire")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private AgentLoopEngine engineWith(RunAdmissionQueue queue, ApplicationEventPublisher publisher) {

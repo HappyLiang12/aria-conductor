@@ -65,16 +65,47 @@ class MemoryProposalServiceTest {
     private static final Instant OLD = Instant.parse("2026-01-01T00:00:00Z");
 
     /**
-     * T38: the four wordings the PA front end discriminates a server outcome on, pinned as a
-     * taxonomy. The memory envelope carries the same {@code 409 CONFLICT} for every conflict and
+     * T38, corrected by T40 item 1: every wording reachable from {@code decideProposal}, pinned as
+     * a taxonomy. The memory envelope carries the same {@code 409 CONFLICT} for every conflict and
      * the same {@code 403 FORBIDDEN} for every refusal, so the message is the only field that tells
      * them apart — that makes each phrase a contract rather than a phrasing. Every edit below is
-     * caught by the assertions in this class; task-38-report.md records the mutation probes.
+     * caught by the assertions in this class; task-38-report.md and task-40-report.md record the
+     * mutation probes.
+     * <p>
+     * Measured on the shipped producers, the reachable wordings are:
+     * <ol>
+     *   <li>{@link #ALREADY_DECIDED} — all three "is already …" throws
+     *       ({@code MemoryProposalService:246}, {@code :292}, {@code :414});</li>
+     *   <li>{@link #RETRYABLE_RACE} + {@link #RETRYABLE_REMEDY} — the fact flush ({@code :384})
+     *       and the entity flush ({@code :402});</li>
+     *   <li>{@link #SLOT_WON_RACE} — the shared current-value slot claim
+     *       ({@code MemoryCurrentValueSlot:50}), which {@code decideFact} runs at {@code :340}
+     *       BEFORE either flush, so an approval that loses the entity slot surfaces this wording
+     *       and ends "re-read before writing", not "re-read before deciding";</li>
+     *   <li>{@link #PENDING_PARENT} — the PENDING branch of the parent guard ({@code :333});</li>
+     *   <li>{@link #DEAD_PARENT} — the RETIRED/MERGED branch of that same throw.</li>
+     * </ol>
+     * So the retryable wordings (2 and 3) share only the substring {@code "changed while"}; their
+     * remedies differ ("re-read before deciding" vs "re-read before writing") and neither suffix is
+     * a discriminator. The shipped card does not need one: {@code AriaProposalCard} settles a 409
+     * only on {@link #ALREADY_DECIDED} or {@link #PENDING_PARENT} and leaves every other conflict
+     * on the ordinary retry path.
+     * <p>
+     * {@code "re-read before retrying"} ({@code MemoryCommandService:781}) is NOT a decision-path
+     * wording and is deliberately not pinned here: that translation belongs to the private
+     * {@code MemoryCommandService.flushFacts(factKey, operation)}, reached only from
+     * {@code addFactByKey}, {@code supersedeFact} and {@code retireFact} ({@code :262},
+     * {@code :435}, {@code :475}). {@code MemoryProposalService} holds no reference to that class
+     * and translates its own fact flushes at {@code :384}. task-40-report.md carries the call-path
+     * evidence.
      */
     private static final String ALREADY_DECIDED = "a decided proposal cannot be reopened";
     private static final String RETRYABLE_RACE = "changed while";
     private static final String RETRYABLE_REMEDY = "re-read before deciding";
+    /** The slot-claim remedy differs from {@link #RETRYABLE_REMEDY}: "writing", not "deciding". */
+    private static final String SLOT_WON_RACE = "another writer won the race — re-read before writing";
     private static final String PENDING_PARENT = "which is still PENDING; decide the entity proposal";
+    private static final String DEAD_PARENT = "the entity is no longer active";
     private static final String CROSS_SITE = "Cross-origin operator mutation rejected";
 
     @Mock
@@ -603,7 +634,7 @@ class MemoryProposalServiceTest {
                     .isInstanceOf(MemoryConflictException.class)
                     .hasMessageContaining(entityId.toString())
                     .hasMessageContaining(parentStatus.name())
-                    .hasMessageContaining("no longer active");
+                    .hasMessageContaining(DEAD_PARENT);
 
             assertThat(proposed.getStatus()).as("a refused approval promotes nothing")
                     .isEqualTo(FactStatus.PENDING);
@@ -871,11 +902,12 @@ class MemoryProposalServiceTest {
      * card. Both governed translations are driven — the fact flush and the entity flush — because
      * they are separate {@code catch} blocks and either could drift to the dead-end wording.
      * <p>
-     * The marker is the pair {@code "changed while"} + {@code "re-read before deciding"}. The
-     * shipped wording differs in two places the brief credited to this marker and which are NOT
-     * pinned here (task-38-report.md): {@code MemoryCurrentValueSlot.claim} says "changed while …
-     * another writer won the race — re-read before writing" (reachable from an approval that loses
-     * the entity slot) and {@code MemoryCommandService} says "re-read before retrying".
+     * The marker is the pair {@code "changed while"} + {@code "re-read before deciding"} for the
+     * two flush translations only. The third retryable wording — the slot claim's "changed while …
+     * another writer won the race — re-read before writing" — is a separate producer and is pinned
+     * by {@link #anApprovalThatLosesTheEntitySlotCarriesTheSlotWordingAndNotTheDecidedMarker}
+     * (T40 item 1). {@code MemoryCommandService}'s "re-read before retrying" is not reachable from
+     * a decision at all; see the taxonomy javadoc above.
      */
     @Test
     void aLostVersionRaceCarriesOnlyTheRetryableMarker() {
@@ -901,6 +933,30 @@ class MemoryProposalServiceTest {
         assertConflictTaxonomy(
                 () -> proposals.decideProposal(cardId, ProposalDecision.APPROVE, OPERATOR),
                 RETRYABLE_RACE, RETRYABLE_REMEDY);
+    }
+
+    /**
+     * T40 item 1 (P2). The slot claim is the FIRST thing an approval does that can lose a row
+     * version: {@code decideFact} calls {@code currentValueSlot.claim} at {@code :340}, before
+     * either fact or entity flush, and the claim flushes the entity. So an approval racing another
+     * writer on the same entity surfaces the slot's own wording — "changed while … another writer
+     * won the race — re-read before writing" — which the T38 taxonomy pinned nowhere. It is still
+     * a retryable conflict (the caller can re-read and retry), so it must share the
+     * {@code "changed while"} substring and must NOT read like the dead-end wording; the remedy
+     * suffix is the slot's, which is exactly why the front end cannot key on it.
+     */
+    @Test
+    void anApprovalThatLosesTheEntitySlotCarriesTheSlotWordingAndNotTheDecidedMarker() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, entityId))
+                .when(entities).flush();
+
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR),
+                RETRYABLE_RACE, SLOT_WON_RACE);
     }
 
     /**
@@ -1099,7 +1155,7 @@ class MemoryProposalServiceTest {
     private static void assertConflictTaxonomy(ThrowingCallable call, String... required) {
         List<String> requiredMarkers = List.of(required);
         List<String> absent = List.of(ALREADY_DECIDED, RETRYABLE_RACE, RETRYABLE_REMEDY,
-                        PENDING_PARENT, CROSS_SITE).stream()
+                        SLOT_WON_RACE, PENDING_PARENT, DEAD_PARENT, CROSS_SITE).stream()
                 .filter(marker -> !requiredMarkers.contains(marker))
                 .toList();
         assertThatThrownBy(call).isInstanceOf(MemoryConflictException.class).satisfies(error -> {

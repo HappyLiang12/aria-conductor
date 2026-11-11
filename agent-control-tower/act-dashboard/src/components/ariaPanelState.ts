@@ -64,6 +64,8 @@ type ProposalItem = Extract<PanelItem, { kind: 'proposal' }>;
 
 /** The backend's trajectory rows prefix a tool invocation with this literal. */
 const TOOL_CALL_PREFIX = 'tool_call:';
+/** A failure is labelled with this separator; the reason follows the last one. */
+const FAILURE_REASON_SEPARATOR = '：';
 /** A tool result row whose call row is missing still names itself in the strip. */
 const ORPHAN_TOOL_NAME = '(tool output)';
 /** The single queued indicator is keyed by its kind, not by a run. */
@@ -411,7 +413,12 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
     }
   }
   const carriedTurnIds = new Set<string>();
-  const baseHasError = base.some((item) => item.kind === 'assistant' && item.error === true);
+  const restoredFailureReasons = new Set<string>();
+  for (const item of base) {
+    if (item.kind !== 'assistant' || item.error !== true) continue;
+    const reason = failureReasonText(item.content);
+    if (reason !== null) restoredFailureReasons.add(reason);
+  }
   let queuedDrawn = base.some((item) => item.kind === 'queued');
 
   const carried: PanelItem[] = [];
@@ -438,10 +445,14 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
         continue;
       }
       // A failed turn is re-told in different words by the snapshot, so the budget
-      // cannot consume the live notice; once the snapshot shows a failure, the live
-      // duplicate is dropped. A run-uncertain notice (noRetry) is not in the
-      // snapshot and still carries.
-      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true && baseHasError) continue;
+      // cannot consume the live notice. Drop it only when the snapshot tells the
+      // same failure — a notice whose reason matches a restored one. A different
+      // reason (a newer failed turn) or no reason at all (a run-uncertain notice,
+      // which the snapshot never holds) still carries: a duplicate is noisy, a
+      // deletion claims nothing failed.
+      const carriedReason = item.kind === 'assistant' && item.error === true ? failureReasonText(item.content) : null;
+      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true
+        && carriedReason !== null && restoredFailureReasons.has(carriedReason)) continue;
     }
     carried.push(item);
   }
@@ -451,6 +462,20 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
 function messageKey(item: Extract<PanelItem, { kind: 'user' | 'assistant' }>): string {
   if (item.kind === 'assistant') return `assistant\u0000${item.error === true ? 'error' : 'ok'}\u0000${item.content}`;
   return `user\u0000${item.content}`;
+}
+
+/**
+ * The reason a failure notice reports. The live plane labels it `⚠ 上一回合失敗：<reason>`
+ * and the snapshot's synthetic failed-turn entry `回合執行失敗：<reason>`, so the text
+ * after the last separator is what the two tellings share. A notice with no reason
+ * (the run-uncertain copy) yields null and matches nothing: it is not a re-telling
+ * of a persisted failure, and the snapshot never re-delivers it.
+ */
+function failureReasonText(content: string): string | null {
+  const at = content.lastIndexOf(FAILURE_REASON_SEPARATOR);
+  if (at < 0) return null;
+  const reason = content.slice(at + FAILURE_REASON_SEPARATOR.length).trim();
+  return reason ? reason : null;
 }
 
 /**

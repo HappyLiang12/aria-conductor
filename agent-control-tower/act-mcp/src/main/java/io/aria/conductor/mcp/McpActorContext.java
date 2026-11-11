@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.security.ActorTokenService;
 import io.aria.conductor.execution.security.OperatorSessionService;
+import io.aria.conductor.mcp.tools.ToolResponses;
 import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.mcp.McpToolUtils;
@@ -32,17 +33,37 @@ public final class McpActorContext {
     /**
      * Resolves the authenticated actor of the invoking MCP session.
      *
+     * <p>The refusal speaks the same one voice as the ten operator-only tools
+     * ({@link ToolResponses#operatorOnly}): it names the action and the surface where
+     * the caller can fix it. This guard runs before an actor exists, so it cannot use
+     * {@code requireOperator}, but a call that carried no credential is exactly the
+     * caller that most needs a next step — a bare "missing actor" tells it nothing.
+     *
      * @throws SecurityException when the call carries no framework exchange or no
      *                           transport-authenticated actor (never falls back to arguments)
      */
     public static ActorPrincipal require(ToolContext context) {
         var exchange = McpToolUtils.getMcpExchange(context)
-                .orElseThrow(() -> new SecurityException("Missing MCP exchange"));
+                .orElseThrow(McpActorContext::unauthenticated);
         Object value = exchange.transportContext().get(ACTOR_KEY);
         if (!(value instanceof ActorPrincipal actor)) {
-            throw new SecurityException("Missing transport actor");
+            throw unauthenticated();
         }
         return actor;
+    }
+
+    /**
+     * The unauthenticated refusal: the shared operator-authority sentence, with the
+     * only remedy available at this layer — the credential on the MCP session. It
+     * deliberately does not say which of the two credentials to use, because either
+     * resolves a valid actor; what is missing is a credential that verifies at all.
+     */
+    private static SecurityException unauthenticated() {
+        return new SecurityException(ToolResponses.operatorOnly(
+                "calling a tool without an authenticated credential",
+                "Reconnect the MCP client with an authenticated credential: the operator bearer "
+                        + "credential (aria.operator.bearer-token) or a run-scoped worker token "
+                        + "issued to the run."));
     }
 
     /** Publishes an actor into a transport context; unauthenticated calls stay empty. */

@@ -598,7 +598,10 @@ class MemoryToolsTest {
 
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
-                .contains("Missing MCP exchange");
+                .contains("Operator authority required: calling a tool without an "
+                        + "authenticated credential is an operator decision. Reconnect the MCP client "
+                        + "with an authenticated credential: the operator bearer credential "
+                        + "(aria.operator.bearer-token) or a run-scoped worker token issued to the run.");
         verifyNoInteractions(commands);
     }
 }

@@ -340,9 +340,10 @@ describe('AriaProposalCard', () => {
 
   /**
    * `GET /proposals?status=&entityId=` answers ONE entity's whole PENDING batch —
-   * its facts, its relations in either direction and its own row — uncapped. The
-   * card may therefore say the list is complete, and must not hedge with the
-   * global inbox's page size.
+   * its FACTS plus its own row — uncapped. (A batch is the entity's pending facts
+   * and nothing else: the relation graph is out of scope, spec :138/:453, so the
+   * RELATION row below must not reach the list.) The card may therefore say the
+   * list is complete, and must not hedge with the global inbox's page size.
    */
   it('states the batch is complete and lists every fact of it', async () => {
     vi.mocked(listMemoryProposals).mockResolvedValue([

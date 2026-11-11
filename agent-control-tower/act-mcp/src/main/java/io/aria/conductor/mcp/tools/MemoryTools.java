@@ -164,7 +164,8 @@ public class MemoryTools implements McpTool {
             description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.")
     public String listMemoryEntities(
             @ToolParam(description = "Entity kind or blank", required = false) String kind,
-            @ToolParam(description = "ACTIVE, MERGED or RETIRED; default ACTIVE", required = false) String status,
+            @ToolParam(description = "ACTIVE, MERGED, RETIRED or PENDING (PENDING is operator authority only); "
+                    + "default ACTIVE", required = false) String status,
             @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit,
             ToolContext toolContext) {
         try {
@@ -193,7 +194,7 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "get_memory_entity",
-            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material and is not readable through this detail read.")
+            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page.")
     public String getMemoryEntity(
             @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
             ToolContext toolContext) {
@@ -547,7 +548,8 @@ public class MemoryTools implements McpTool {
         try {
             return EntityStatus.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid status '" + raw + "'. Valid: ACTIVE, MERGED, RETIRED");
+            throw new IllegalArgumentException(
+                    "Invalid status '" + raw + "'. Valid: ACTIVE, PENDING, MERGED, RETIRED");
         }
     }
 

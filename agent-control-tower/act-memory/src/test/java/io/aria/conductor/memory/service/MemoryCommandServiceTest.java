@@ -244,6 +244,34 @@ class MemoryCommandServiceTest {
         verify(facts).save(any(MemoryFact.class));
     }
 
+    /**
+     * The composition of two rules reviewed as verified-correct but untested (T14 review m3):
+     * {@link MemoryCommandService#createEntity} returns an existing PENDING row unchanged, then the
+     * OPERATOR half of the unknown-key shape computes an ACTIVE fact and the dependent-read guard
+     * refuses it. The proposal stays PENDING and no fact or assertion is written.
+     */
+    @Test
+    void anOperatorUnknownKeyOnAnExistingPendingEntityConflictsAndLeavesItPending() {
+        MemoryEntity pending = entity(id("pending-person"));
+        pending.setCanonicalKey("person:happy");
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(pending));
+        when(entities.findById(pending.getId())).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> command.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("ACTIVE fact cannot be");
+
+        assertThat(pending.getStatus())
+                .as("the existing PENDING proposal is returned unchanged, never promoted")
+                .isEqualTo(EntityStatus.PENDING);
+        verify(entities, never()).save(any());
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
     // ---------------------------------------------------------------- conflicts
 
     @Test

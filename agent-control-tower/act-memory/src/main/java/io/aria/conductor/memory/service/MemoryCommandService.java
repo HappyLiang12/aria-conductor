@@ -204,8 +204,15 @@ public class MemoryCommandService {
 
     /**
      * Closes the current ACTIVE facts and relations a lifecycle-retired entity left behind (see
-     * {@link #rePropose}). Relations are read in both directions because either endpoint retiring
-     * makes the edge resurrectable; an edge that is both is retired once.
+     * {@link #rePropose}), together with its still-PENDING facts (T29 Item 3). Relations are read
+     * in both directions because either endpoint retiring makes the edge resurrectable; an edge
+     * that is both is retired once.
+     * <p>
+     * T29 Item 3 (P3): lifecycle retire writes no fact row, so a PENDING proposal that was raised
+     * before the retire stayed PENDING. Re-proposing the same key then re-used the identity row
+     * and the operator's approval of the new proposal promoted that stale row — a value the
+     * current extraction never proposed. The PENDING rows are closed here, so the new batch holds
+     * only what the new proposal writes, and they count on the same tally.
      *
      * @return the number of fact rows closed, recorded on the re-proposal's CREATE assertion
      */
@@ -216,15 +223,15 @@ public class MemoryCommandService {
             if (fact == null) {
                 continue;
             }
-            fact.setStatus(FactStatus.RETIRED);
-            fact.setValidTo(now);
-            facts.save(fact);
-            // The audit payload names the key, never the value: a fact value can be CONFIDENTIAL.
-            assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
-                    null, now,
-                    audit("status", FactStatus.ACTIVE.name(), "factKey", fact.getFactKey()),
-                    audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey(),
-                            "reason", "entity re-proposed", "entityId", row.getId().toString())));
+            retireLiveFact(row, fact, actor, now);
+            factsRetired++;
+        }
+        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                row.getId(), FactStatus.PENDING))) {
+            if (fact == null) {
+                continue;
+            }
+            retireLiveFact(row, fact, actor, now);
             factsRetired++;
         }
         Set<UUID> seen = new LinkedHashSet<>();
@@ -235,6 +242,22 @@ public class MemoryCommandService {
             retireLiveRelation(row, relation, seen, actor, now);
         }
         return factsRetired;
+    }
+
+    /**
+     * Closes one fact row the retired entity left live. The audit payload names the key and the
+     * status it closed, never the value: a fact value can be CONFIDENTIAL.
+     */
+    private void retireLiveFact(MemoryEntity row, MemoryFact fact, MemoryActor actor, Instant now) {
+        FactStatus previous = fact.getStatus();
+        fact.setStatus(FactStatus.RETIRED);
+        fact.setValidTo(now);
+        facts.save(fact);
+        assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
+                null, now,
+                audit("status", previous.name(), "factKey", fact.getFactKey()),
+                audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey(),
+                        "reason", "entity re-proposed", "entityId", row.getId().toString())));
     }
 
     private void retireLiveRelation(MemoryEntity row, MemoryRelation relation, Set<UUID> seen,

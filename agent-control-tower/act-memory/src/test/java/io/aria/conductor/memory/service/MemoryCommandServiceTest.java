@@ -1189,6 +1189,52 @@ class MemoryCommandServiceTest {
     }
 
     /**
+     * T29 Item 3 (P3). Lifecycle retire leaves the entity's PENDING facts PENDING, so the next
+     * extraction of the same key inherited them: the operator approved the re-proposed entity and
+     * the decision promoted a value the current extraction never proposed. The re-proposal must
+     * close the stale PENDING rows with the same RETIRE assertion and count them on
+     * {@code factsRetired}, so the batch the new proposal creates holds only what it wrote.
+     */
+    @Test
+    void reProposingARetiredKeyRetiresItsStalePendingFactsAndCountsThem() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryFact stale = currentFact(id("fact:stale"), retired.getId(), "preferred_editor", "vim", 1);
+        stale.setStatus(FactStatus.PENDING);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.PENDING))
+                .thenReturn(List.of(stale));
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+
+        command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(stale.getStatus())
+                .as("a stale PENDING row must not survive into the new batch")
+                .isEqualTo(FactStatus.RETIRED);
+        assertThat(stale.getValidTo()).as("the stale proposal is closed, not current").isNotNull();
+        verify(facts).save(stale);
+        List<MemoryAssertion> written = captureAssertions(2);
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.FACT)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(stale.getId());
+                    assertThat(assertion.getBeforeJson()).contains("PENDING").contains("preferred_editor");
+                });
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> assertThat(assertion.getAfterJson())
+                        .as("the closure is recorded on the re-proposal tally")
+                        .contains("\"factsRetired\":1"));
+    }
+
+    /**
      * The same resurrection on the graph: approving the re-proposed entity makes its surviving
      * ACTIVE relations current again (recall expands them from an ACTIVE match), so the edges the
      * retired entity left behind must be closed with it. One edge that is both incoming and

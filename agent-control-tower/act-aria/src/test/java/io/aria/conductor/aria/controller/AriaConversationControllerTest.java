@@ -451,7 +451,7 @@ class AriaConversationControllerTest {
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
         verify(trajectoryRepository, never()).deleteByRunIdIn(any());
         verify(auditEventRepository, never()).deleteByConversationId(any());
-        verify(conversationRunRepository, never()).detachFromConversation(any());
+        verify(conversationRunRepository, never()).detachByConversationId(any());
     }
 
     @Test
@@ -462,7 +462,7 @@ class AriaConversationControllerTest {
                 .andExpect(status().isNotFound());
 
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
-        verify(conversationRunRepository, never()).detachFromConversation(any());
+        verify(conversationRunRepository, never()).detachByConversationId(any());
     }
 
     @Test
@@ -487,10 +487,12 @@ class AriaConversationControllerTest {
         verify(toolCallRepository).deleteByRunIdIn(allIds);
         verify(trajectoryRepository).deleteByRunIdIn(allIds);
         verify(auditEventRepository).deleteByConversationId("conv-1");
-        // The conversation link is cleared for every run, so /latest and the timeline can no
-        // longer resolve this conversation (the end-to-end effect is pinned on the real
-        // repositories in ConversationClearContractTest).
-        verify(conversationRunRepository).detachFromConversation(allIds);
+        // The conversation link is cleared for every run that still carries it -- keyed to
+        // the conversation, so a run created while the verified cancels above were running
+        // is detached too (T50 F-2) -- so /latest and the timeline can no longer resolve
+        // this conversation (the end-to-end effect is pinned on the real repositories in
+        // ConversationClearContractTest and ConversationClearWriterWindowTest).
+        verify(conversationRunRepository).detachByConversationId("conv-1");
     }
 
     @Test
@@ -516,7 +518,7 @@ class AriaConversationControllerTest {
         verify(toolCallRepository, never()).deleteByRunIdIn(any());
         verify(trajectoryRepository, never()).deleteByRunIdIn(any());
         verify(auditEventRepository, never()).deleteByConversationId(any());
-        verify(conversationRunRepository, never()).detachFromConversation(any());
+        verify(conversationRunRepository, never()).detachByConversationId(any());
     }
 
     @Test

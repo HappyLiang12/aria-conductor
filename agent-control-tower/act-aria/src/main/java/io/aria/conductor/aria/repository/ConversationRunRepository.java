@@ -6,7 +6,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -19,18 +18,25 @@ import java.util.UUID;
  * pinned rule is that a whole-entity save flushes {@code status}/{@code completedAt}
  * too, so a run read before a concurrent verified cancel committed would be written
  * back stale. This statement touches the conversation link and nothing else.
+ *
+ * <p>Keyed to the conversation, not to a list of run ids read earlier: Clear cancels
+ * the live runs it read through the verified stop path first, and a run created for
+ * the same conversation while that stop is in flight is not in that list. A detach
+ * keyed to the stale list would leave the late run's link alive, and {@code /latest}
+ * would answer the cleared conversation again — Clear undone by a concurrent writer.
  */
 public interface ConversationRunRepository extends Repository<Run, UUID> {
 
     /**
-     * Forgets which conversation the named runs belonged to. After this, the runs no
-     * longer resolve through {@code findByConversationId...}, so the cleared
-     * conversation is no longer the latest one and its timeline is empty, while the
-     * run rows themselves survive for the runs surface, reports and usage totals.
+     * Forgets which conversation every run that still carries {@code conversationId}
+     * belonged to. After this, those runs no longer resolve through
+     * {@code findByConversationId...}, so the cleared conversation is no longer the
+     * latest one and its timeline is empty, while the run rows themselves survive for
+     * the runs surface, reports and usage totals.
      *
-     * @return the number of run rows that carried one of the ids and a conversation
+     * @return the number of run rows that carried the conversation
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("update Run r set r.conversationId = null where r.id in :ids")
-    int detachFromConversation(@Param("ids") List<UUID> ids);
+    @Query("update Run r set r.conversationId = null where r.conversationId = :conversationId")
+    int detachByConversationId(@Param("conversationId") String conversationId);
 }

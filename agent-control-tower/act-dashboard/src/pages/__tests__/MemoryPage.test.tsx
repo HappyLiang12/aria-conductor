@@ -275,6 +275,11 @@ describe('MemoryPage — entity list', () => {
     });
     // Approving is the only way out of PENDING: the mutation surface stays ACTIVE-only.
     expect(screen.queryByRole('button', { name: /retire entity/i })).not.toBeInTheDocument();
+    // Same for the fact rows the proposal carries. A PENDING fact is review
+    // material: its decision belongs to the proposal card's approve/reject, and a
+    // fact-level retire would leave the proposal itself dangling.
+    expect(screen.getByText('proposed_nickname')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retire fact/i })).not.toBeInTheDocument();
   });
 });
 
@@ -440,6 +445,8 @@ describe('MemoryPage — entity detail and retirement', () => {
     ]);
   });
 
+  // Positive control for the PENDING pin above: an ACTIVE fact row keeps its
+  // Retire control — the mutation is hidden for review material only.
   it('opens the detail, lists its facts, and retires one through the confirmation', async () => {
     routeGets({ entities: () => [entity()] });
     post.mockResolvedValue({ data: fact({ status: 'RETIRED' }) } as never);

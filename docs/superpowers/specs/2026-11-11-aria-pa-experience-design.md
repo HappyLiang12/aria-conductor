@@ -128,6 +128,9 @@ containing the string `decide_approval`; `ApprovalDetail` is mapped in two place
 same payload feeds MCP `list_approvals`; the panel uses no WebSocket today and mutations
 must call `applyOperatorHeaders()`; a clarification's question text is `ask.content`;
 there is no `QUEUED` run status; and there is no conversation-scoped approvals endpoint.
+F6's root cause was also re-located: the run DTO already distinguishes "never observed",
+so the false zero comes from the dashboard summary summing a table that normal runs never
+write, plus a carried-zero usage report being treated as measured (see 5.4).
 
 ## 3. Non-goals
 
@@ -249,20 +252,38 @@ mapping changes no runtime behavior.
 
 ### 5.4 Usage truth
 
-`Run.inputTokens` and `Run.outputTokens` are nullable `Long` and are COALESCE-updated by
-`RunRepository.updateUsageIfNotTerminal`. `AgentLoopEngine.recordUsage` returns early when
-the core reports no usage, and `RunTelemetryService.recordUsage` no-ops when nothing was
-reported. Both are correct; the defect is that a primitive `totalTokensUsed = 0` cannot
-express "unknown", and the UI and the briefing read it as zero cost.
+Two distinct defects produce the same false zero, and both were verified by reading the
+code at `a752acef`.
 
-The fix derives `usageState` (`NOT_REPORTED` when both nullable counters are null,
-`REPORTED` otherwise) and exposes it on the run DTO and the dashboard summary. The UI
-shows "not reported" instead of 0, and the summary distinguishes "N runs, M of which
-reported no usage" so Aria stops asserting a zero burn. No migration, no invented number.
+**The summary reads the wrong table.** `DashboardTools.getDashboardSummary` computes
+`totalTokensBurned` as `promptCallRepository.findAll()` summed over input plus output
+(`DashboardTools.java:40-43`). The only production writer of `PromptCall` in the whole
+repository is `SelfImprovementService` in act-knowledge (`:82`); normal agent runs never
+write that table. So the KPI and the briefing report zero for every core, not just qoder,
+and the unbounded `findAll()` is also a scaling defect. The summary must source usage from
+the runs' reported counters through a bounded aggregate, and must say how many runs
+reported nothing instead of presenting a bare 0.
 
-Whether the pinned qoder CLI can report usage at all is a separate spike, off the critical
+**A carried zero is reported as a measured zero.** `RunService.observedTotalTokens`
+(`:526-532`) already returns null when the total is 0 and both provider columns are null,
+so "never observed" is already distinguishable. The live acceptance runs returned `0`, not
+null, which means their provider columns are non-null: the pinned CLI's placeholder shape
+wrote explicit zeros. A real LLM call cannot consume zero input tokens, so an all-zero
+usage report is a placeholder, not a measurement, and must be classified `NOT_REPORTED`.
+The existing telemetry comment already describes this shape ("a carried zero next to
+positive parts is the pinned CLI's placeholder"); the rule is extended to the all-zero
+case.
+
+The fix exposes `usageState` (`NOT_REPORTED` / `REPORTED`) on the run DTO and the dashboard
+summary, shows "not reported" in the UI instead of 0, and makes the summary separate
+unreported runs from zero cost. `inputTokens` and `outputTokens` are added to the run
+response so the classification is observable rather than inferred. No migration, no
+invented number, and no estimate.
+
+Whether the pinned qoder CLI can report real usage is a separate spike, off the critical
 path. The bridge already supports both the ACP `usage` block and `_meta.quota`
-(`packages/qoder-acp-bridge/src/usage.ts`); neither appeared in this acceptance.
+(`packages/qoder-acp-bridge/src/usage.ts`); neither produced a positive count in this
+acceptance.
 
 ### 5.5 Memory operation surface
 
@@ -366,9 +387,15 @@ release.
 
 Covers F6, F8, and the governance amendment from decision 3.
 
-**B2 Usage truth.** As described in 5.4: `usageState` on the run DTO and dashboard
-summary, "not reported" in the UI, and a summary that separates unreported runs from zero
-cost. The qoder usage spike is scheduled but does not gate the wave.
+**B2 Usage truth.** As described in 5.4, in two parts. First measure: expose
+`inputTokens`/`outputTokens` on the run response and record the actual values for a live
+Aria run, so the carried-zero classification rests on a measurement rather than an
+inference. Then fix both producers: the dashboard summary sources usage from the runs'
+reported counters through a bounded aggregate instead of `promptCallRepository.findAll()`,
+and an all-zero usage report is classified `NOT_REPORTED`. The run DTO and the summary
+carry `usageState`, the UI shows "not reported" instead of 0, and the summary separates
+unreported runs from zero cost. The qoder usage spike is scheduled but does not gate the
+wave.
 
 **B3 Capability honesty.** Two measured false claims are fixed at three places:
 
@@ -581,11 +608,17 @@ shows `mcp__aria-conductor__remember_fact` (approval `e3d98ff2`) and
 `riskTier = READ`, while `ToolCatalog.java:66` classifies `remember_fact` as WORKER_WRITE
 and `:82` classifies `decide_memory_proposal` as OPERATOR_ONLY.
 
-Usage. All nine completed runs report `totalTokensUsed = 0`. The run-owned core logs for
-`27d2af95`, `1381912e` and `872beb3b` are each 197 bytes and one line (`bridge.ready`
-only), so the event stream is not in the core log; the code path was inspected instead
-(`AgentLoopEngine.java:450-459`, `RunTelemetryService.recordUsage`,
-`RunRepository.updateUsageIfNotTerminal`).
+Usage. All nine completed runs report `totalTokensUsed = 0` through
+`GET /api/v1/runs/<id>`, which is served by `RunService.toResponse`. Because
+`observedTotalTokens` returns null when both provider columns are null, a returned `0`
+means the columns are non-null; the explicit values are not exposed by the DTO today, so
+"the CLI wrote a carried zero" is INFERRED from that mapper and is measured as B2's first
+step. Separately verified by grep: the only production `PromptCall` writer is
+`SelfImprovementService.java:82`, while `DashboardTools.java:40-43` sums that table for the
+token KPI, so the KPI is zero for every core regardless of what the provider reported. The
+run-owned core logs for `27d2af95`, `1381912e` and `872beb3b` are each 197 bytes and one
+line (`bridge.ready` only), so the event stream is not in the core log and cannot serve as
+the usage probe.
 
 Missing memory UI. `act-dashboard/src/pages` contains no Memory page and `src/api`
 contains no memory client. The only promotion path used in this acceptance was

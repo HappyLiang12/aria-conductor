@@ -35,8 +35,10 @@ the operator can actually run from the conversation. Three waves, twelve defects
   status/result identity keyed by the producer's own row-id derivation.
 
 **Truth surface**
-- `usageState` (`REPORTED` / `NOT_REPORTED` / `NEVER_OBSERVED`) and `runsWithoutUsage` on the shared
-  summary payload; the aggregate and the classifier share one expression.
+- `usageState` (`REPORTED` / `NOT_REPORTED`) and the nullable token total on `RunResponse`
+  (`RunResponse.java:44`, classified by `RunService.usageStateOf:526`); `runsWithoutUsage` on the
+  dashboard summary. The aggregate (`RunRepository.sumReportedUsage`) and the classifier share one
+  expression, so a measured zero and a silence are never conflated.
 - The token KPI reads "not reported" with the count of runs that reported nothing.
 - `TemplateListing(templates, totalApproved)` replaces the false "no template is approved" claim.
 
@@ -93,11 +95,14 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
   rows from a non-operator). The operator sees it through the explicit review read.
 - **A 409 on a proposal decision is disambiguated**: an already-decided conflict settles the card as
   decided elsewhere; a retryable optimistic-lock conflict keeps a retry that can succeed. The
-  discriminator is the stable message marker `changed while`, which is common to every retryable
-  wording, plus server-side mutual-exclusion pins — the REST envelope is closed to four error codes,
-  so no new code or field was added. Two retryable wordings end differently (`re-read before writing`
-  from the current-value slot claim, `re-read before retrying` from the command service); see the
-  residual below.
+  discrimination is a POSITIVE marker, not a substring of the retryable text: the card settles only
+  when the body is `errorType = CONFLICT` **and** its message contains
+  `a decided proposal cannot be reopened` (`AriaProposalCard.tsx:54,68-75`). Every other 409 — including
+  the current-value slot's `another writer won the race` and the command service's
+  `re-read before retrying` — keeps the ordinary error path and its retry, so an unknown wording fails
+  safe toward retryable. The parent-still-PENDING refusal has its own marker and settles on the entity
+  decision (`:65-66`). The REST envelope is closed to four error codes, so no new code or field was
+  added; the server-side mutual-exclusion pins keep the markers disjoint.
 - **A re-proposal returns the same identity row to PENDING.** An ACTIVE row is never demoted, and a
   re-proposal retires the retired entity's stale live graph so a new batch cannot inherit old values.
 
@@ -145,10 +150,10 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    `.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`). The full clean-room
    gate re-runs both threshold-enforcing tiers; a threshold failure there is a real failure to triage,
    not to suppress.
-7. **The retryable-409 discriminator is a shared substring, not a pinned suffix.** `changed while` is
-   common to every retryable wording, but the tails differ: the current-value slot claim says
-   `another writer won the race — re-read before writing` (`MemoryCurrentValueSlot.java:50-51`,
-   reachable from `decideFact` before the two proposal flushes) and the command service says
-   `re-read before retrying` (`MemoryCommandService.java:781`). A client that matched on
-   `re-read before deciding` alone would mis-settle a slot-loss conflict as decided-elsewhere. The
-   dashboard matches the shared substring; the taxonomy pins are being extended to cover both tails.
+7. **The retryable-409 wordings are not all pinned server-side.** The card's positive-marker rule
+   (above) means a divergent retryable tail cannot mis-settle it: `MemoryCurrentValueSlot.java:50-51`
+   says `another writer won the race — re-read before writing` and `MemoryCommandService.java:781` says
+   `re-read before retrying`, and neither carries the already-decided marker, so both keep a retry.
+   The residual is TEST COVERAGE, not behaviour: the taxonomy pins in `MemoryProposalServiceTest` cover
+   the two proposal flushes, and a fix round is extending them to the slot-claim wording reachable from
+   `decideFact`. Until that lands, a future edit to the slot wording would not be caught by a pin.

@@ -922,6 +922,146 @@ class MemoryProposalServiceTest {
                 PENDING_PARENT, entityId.toString());
     }
 
+    // ---------------------------------------------------------------- worker visibility of decided entities (T38 item 2)
+
+    /**
+     * T38 item 2. The catalog description now promises that a worker read with {@code status=ACTIVE}
+     * or {@code status=RETIRED} DOES receive ENTITY rows, but the only pin of the entity gate
+     * ({@code operator || status != PENDING}) used the default PENDING status, so the promise was
+     * unpinned here. Both worker identities are driven because the gate keys on OPERATOR versus
+     * every other type, not on which worker asked. The facts and relations on the same page are
+     * asserted too: the widening must not have replaced the page with entity rows.
+     */
+    @Test
+    void aWorkerInboxOfActiveRowsReceivesTheEntityRowWithItsKeyAndSubjectType() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity activeEntity = pendingEntity(happy);
+        activeEntity.setStatus(EntityStatus.ACTIVE);
+        MemoryFact activeFact = fact(happy, "timezone", FactStatus.ACTIVE, OLD.plusSeconds(3));
+        MemoryRelation activeRelation = relation(FactStatus.ACTIVE, OLD.plusSeconds(2));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeEntity));
+
+        for (MemoryActor worker : List.of(WORKER_RUN, WORKER_EXTRACTION)) {
+            List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.ACTIVE, worker);
+
+            assertThat(inbox).extracting(MemoryProposalView::subjectType)
+                    .as("a %s worker read of ACTIVE memory is the whole page, entity included", worker.type())
+                    .containsExactly("FACT", "RELATION", "ENTITY");
+            assertThat(inbox).filteredOn(view -> "ENTITY".equals(view.subjectType()))
+                    .singleElement()
+                    .satisfies(view -> {
+                        assertThat(view.id()).isEqualTo(happy.toString());
+                        assertThat(view.factKey()).as("the canonical key is the handle").isEqualTo("person:happy");
+                        assertThat(view.valueText()).isEqualTo("Happy");
+                        assertThat(view.status()).isEqualTo("ACTIVE");
+                    });
+        }
+    }
+
+    /** The RETIRED half of the same promise: a retired entity is history a worker may still read. */
+    @Test
+    void aWorkerInboxOfRetiredRowsReceivesTheRetiredEntityRow() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity retiredEntity = pendingEntity(happy);
+        retiredEntity.setStatus(EntityStatus.RETIRED);
+        MemoryFact retiredFact = fact(happy, "timezone", FactStatus.RETIRED, OLD.plusSeconds(2));
+        MemoryRelation retiredRelation = relation(FactStatus.RETIRED, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredEntity));
+
+        List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.RETIRED, WORKER_EXTRACTION);
+
+        assertThat(inbox).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "RELATION", "ENTITY");
+        assertThat(inbox).filteredOn(view -> "ENTITY".equals(view.subjectType()))
+                .singleElement()
+                .satisfies(view -> {
+                    assertThat(view.id()).isEqualTo(happy.toString());
+                    assertThat(view.factKey()).isEqualTo("person:happy");
+                    assertThat(view.status()).isEqualTo("RETIRED");
+                });
+    }
+
+    /**
+     * The withholding the widening must not erase: a PENDING entity's canonical key and display
+     * name stay review material for the operator. The operator half is in the same test as the
+     * positive control — an empty page for everyone would satisfy the negative alone, and the
+     * {@code status != PENDING} clause is the only thing that keeps this test honest.
+     */
+    @Test
+    void aWorkerInboxOfPendingRowsOmitsTheEntityWhileTheOperatorInboxKeepsIt() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity entityProposal = pendingEntity(happy);
+        MemoryFact pendingFact = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(2));
+        MemoryRelation pendingRelation = relation(FactStatus.PENDING, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(entityProposal));
+
+        List<MemoryProposalView> workerView = proposals.listProposals(FactStatus.PENDING, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("a PENDING entity identity is withheld from the worker")
+                .containsExactly("FACT", "RELATION");
+        assertThat(workerView).extracting(MemoryProposalView::factKey)
+                .as("the worker still sees the proposal it made")
+                .containsExactly("timezone", null);
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .as("the positive control: the operator page does carry the entity row")
+                .containsExactly("FACT", "RELATION", "ENTITY");
+        assertThat(operatorView).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", null, "person:happy");
+    }
+
+    /**
+     * T38 item 2's sensitivity bullet, pinned where the guarantee actually lives. The brief asked
+     * for "a worker read never returns a value above INTERNAL"; that is NOT this service's
+     * behaviour and asserting it here would be false. {@code listProposals} carries each row's own
+     * label through {@link MemoryProposalView#sensitivity()} and applies no ceiling — the ceiling
+     * is the caller's, {@code MemoryTools.list_memory_proposals} filtering with
+     * {@code withinCeiling}, which treats an unlabelled row as RESTRICTED (fail closed). Closing
+     * that gap at the service would be a production change, out of scope for this test-only lane.
+     * <p>
+     * What is pinned instead is the property that caller depends on: the label is the ROW's label,
+     * never a constant and never re-derived, so a ceiling filter downstream can work at all. The
+     * two labels differ inside one page, which is what makes this a control rather than a fixture
+     * echo.
+     */
+    @Test
+    void theInboxCarriesEachRowsOwnSensitivitySoTheCeilingCanBeAppliedByTheCaller() {
+        UUID happy = UUID.randomUUID();
+        MemoryFact internal = fact(happy, "timezone", FactStatus.ACTIVE, OLD.plusSeconds(2));
+        MemoryFact publicRow = fact(happy, "timezone_format", FactStatus.ACTIVE, OLD.plusSeconds(1));
+        publicRow.setSensitivity(Sensitivity.PUBLIC);
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(internal, publicRow));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.ACTIVE, WORKER_EXTRACTION);
+
+        assertThat(inbox).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", "timezone_format");
+        assertThat(inbox).extracting(MemoryProposalView::sensitivity)
+                .as("each row keeps its own label; the INTERNAL ceiling is applied by the caller")
+                .containsExactly("INTERNAL", "PUBLIC");
+    }
+
     // ---------------------------------------------------------------- transaction boundary
 
     /**

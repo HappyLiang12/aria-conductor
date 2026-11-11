@@ -572,6 +572,91 @@ class MemoryCommandServiceTransactionTest {
         }
     }
 
+    /**
+     * Item 2 (this lane). The entity card's read and {@code decideEntity}'s batch must be the SAME
+     * set, so the read has to select with the decision's own predicate: {@code status = PENDING AND
+     * valid_to IS NULL}. T29 Item 1 removed the relation branch from the read; the predicate was not
+     * applied, so a PENDING fact that is already closed ({@code valid_to} stamped — a row a
+     * re-proposal or an earlier decision left behind) was listed on the card while the decision
+     * skipped it, which is the same under-reporting the card was fixed for.
+     * <p>
+     * Both directions in one test: the open PENDING fact IS in the batch (positive control), the
+     * closed one is NOT, and the ids the decision actually promotes are exactly the ids the read
+     * showed — the set equality, observed in the database rather than assumed.
+     */
+    @Test
+    void theEntityBatchReadIsExactlyTheSetTheEntityDecisionDecides() {
+        UUID entityId = UUID.randomUUID();
+        UUID openFactId = UUID.randomUUID();
+        UUID closedFactId = UUID.randomUUID();
+        MemoryActor operator = new MemoryActor(MemoryActorType.OPERATOR, "operator-session");
+        ownTransaction.executeWithoutResult(status -> {
+            entities.saveAndFlush(MemoryEntity.builder()
+                    .id(entityId)
+                    .kind("PERSON")
+                    .canonicalKey("person-" + entityId)
+                    .displayName("Happy")
+                    .status(EntityStatus.PENDING)
+                    .origin(MemoryOrigin.EXTRACTION)
+                    .build());
+            facts.saveAndFlush(pendingFact(openFactId, entityId, "timezone", null));
+            facts.saveAndFlush(pendingFact(closedFactId, entityId, "language", Instant.now()));
+        });
+
+        List<MemoryProposalView> batch =
+                proposals.listProposalsForEntity(FactStatus.PENDING, entityId, operator);
+
+        assertThat(factIds(batch))
+                .as("an open PENDING fact is batch material")
+                .containsExactly(openFactId.toString());
+        assertThat(factIds(batch))
+                .as("a PENDING fact that is already closed is not what the decision decides")
+                .doesNotContain(closedFactId.toString());
+        assertThat(batch).extracting(MemoryProposalView::subjectType)
+                .as("the batch is the facts plus the entity row")
+                .contains("ENTITY");
+
+        ownTransaction.executeWithoutResult(status ->
+                proposals.decideProposal(entityId, ProposalDecision.APPROVE, operator));
+
+        ownTransaction.executeWithoutResult(status -> {
+            assertThat(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                    entityId, FactStatus.ACTIVE))
+                    .as("the decision promoted exactly the fact the card showed")
+                    .extracting(fact -> fact.getId().toString())
+                    .containsExactlyInAnyOrderElementsOf(factIds(batch));
+            assertThat(facts.findById(closedFactId).orElseThrow().getStatus())
+                    .as("the closed row the decision skips is left alone")
+                    .isEqualTo(FactStatus.PENDING);
+        });
+    }
+
+    private static List<String> factIds(List<MemoryProposalView> batch) {
+        List<String> ids = new ArrayList<>();
+        for (MemoryProposalView view : batch) {
+            if ("FACT".equals(view.subjectType())) {
+                ids.add(view.id());
+            }
+        }
+        return ids;
+    }
+
+    /** A PENDING fact of the entity; {@code validTo} null is an open batch row, set is a closed one. */
+    private static MemoryFact pendingFact(UUID id, UUID entityId, String factKey, Instant validTo) {
+        return MemoryFact.builder()
+                .id(id)
+                .entityId(entityId)
+                .factKey(factKey)
+                .valueText("value")
+                .valueType("STRING")
+                .status(FactStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .sensitivity(Sensitivity.INTERNAL)
+                .validFrom(Instant.now())
+                .validTo(validTo)
+                .build();
+    }
+
     private static boolean await(CountDownLatch latch) {
         try {
             return latch.await(30, TimeUnit.SECONDS);

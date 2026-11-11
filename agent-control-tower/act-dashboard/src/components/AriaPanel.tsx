@@ -7,6 +7,8 @@ import { cancelRun, getRun } from '../api/runs';
 import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 import type { TimelineEntry } from '../api/ariaConversations';
+import { listMemoryProposals } from '../api/memory';
+import type { MemoryProposalView } from '../api/memory';
 import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import { useWebSocketContext } from './Layout';
@@ -15,6 +17,7 @@ import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
+import AriaProposalCard from './AriaProposalCard';
 import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
@@ -102,6 +105,11 @@ async function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | nul
 /** What an ask that left the PENDING list turned into, as its card must say it. */
 type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
 
+/** True for the subject types the memory proposals surface can decide. */
+function isProposalSubjectType(value: string): value is MemoryProposalSummary['subjectType'] {
+  return value === 'FACT' || value === 'ENTITY' || value === 'RELATION';
+}
+
 /**
  * A live `memory_proposal` signal as the reducer's summary, or null for a frame
  * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
@@ -111,7 +119,7 @@ type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
 function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
   const { id, subjectType } = signal;
   if (!id) return null;
-  if (subjectType !== 'FACT' && subjectType !== 'ENTITY' && subjectType !== 'RELATION') return null;
+  if (!isProposalSubjectType(subjectType)) return null;
   return {
     id,
     subjectType,
@@ -120,6 +128,28 @@ function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | 
     ...(signal.valueText !== undefined ? { valueText: signal.valueText } : {}),
     ...(signal.sensitivity !== undefined ? { sensitivity: signal.sensitivity } : {}),
   };
+}
+
+/**
+ * The PENDING proposal inbox as the reducer's restore summaries. `entityId`
+ * travels with the row because the card lists an entity's facts from it, and a
+ * row the panel cannot classify is dropped for the same reason a live frame is:
+ * it would render a card no decision endpoint owns.
+ */
+function proposalSummaries(rows: MemoryProposalView[]): MemoryProposalSummary[] {
+  const out: MemoryProposalSummary[] = [];
+  for (const row of rows) {
+    if (!row.id || !isProposalSubjectType(row.subjectType)) continue;
+    out.push({
+      id: row.id,
+      subjectType: row.subjectType,
+      ...(row.entityId !== null ? { entityId: row.entityId } : {}),
+      ...(row.factKey !== null ? { factKey: row.factKey } : {}),
+      ...(row.valueText !== null ? { valueText: row.valueText } : {}),
+      ...(row.sensitivity !== null ? { sensitivity: row.sensitivity } : {}),
+    });
+  }
+  return out;
 }
 
 /**
@@ -344,6 +374,12 @@ export function AriaPanel() {
    * timeline's run ids — there is no conversation-scoped approvals endpoint —
    * and an operator-only refusal of that read leaves the timeline view intact
    * instead of failing the whole reconcile.
+   *
+   * Pending memory proposals come from their own inbox (`GET /proposals?status=PENDING`),
+   * which is server-filtered: a proposal the operator already decided is never
+   * re-delivered, and the reducer's merge never reopens a settled card. The read
+   * is additive, so a refusal only means this reconcile learns of no new
+   * proposal — it never settles or invents one.
    */
   const reconcile = useCallback(async (targetConversationId: string) => {
     const timeline = await getConversationTimeline(targetConversationId);
@@ -359,11 +395,18 @@ export function AriaPanel() {
         approvals = [];
       }
     }
+    let proposals: MemoryProposalSummary[] = [];
+    try {
+      proposals = proposalSummaries(await listMemoryProposals('PENDING'));
+    } catch (err) {
+      if (!isOperatorRejection(err)) console.warn('[Aria] pending-proposal reconcile failed:', err);
+      proposals = [];
+    }
     // A snapshot that resolves after the operator cleared this conversation must
     // not write the cleared transcript back, nor revert the reducer's id.
     if (conversationIdRef.current !== targetConversationId) return;
     conversationRunIdsRef.current = runIds;
-    dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
+    dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals });
     const queued = await queuedRunIds(timeline, activeRunIdRef.current);
     if (conversationIdRef.current !== targetConversationId) return;
     dispatch({ type: 'queuedRuns', runIds: queued });
@@ -1106,43 +1149,21 @@ export function AriaPanel() {
                 );
               }
               if (item.kind === 'proposal') {
-                // Task 12 (Wave C) owns the full proposal card — decide controls
-                // and the linked fact. The minimum here is visibility: a pending
-                // proposal already counts toward `hasUnansweredCard`, so drawing
-                // nothing would gate the composer behind an invisible control.
-                // The card names what would be written and says it holds the
-                // turn; it promises no button this panel does not have yet.
+                // The card owns the decide call (Task 12a): the panel only mounts
+                // it and settles the item, so one decision renders one settlement.
+                // A pending proposal counts toward `hasUnansweredCard`, so it must
+                // be drawn with its own decision controls — gating the composer on
+                // a card the operator cannot act on is an invisible lock.
                 return (
-                  <div
+                  <AriaProposalCard
                     key={item.id}
-                    className={`ai-decision-card ask-card ai-decision-proposal ai-decision-${item.state}`}
-                  >
-                    <div className="ai-decision-head">
-                      <span className="ask-q ai-decision-tool">Memory proposal</span>
-                      <span className="ai-decision-tags">
-                        <span className="pill dim">{item.subjectType}</span>
-                        {item.sensitivity !== undefined && item.sensitivity !== '' && (
-                          <span className="pill risk">{item.sensitivity}</span>
-                        )}
-                      </span>
-                    </div>
-                    {(item.factKey !== undefined || item.valueText !== undefined) && (
-                      <div className="ask-meta ai-decision-meta">
-                        {item.factKey !== undefined && <code>{item.factKey}</code>}
-                        {item.factKey !== undefined && item.valueText !== undefined && ' = '}
-                        {item.valueText !== undefined && <span>{item.valueText}</span>}
-                      </div>
-                    )}
-                    {item.state === 'pending' ? (
-                      <div className="ask-meta ai-decision-meta">
-                        Awaiting a decision — a pending proposal holds new prompts.
-                      </div>
-                    ) : (
-                      <div className="ai-decision-settled">
-                        {item.state === 'approved' ? 'Approved' : 'Rejected'}
-                      </div>
-                    )}
-                  </div>
+                    item={item}
+                    onSettled={(proposalId, settled) => dispatch({
+                      type: 'proposalSettled',
+                      proposalId,
+                      state: settled,
+                    })}
+                  />
                 );
               }
               return (

@@ -289,6 +289,56 @@ describe('MemoryPage — entity list', () => {
   });
 });
 
+// T46 Item 4 (final review Minor 4): both reads on this page are bounded pages
+// (`MemoryController.DEFAULT_LIST_LIMIT` = 50, `MemoryProposalService.INBOX_LIMIT`
+// = 50) and neither response carries a total, so a full page is the ONLY evidence
+// the page has that more rows may exist. A length rendered as a total is a silent
+// undercount the operator reads as "that is all there is".
+describe('MemoryPage — a capped page is never presented as a total', () => {
+  const PAGE_CAP = 50;
+
+  it('labels a full entity page as at least that many, not as the count', async () => {
+    routeGets({
+      entities: () =>
+        Array.from({ length: PAGE_CAP }, (_, i) =>
+          entity({ id: `e${i}`, canonicalKey: `person:${i}`, displayName: `Person ${i}` }),
+        ),
+    });
+    ui();
+
+    expect(
+      await screen.findByText(`/ showing ${PAGE_CAP} of at least ${PAGE_CAP} active`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(`/ ${PAGE_CAP} active`)).not.toBeInTheDocument();
+  });
+
+  it('labels a full proposal page as at least that many, not as the count', async () => {
+    routeGets({
+      proposals: () =>
+        Array.from({ length: PAGE_CAP }, (_, i) =>
+          proposal({ id: `p${i}`, factKey: `fact_${i}`, valueText: `value ${i}` }),
+        ),
+    });
+    ui();
+
+    expect(
+      await screen.findByText(`/ showing ${PAGE_CAP} of at least ${PAGE_CAP} pending`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(`/ ${PAGE_CAP} pending`)).not.toBeInTheDocument();
+  });
+
+  it('a short page still reads as a plain count', async () => {
+    // Positive control: below the cap the server returned every row, so the
+    // length IS the count and the hedge would be a false hedge.
+    routeGets({ entities: () => [entity()], proposals: () => [proposal()] });
+    ui();
+
+    expect(await screen.findByText('/ 1 active')).toBeInTheDocument();
+    expect(screen.getByText('/ 1 pending')).toBeInTheDocument();
+    expect(screen.queryByText(/of at least/)).not.toBeInTheDocument();
+  });
+});
+
 describe('MemoryPage — entity creation', () => {
   it('opens the create dialog, validates the required fields, then posts the entity body', async () => {
     routeGets({});

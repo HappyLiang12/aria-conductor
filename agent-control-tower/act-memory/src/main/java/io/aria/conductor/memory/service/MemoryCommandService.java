@@ -141,12 +141,28 @@ public class MemoryCommandService {
                 .origin(origin)
                 .build();
         try {
-            entities.save(entity);
+            // saveAndFlush, not save: the entity carries an assigned id and a primitive @Version,
+            // so `save` only schedules the INSERT and the unique-index check happens at commit —
+            // outside this try. The flush puts the check inside it, which is the rule
+            // MemoryProposalWriter.insertProposal already states (spec :325-326: the loser of the
+            // concurrent insert "is caught and re-read, never surfaced as a duplicate").
+            entities.saveAndFlush(entity);
         } catch (DataIntegrityViolationException e) {
-            // UNIQUE (kind, canonical_key) is the atomic guard; the loser reads the winner.
-            return entities.findByKindAndCanonicalKey(kind, canonicalKey)
+            // UNIQUE (kind, canonical_key) is the atomic guard and the loser re-reads the winner,
+            // but it cannot *return* it: the failed flush has already marked this transaction for
+            // rollback (the driver and Hibernate do that on any flush failure — the rule
+            // MemoryProposalWriter's class comment states for the proposal_hash race), so the row is
+            // read in a fresh transaction, named, and the caller gets the governed conflict that a
+            // retry resolves through the probe above. Before this, both halves were dead: `save`
+            // deferred the INSERT past this catch, the raw violation was raised at commit, and — on
+            // the worker path — the PENDING fact was already committed against the rolled-back
+            // entity id, i.e. a card the operator could never approve.
+            MemoryEntity winner = proposalWriter.findExistingEntity(kind, canonicalKey)
                     .orElseThrow(() -> new MemoryConflictException("entity " + kind + "/" + canonicalKey
                             + " collided with a concurrent write that cannot be read back; retry"));
+            throw new MemoryConflictException("entity " + kind + "/" + canonicalKey
+                    + " was created concurrently by another caller (entity " + winner.getId()
+                    + "); re-read that row instead of inserting a second one");
         }
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.CREATE, actor,
                 null, now, null, audit(
@@ -258,6 +274,11 @@ public class MemoryCommandService {
         FactStatus previous = fact.getStatus();
         fact.setStatus(FactStatus.RETIRED);
         fact.setValidTo(now);
+        // The hash is held by an OPEN proposal (or the value it promoted), never by a decided one:
+        // V81 says "exactly one row per proposal", so a retired row that kept its hash would make the
+        // same value unproposable — the insert would collide and return this row to a caller that
+        // believes it proposed something. Closing it releases the proposal.
+        fact.setProposalHash(null);
         facts.save(fact);
         flushFacts(fact.getFactKey(), "closed by the entity re-proposal");
         assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
@@ -319,10 +340,15 @@ public class MemoryCommandService {
         }
 
         String proposalHash = proposalHash(origin, entityId, factKey, command.valueText(), command.sourceRef());
-        // The repository exposes no proposal-hash lookup, so the probe uses the entity's fact
-        // history (all statuses, so a repeat after an operator decision is still a no-op).
-        Optional<MemoryFact> alreadyProposed = facts.findByEntityIdOrderByValidFromDesc(entityId).stream()
-                .filter(fact -> proposalHash.equals(fact.getProposalHash()))
+        // The probe is the OPEN proposal only (PENDING with valid_to IS NULL), which is the same set
+        // the entity card lists and decideEntity decides. It used to read the entity's whole fact
+        // history: a REJECTED fact keeps its proposal_hash, so re-proposing the identical value after
+        // a decision returned that RETIRED row, wrote no new PENDING fact, and answered ok — the
+        // operator was asked to decide a card with an empty batch and the worker's value was dropped.
+        // A decided value is a decision about a closed proposal, so a re-proposal is a new proposal.
+        Optional<MemoryFact> alreadyProposed = facts
+                .findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING).stream()
+                .filter(fact -> fact != null && proposalHash.equals(fact.getProposalHash()))
                 .findFirst();
         if (alreadyProposed.isPresent()) {
             return alreadyProposed.get();
@@ -435,6 +461,9 @@ public class MemoryCommandService {
                 "status", current.getStatus().name());
         current.setStatus(FactStatus.RETIRED);
         current.setValidTo(now);
+        // A superseded value is no longer current memory, so its proposal hash is released with the
+        // window (V81: one row per proposal) and the same value may be proposed again.
+        current.setProposalHash(null);
         facts.save(current);
 
         MemoryFact fresh = MemoryFact.builder()
@@ -488,6 +517,9 @@ public class MemoryCommandService {
         String before = audit("factKey", factKey, "status", current.getStatus().name());
         current.setStatus(FactStatus.RETIRED);
         current.setValidTo(now);
+        // Retired without approval, so the proposal hash is released (V81: one row per proposal):
+        // a value an operator retired can be proposed again instead of colliding with this row.
+        current.setProposalHash(null);
         facts.save(current);
         flushFacts(factKey, "retired");
         assertions.save(assertion(MemorySubjectType.FACT, current.getId(), MemoryAction.RETIRE, actor,
@@ -621,6 +653,9 @@ public class MemoryCommandService {
                 String factKey = fact.getFactKey();
                 fact.setStatus(FactStatus.RETIRED);
                 fact.setValidTo(now);
+                // The merge keeps the target's value, so the dropped one is decided; its hash is
+                // released (V81: one row per proposal) rather than blocking a future proposal.
+                fact.setProposalHash(null);
                 fact.setEntityId(targetId);
                 facts.save(fact);
                 assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.SUPERSEDE,

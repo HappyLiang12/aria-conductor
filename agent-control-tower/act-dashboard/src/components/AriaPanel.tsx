@@ -1020,9 +1020,12 @@ export function AriaPanel() {
       slash.clearSkill();
 
       // A turn belongs to the conversation it was sent in. Frames from a turn
-      // whose conversation the operator has since cleared or replaced must not
-      // write into the new transcript — the parked run keeps living on the
-      // server, it just stops owning this panel.
+      // whose conversation the operator has since cleared or left must not write
+      // into the transcript on screen. Leaving one only stops drawing its frames
+      // here; Clear also ends the turn at the server, because its route cancels
+      // this conversation's runs and purges the transcript it belonged to
+      // (`AriaConversationController.java:153-180`). Neither case keeps the turn
+      // writing into this panel, and Clear does not keep the run alive at all.
       const turnConversationId = conversationId;
       const staleTurn = (): boolean => conversationIdRef.current !== turnConversationId;
 

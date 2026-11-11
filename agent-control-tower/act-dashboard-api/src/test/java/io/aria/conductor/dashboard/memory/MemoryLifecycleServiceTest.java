@@ -11,6 +11,7 @@ import io.aria.conductor.memory.model.MemoryAssertion;
 import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryOrigin;
+import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
@@ -126,6 +127,56 @@ class MemoryLifecycleServiceTest {
         assertThat(retired.getStatus()).isEqualTo(EntityStatus.RETIRED);
         verify(assertions).save(any(MemoryAssertion.class));
     }
+
+    /**
+     * Retiring an entity must sweep its open graph, exactly as a re-proposal does
+     * ({@code MemoryCommandService.retireLiveGraph}). Without the sweep a PENDING fact stayed
+     * PENDING under a RETIRED entity, and the operator's next decision on it was refused with
+     * "which is RETIRED; the entity is no longer active …" — a message that matches neither client
+     * marker, so the card kept a Retry that could only ever 409.
+     */
+    @Test
+    void retireEntityRetiresItsOpenFactsAndLeavesNoDecideLessProposal() {
+        UUID id = UUID.randomUUID();
+        when(entities.findById(id)).thenReturn(Optional.of(entity(id, null)));
+        MemoryFact first = fact(id, FactStatus.PENDING);
+        MemoryFact second = fact(id, FactStatus.PENDING);
+        MemoryFact active = fact(id, FactStatus.ACTIVE);
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(id, FactStatus.PENDING))
+                .thenReturn(List.of(first, second));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(id, FactStatus.ACTIVE))
+                .thenReturn(List.of(active));
+
+        service.retireEntity(id, OPERATOR);
+
+        for (MemoryFact swept : List.of(first, second, active)) {
+            assertThat(swept.getStatus())
+                    .as("an open fact of a retired entity is retired with it, like retireLiveGraph")
+                    .isEqualTo(FactStatus.RETIRED);
+            assertThat(swept.getValidTo()).as("and its validity window is closed").isNotNull();
+            assertThat(swept.getProposalHash())
+                    .as("and it releases the proposal hash, so the value can be proposed again")
+                    .isNull();
+            verify(facts).save(swept);
+        }
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions, org.mockito.Mockito.times(4)).save(written.capture());
+        assertThat(written.getAllValues())
+                .as("one assertion per closed row plus the entity's own RETIRE")
+                .extracting(MemoryAssertion::getSubjectType, MemoryAssertion::getAction)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(MemorySubjectType.ENTITY, MemoryAction.RETIRE),
+                        org.assertj.core.groups.Tuple.tuple(MemorySubjectType.FACT, MemoryAction.RETIRE),
+                        org.assertj.core.groups.Tuple.tuple(MemorySubjectType.FACT, MemoryAction.RETIRE),
+                        org.assertj.core.groups.Tuple.tuple(MemorySubjectType.FACT, MemoryAction.RETIRE));
+    }
+
+    /**
+     * The operator-visible consequence is already pinned where the wording lives: a decision on a
+     * RETIRED fact answers the marker the card maps
+     * ({@code MemoryProposalServiceTest:868-896}, {@code ALREADY_DECIDED}), and the sweep below is
+     * what puts the fact into that state, so the card's Retry settles instead of 409-ing forever.
+     */
 
     @Test
     void retireFactClosesTheValidityWindow() {

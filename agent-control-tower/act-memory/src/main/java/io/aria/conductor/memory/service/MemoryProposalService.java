@@ -298,6 +298,11 @@ public class MemoryProposalService {
         if (decision == ProposalDecision.REJECT) {
             proposal.setStatus(FactStatus.RETIRED);
             proposal.setValidTo(now);
+            // T42 Item 2: a rejected proposal releases its hash (V81: "exactly one row per
+            // proposal"). Keeping it made the identical value unproposable — the re-proposal found
+            // this RETIRED row by hash, wrote no PENDING fact, and answered ok, so the entity card
+            // asked the operator to decide an empty batch and the worker's value was dropped.
+            proposal.setProposalHash(null);
             facts.save(proposal);
             // N3 (T10 fix round 1 re-review): flush here, not only at the entity flush that follows
             // a batch rejection. Otherwise a lost fact version is reported as a lost entity row and
@@ -348,6 +353,9 @@ public class MemoryProposalService {
             }
             current.setStatus(FactStatus.RETIRED);
             current.setValidTo(now);
+            // An approved proposal replaces this current value, so the replaced row is decided: its
+            // hash is released (V81: one row per proposal) instead of blocking that value for good.
+            current.setProposalHash(null);
             facts.save(current);
             assertions.save(assertion(MemorySubjectType.FACT, current.getId(), MemoryAction.SUPERSEDE, actor, now,
                     audit("status", FactStatus.ACTIVE.name(), "factKey", current.getFactKey()),

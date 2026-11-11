@@ -52,6 +52,10 @@ export function SettingsPage() {
   // The delete refusal belongs to the Confirm Delete dialog, which stays open on
   // failure: it renders there, not on the page behind the overlay.
   const [deleteRefusal, setDeleteRefusal] = useState<unknown | null>(null);
+  // A non-refusal delete failure keeps the dialog open too, so its text also
+  // renders there: the toast container (z-index 1000) is dimmed and blurred
+  // behind `.modal-overlay` (z-index 2000), unreadable where it matters.
+  const [deleteFailure, setDeleteFailure] = useState<unknown | null>(null);
 
   const { data: providers, isLoading, error } = useQuery({
     queryKey: ['llm-providers'],
@@ -90,6 +94,7 @@ export function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
       setRefusal(null);
       setDeleteRefusal(null);
+      setDeleteFailure(null);
       setConfirmDelete({ open: false, id: '', name: '' });
       addToast('Provider deleted', 'success');
     },
@@ -101,6 +106,8 @@ export function SettingsPage() {
         setDeleteRefusal(err);
         return;
       }
+      // Task 41 m3: same for a fault — the toast alone is behind the overlay.
+      setDeleteFailure(err);
       reportMutationError(err, 'Failed to delete provider');
     },
   });
@@ -326,7 +333,7 @@ export function SettingsPage() {
                       {testingId === provider.id ? 'Testing...' : 'Test'}
                     </button>
                     <button className="btn btn-sm" onClick={() => handleEdit(provider)}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete({ open: true, id: provider.id, name: provider.name })}>
+                    <button className="btn btn-sm btn-danger" onClick={() => { setConfirmDelete({ open: true, id: provider.id, name: provider.name }); setDeleteFailure(null); setDeleteRefusal(null); }}>
                       Delete
                     </button>
                   </td>
@@ -339,7 +346,7 @@ export function SettingsPage() {
 
       {/* Confirm Delete Dialog */}
       {confirmDelete.open && (
-        <div className="modal-overlay" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); }}>
+        <div className="modal-overlay" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); setDeleteFailure(null); }}>
           <div
             className="modal-dialog"
             role="dialog"
@@ -356,11 +363,16 @@ export function SettingsPage() {
                 actionLabel="Deleting the LLM provider"
               />
             )}
+            {deleteFailure != null && (
+              // Ordinary path, inside the dialog: the dialog stays open on a
+              // fault, and a toast would be behind this overlay.
+              <ErrorNotice presented={presentError(deleteFailure, 'The provider was not deleted.')} />
+            )}
             <div className="modal-actions">
               <button className="btn btn-danger" onClick={() => deleteMutation.mutate(confirmDelete.id)} disabled={deleteMutation.isPending}>
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
               </button>
-              <button className="btn" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); }}>Cancel</button>
+              <button className="btn" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); setDeleteFailure(null); }}>Cancel</button>
             </div>
           </div>
         </div>

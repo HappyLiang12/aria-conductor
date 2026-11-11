@@ -157,7 +157,9 @@ describe('SettingsPage LLM-provider refusals (Task 30)', () => {
   });
 
   // Positive control: a 500 is a fault, not a session problem. It keeps the
-  // ordinary toast and must not fabricate an operator-session notice.
+  // ordinary text and must not fabricate an operator-session notice — and the
+  // text must land INSIDE the dialog (Task 41 m3): the dialog stays open, and a
+  // toast sits at z-index 1000 behind the blurred z-index 2000 overlay.
   it('keeps the ordinary toast for a 500 delete and shows no session notice', async () => {
     remove.mockRejectedValue({
       response: { status: 500, data: { message: 'provider store unavailable' } },
@@ -166,7 +168,17 @@ describe('SettingsPage LLM-provider refusals (Task 30)', () => {
     const dialog = await openDeleteDialog();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
-    expect(await screen.findByText('provider store unavailable')).toBeInTheDocument();
+    expect(await screen.findAllByText('provider store unavailable')).not.toHaveLength(0);
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    // The operator caused the failure from this dialog and it is still open, so
+    // the text is inside it (the toast alone is behind the overlay).
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'provider store unavailable',
+    );
+    // Positive control: the ordinary toast path still fires too.
+    const toasts = (await screen.findAllByText('provider store unavailable'))
+      .filter((el) => !dialog.contains(el));
+    expect(toasts.length).toBeGreaterThan(0);
+    expect(screen.getByRole('dialog', { name: /confirm delete/i })).toBeInTheDocument();
   });
 });

@@ -27,6 +27,20 @@ public class RunResponse {
      * still arrives as 0.
      */
     private Long totalTokensUsed;
+    /**
+     * Provider-reported input tokens (Task 7 / spec 5.4), or null when this run
+     * reported no measurement. An all-zero placeholder report is null here, never 0:
+     * the API must not hand a consumer a number the provider never stated.
+     */
+    private Long inputTokens;
+    /** Provider-reported output tokens; null for the same reason as {@link #inputTokens}. */
+    private Long outputTokens;
+    /**
+     * {@code REPORTED} when the run reported a real measurement, {@code NOT_REPORTED}
+     * when it never did (never observed, or the pinned CLI's all-zero placeholder).
+     * The UI shows "not reported" from this field instead of rendering a zero cost.
+     */
+    private String usageState;
     private int iterationCount;
     private String errorMessage;
     /** Stable identity and repair surface of an actionable failure (null otherwise). */

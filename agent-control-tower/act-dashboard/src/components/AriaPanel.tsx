@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
-import type { StreamError } from '../api/aria';
-import { listApprovals } from '../api/approvals';
+import type { MemoryProposalSignal, StreamError } from '../api/aria';
+import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
-import { cancelRun } from '../api/runs';
+import { cancelRun, getRun } from '../api/runs';
 import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 import type { TimelineEntry } from '../api/ariaConversations';
 import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from './Layout';
 import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
+import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
@@ -78,19 +79,69 @@ async function readFailedTurnEntry(conversationId: string): Promise<TimelineEntr
 
 /**
  * A queued turn (spec A3): the run is admitted but still PENDING, and there is
- * no QUEUED engine status, so the indicator is derived from the timeline. A
- * timeline row carries a run id but no run status, so the one pending signal it
- * offers is a trailing unanswered prompt: the last row is the operator's own
- * message and no reply (assistant or tool) has landed for it. Earlier prompts
- * are answered by construction — the conversation has moved past them — and a
- * turn whose stream this panel holds is not queued, it is the turn being
- * watched.
+ * no QUEUED engine status, so the indicator is derived from the timeline — a
+ * trailing unanswered prompt names the run — and then confirmed against the run
+ * itself. The status read is what makes the label true: a trailing prompt whose
+ * run is RUNNING is a hung turn, and one that FAILED or was cancelled is dead;
+ * neither is admitted-and-waiting, so neither is called Queued. An unreadable
+ * status claims nothing. A turn whose stream this panel holds is not queued, it
+ * is the turn being watched.
  */
-function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): string[] {
+async function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): Promise<string[]> {
   const last = timeline[timeline.length - 1];
   if (!last || last.role !== 'user' || !last.runId) return [];
   if (last.runId === activeRunId) return [];
-  return [last.runId];
+  try {
+    const run = await getRun(last.runId);
+    return run?.status === 'PENDING' ? [last.runId] : [];
+  } catch {
+    return []; // no evidence of admission: no claim
+  }
+}
+
+/** What an ask that left the PENDING list turned into, as its card must say it. */
+type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
+
+/**
+ * A live `memory_proposal` signal as the reducer's summary, or null for a frame
+ * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
+ * counts a pending one), so an unclassifiable subject is dropped rather than
+ * drawn as a blank card nobody can act on.
+ */
+function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
+  const { id, subjectType } = signal;
+  if (!id) return null;
+  if (subjectType !== 'FACT' && subjectType !== 'ENTITY' && subjectType !== 'RELATION') return null;
+  return {
+    id,
+    subjectType,
+    ...(signal.entityId !== undefined ? { entityId: signal.entityId } : {}),
+    ...(signal.factKey !== undefined ? { factKey: signal.factKey } : {}),
+    ...(signal.valueText !== undefined ? { valueText: signal.valueText } : {}),
+    ...(signal.sensitivity !== undefined ? { sensitivity: signal.sensitivity } : {}),
+  };
+}
+
+/**
+ * Reads an ask the PENDING snapshot no longer lists (spec A2's by-id endpoint)
+ * so its card can say what became of it: decided elsewhere, expired, or gone.
+ * A read that fails or that cannot classify the status proves nothing, so it
+ * returns null and the card stays the operator's to decide.
+ */
+async function readAskOutcome(approvalId: string): Promise<AskOutcome | null> {
+  let approval: Approval | null;
+  try {
+    approval = await getApproval(approvalId);
+  } catch {
+    // 404 (the ask no longer exists) or an unreadable read: either way it is not
+    // pending any more — it left the list this reconcile just read.
+    return { state: 'expired', reason: 'this ask no longer exists on the server' };
+  }
+  if (approval === null || typeof approval?.status !== 'string') return null;
+  if (approval.status === 'APPROVED') return { state: 'approved' };
+  if (approval.status === 'DENIED') return { state: 'denied' };
+  if (approval.status === 'PENDING') return null; // the two reads disagree: never decide for the operator
+  return { state: 'expired', reason: approval.reason || 'this ask can no longer be decided' };
 }
 
 function loadOpenState(): boolean {
@@ -225,11 +276,20 @@ export function AriaPanel() {
   const activeRunIdRef = useRef<string | null>(null); // M1: run id for server-side cancellation
   const turnIdRef = useRef(''); // the id the live turn's activity strip is keyed by (the run id once known)
   const conversationIdRef = useRef('');
+  // The runs this conversation's timeline holds: a WebSocket ask is only this
+  // panel's business when its run is one of them (a single-conversation panel
+  // must not render another conversation's ask).
+  const conversationRunIdsRef = useRef<Set<string>>(new Set());
 
   const items = state.items;
   const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
+  // The latest transcript for the reconcile's settle step: a reconcile resolves
+  // after awaits, so it reads the cards as they are now, not as they were when
+  // the callback was created.
+  const itemsRef = useRef<PanelItem[]>(items);
+  itemsRef.current = items;
   // Hoisted primitive so sendStreamed's closure can depend on the id itself —
   // the `slash` object is render-scoped and must not be a hook dep (fix 1).
   const pendingSkillId = slash.pendingSkill?.id;
@@ -238,6 +298,45 @@ export function AriaPanel() {
     conversationIdRef.current = id;
     setConversationId(id);
   }, []);
+
+  /**
+   * Settles every carried pending card whose ask the PENDING snapshot no longer
+   * lists — a lost `approval.expired` frame, a Cancel while the turn is parked,
+   * a decision taken in another window. Left pending, such a card can only 409
+   * and keeps the composer locked behind a false "still pending" copy, so it is
+   * settled with what the ask actually became. Only a run the snapshot speaks
+   * for is settled: a live turn's ask may simply predate its timeline rows.
+   */
+  const settleDepartedAsks = useCallback(
+    async (targetConversationId: string, listed: Approval[], runIds: Set<string>) => {
+      const listedIds = new Set(listed.map((approval) => approval.id));
+      const departed = itemsRef.current.filter(
+        (item) =>
+          (item.kind === 'approval' || item.kind === 'clarification')
+          && item.state === 'pending'
+          && runIds.has(item.runId)
+          && !listedIds.has(item.approvalId),
+      );
+      for (const card of departed) {
+        if (card.kind !== 'approval' && card.kind !== 'clarification') continue;
+        const outcome = await readAskOutcome(card.approvalId);
+        if (outcome === null) continue;
+        if (conversationIdRef.current !== targetConversationId) return;
+        dispatch({
+          type: 'approvalSettled',
+          approvalId: card.approvalId,
+          state: outcome.state,
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+        });
+        dispatch({
+          type: 'clarificationSettled',
+          approvalId: card.approvalId,
+          state: outcome.state === 'approved' ? 'answered' : 'expired',
+        });
+      }
+    },
+    [],
+  );
 
   /**
    * REST reconciliation (spec A3): re-read the durable conversation and merge it
@@ -250,17 +349,27 @@ export function AriaPanel() {
     const timeline = await getConversationTimeline(targetConversationId);
     const runIds = new Set(timeline.map((entry) => entry.runId).filter((runId) => !!runId));
     let approvals: Approval[] = [];
+    let pendingListed = false; // only a PENDING read that actually answered may settle a card
     if (runIds.size > 0) {
       try {
         approvals = (await listApprovals('PENDING')).filter((approval) => runIds.has(approval.runId));
+        pendingListed = true;
       } catch (err) {
         if (!isOperatorRejection(err)) console.warn('[Aria] pending-approval reconcile failed:', err);
         approvals = [];
       }
     }
+    // A snapshot that resolves after the operator cleared this conversation must
+    // not write the cleared transcript back, nor revert the reducer's id.
+    if (conversationIdRef.current !== targetConversationId) return;
+    conversationRunIdsRef.current = runIds;
     dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
-    dispatch({ type: 'queuedRuns', runIds: queuedRunIds(timeline, activeRunIdRef.current) });
-  }, []);
+    const queued = await queuedRunIds(timeline, activeRunIdRef.current);
+    if (conversationIdRef.current !== targetConversationId) return;
+    dispatch({ type: 'queuedRuns', runIds: queued });
+    if (!pendingListed) return;
+    await settleDepartedAsks(targetConversationId, approvals, runIds);
+  }, [settleDepartedAsks]);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -269,6 +378,10 @@ export function AriaPanel() {
       try {
         const summary = await getLatestConversation();
         if (cancelled) return;
+        // A Clear while this read was in flight already picked this tab's
+        // conversation: this snapshot is stale, so it must not adopt its id or
+        // its transcript.
+        if (conversationIdRef.current !== '') return;
         if (summary) {
           adoptConversationId(summary.conversationId);
           await reconcile(summary.conversationId);
@@ -330,11 +443,79 @@ export function AriaPanel() {
    * taken in the Review Queue or in another tab settles the card here, and a
    * completed run re-reads this conversation's snapshot. Both are merged by ask
    * id, so a decision delivered twice is a no-op.
+   *
+   * The subscription rides the app-wide connection from `WebSocketProvider`
+   * (Layout.tsx), the same one ConnectionBanner reports: a per-instance
+   * `useWebSocket()` would open a second server session and a second
+   * `/topic/events` SUBSCRIBE per tab, and its reconnect flag could disagree
+   * with the banner about whether the feed came back.
    */
-  const { subscribe, isConnected } = useWebSocket();
+  const { subscribe, isConnected } = useWebSocketContext();
+  /**
+   * True when a run is this conversation's own — one the timeline holds, or the
+   * turn this panel is watching right now.
+   */
+  const isThisConversationsRun = useCallback(
+    (runId: string) =>
+      runId !== ''
+      && (runId === activeRunIdRef.current || conversationRunIdsRef.current.has(runId)),
+    [],
+  );
+
+  /**
+   * A WS-announced ask, read by id (spec A2). The `approval.requested` frame
+   * carries no tool name, tier, policy or question, so the panel reads the ask
+   * itself; the frame is the only signal for an ask raised after this panel's
+   * own stream died (client timeout, cancel, a dropped SSE connection), which is
+   * the plane the three-plane design exists for. Only asks of a run this
+   * conversation holds are adopted — the cross-conversation half of the review's
+   * concern is correct: one conversation's panel does not render another's.
+   */
+  const adoptAskById = useCallback(async (approvalId: string) => {
+    const targetConversationId = conversationIdRef.current;
+    let approval: Approval | null;
+    try {
+      approval = await getApproval(approvalId);
+    } catch (err) {
+      console.warn('[Aria] announced ask could not be read:', err);
+      return;
+    }
+    if (!approval || approval.status !== 'PENDING') return;
+    if (conversationIdRef.current !== targetConversationId) return;
+    if (!isThisConversationsRun(approval.runId)) return;
+    if (approval.source === 'CLARIFICATION') {
+      dispatch({
+        type: 'waitingInput',
+        approvalId: approval.id,
+        runId: approval.runId,
+        question: approval.content?.trim() || approval.reason || '',
+      });
+      return;
+    }
+    dispatch({
+      type: 'approvalRequired',
+      approvalId: approval.id,
+      runId: approval.runId,
+      toolName: approval.toolName ?? 'unknown tool',
+      riskTier: approval.riskTier,
+      toolPolicy: approval.toolPolicy,
+      args: approval.arguments,
+    });
+  }, [isThisConversationsRun]);
+
   useEffect(() => {
     const subscription = subscribe((event) => {
       switch (event.type) {
+        case 'approval.requested': {
+          const approvalId = String(event.payload?.approvalId ?? '');
+          if (!approvalId) return;
+          // The frame names the run: a foreign conversation's ask is not read at
+          // all. An absent run id falls through to the by-id read, which decides.
+          const runId = String(event.payload?.runId ?? '');
+          if (runId !== '' && !isThisConversationsRun(runId)) return;
+          void adoptAskById(approvalId);
+          return;
+        }
         case 'approval.decided': {
           const approvalId = String(event.payload?.approvalId ?? '');
           if (!approvalId) return;
@@ -350,8 +531,23 @@ export function AriaPanel() {
         case 'approval.expired': {
           const approvalId = String(event.payload?.approvalId ?? '');
           if (!approvalId) return;
-          dispatch({ type: 'approvalSettled', approvalId, state: 'expired' });
+          // The frame carries the backend's own reason ("Auto-rejected: approval
+          // expired"), which the Review panel shows; the card says the same.
+          const reason = String(event.payload?.reason ?? '');
+          dispatch({
+            type: 'approvalSettled',
+            approvalId,
+            state: 'expired',
+            ...(reason !== '' ? { reason } : {}),
+          });
           dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
+          return;
+        }
+        case 'run.waiting_input': {
+          // The frame carries no approvalId, so it cannot key a card itself; it
+          // does mean a run just parked, and the snapshot holds the ask (A2).
+          const id = conversationIdRef.current;
+          if (id) void reconcile(id).catch(() => { /* a background reconcile is best-effort */ });
           return;
         }
         case 'run.completed': {
@@ -368,7 +564,7 @@ export function AriaPanel() {
       }
     });
     return () => subscription.unsubscribe();
-  }, [subscribe, reconcile]);
+  }, [subscribe, reconcile, adoptAskById, isThisConversationsRun]);
 
   // Reconcile when the socket comes back: frames missed while it was down are
   // recovered from the durable snapshot rather than from a replay.
@@ -502,8 +698,7 @@ export function AriaPanel() {
       const skillId = skillIdOverride ?? pendingSkillId;
 
       // Abort any prior in-flight stream defensively.
-      abortRef.current?.abort();
-      cancelledRef.current = false; // M1: reset per-request cancel state
+      abortRef.current?.abort();      cancelledRef.current = false; // M1: reset per-request cancel state
       activeRunIdRef.current = null;
       turnIdRef.current = '';
       const ctrl = new AbortController();
@@ -519,6 +714,9 @@ export function AriaPanel() {
         content: text,
         timestamp: new Date().toISOString(),
       });
+      // The previous turn is no longer the transcript's trailing one, so a
+      // queued pill naming its run would be stale until the next reconcile.
+      dispatch({ type: 'queuedRuns', runIds: [] });
       setInput('');
       setBusy(true);
       setLastSentMessage(text);
@@ -552,15 +750,19 @@ export function AriaPanel() {
             if (runId) {
               activeRunIdRef.current = runId; // M1: capture run id for cancel
               turnIdRef.current = runId;
+              // This turn is this conversation's: a WS ask carrying this run id
+              // belongs in this transcript even though its rows may not have
+              // landed yet.
+              conversationRunIdsRef.current.add(runId);
             }
           },
           onToolCall: (name) => {
             if (staleTurn()) return;
             dispatch({ type: 'toolCall', turnId: turnId(), name });
           },
-          onToolResult: (name, result) => {
+          onToolResult: (name, result, ok) => {
             if (staleTurn()) return;
-            dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok: true });
+            dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok });
           },
           onMessage: (content) => {
             if (staleTurn()) return;
@@ -590,6 +792,12 @@ export function AriaPanel() {
               runId: ask.runId || activeRunIdRef.current || '',
               question: ask.question,
             });
+          },
+          onMemoryProposal: (signal) => {
+            if (staleTurn()) return;
+            const proposal = proposalSummary(signal);
+            if (proposal === null) return;
+            dispatch({ type: 'proposalCreated', proposal });
           },
           onDone: (data) => {
             if (staleTurn()) return;
@@ -659,14 +867,30 @@ export function AriaPanel() {
     sendStreamed(retryText, lastSentSkillIdRef.current);
   }, [busy, gated, tail, lastSentMessage, sendStreamed]);
 
+  /** Settles the asks of a run that can no longer decide them (a cancelled run). */
+  const settleRunAsks = useCallback((runId: string, reason: string) => {
+    for (const item of itemsRef.current) {
+      if (item.kind !== 'approval' && item.kind !== 'clarification') continue;
+      if (item.state !== 'pending' || item.runId !== runId) continue;
+      dispatch({ type: 'approvalSettled', approvalId: item.approvalId, state: 'expired', reason });
+      dispatch({ type: 'clarificationSettled', approvalId: item.approvalId, state: 'expired' });
+    }
+  }, []);
+
   const handleCancel = useCallback(() => {
     cancelledRef.current = true; // M1: suppress the false close-error bubble
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
     // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
     // is known once the first `thinking` event arrives).
-    if (activeRunIdRef.current) {
-      cancelRun(activeRunIdRef.current).catch((err) => {
+    const cancelledRunId = activeRunIdRef.current;
+    if (cancelledRunId) {
+      cancelRun(cancelledRunId).then(() => {
+        // The run is cancelled, so an ask it raised can no longer be decided:
+        // the card says why instead of staying actionable behind a locked
+        // composer (a decision on it would only 409).
+        settleRunAsks(cancelledRunId, 'the run was cancelled before this ask was decided');
+      }).catch((err) => {
         dispatch({
           type: 'turnFailed',
           id: crypto.randomUUID(),
@@ -682,7 +906,7 @@ export function AriaPanel() {
       content: 'Request cancelled.',
       timestamp: new Date().toISOString(),
     });
-  }, []);
+  }, [settleRunAsks]);
 
   const handleCopyConversationId = useCallback(() => {
     navigator.clipboard.writeText(conversationId).then(() => {
@@ -707,6 +931,9 @@ export function AriaPanel() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
     activeRunIdRef.current = null;
+    // The cleared conversation's runs are no longer this panel's: a late WS ask
+    // for one of them must not become a card in the new transcript.
+    conversationRunIdsRef.current = new Set();
     adoptConversationId(newConversationId);
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.
@@ -879,8 +1106,44 @@ export function AriaPanel() {
                 );
               }
               if (item.kind === 'proposal') {
-                // Wave C (Task 12) renders the memory-proposal card into this list.
-                return null;
+                // Task 12 (Wave C) owns the full proposal card — decide controls
+                // and the linked fact. The minimum here is visibility: a pending
+                // proposal already counts toward `hasUnansweredCard`, so drawing
+                // nothing would gate the composer behind an invisible control.
+                // The card names what would be written and says it holds the
+                // turn; it promises no button this panel does not have yet.
+                return (
+                  <div
+                    key={item.id}
+                    className={`ai-decision-card ask-card ai-decision-proposal ai-decision-${item.state}`}
+                  >
+                    <div className="ai-decision-head">
+                      <span className="ask-q ai-decision-tool">Memory proposal</span>
+                      <span className="ai-decision-tags">
+                        <span className="pill dim">{item.subjectType}</span>
+                        {item.sensitivity !== undefined && item.sensitivity !== '' && (
+                          <span className="pill risk">{item.sensitivity}</span>
+                        )}
+                      </span>
+                    </div>
+                    {(item.factKey !== undefined || item.valueText !== undefined) && (
+                      <div className="ask-meta ai-decision-meta">
+                        {item.factKey !== undefined && <code>{item.factKey}</code>}
+                        {item.factKey !== undefined && item.valueText !== undefined && ' = '}
+                        {item.valueText !== undefined && <span>{item.valueText}</span>}
+                      </div>
+                    )}
+                    {item.state === 'pending' ? (
+                      <div className="ask-meta ai-decision-meta">
+                        Awaiting a decision — a pending proposal holds new prompts.
+                      </div>
+                    ) : (
+                      <div className="ai-decision-settled">
+                        {item.state === 'approved' ? 'Approved' : 'Rejected'}
+                      </div>
+                    )}
+                  </div>
+                );
               }
               return (
                 <div key={item.id} className={`ai-msg ai-msg-${item.kind}`}>
@@ -953,7 +1216,10 @@ export function AriaPanel() {
 
           {gated && (
             <div className="ai-gate-hint" role="status">
-              Answer or cancel the pending decision first.
+              {/* Name only what the cards actually offer: Allow/Deny on an
+                  approval, Answer on a question. There is no cancel affordance
+                  in this panel, so the copy must not promise one. */}
+              Answer the pending decision first.
             </div>
           )}
 

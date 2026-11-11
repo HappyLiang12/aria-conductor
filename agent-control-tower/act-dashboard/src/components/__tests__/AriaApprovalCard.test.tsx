@@ -110,4 +110,37 @@ describe('AriaApprovalCard', () => {
     expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^deny$/i })).not.toBeInTheDocument();
   });
+
+  // A 409 is the backend saying the ask is no longer PENDING (expired, the run
+  // was cancelled, or another window already decided it). Reporting that as
+  // "still pending; retry" is a false claim, and the card would stay actionable
+  // forever behind the composer gate.
+  it('reports a state conflict as settled, not as "still pending"', async () => {
+    const onSettled = vi.fn();
+    mockDecide.mockRejectedValueOnce({
+      response: { status: 409, data: { message: 'Approval is no longer PENDING' } },
+    });
+    render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /allow once/i }));
+
+    await waitFor(() =>
+      expect(onSettled).toHaveBeenCalledWith('expired', expect.stringMatching(/no longer PENDING/)),
+    );
+    expect(screen.queryByText(/still pending; retry/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the ask actionable when the decision fails for another reason', async () => {
+    // Positive control for the 409 mapping: a 500 proves nothing about the
+    // ask's state, so the card reports the failure and stays the operator's.
+    const onSettled = vi.fn();
+    mockDecide.mockRejectedValueOnce({ response: { status: 500, data: { message: 'relay dead' } } });
+    render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /allow once/i }));
+
+    expect(await screen.findByText(/relay dead/)).toBeInTheDocument();
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+  });
 });

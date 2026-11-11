@@ -158,7 +158,7 @@ export interface MemoryProposalSignal {
 export interface StreamCallbacks {
   onThinking?: (runId?: string) => void;
   onToolCall?: (name: string) => void;
-  onToolResult?: (name: string, result: string) => void;
+  onToolResult?: (name: string, result: string, ok: boolean) => void;
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
   onError?: (error: StreamError) => void;
@@ -286,7 +286,11 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       cb.onToolCall?.(String(p.name ?? 'tool'));
       break;
     case 'tool_result':
-      cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''));
+      // `ok` is `!isError` from the core payload and is always present on the
+      // producer (tool-event-contract.md). An absent field means an older
+      // backend answered, so it is read as success — never as a measured
+      // failure; an explicit `false` is the only error signal.
+      cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''), p.ok !== false);
       break;
     case 'message':
       cb.onMessage?.(String(p.content ?? ''));

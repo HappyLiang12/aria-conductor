@@ -37,8 +37,12 @@ export function AriaClarificationCard({
     } catch (err) {
       setError(
         isOperatorRejection(err)
-          ? `Your operator session refused this answer: ${apiErrorMessage(err, 'operator-only route')}. `
-            + 'Establish the operator session again, then answer.'
+          // Same posture as the Review panels: say the refusal, say what the
+          // operator can do about it, and say that nothing was sent.
+          ? `Your operator session was refused this answer: ${apiErrorMessage(err, 'operator-only route')}. `
+            + 'Answering is operator-only — on this machine loopback requests are the operator '
+            + 'automatically, so reload and try again; from a remote machine the operator who runs '
+            + 'the backend must grant access. Nothing was sent by the refused call.'
           : apiErrorMessage(err, 'The answer could not be sent — the question is still waiting; retry.'),
       );
     } finally {

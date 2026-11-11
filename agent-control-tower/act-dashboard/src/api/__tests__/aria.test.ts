@@ -147,3 +147,39 @@ describe('aria streamMessage decision signals', () => {
     expect(onMessage).toHaveBeenCalledWith('still here');
   });
 });
+
+describe('aria streamMessage tool result success flag', () => {
+  // tool-event-contract.md: `tool_result` carries `ok` (= !isError) and the
+  // dispatcher reads it as `p.ok !== false`, so an explicit false is an error
+  // while an absent field (an older backend) still renders as success.
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('passes ok through and treats an absent flag as success', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: tool_call\ndata: {"runId":"r1","name":"write_file","args":"{}","toolCallId":null}\n\n',
+        'event: tool_result\ndata: {"runId":"r1","name":"write_file","result":"denied by policy","ok":false,"toolCallId":null}\n\n',
+        'event: tool_result\ndata: {"runId":"r1","name":"read_file","result":"{}","toolCallId":null}\n\n',
+        'event: tool_result\ndata: {"runId":"r1","name":"list_runs","result":"[]","ok":true,"toolCallId":null}\n\n',
+      ]),
+    );
+    const onToolResult = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onToolResult });
+
+    expect(onToolResult).toHaveBeenNthCalledWith(1, 'write_file', 'denied by policy', false);
+    // Absent `ok`: an older backend, rendered as success rather than as an error
+    // the frame never claimed.
+    expect(onToolResult).toHaveBeenNthCalledWith(2, 'read_file', '{}', true);
+    expect(onToolResult).toHaveBeenNthCalledWith(3, 'list_runs', '[]', true);
+  });
+});

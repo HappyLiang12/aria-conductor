@@ -2616,7 +2616,11 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-card { border-bottom: 1px dashed var(--line-2); padding: 8px 0; }
 .ask-card:last-of-type { border-bottom: none; }
 .ask-q { font-weight: 600; margin-bottom: 4px; }
-.ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
+/* T35 renders the operator notice as a span (a div inside ConfirmDialog's `<p>`
+   would be invalid nesting), and an inline span does not apply margin-bottom, so
+   the rule had lost the 6px the notice is spaced by. display:block restores it
+   and is valid inside a `<p>`; every div.ask-ctx consumer is unaffected. */
+.ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; display: block; }
 /* Task 12b: the pending facts an ENTITY proposal decides with it. One operator
    decision promotes the whole batch, so the card lists it before the decision.
    Field metrics follow the ask rows above — no new visual language. */

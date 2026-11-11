@@ -263,6 +263,66 @@ class RunAdmissionQueueTest {
         assertThat(failures).isEmpty();
     }
 
+    /**
+     * Today's only production path: every caller still takes the 3-arg acquire, so
+     * its conversation is {@code null}. Nulls must never be bucketed together as one
+     * shared conversation -- they are bounded by the global Aria cap only, and a null
+     * holder must not delay a named conversation either.
+     */
+    @Test
+    void nullConversationsAreNeverGroupedTogether() throws Exception {
+        RunAdmissionQueue queue = queue(6, 3);
+        List<Throwable> failures = new ArrayList<>();
+
+        CountDownLatch firstNull = new CountDownLatch(1);
+        UUID firstNullRun = UUID.randomUUID();
+        acquiringIn(queue, firstNullRun, Instant.parse("2026-11-11T00:00:00Z"), null, firstNull, failures);
+        assertThat(firstNull.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch secondNull = new CountDownLatch(1);
+        UUID secondNullRun = UUID.randomUUID();
+        acquiringIn(queue, secondNullRun, Instant.parse("2026-11-11T00:00:01Z"), null, secondNull, failures);
+
+        CountDownLatch named = new CountDownLatch(1);
+        acquiringIn(queue, UUID.randomUUID(), Instant.parse("2026-11-11T00:00:02Z"), "conv-a", named, failures);
+
+        // If nulls were grouped, the second null run would queue behind the first.
+        assertThat(secondNull.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(named.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(queue.isWaiting(secondNullRun)).isFalse();
+        assertThat(queue.activeAriaCount()).isEqualTo(3);
+        assertThat(failures).isEmpty();
+    }
+
+    /**
+     * {@code aria-reserved=0} removes the Aria slot cap but not the per-conversation
+     * rule: one conversation still serializes while another proceeds.
+     */
+    @Test
+    void zeroAriaCapacityStillSerializesOneConversation() throws Exception {
+        RunAdmissionQueue queue = queue(6, 0);
+        List<Throwable> failures = new ArrayList<>();
+
+        CountDownLatch first = new CountDownLatch(1);
+        UUID holder = UUID.randomUUID();
+        acquiringIn(queue, holder, Instant.parse("2026-11-11T00:00:00Z"), "conv-a", first, failures);
+        assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch sameConv = new CountDownLatch(1);
+        UUID sameConvRun = UUID.randomUUID();
+        acquiringIn(queue, sameConvRun, Instant.parse("2026-11-11T00:00:01Z"), "conv-a", sameConv, failures);
+        assertThat(sameConv.await(300, TimeUnit.MILLISECONDS)).isFalse();
+        assertThat(queue.isWaiting(sameConvRun)).isTrue();
+
+        CountDownLatch otherConv = new CountDownLatch(1);
+        acquiringIn(queue, UUID.randomUUID(), Instant.parse("2026-11-11T00:00:02Z"), "conv-b", otherConv, failures);
+        assertThat(otherConv.await(5, TimeUnit.SECONDS)).isTrue();
+
+        queue.release(holder);
+        assertThat(sameConv.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(failures).isEmpty();
+    }
+
     @Test
     void oldestCreatedAtWinsEvenWhenArrivingLater() throws Exception {
         RunAdmissionQueue queue = queue(1, 0);

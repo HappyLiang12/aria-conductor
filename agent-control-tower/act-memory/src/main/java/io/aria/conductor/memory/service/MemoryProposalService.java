@@ -80,7 +80,7 @@ public class MemoryProposalService {
     /** The review inbox: the newest {@link #INBOX_LIMIT} facts and relations in {@code status}. */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposals(FactStatus status) {
-        return listProposals(status, INBOX_LIMIT);
+        return listProposals(status, INBOX_LIMIT, null);
     }
 
     /**
@@ -90,9 +90,32 @@ public class MemoryProposalService {
      */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposals(FactStatus status, int limit) {
+        return listProposals(status, limit, null);
+    }
+
+    /** The review inbox read on behalf of {@code actor} (see {@link #listProposals(FactStatus, int, MemoryActor)}). */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposals(FactStatus status, MemoryActor actor) {
+        return listProposals(status, INBOX_LIMIT, actor);
+    }
+
+    /**
+     * One bounded page of the review inbox, newest first, read on behalf of {@code actor}.
+     * <p>
+     * T11 C1: {@code list_memory_proposals} is an auto-approved worker read, and a PENDING entity
+     * row carries the canonical key and display name that {@code list_memory_entities(status=
+     * PENDING)} refuses to the same worker — the guard was cosmetic while this read was actorless.
+     * The rule is therefore part of the read contract: a PENDING ENTITY row is included only for
+     * an OPERATOR actor. PENDING FACT and RELATION rows stay visible to every actor — a worker
+     * must see the proposal it just made. A null actor (no transport identity) is treated as a
+     * non-operator, so a missing identity can never widen the read.
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposals(FactStatus status, int limit, MemoryActor actor) {
         FactStatus target = status == null ? FactStatus.PENDING : status;
         int pageSize = limit <= 0 ? INBOX_LIMIT : limit;
         Pageable page = PageRequest.of(0, pageSize);
+        boolean operator = actor != null && actor.type() == MemoryActorType.OPERATOR;
         List<MemoryProposalView> inbox = new ArrayList<>();
         for (MemoryFact fact : safe(facts.findByStatusOrderByCreatedAtDesc(target, page))) {
             if (fact != null) {
@@ -105,7 +128,7 @@ public class MemoryProposalService {
             }
         }
         for (MemoryEntity entity : safe(entities.findByStatusOrderByUpdatedAtDesc(entityStatusOf(target), page))) {
-            if (entity != null) {
+            if (entity != null && (operator || entity.getStatus() != EntityStatus.PENDING)) {
                 inbox.add(MemoryProposalView.fromEntity(entity));
             }
         }

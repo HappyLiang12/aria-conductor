@@ -48,6 +48,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -443,7 +444,7 @@ class MemoryToolsTest {
 
     @Test
     void listMemoryProposalsDefaultsToThePendingInbox() {
-        when(proposals.listProposals(FactStatus.PENDING))
+        when(proposals.listProposals(eq(FactStatus.PENDING), any(MemoryActor.class)))
                 .thenReturn(List.of(MemoryProposalView.fromFact(fact(FactStatus.PENDING, MemoryOrigin.EXTRACTION))));
 
         String json = tools.listMemoryProposals(null, workerContext());
@@ -451,6 +452,33 @@ class MemoryToolsTest {
         assertThat(json).contains("\"ok\":true")
                 .contains("\"id\":\"" + FACT_ID + "\"")
                 .contains("\"status\":\"PENDING\"");
+    }
+
+    /**
+     * T11 C1: this tool is an AUTO-APPROVED worker read, and the inbox used to return PENDING
+     * ENTITY rows — the canonical key and display name of exactly what
+     * {@code list_memory_entities(status=PENDING)} refuses. The read is now actor-scoped inside
+     * the service, so the tool must hand it the transport identity, never a privileged default:
+     * the worker's run id goes in, the operator credential stays an OPERATOR read. The filter
+     * itself is pinned in {@code MemoryProposalServiceTest}.
+     */
+    @Test
+    void listMemoryProposalsHandsTheTransportIdentityToTheActorScopedInbox() {
+        when(proposals.listProposals(eq(FactStatus.PENDING), any(MemoryActor.class)))
+                .thenReturn(List.of(MemoryProposalView.fromFact(fact(FactStatus.PENDING, MemoryOrigin.EXTRACTION))));
+
+        tools.listMemoryProposals(null, workerContext());
+        tools.listMemoryProposals(null, operatorContext());
+
+        ArgumentCaptor<MemoryActor> reviewer = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(proposals, times(2)).listProposals(eq(FactStatus.PENDING), reviewer.capture());
+        assertThat(reviewer.getAllValues().get(0).type())
+                .as("a worker read is an EXTRACTION read, so no PENDING entity identity is enumerated")
+                .isEqualTo(MemoryActorType.EXTRACTION);
+        assertThat(reviewer.getAllValues().get(0).ref()).isEqualTo(RUN_ID.toString());
+        assertThat(reviewer.getAllValues().get(1).type())
+                .as("the operator keeps the entity proposal on the card")
+                .isEqualTo(MemoryActorType.OPERATOR);
     }
 
     // ---------------------------------------------------------------- read ceiling
@@ -529,7 +557,7 @@ class MemoryToolsTest {
                 .validFrom(VALID_FROM)
                 .createdAt(VALID_FROM)
                 .build();
-        when(proposals.listProposals(FactStatus.PENDING)).thenReturn(List.of(
+        when(proposals.listProposals(eq(FactStatus.PENDING), any(MemoryActor.class))).thenReturn(List.of(
                 MemoryProposalView.fromFact(fact(FACT_ID, FactStatus.PENDING, MemoryOrigin.EXTRACTION,
                         Sensitivity.INTERNAL, "timezone", "UTC")),
                 MemoryProposalView.fromFact(fact(confidentialProposal, FactStatus.PENDING,

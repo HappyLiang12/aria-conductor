@@ -7,6 +7,7 @@ import io.aria.conductor.execution.context.ContextManifest;
 import io.aria.conductor.execution.context.ContextManifestRepository;
 import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
+import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.EntityStatus;
@@ -35,6 +36,7 @@ import io.aria.conductor.memory.service.MemoryRecallService;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -48,6 +50,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
@@ -387,17 +390,29 @@ class MemoryControllerTest {
 
     // ---------------------------------------------------------------- proposals
 
+    /**
+     * The dashboard proposal card's source. T11 C1 makes the service read actor-scoped (a
+     * non-operator read omits a PENDING entity's canonical key), so this route must name the
+     * operator it serves or the entity card loses its own proposal.
+     */
     @Test
     void listsPendingProposals() throws Exception {
-        when(proposals.listProposals(FactStatus.PENDING)).thenReturn(List.of(new MemoryProposalView(
-                UUID.randomUUID().toString(), "FACT", UUID.randomUUID().toString(), "timezone", "UTC",
-                null, null, "PENDING", "EXTRACTION", "INTERNAL", BigDecimal.valueOf(0.9), NOW, NOW)));
+        when(proposals.listProposals(eq(FactStatus.PENDING), any(MemoryActor.class)))
+                .thenReturn(List.of(new MemoryProposalView(
+                        UUID.randomUUID().toString(), "FACT", UUID.randomUUID().toString(), "timezone", "UTC",
+                        null, null, "PENDING", "EXTRACTION", "INTERNAL", BigDecimal.valueOf(0.9), NOW, NOW)));
 
         mvc.perform(get("/api/v1/memory/proposals").param("status", "PENDING"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].subjectType").value("FACT"))
                 .andExpect(jsonPath("$[0].status").value("PENDING"))
                 .andExpect(jsonPath("$[0].origin").value("EXTRACTION"));
+
+        ArgumentCaptor<MemoryActor> reviewer = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(proposals).listProposals(eq(FactStatus.PENDING), reviewer.capture());
+        assertThat(reviewer.getValue().type())
+                .as("the operator inbox keeps the PENDING entity proposal on the card")
+                .isEqualTo(MemoryActorType.OPERATOR);
     }
 
     @Test

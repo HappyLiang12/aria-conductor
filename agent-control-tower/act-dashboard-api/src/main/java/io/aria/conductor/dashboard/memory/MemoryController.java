@@ -72,6 +72,13 @@ public class MemoryController {
     private static final int DEFAULT_RECALL_LIMIT = 20;
     private static final int MAX_RECALL_LIMIT = 40;
 
+    /**
+     * The actor of the review-inbox read: this route has always served the operator's dashboard,
+     * and the service only withholds a PENDING entity's identity from a non-operator actor
+     * (T11 C1). It writes nothing, so it carries no audit reference.
+     */
+    private static final MemoryActor INBOX_REVIEWER = new MemoryActor(MemoryActorType.OPERATOR, null);
+
     private final MemoryCommandService command;
     private final MemoryQueryService query;
     private final MemoryProposalService proposals;
@@ -233,10 +240,19 @@ public class MemoryController {
 
     // ---------------------------------------------------------------- proposals
 
+    /**
+     * The operator's review inbox, and the source of the dashboard proposal card. The read is an
+     * actor-scoped service call since T11 C1 (a non-operator read omits a PENDING entity's
+     * canonical key and display name), so this route names the operator it has always served —
+     * its authority resolution is unchanged and separate (a review-inbox auth defect is Task 18's
+     * M2 finding, deliberately not fixed here). Passing the operator keeps the entity card on the
+     * dashboard; a worker's own read of the same rows goes through the MCP tool, which passes the
+     * transport actor instead.
+     */
     @GetMapping("/proposals")
     public List<MemoryProposalView> listProposals(
             @RequestParam(required = false, defaultValue = "PENDING") FactStatus status) {
-        return proposals.listProposals(status);
+        return proposals.listProposals(status, INBOX_REVIEWER);
     }
 
     @PostMapping("/proposals/{id}/decide")

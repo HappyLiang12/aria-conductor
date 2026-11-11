@@ -84,7 +84,8 @@ class MemoryProposalServiceTest {
     /**
      * The card test in Task 12 renders an ENTITY item with the canonical key in {@code factKey}
      * and the display name in {@code valueText}, so the view must carry both: the proposal's own
-     * id is what the decision endpoint is addressed to.
+     * id is what the decision endpoint is addressed to. The read is the OPERATOR's, which is the
+     * contract T11 C1 preserves: only a non-operator read omits a PENDING entity's identity.
      */
     @Test
     void listProposalsIncludesPendingEntitiesWithTheirKeyAndDisplayName() {
@@ -92,7 +93,7 @@ class MemoryProposalServiceTest {
         when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
                 .thenReturn(List.of(proposal));
 
-        List<MemoryProposalView> inbox = proposals.listProposals(null);
+        List<MemoryProposalView> inbox = proposals.listProposals(null, OPERATOR);
 
         assertThat(inbox).singleElement().satisfies(view -> {
             assertThat(view.subjectType()).isEqualTo("ENTITY");
@@ -108,6 +109,45 @@ class MemoryProposalServiceTest {
         assertThat(page.getValue().getPageSize())
                 .as("the inbox query itself is bounded")
                 .isEqualTo(MemoryProposalService.INBOX_LIMIT);
+    }
+
+    /**
+     * T11 C1 (moved into this lane). {@code list_memory_proposals} is an auto-approved worker
+     * read, and the inbox returned PENDING ENTITY rows to it — the canonical key and display name
+     * of exactly the rows {@code list_memory_entities(status=PENDING)} refuses. The actor now
+     * travels with the read: a worker still sees the PENDING FACT proposals (it must see its own
+     * work), but the identity of a PENDING entity is review material for the operator only.
+     * The pinned operator contract is
+     * {@link #listProposalsIncludesPendingEntitiesWithTheirKeyAndDisplayName}.
+     */
+    @Test
+    void aWorkerViewOfTheProposalsOmitsAPendingEntityIdentityWhileAnOperatorSeesIt() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entityProposal = pendingEntity(entityId);
+        MemoryFact ownFact = fact(UUID.randomUUID(), "timezone", FactStatus.PENDING, OLD.plusSeconds(10));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(ownFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(entityProposal));
+
+        List<MemoryProposalView> workerView = proposals.listProposals(FactStatus.PENDING, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("a worker still sees its own PENDING fact proposal")
+                .containsExactly("FACT");
+        assertThat(workerView).extracting(MemoryProposalView::factKey)
+                .as("but not the canonical key of a PENDING entity")
+                .containsExactly("timezone");
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .as("the operator card keeps the entity proposal")
+                .containsExactly("FACT", "ENTITY");
+        assertThat(operatorView).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", "person:happy");
+        assertThat(operatorView).extracting(MemoryProposalView::valueText)
+                .containsExactly("value", "Happy");
     }
 
     @Test

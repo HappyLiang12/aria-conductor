@@ -15,6 +15,15 @@ export interface TimelineEntry {
   error?: boolean;
   /** Prompt that re-runs the failed turn; absent unless `error`. */
   retryPrompt?: string;
+  /**
+   * The `ToolCallStatus` name of the tool call a `role: 'tool'` row belongs to —
+   * `COMPLETED`, `FAILED`, `DENIED`, `PENDING` or `EXECUTING`. Absent when the backend
+   * cannot say (an older backend, or a row with no matching tool call); absent is not
+   * a success, it is "the timeline does not say otherwise".
+   */
+  toolStatus?: string;
+  /** The raw core tool-call id of the row, so a result can be attributed to its own call. */
+  toolCallId?: string;
 }
 
 export async function getLatestConversation(): Promise<ConversationSummary | null> {

@@ -235,7 +235,8 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
      * predicate; otherwise the row is in neither bucket and the partition claim breaks.
      */
     @Query("SELECT COUNT(r) FROM Run r "
-            + "WHERE r.totalTokensUsed = 0 AND (r.inputTokens IS NULL OR r.inputTokens = 0) "
+            + "WHERE (r.totalTokensUsed IS NULL OR r.totalTokensUsed = 0) "
+            + "AND (r.inputTokens IS NULL OR r.inputTokens = 0) "
             + "AND (r.outputTokens IS NULL OR r.outputTokens = 0)")
     long countWithoutReportedUsage();
 

@@ -51,9 +51,20 @@ public class MemoryQueryService {
      * a read path that cannot prove PENDING exclusion fails closed (spec §5.5, §9).
      */
     public MemoryEntityView getEntity(UUID entityId) {
+        return getEntity(entityId, false);
+    }
+
+    /**
+     * The detail read with the operator's explicit {@code status=PENDING} filter (spec :309-313):
+     * with {@code includePending} the reviewer can open the proposal they are deciding. It is a
+     * separate flag so the default read above stays fail-closed, and the caller of this variant —
+     * the REST detail route — resolves operator authority before it asks, because a PENDING row
+     * is review material, never an agent-facing read.
+     */
+    public MemoryEntityView getEntity(UUID entityId, boolean includePending) {
         UUID id = requireId(entityId);
         return entities.findById(id)
-                .filter(entity -> entity.getStatus() != EntityStatus.PENDING)
+                .filter(entity -> includePending || entity.getStatus() != EntityStatus.PENDING)
                 .map(MemoryEntityView::from)
                 .orElseThrow(() -> new MemoryNotFoundException("memory entity " + id + " not found"));
     }

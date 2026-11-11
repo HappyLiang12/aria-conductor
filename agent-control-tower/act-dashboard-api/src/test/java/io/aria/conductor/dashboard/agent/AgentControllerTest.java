@@ -46,7 +46,10 @@ class AgentControllerTest {
     void setUp() {
         agentService = mock(AgentService.class);
         templateService = mock(AgentTemplateService.class);
-        AgentController controller = new AgentController(agentService, templateService);
+        AgentController controller = new AgentController(agentService, templateService,
+                new io.aria.conductor.execution.security.OperatorAuthorityResolver(
+                        mock(io.aria.conductor.execution.security.OperatorSessionService.class),
+                        mock(io.aria.conductor.execution.security.ActorTokenService.class), ""));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

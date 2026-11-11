@@ -75,8 +75,10 @@ import static org.mockito.Mockito.when;
  *   <li><strong>sequence tests</strong> — several commits observed in order — spread those commits
  *       over the test's own committed template and assert on the rows it can then read back.</li>
  * </ul>
- * Every rollback test has a success case here as its positive control, so "zero rows" cannot be
- * confused with "the write never happened".
+ * Every rollback test comes with a positive control, so "zero rows" cannot be confused with "the
+ * write never happened": the success case in this class for the entity insert, the seeded committed
+ * fact for the retirement, and the approving-entity test in {@link MemoryProposalServiceTest} for
+ * the batch decision.
  */
 @DataJpaTest
 @ContextConfiguration(classes = MemoryJpaSliceConfig.class)

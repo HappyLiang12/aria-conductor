@@ -818,17 +818,19 @@ class MemoryProposalServiceTest {
     // ---------------------------------------------------------------- transaction boundary
 
     /**
-     * {@code decideProposal} carries {@code @Transactional}. No pin covered it anywhere in the
-     * repo: a grep for the method found only callers, and the mutation probe (delete the
-     * annotation) left every test green, because the only behavioural test of its rollback drove a
-     * {@code new MemoryProposalService(...)} inside its own {@code REQUIRES_NEW} template.
+     * {@code decideProposal} carries {@code @Transactional}. Before this test nothing pinned it: a
+     * grep for the annotation on this method found no assertion anywhere, and the one behavioural
+     * test of its rollback drove a {@code new MemoryProposalService(...)} inside its own
+     * {@code REQUIRES_NEW} template, which rolls back whether or not the production annotation
+     * exists. The same shape was measured on the sibling command path: with the annotation deleted,
+     * the template-owned test stayed green while the bean-driven one reds.
      * <p>
      * The behavioural pin is
      * {@link MemoryCommandServiceTransactionTest#aFailedFactAssertionRollsBackTheWholeEntityRejection}
      * (the service bean, no ambient transaction, so only this annotation can roll the batch back).
-     * This static half is the second one the previous wave added for {@code addFactByKey}: the
-     * annotation must exist on the declared method itself, so removing it reds a test that never
-     * touches a database.
+     * This static half is the counterpart the previous wave added for {@code addFactByKey}: the
+     * annotation must be present on that exact method signature, so removing it reds a test that
+     * never touches a database.
      */
     @Test
     void decideProposalCarriesItsOwnTransactionBoundary() throws Exception {

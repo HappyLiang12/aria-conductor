@@ -26,9 +26,11 @@ describe('RailNav navigation semantics (Task 8)', () => {
     renderRail();
 
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(10);
+    expect(links).toHaveLength(11);
     expect(screen.getByRole('link', { name: /overview/i })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: /chat/i })).toHaveAttribute('href', '/chat');
+    // Task 12: the Memory surface is a first-class destination.
+    expect(screen.getByRole('link', { name: /memory/i })).toHaveAttribute('href', '/memory');
     expect(screen.getByRole('button', { name: 'Open configuration' })).toBeInTheDocument();
     // The Configure control is an action, not a destination.
     expect(screen.queryByRole('link', { name: /configure/i })).not.toBeInTheDocument();

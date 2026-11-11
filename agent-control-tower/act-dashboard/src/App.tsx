@@ -6,6 +6,7 @@ import CrewPage from './pages/CrewPage';
 import ChatPage from './pages/ChatPage';
 import OpsPage from './pages/OpsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { MemoryPage } from './pages/MemoryPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { ScheduledJobsPage } from './pages/ScheduledJobsPage';
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/crew" element={<CrewPage />} />
               <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
+              <Route path="/memory" element={<MemoryPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/workflows" element={<WorkflowsPage />} />

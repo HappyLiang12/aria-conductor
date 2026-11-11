@@ -71,7 +71,7 @@
    "classes": 17,
    "tests": 262,
    "skipped": 0,
-   "classSumSec": 2.294,
+   "classSumSec": 2.327,
    "byClass": {
     "io.aria.conductor.agent.controller.RunControllerTest": 0.437,
     "io.aria.conductor.agent.controller.RunProgressControllerTest": 0.036,
@@ -614,7 +614,7 @@
    "classes": 15,
    "tests": 121,
    "skipped": 0,
-   "classSumSec": 8.006,
+   "classSumSec": 7.962,
    "byClass": {
     "io.aria.conductor.dashboard.agent.AgentControllerCrudTest": 3.066,
     "io.aria.conductor.dashboard.agent.AgentControllerTest": 0.104,

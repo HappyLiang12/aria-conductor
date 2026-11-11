@@ -58,3 +58,92 @@ describe('aria streamMessage terminal error detail', () => {
     expect(onError).toHaveBeenCalledWith('stream timed out');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ordered decision signals (spec A2, Task 5's SSE contract): a parked turn
+// announces its ask on the same ordered stream as the turn, so the panel can
+// render a card in the conversation instead of waiting for the 600 s timeout.
+// ---------------------------------------------------------------------------
+
+describe('aria streamMessage decision signals', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('dispatches approval_required and waiting_input', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: approval_required\ndata: {"runId":"r1","approvalId":"a1","toolName":"mcp__aria-conductor__remember_fact","riskTier":"WRITE_LOCAL","toolPolicy":"WORKER_WRITE","optionsJson":"allow_once,deny","expiresAt":"2026-11-11T00:10:00Z"}\n\n',
+        'event: waiting_input\ndata: {"runId":"r1","approvalId":"a2","question":"Which PR?"}\n\n',
+        'event: done\ndata: {"runId":"r1","conversationId":"c1","intent":""}\n\n',
+      ]),
+    );
+    const onApprovalRequired = vi.fn();
+    const onWaitingInput = vi.fn();
+    const onDone = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onApprovalRequired, onWaitingInput, onDone });
+
+    expect(onApprovalRequired).toHaveBeenCalledWith({
+      runId: 'r1',
+      approvalId: 'a1',
+      toolName: 'mcp__aria-conductor__remember_fact',
+      riskTier: 'WRITE_LOCAL',
+      toolPolicy: 'WORKER_WRITE',
+      optionsJson: 'allow_once,deny',
+      expiresAt: '2026-11-11T00:10:00Z',
+    });
+    expect(onWaitingInput).toHaveBeenCalledWith({
+      runId: 'r1',
+      approvalId: 'a2',
+      question: 'Which PR?',
+    });
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches memory_proposal with the proposal summary the panel merges by id', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: memory_proposal\ndata: {"id":"p1","subjectType":"FACT","entityId":"e1","factKey":"preferred_channel","valueText":"email","sensitivity":"INTERNAL"}\n\n',
+      ]),
+    );
+    const onMemoryProposal = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onMemoryProposal });
+
+    expect(onMemoryProposal).toHaveBeenCalledWith({
+      id: 'p1',
+      subjectType: 'FACT',
+      entityId: 'e1',
+      factKey: 'preferred_channel',
+      valueText: 'email',
+      sensitivity: 'INTERNAL',
+    });
+  });
+
+  it('leaves an unknown signal alone and still dispatches the known ones around it', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: run.queued\ndata: {"runId":"r1"}\n\n',
+        'event: message\ndata: {"content":"still here"}\n\n',
+        'event: done\ndata: {"runId":"r1","conversationId":"c1","intent":""}\n\n',
+      ]),
+    );
+    const onMessage = vi.fn();
+    const onError = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onMessage, onError });
+
+    // The unknown frame changes nothing and is not an error…
+    expect(onError).not.toHaveBeenCalled();
+    // …while the known frame on the same stream is delivered (positive control).
+    expect(onMessage).toHaveBeenCalledWith('still here');
+  });
+});

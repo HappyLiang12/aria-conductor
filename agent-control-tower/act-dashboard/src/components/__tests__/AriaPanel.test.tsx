@@ -736,6 +736,51 @@ describe('AriaPanel in-flow decisions', () => {
     expect(textarea()).toBeDisabled();
   });
 
+  // T45 Item 3 (spec A3): the operator must see what they are approving. The SSE
+  // frame carries no arguments (RunSignalSseListener.java:84-92), so the card
+  // reads the ask's own record — GET /api/v1/approvals/{id} serves
+  // ApprovalDetail.arguments, the read the panel already has.
+  it('shows the argument summary the ask\'s own record carries, not a blind approve', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockGetApproval.mockResolvedValue({
+      ...pendingToolAsk('a1', 'r1'),
+      arguments: JSON.stringify({ command: 'rm -rf build', cwd: '/repo' }),
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    // The summary is compact, but it is the real payload: both keys, in order.
+    const summary = await screen.findByText(/command: rm -rf build/);
+    expect(summary.textContent).toMatch(/cwd: \/repo/);
+    expect(mockGetApproval).toHaveBeenCalledWith('a1');
+    // Nothing was decided by the read.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /deny/i })).toBeEnabled();
+  });
+
+  it('says the arguments could not be read instead of drawing an empty summary', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockGetApproval.mockRejectedValue(new Error('Network Error'));
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(await screen.findByText(/arguments could not be read/i)).toBeInTheDocument();
+    // Still the operator's to decide — with the tool name it does know.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+  });
+
   it('settles the card from the WebSocket plane, releasing the composer without a duplicate', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');

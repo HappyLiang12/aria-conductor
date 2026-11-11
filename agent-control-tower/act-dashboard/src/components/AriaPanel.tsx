@@ -682,6 +682,62 @@ export function AriaPanel() {
   );
 
   /**
+   * Fills a live in-flow ask's argument summary from the ask's own record
+   * (spec A3, T45 Item 3). The `approval_required` SSE frame names the tool but
+   * carries no arguments (`RunSignalSseListener.java:84-92`), so the card is
+   * drawn first and the summary arrives from `GET /api/v1/approvals/{id}` —
+   * the read `adoptAskById` already uses. A refused/failed read is NOT an empty
+   * argument list: the card says the arguments could not be read, and the
+   * reconcile refreshes an already-drawn card from its PENDING snapshot.
+   */
+  const hydrateApprovalArgs = useCallback(async (approvalId: string) => {
+    const targetConversationId = conversationIdRef.current;
+    let approval: Approval | null;
+    try {
+      approval = await getApproval(approvalId);
+    } catch (err) {
+      console.warn('[Aria] approval arguments could not be read:', err);
+      if (conversationIdRef.current !== targetConversationId) return;
+      dispatch({ type: 'approvalArgsUnreadable', approvalId });
+      return;
+    }
+    if (conversationIdRef.current !== targetConversationId) return;
+    if (!approval || typeof approval.status !== 'string') {
+      dispatch({ type: 'approvalArgsUnreadable', approvalId });
+      return;
+    }
+    if (approval.status === 'APPROVED' || approval.status === 'DENIED') {
+      // The read proved the ask already left PENDING: the card must not offer a
+      // decision that can only 409.
+      dispatch({
+        type: 'approvalSettled',
+        approvalId,
+        state: approval.status === 'APPROVED' ? 'approved' : 'denied',
+      });
+      return;
+    }
+    if (approval.status !== 'PENDING') {
+      dispatch({
+        type: 'approvalSettled',
+        approvalId,
+        state: 'expired',
+        ...(approval.reason ? { reason: approval.reason } : {}),
+      });
+      return;
+    }
+    if (approval.source === 'CLARIFICATION') return; // the ask is a question, not a tool call
+    dispatch({
+      type: 'approvalRequired',
+      approvalId,
+      runId: approval.runId,
+      toolName: approval.toolName ?? 'unknown tool',
+      riskTier: approval.riskTier,
+      toolPolicy: approval.toolPolicy,
+      args: approval.arguments,
+    });
+  }, []);
+
+  /**
    * A WS-announced ask, read by id (spec A2). The `approval.requested` frame
    * carries no tool name, tier, policy or question, so the panel reads the ask
    * itself; the frame is the only signal for an ask raised after this panel's
@@ -1022,7 +1078,11 @@ export function AriaPanel() {
               toolName: ask.toolName,
               riskTier: ask.riskTier,
               toolPolicy: ask.toolPolicy,
+              // The frame carries no arguments (spec A3, T45 Item 3): the card
+              // is drawn at once and filled by the read below.
+              argsStatus: 'reading',
             });
+            void hydrateApprovalArgs(ask.approvalId);
           },
           onWaitingInput: (ask) => {
             if (staleTurn()) return;
@@ -1068,7 +1128,7 @@ export function AriaPanel() {
         void reportRunUncertain(conversationId, 'timeout');
       }, CLIENT_TIMEOUT_MS);
     },
-    [busy, gated, items, conversationId, pendingSkillId, reportRunUncertain],
+    [busy, gated, items, conversationId, pendingSkillId, reportRunUncertain, hydrateApprovalArgs],
   );
 
   // One-click synthesis (Feature B2): the batch-completion notification composes

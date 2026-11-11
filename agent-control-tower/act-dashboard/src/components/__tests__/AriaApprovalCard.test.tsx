@@ -131,6 +131,45 @@ describe('AriaApprovalCard', () => {
     await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
   });
 
+  // T45 Item 3 (spec A3): the operator approves a payload, so the card shows a
+  // compact summary of it — one line per JSON key, verbatim for raw text. The
+  // summary is derived from the arguments themselves, never paraphrased.
+  it('summarises the arguments it is asking the operator to approve', () => {
+    render(
+      <AriaApprovalCard
+        item={{ ...pendingAsk, args: '{"command":"npm test","cwd":"/w/repo"}' }}
+        onSettled={vi.fn()}
+      />,
+    );
+
+    const summary = screen.getByText(/command: npm test/);
+    expect(summary.textContent).toBe('command: npm test\ncwd: /w/repo');
+    // The full payload stays reachable on the element, punctuation included.
+    expect(summary).toHaveAttribute('title', '{"command":"npm test","cwd":"/w/repo"}');
+  });
+
+  it('shows a non-JSON argument verbatim instead of guessing its structure', () => {
+    render(<AriaApprovalCard item={{ ...pendingAsk, args: 'git push --force origin main' }} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('git push --force origin main')).toBeInTheDocument();
+  });
+
+  it('says the arguments are being read, then that they could not be read — never "no arguments"', () => {
+    const { rerender } = render(
+      <AriaApprovalCard item={{ ...pendingAsk, args: undefined, argsStatus: 'reading' }} onSettled={vi.fn()} />,
+    );
+    expect(screen.getByText(/reading the arguments/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+    // The decision controls never wait for the summary: the ask is decidable.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+
+    rerender(
+      <AriaApprovalCard item={{ ...pendingAsk, args: undefined, argsStatus: 'unavailable' }} onSettled={vi.fn()} />,
+    );
+    expect(screen.getByText(/arguments could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reading the arguments/i)).not.toBeInTheDocument();
+  });
+
   it('renders a settled card without decision controls', () => {
     render(<AriaApprovalCard item={{ ...pendingAsk, state: 'denied', reason: 'wrong tenant' }} onSettled={vi.fn()} />);
 

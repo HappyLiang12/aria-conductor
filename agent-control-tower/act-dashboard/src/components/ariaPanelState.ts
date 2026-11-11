@@ -23,7 +23,18 @@ export type PanelItem =
   | { kind: 'user'; id: string; content: string; timestamp: string }
   | { kind: 'assistant'; id: string; content: string; timestamp: string; error?: boolean; retryText?: string; noRetry?: boolean }
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
-  | { kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string }
+  | {
+    kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string;
+    riskTier?: string; toolPolicy?: string; args?: string;
+    /**
+     * The argument summary's own state, because "no summary" has two meanings
+     * and only one of them is safe: `reading` is a live ask whose record is
+     * still being read (the SSE frame carries no arguments), `unavailable` is a
+     * read that failed. Neither may be drawn as "this tool takes no arguments".
+     */
+    argsStatus?: 'reading' | 'unavailable';
+    state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string;
+  }
   | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired'; reason?: string }
   /**
    * `decided-elsewhere` is the proposal's third settled state: a PENDING inbox
@@ -63,7 +74,18 @@ export type PanelEvent =
    * carries.
    */
   | { type: 'assistantMessage'; id: string; content: string; timestamp: string }
-  | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
+  /**
+   * A live in-flow ask. The SSE frame carries no arguments
+   * (`RunSignalSseListener`), so the panel draws the card with `argsStatus:
+   * 'reading'` and re-dispatches it with the summary once it has read the ask's
+   * own record (spec A3: the operator must see what they are approving).
+   */
+  | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; argsStatus?: 'reading' }
+  /**
+   * The argument read failed. The card says the arguments could not be read
+   * instead of drawing an empty summary the operator would take for "no args".
+   */
+  | { type: 'approvalArgsUnreadable'; approvalId: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
   | { type: 'waitingInput'; approvalId: string; runId: string; question: string }
   /**
@@ -156,6 +178,12 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         riskTier: event.riskTier,
         toolPolicy: event.toolPolicy,
         args: event.args,
+        argsStatus: event.argsStatus,
+      });
+    case 'approvalArgsUnreadable':
+      return upsertApproval(state, {
+        approvalId: event.approvalId,
+        argsStatus: 'unavailable',
       });
     case 'approvalSettled':
       return settleApproval(state, event.approvalId, event.state, event.reason);
@@ -289,18 +317,32 @@ function freeOrphanTurnId(items: PanelItem[], turnId: string): string {
 
 type ApprovalPatch = {
   approvalId: string;
-  runId: string;
-  toolName: string;
+  /** A patch may address a drawn card by id alone (the unreadable-arguments report). */
+  runId?: string;
+  toolName?: string;
   riskTier?: string;
   toolPolicy?: string;
   args?: string;
+  argsStatus?: ApprovalItem['argsStatus'];
   reason?: string;
   state?: ApprovalItem['state'];
 };
 
+/** The card with its argument-summary state replaced, or dropped when undefined. */
+function withArgsStatus(card: ApprovalItem, status: ApprovalItem['argsStatus']): ApprovalItem {
+  const copy = { ...card };
+  if (status === undefined) {
+    delete copy.argsStatus;
+  } else {
+    copy.argsStatus = status;
+  }
+  return copy;
+}
+
 function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'approval' && item.approvalId === patch.approvalId);
   if (index < 0) {
+    if (patch.runId === undefined || patch.toolName === undefined) return state; // nothing to draw
     const card: ApprovalItem = {
       kind: 'approval',
       id: `approval:${patch.approvalId}`,
@@ -310,6 +352,7 @@ function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
       ...(patch.riskTier !== undefined ? { riskTier: patch.riskTier } : {}),
       ...(patch.toolPolicy !== undefined ? { toolPolicy: patch.toolPolicy } : {}),
       ...(patch.args !== undefined ? { args: patch.args } : {}),
+      ...(patch.argsStatus !== undefined ? { argsStatus: patch.argsStatus } : {}),
       ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
       state: patch.state ?? 'pending',
     };
@@ -320,13 +363,17 @@ function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
   if (existing.state !== 'pending') return state;
   const merged: ApprovalItem = {
     ...existing,
-    toolName: patch.toolName,
+    ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
     ...(patch.riskTier !== undefined ? { riskTier: patch.riskTier } : {}),
     ...(patch.toolPolicy !== undefined ? { toolPolicy: patch.toolPolicy } : {}),
     ...(patch.args !== undefined ? { args: patch.args } : {}),
     ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
   };
-  return replaceItem(state, index, merged);
+  // A summary that arrived is no longer "being read"; an explicit status wins.
+  const argsStatus = patch.argsStatus !== undefined
+    ? patch.argsStatus
+    : patch.args !== undefined ? undefined : existing.argsStatus;
+  return replaceItem(state, index, withArgsStatus(merged, argsStatus));
 }
 
 function settleApproval(
@@ -465,7 +512,18 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
 
   for (const approval of event.approvals) {
     if (approval.status !== 'PENDING' || !runIds.has(approval.runId)) continue;
-    if (askIds.has(approval.id)) continue; // already drawn, live or restored: a card is keyed by its ask id
+    if (askIds.has(approval.id)) {
+      // Already drawn — by a live frame or an earlier restore. It is NOT skipped
+      // outright (T45 Item 3): the snapshot is the only read that carries the
+      // ask's arguments, so a drawn-but-blind card takes its argument summary
+      // from here. Only a still-pending card is refreshed: a settled one is the
+      // operator's decision and no snapshot may rewrite it.
+      const at = items.findIndex(
+        (item) => item.kind === 'approval' && item.approvalId === approval.id && item.state === 'pending',
+      );
+      if (at >= 0) items[at] = refreshedApproval(items[at] as ApprovalItem, approval);
+      continue;
+    }
     askIds.add(approval.id);
     items.push(isClarificationAsk(approval) ? clarificationFromApproval(approval) : approvalFromApproval(approval));
   }
@@ -631,6 +689,24 @@ function mergeTools(restored: ToolActivity[], carried: ToolActivity[]): ToolActi
     if (!used[index]) merged.push(tool);
   });
   return merged;
+}
+
+/**
+ * A drawn pending card merged with what the snapshot knows about the same ask.
+ * Only the fields the snapshot carries are taken, so a summary already drawn is
+ * never blanked by a snapshot that omits the field, and the reading marker is
+ * dropped once a summary arrives.
+ */
+function refreshedApproval(card: ApprovalItem, approval: Approval): ApprovalItem {
+  const toolPolicy = (approval as { toolPolicy?: string }).toolPolicy;
+  const merged: ApprovalItem = {
+    ...card,
+    ...(approval.toolName !== undefined && approval.toolName !== '' ? { toolName: approval.toolName } : {}),
+    ...(approval.riskTier !== undefined ? { riskTier: approval.riskTier } : {}),
+    ...(toolPolicy !== undefined ? { toolPolicy } : {}),
+    ...(approval.arguments !== undefined ? { args: approval.arguments } : {}),
+  };
+  return approval.arguments !== undefined ? withArgsStatus(merged, undefined) : merged;
 }
 
 function isClarificationAsk(approval: Approval): boolean {

@@ -85,6 +85,61 @@ describe('panelReducer', () => {
     expect(hasUnansweredCard(s)).toBe(false);
   });
 
+  // T45 Item 3: the SSE frame carries no arguments (RunSignalSseListener), so a
+  // live ask is drawn blind and the reconcile used to skip an already-drawn id
+  // outright. Refreshing the drawn card from the PENDING snapshot is how a
+  // reconcile fills the argument summary the operator approves.
+  it('refreshes an already-drawn pending ask from the snapshot, but never a settled one', () => {
+    const timeline = [row({ role: 'user', content: 'go' })];
+    let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1', timeline,
+      approvals: [{
+        id: 'a1', runId: 'r1', status: 'PENDING', toolName: 'bash',
+        arguments: '{"command":"ls"}', riskTier: 'WRITE_LOCAL',
+      } as never],
+      proposals: [],
+    });
+    expect(s.items.filter((i) => i.kind === 'approval')).toHaveLength(1);
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({
+      args: '{"command":"ls"}', riskTier: 'WRITE_LOCAL', state: 'pending',
+    });
+
+    // The operator decided: a later snapshot may not rewrite the card's record.
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'approved' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1', timeline,
+      approvals: [{
+        id: 'a1', runId: 'r1', status: 'PENDING', toolName: 'bash',
+        arguments: '{"command":"rm -rf /"}', riskTier: 'GLOBAL_WRITE',
+      } as never],
+      proposals: [],
+    });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({
+      state: 'approved', args: '{"command":"ls"}', riskTier: 'WRITE_LOCAL',
+    });
+  });
+
+  it('marks an ask whose arguments are still being read, and says so when they cannot be read', () => {
+    let s = panelReducer(base, {
+      type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash', argsStatus: 'reading',
+    });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ argsStatus: 'reading' });
+
+    // The read answered: the summary replaces the reading marker.
+    s = panelReducer(s, {
+      type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash', args: '{"command":"ls"}',
+    });
+    const card = s.items.find((i) => i.kind === 'approval');
+    expect(card).toMatchObject({ args: '{"command":"ls"}' });
+    expect(card).not.toHaveProperty('argsStatus');
+
+    // A read that failed is not "no arguments": the card must say it could not
+    // read them instead of drawing an empty argument list.
+    s = panelReducer(s, { type: 'approvalArgsUnreadable', approvalId: 'a1' });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ argsStatus: 'unavailable' });
+  });
+
   it('keeps a settled card visible with its reason instead of removing it', () => {
     let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
     s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'expired', reason: 'Auto-rejected: approval expired' });

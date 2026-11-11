@@ -52,6 +52,9 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   // Task 37: the 403 that carries the cross-origin marker is not an authority
   // refusal, so it must not be answered with the operator-grant remedy.
   const [crossOriginRejected, setCrossOriginRejected] = useState(false);
+  // Task 41 m4: which mutation was refused, so the cross-site notice names it
+  // (Finalize is not operator-gated; Approve/Deny is the other caller).
+  const [refusedAction, setRefusedAction] = useState('Approving this ask');
 
   // A native permission ask is authorizable exactly once, never in bulk: the
   // batch control below skips them so a batch action can never stand in for a
@@ -91,6 +94,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     },
     onError: (err: unknown) => {
+      setRefusedAction('Approving this ask');
       setOperatorRejected(isOperatorRejection(err));
       setCrossOriginRejected(isCrossOriginRejection(err));
       setError(presentError(err, 'Action rejected — please retry.'));
@@ -106,7 +110,15 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     },
-    onError: (err: unknown) => setError(presentError(err, 'Finalize rejected — please retry.')),
+    onError: (err: unknown) => {
+      // Finalize is not operator-gated (spec D6), so its only refusal is the
+      // cross-site 403; without these two lines the operator read the bare
+      // marker in the plain error notice, with no remedy at all.
+      setRefusedAction('Finalizing this run');
+      setOperatorRejected(isOperatorRejection(err));
+      setCrossOriginRejected(isCrossOriginRejection(err));
+      setError(presentError(err, 'Finalize rejected — please retry.'));
+    },
   });
   // Card-level fallback (spec 10.1): send the whole card back to the agent
   // with feedback even while asks are still pending on it.
@@ -218,7 +230,10 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       >
         ✎ Request changes (starts 1 fresh run)
       </button>
-      {error && <ErrorNotice className="kanban-form-error" presented={error} />}
+      {/* A refusal is answered by the remedy below, not by the server's wording
+          (on a refusal that wording points at no fix — Task 41 m4: Finalize's
+          bare marker was the only thing shown). A fault keeps its text. */}
+      {error && !operatorRejected && <ErrorNotice className="kanban-form-error" presented={error} />}
       {/* Task 35: the remedy clause is the shared `OPERATOR_REMEDY_COPY`; the
           panel keeps its own frame (what was refused, and that it decided
           nothing) because a refusal here may also carry the server's wording. */}
@@ -226,7 +241,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
         <div className="ask-ctx">
           {crossOriginRejected ? (
             <>
-              {crossSiteSessionMessage('Approving this ask')} Nothing was decided by the refused
+              {crossSiteSessionMessage(refusedAction)} Nothing was decided by the refused
               call.
             </>
           ) : (

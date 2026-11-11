@@ -461,4 +461,25 @@ describe('DecisionPanel CLARIFICATION asks (waiting input)', () => {
     await userEvent.click(screen.getByRole('button', { name: /finalize/i }));
     expect(await screen.findByText('Finalize rejected — please retry.')).toBeInTheDocument();
   });
+
+  // Task 41 m4: Finalize is not operator-gated, so the only refusal it can
+  // receive is RunController's cross-site 403 `{error: <marker>}` — the panel
+  // used to print the bare marker with no remedy. The cross-site notice names
+  // the action that was actually refused (finalizing, not approving).
+  it('gives the cross-site remedy when finalize is refused for its origin', async () => {
+    mockedFinalize.mockRejectedValue({
+      response: { status: 403, data: { error: 'Cross-origin operator mutation rejected' } },
+    });
+    renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /finalize/i }));
+
+    const refusal = await screen.findByText(/refused as a cross-site request/i);
+    expect(refusal).toHaveTextContent(/finalizing this run/i);
+    expect(refusal).toHaveTextContent(/origin the backend trusts/i);
+    expect(refusal).toHaveTextContent(/not a missing operator session/i);
+    // Neither the bare server marker nor the generic retry line survives.
+    expect(screen.queryByText(/Cross-origin operator mutation rejected/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Finalize rejected — please retry.')).not.toBeInTheDocument();
+  });
 });

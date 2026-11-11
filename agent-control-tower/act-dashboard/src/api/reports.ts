@@ -1,4 +1,5 @@
 import client from './client';
+import { applyOperatorHeaders } from './operatorSession';
 import type {
   AmendReportRequest,
   GenerateReportRequest,
@@ -6,6 +7,11 @@ import type {
 } from '../types';
 
 const BASE = '/api/v1/reports';
+
+// Regenerate and archive are operator-only server-side (403 for a worker, 401
+// without a session), so each applies the stored operator session before the
+// request. Generate and amend stay ungated on purpose: both have a worker-write
+// MCP twin, so a run worker is expected to request them per call.
 
 export async function listReports(): Promise<ReportArtifact[]> {
   const { data } = await client.get<ReportArtifact[]>(BASE);
@@ -31,6 +37,7 @@ export async function amendReport(id: string, request: AmendReportRequest): Prom
 }
 
 export async function regenerateReport(id: string): Promise<ReportArtifact> {
+  applyOperatorHeaders();
   const { data } = await client.post<ReportArtifact>(
     `${BASE}/${encodeURIComponent(id)}/regenerate`,
     {}
@@ -39,6 +46,7 @@ export async function regenerateReport(id: string): Promise<ReportArtifact> {
 }
 
 export async function archiveReport(id: string): Promise<void> {
+  applyOperatorHeaders();
   await client.delete(`${BASE}/${encodeURIComponent(id)}`);
 }
 

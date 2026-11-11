@@ -339,16 +339,33 @@ public class MemoryCommandService {
 
     /**
      * The unknown-key write of the memory surface (spec §5.5, C3/F10): a fact that names its
-     * entity only by {@code (kind, canonicalKey)}. The entity and its first fact are written in
-     * ONE transaction, because the caller asked for one decision: if the fact is rejected — a
-     * credential-like value, an invalid key — the entity insert rolls back with it and no
-     * undecidable PENDING proposal survives.
+     * entity only by {@code (kind, canonicalKey)}. One caller invocation resolves that key and then
+     * attaches the fact; the fact is validated before it is written, so a rejected fact — a
+     * credential-like value, an invalid key, a refused parent — leaves nothing behind: the fact is
+     * never written and an entity this call created is rolled back with it. Which of three things
+     * the key resolves to decides the rest:
+     * <ul>
+     *   <li>an unknown key creates the entity — PENDING for an EXTRACTION actor, ACTIVE otherwise
+     *       — and this fact is its first one ({@link #createEntity});</li>
+     *   <li>an existing ACTIVE or PENDING key reuses that row unchanged ({@link #createEntity})
+     *       and attaches the fact to it, which need not be its first fact;</li>
+     *   <li>a RETIRED or MERGED key is re-proposed on its identity row to PENDING by an
+     *       EXTRACTION actor, closing the row's live graph with it, and the fact waits on that
+     *       proposal ({@link #rePropose}). The ACTIVE fact an OPERATOR or RUN actor would write is
+     *       instead refused by {@link #requireEntityForFact} — a decided key is only reopened by
+     *       the actor that proposes.</li>
+     * </ul>
+     * So "the entity and its first fact in one transaction" holds only on the ACTIVE half of that
+     * matrix: an ACTIVE fact is written in the caller's transaction with the entity, while a
+     * PENDING extraction proposal and its assertion commit in their own transaction
+     * ({@link MemoryProposalWriter#insertProposal} is {@code REQUIRES_NEW}) so a lost
+     * {@code proposal_hash} race stays survivable.
      * <p>
-     * Status follows the same actor matrix as the two halves used separately: an EXTRACTION
-     * actor produces a PENDING entity with a PENDING fact (one operator decision promotes the
-     * batch), an OPERATOR actor produces ACTIVE memory. {@link #createEntity} publishes the
-     * entity proposal event exactly once; adding the fact publishes nothing, so the card is
-     * never duplicated.
+     * Fact status follows {@link #statusOf}: EXTRACTION writes a PENDING proposal, OPERATOR writes
+     * ACTIVE, and a RUN actor writes ACTIVE for a structural key with provenance. The entity's own
+     * status is ACTIVE unless the actor is an EXTRACTION one, so one operator decision promotes
+     * that PENDING pair as a batch. {@link #createEntity} publishes the entity proposal event
+     * exactly once; adding the fact publishes nothing, so the card is never duplicated.
      */
     @Transactional
     public MemoryFact addFactByKey(String kind, String canonicalKey, AddFactCommand command, MemoryActor actor) {

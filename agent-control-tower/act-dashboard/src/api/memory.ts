@@ -217,7 +217,8 @@ export async function createMemoryEntity(
 }
 
 /**
- * `GET /entities/{id}` — the fail-closed default read (ACTIVE-only), or, with
+ * `GET /entities/{id}` — the fail-closed default read, which withholds PENDING and
+ * returns any other entity (ACTIVE, RETIRED or MERGED), or, with
  * `'PENDING'`, the operator-authorised review read of a pending entity
  * (spec :309-313: the operator cannot approve what they cannot see). The server
  * honours no other status value here, so the argument is typed to the only one

@@ -58,10 +58,15 @@ import java.util.UUID;
 
 /**
  * The memory operator surface (spec §9). All reads are deterministic views over the merged
- * act-memory services; every route resolves operator authority first — reads as a read, writes
- * as a mutation — so a worker credential, a failed origin/CSRF check, or an anonymous remote
- * caller gets 403 {@code FORBIDDEN}. Responses carry ids, provenance, sensitivity and validity —
- * never credentials and, on the manifest route, never prompt content.
+ * act-memory services. Every route resolves operator authority before it reaches a service — reads
+ * as a read, writes as a mutation — so a worker credential, a failed origin/CSRF check, or an
+ * anonymous remote caller gets 403 {@code FORBIDDEN}. The one route that does not always resolve it
+ * is the entity detail read, {@code GET /entities/{id}}: it resolves authority only for
+ * {@code status=PENDING}, the operator's review read (see {@link #getEntity}). That asymmetry is
+ * deliberate — the default detail read is fail-closed ACTIVE-only, so it cannot return PENDING data
+ * at all — and this paragraph used to claim "every route" without it. Responses carry ids,
+ * provenance, sensitivity and validity — never credentials and, on the manifest route, never
+ * prompt content.
  */
 @RestController
 @RequestMapping("/api/v1/memory")

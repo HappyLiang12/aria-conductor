@@ -26,7 +26,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -171,7 +173,7 @@ class MemoryProposalServiceTest {
         MemoryFact theme = fact(happy, "theme", FactStatus.PENDING, OLD.plusSeconds(1));
         when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
                 .thenReturn(otherEntities);
-        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.PENDING))
                 .thenReturn(List.of(timezone, language, theme));
         when(entities.findById(happy)).thenReturn(Optional.of(pendingEntity(happy)));
 
@@ -191,7 +193,7 @@ class MemoryProposalServiceTest {
                 .containsExactly("timezone", "language", "theme", "person:happy");
         assertThat(batch).extracting(MemoryProposalView::id).contains(timezone.getId().toString());
         assertThat(batch).extracting(MemoryProposalView::createdAt).isSortedAccordingTo(Comparator.reverseOrder());
-        verify(facts).findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING);
+        verify(facts).findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.PENDING);
         verify(facts, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
         verify(relations, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
     }
@@ -207,7 +209,7 @@ class MemoryProposalServiceTest {
         MemoryFact pending = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(5));
         when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.ACTIVE))
                 .thenReturn(List.of(active));
-        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.PENDING))
                 .thenReturn(List.of(pending));
         when(entities.findById(happy)).thenReturn(Optional.of(entity(happy)));
 
@@ -240,6 +242,12 @@ class MemoryProposalServiceTest {
      * the entity left a relation PENDING and approving that relation then survived under a RETIRED
      * entity. Both halves are driven in this one test: the read's fact ids must equal the ids the
      * decision promotes, a PENDING relation must not be in the batch, and it must stay undecided.
+     * <p>
+     * T31 Item 2: both halves now go through the same query method ({@code status} AND
+     * {@code valid_to IS NULL}) as well as the same status, which is why one stub serves both. The
+     * predicate itself — a closed PENDING row is not batch material — is pinned against real
+     * persistence in
+     * {@link MemoryCommandServiceTransactionTest#theEntityBatchReadIsExactlyTheSetTheEntityDecisionDecides}.
      */
     @Test
     void theEntityBatchIsExactlyTheSetTheEntityDecisionPromotes() {
@@ -248,7 +256,7 @@ class MemoryProposalServiceTest {
         MemoryFact timezone = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(2));
         MemoryFact language = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(1));
         MemoryRelation pendingRelation = relation(FactStatus.PENDING);
-        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.PENDING))
                 .thenReturn(List.of(timezone, language));
         when(entities.findById(happy)).thenReturn(Optional.of(entity));
         // Stubbed leniently: after the fix the read never looks at relations, and the point of the
@@ -805,6 +813,33 @@ class MemoryProposalServiceTest {
                 .containsExactly(MemoryAction.SUPERSEDE, MemoryAction.UPDATE);
         assertThat(written.getAllValues()).allSatisfy(
                 assertion -> assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.RELATION));
+    }
+
+    // ---------------------------------------------------------------- transaction boundary
+
+    /**
+     * {@code decideProposal} carries {@code @Transactional}. Before this test nothing pinned it: a
+     * grep for the annotation on this method found no assertion anywhere, and the one behavioural
+     * test of its rollback drove a {@code new MemoryProposalService(...)} inside its own
+     * {@code REQUIRES_NEW} template, which rolls back whether or not the production annotation
+     * exists. The same shape was measured on the sibling command path: with the annotation deleted,
+     * the template-owned test stayed green while the bean-driven one reds.
+     * <p>
+     * The behavioural pin is
+     * {@link MemoryCommandServiceTransactionTest#aFailedFactAssertionRollsBackTheWholeEntityRejection}
+     * (the service bean, no ambient transaction, so only this annotation can roll the batch back).
+     * This static half is the counterpart the previous wave added for {@code addFactByKey}: the
+     * annotation must be present on that exact method signature, so removing it reds a test that
+     * never touches a database.
+     */
+    @Test
+    void decideProposalCarriesItsOwnTransactionBoundary() throws Exception {
+        Method decideProposal = MemoryProposalService.class.getMethod(
+                "decideProposal", UUID.class, ProposalDecision.class, MemoryActor.class);
+
+        assertThat(decideProposal.isAnnotationPresent(Transactional.class))
+                .as("decideProposal must run in one transaction")
+                .isTrue();
     }
 
     // ---------------------------------------------------------------- fixtures

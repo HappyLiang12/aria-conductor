@@ -25,10 +25,18 @@ import java.util.Map;
  * operator decisions and resolve operator authority before the service call; the
  * three reads stay open.
  *
- * <p>{@code POST /generate} and {@code POST /{id}/amend} are deliberately NOT gated:
- * both are {@code WORKER_WRITE} in the MCP tool catalog ({@code generate_report},
- * {@code amend_report}) and the QA workflow instructs a run-scoped worker to generate
- * its report, so gating them would refuse a legitimate worker path.
+ * <p>{@code POST /generate} and {@code POST /{id}/amend} are deliberately NOT gated, and
+ * the justification is the catalog policy alone: {@code generate_report} and
+ * {@code amend_report} are {@code WORKER_WRITE} in {@code ToolCatalog} — callable by a
+ * run-scoped worker and not auto-approved — while regenerating and archiving a report
+ * have no MCP twin on either surface, so gating exactly those two is the right cut.
+ *
+ * <p>Known pre-existing defect, disclosed here rather than fixed: the TS MCP server's
+ * forwards for these two tools send payloads these DTOs reject (no {@code title}/
+ * {@code description}, and {@code instructions} where {@link AmendReportRequest} requires
+ * {@code instruction}), so the worker path through those forwards is not currently
+ * exercisable. If the payloads are ever aligned, these two routes become live worker
+ * writes and this gating decision must be re-checked then.
  */
 @Slf4j
 @Validated

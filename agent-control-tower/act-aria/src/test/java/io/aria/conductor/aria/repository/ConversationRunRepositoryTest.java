@@ -16,6 +16,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +50,11 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
     private TransactionTemplate ownTransaction;
     /** Unique per test instance (and 36 chars: the column is {@code varchar(36)}). */
     private final String conversationId = UUID.randomUUID().toString();
+    /**
+     * The id of the row committed outside the rollback, captured at commit time: the statement
+     * under test nulls the conversation id, so the cleanup cannot look the row up by that.
+     */
+    private UUID committedRunId;
 
     @BeforeEach
     void setUp() {
@@ -56,17 +63,35 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
     }
 
     @AfterEach
-    void removeTheCommittedFixture() {
-        // The slice's embedded schema is shared with the module's other data-jpa tests, so a
-        // row this class committed is removed explicitly rather than left to rollback.
-        ownTransaction.executeWithoutResult(status ->
-                runs.deleteAll(runs.findByConversationIdOrderByCreatedAtAsc(conversationId)));
+    void removeTheCommittedFixtureAfterEach() {
+        removeTheCommittedFixture();
+    }
+
+    /**
+     * The slice's embedded schema is shared with the module's other data-jpa tests, so a
+     * row this class committed is removed explicitly rather than left to rollback. Callable
+     * from a test so the cleanup itself can be asserted instead of trusted.
+     */
+    private void removeTheCommittedFixture() {
+        UUID runId = committedRunId;
+        committedRunId = null;
+        if (runId == null) {
+            return;
+        }
+        ownTransaction.executeWithoutResult(status -> runs.deleteAll(runs.findById(runId).stream().toList()));
+    }
+
+    /** Commits a run outside the slice's transaction and remembers its id for the cleanup. */
+    private UUID commitRun() {
+        UUID runId = ownTransaction.execute(status -> runs.saveAndFlush(run()).getId());
+        committedRunId = runId;
+        return runId;
     }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void theDetachOwnsItsTransactionWhenTheCallerHasNone() {
-        UUID runId = ownTransaction.execute(status -> runs.saveAndFlush(run()).getId());
+        UUID runId = commitRun();
         assertThat(ownTransaction.execute(status -> runs.findById(runId).orElseThrow()).getConversationId())
                 .as("positive control: the fixture really carries the conversation id")
                 .isEqualTo(conversationId);
@@ -83,6 +108,41 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
         assertThat(ownTransaction.execute(status -> runs.findById(runId).orElseThrow()).getConversationId())
                 .as("the detach committed without a caller-provided transaction")
                 .isNull();
+    }
+
+    /**
+     * T52 N-1: the cleanup must actually delete the committed fixture. The statement under
+     * test nulls the conversation id, so a cleanup that looks the row up by that id finds
+     * nothing; the row then survives into the shared embedded schema and is invisible to the
+     * cleanup (harmless here because every other read in this module filters on the id, but a
+     * no-op cleanup is what makes an unrelated suite order-dependent).
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void theCleanupRemovesTheRowTheDetachOrphaned() {
+        UUID runId = commitRun();
+        assertThat(conversationRuns.detachByConversationId(conversationId)).isEqualTo(1);
+
+        // Positive control for the old key: the lookup the cleanup used is empty because the
+        // detach just nulled it, while the row itself is still committed and findable by id.
+        // The results bind to locals because `execute`'s callback type is inferred from the
+        // assertion target, and AssertJ's Predicate overloads make that inference ambiguous.
+        List<Run> byConversation =
+                ownTransaction.execute(status -> runs.findByConversationIdOrderByCreatedAtAsc(conversationId));
+        assertThat(byConversation)
+                .as("the conversation-keyed lookup is empty, so a cleanup keyed to it deletes nothing")
+                .isEmpty();
+        Optional<Run> stillThere = ownTransaction.execute(status -> runs.findById(runId));
+        assertThat(stillThere)
+                .as("the committed fixture is still there after the detach")
+                .isPresent();
+
+        removeTheCommittedFixture();
+
+        Optional<Run> afterCleanup = ownTransaction.execute(status -> runs.findById(runId));
+        assertThat(afterCleanup)
+                .as("the cleanup removes the row by the id it was committed under")
+                .isEmpty();
     }
 
     private Run run() {

@@ -18,11 +18,12 @@ vi.mock('../../components/Layout', () => ({
   useWebSocketContext: () => ({ lastMessage: null, isConnected: true }),
 }));
 
-import { listReports, archiveReport, getReportHtml } from '../../api/reports';
+import { listReports, archiveReport, getReportHtml, regenerateReport } from '../../api/reports';
 
 const mockListReports = listReports as Mock;
 const mockArchiveReport = archiveReport as Mock;
 const mockGetReportHtml = getReportHtml as Mock;
+const mockRegenerateReport = regenerateReport as Mock;
 
 const REPORT: ReportArtifact = {
   id: 'r-1',
@@ -111,6 +112,98 @@ describe('ReportsPage archive confirmation (Task 10)', () => {
     expect(await screen.findByText('Archive failed. Please retry.')).toBeInTheDocument();
     expect(confirmDialog()).not.toBeInTheDocument();
     expect(mockArchiveReport).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Task 33 / Item 5: regenerate and archive hit routes gated operator-only in a
+// merged lane, but their failures still rendered as plain toolbar text. They
+// use the same notice idiom as every other gated caller now: a 401/403 is the
+// operator-session notice, anything else keeps the ordinary error path.
+describe('ReportsPage gated mutations (Task 33)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListReports.mockResolvedValue([REPORT]);
+    mockGetReportHtml.mockResolvedValue('<html><body>brief</body></html>');
+    mockArchiveReport.mockResolvedValue(undefined);
+    mockRegenerateReport.mockResolvedValue(REPORT);
+  });
+
+  async function clickRegenerate() {
+    const button = await screen.findByRole('button', { name: /Regenerate/ });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    await userEvent.click(button);
+  }
+
+  async function confirmArchive() {
+    await clickDelete();
+    await userEvent.click(within(confirmDialog() as HTMLElement).getByRole('button', { name: 'Confirm' }));
+  }
+
+  it.each([401, 403])('renders the operator-session notice for a %i regenerate', async (status) => {
+    mockRegenerateReport.mockRejectedValue({
+      response: { status, data: { message: 'REGENERATE_RAW_SERVER_TEXT' } },
+    });
+    ui();
+
+    await clickRegenerate();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/regenerating a report is operator-only/i);
+    expect(screen.queryByText(/REGENERATE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Regeneration failed.')).not.toBeInTheDocument();
+  });
+
+  it.each([401, 403])('renders the operator-session notice for a %i archive', async (status) => {
+    mockArchiveReport.mockRejectedValue({
+      response: { status, data: { message: 'ARCHIVE_RAW_SERVER_TEXT' } },
+    });
+    ui();
+
+    await confirmArchive();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/archiving a report is operator-only/i);
+    expect(screen.queryByText(/ARCHIVE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Archive failed. Please retry.')).not.toBeInTheDocument();
+    expect(confirmDialog()).not.toBeInTheDocument();
+  });
+
+  // Positive controls: a 500 is a fault, not an authority problem, and success
+  // must not leave a notice behind.
+  it('keeps the ordinary error path for a 500 regenerate', async () => {
+    mockRegenerateReport.mockRejectedValue({
+      response: { status: 500, data: { message: 'report engine unavailable' } },
+    });
+    ui();
+
+    await clickRegenerate();
+
+    expect(await screen.findByText('report engine unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error path for a 500 archive', async () => {
+    mockArchiveReport.mockRejectedValue({
+      response: { status: 500, data: { message: 'archive store unavailable' } },
+    });
+    ui();
+
+    await confirmArchive();
+
+    expect(await screen.findByText('archive store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  it('shows no notice after a successful regenerate or archive', async () => {
+    ui();
+
+    await clickRegenerate();
+    await waitFor(() => expect(mockRegenerateReport).toHaveBeenCalledWith('r-1'));
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+
+    await confirmArchive();
+    await waitFor(() => expect(mockArchiveReport).toHaveBeenCalledWith('r-1'));
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });
 

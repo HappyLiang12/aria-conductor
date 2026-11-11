@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { MemoryPage } from '../MemoryPage';
@@ -566,7 +566,55 @@ describe('MemoryPage — mutation refusals (Task 30)', () => {
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
     fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
 
-    expect(await screen.findByText('memory store unavailable')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: /create memory entity/i });
+    expect(await within(dialog).findByText('memory store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    // Positive control for the refusal pin below: a fault is not an authority
+    // problem, so the dialog keeps the operator and the ordinary form error.
+    expect(screen.getByRole('dialog', { name: /create memory entity/i })).toBeInTheDocument();
+  });
+});
+
+// Task 33 / Item 1: the create dialog's overlay (position:fixed, z-index 2000)
+// hid the page-level refusal behind it, so the operator's only visible outcome
+// was a dialog that silently did nothing. A document-wide `getByTestId` cannot
+// see stacking — that is how the old pin stayed green. These pins scope the
+// notice to the dialog's own subtree instead.
+describe('MemoryPage — the create refusal is inside the dialog (Task 33)', () => {
+  async function submitCreate() {
+    fireEvent.click(await screen.findByRole('button', { name: /new entity/i }));
+    fireEvent.change(screen.getByLabelText('Canonical key'), { target: { value: 'person:x' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: /create entity/i }));
+  }
+
+  const createDialog = () => screen.queryByRole('dialog', { name: /create memory entity/i });
+
+  it.each([401, 403])('renders a %i refusal within the dialog the operator is looking at', async (status) => {
+    routeGets({});
+    post.mockRejectedValue({ response: { status, data: { message: 'CREATE_RAW_SERVER_TEXT' } } });
+    ui();
+
+    await submitCreate();
+
+    // Scoped to the dialog: a notice rendered at page level is behind the
+    // dialog's overlay and fails here, which is the regression this pins.
+    const notice = await within(createDialog() as HTMLElement).findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/creating a memory entity is operator-only/i);
+    // The form context is kept — the dialog must not close and swallow the form.
+    expect(createDialog()).toBeInTheDocument();
+    expect(screen.getByLabelText('Canonical key')).toHaveValue('person:x');
+    expect(screen.queryByText(/CREATE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+  });
+
+  it('closes the dialog and shows no refusal on a successful create', async () => {
+    routeGets({});
+    ui();
+
+    await submitCreate();
+
+    expect(await screen.findByText(/entity created/i)).toBeInTheDocument();
+    expect(createDialog()).not.toBeInTheDocument();
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });

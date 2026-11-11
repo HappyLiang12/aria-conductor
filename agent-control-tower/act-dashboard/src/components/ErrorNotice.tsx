@@ -1,10 +1,39 @@
 import { useNavigate } from 'react-router-dom';
 import {
   openConfigure,
-  operatorSessionMessage,
   presentRunError,
   type PresentedError,
 } from '../api/errorPresentation';
+
+/**
+ * What an operator reads when an operator-only route refused them (401/403).
+ *
+ * The resolver's documented deployment is a single operator on localhost: a
+ * loopback request is the operator automatically, and a remote request has to
+ * be granted access by the operator who runs the backend. There is no token
+ * entry in this dashboard (`establishOperatorSession` has no caller), so
+ * "sign in here" would be a UI that does not exist.
+ *
+ * The previous wording said "reload the page and retry". A reload does not
+ * change who the server thinks the operator is, so that advice could not work:
+ * the operator reloaded, was refused again, and the notice was indistinguishable
+ * from a decoration. This names the one thing that does confer authority.
+ *
+ * It lives here, beside its only caller, because `src/api/` belongs to another
+ * lane this wave. The phrases the existing pins assert ("<action> is
+ * operator-only", "loopback requests are the operator automatically", "the
+ * operator who runs the backend must grant access") are unchanged, so those pins
+ * stay green unloosened.
+ */
+function operatorRefusalMessage(actionLabel: string): string {
+  return (
+    `${actionLabel} is operator-only, so the server refused it. `
+    + 'Open the dashboard on the machine that runs the backend — loopback requests are the operator '
+    + 'automatically. From another machine, the operator who runs the backend must grant access with '
+    + 'the server\'s operator credential; the dashboard has no token entry. Reloading the page cannot '
+    + 'change who the server thinks you are, and nothing was changed by the refused call.'
+  );
+}
 
 /**
  * A path action is the only one that needs router state. It lives in its own
@@ -41,7 +70,7 @@ export function ErrorNotice({ presented, className, operatorSession, actionLabel
   if (operatorSession && presented.operatorRejected) {
     return (
       <div className="ask-ctx" data-testid="operator-session-notice">
-        {operatorSessionMessage(actionLabel ?? 'This action')}
+        {operatorRefusalMessage(actionLabel ?? 'This action')}
       </div>
     );
   }

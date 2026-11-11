@@ -108,4 +108,18 @@ describe('ErrorNotice operator-session refusal', () => {
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Operator session required');
   });
+
+  // Task 33 / Item 4: the notice used to tell the operator to "reload the page
+  // and retry". A reload cannot change who the server thinks the operator is,
+  // so the advice was a loop with no exit. The remedy has to be something this
+  // deployment actually offers. Asserted as the remedy phrase, not the whole
+  // sentence, so wording may change but the remedy cannot disappear.
+  it('names a remedy the operator can actually carry out', () => {
+    renderOperatorNotice({ text: 'OPERATOR_ROUTE_RAW', operatorRejected: true });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    // The advice that cannot work must be gone, not merely softened.
+    expect(notice).not.toHaveTextContent(/reload the page and retry/i);
+  });
 });

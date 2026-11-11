@@ -177,26 +177,27 @@ class ToolCatalogParityTest {
     }
 
     /**
-     * Decision (2026-11 review), pinned so a later tidy-up cannot flip it: the memory read
-     * tools stay WORKER_READ but are never auto-approved. Memory data is learned operator
-     * and user facts rather than reference material, so an operator approval stays in front
-     * of every read even though the policy class would allow auto-approval.
+     * Decision (2026-11-11 operator amendment, reversing the 2026-11 review): the memory read
+     * tools are auto-approved for the Aria assistant's coordinated runs. Memory reads are
+     * clamped at INTERNAL and every prompt still records which facts entered it, so the
+     * operator keeps auditability without a per-read click. Writes and operator-only tools
+     * are unchanged. Pinned so a later tidy-up cannot flip it back silently.
      */
     @Test
-    void theMemoryReadToolsAreWorkerReadButNeverAutoApproved() {
+    void theMemoryReadToolsAreWorkerReadAndAutoApproved() {
         List<String> memoryReads = List.of("recall_memory", "list_memory_entities", "get_memory_entity",
                 "list_memory_proposals", "get_context_manifest");
 
-        assertThat(catalog.autoApproveReadNames()).doesNotContainAnyElementsOf(memoryReads);
+        assertThat(catalog.autoApproveReadNames()).containsAll(memoryReads);
         assertThat(catalog.tools())
                 .filteredOn(tool -> memoryReads.contains(tool.name()))
                 .hasSize(memoryReads.size())
                 .allSatisfy(tool -> {
                     assertThat(tool.policy()).isEqualTo(ToolPolicy.WORKER_READ);
-                    assertThat(tool.autoApproveRead())
-                            .as("%s must stay operator-approved", tool.name())
-                            .isFalse();
+                    assertThat(tool.autoApproveRead()).isTrue();
                 });
+        assertThat(catalog.autoApproveReadNames())
+                .doesNotContain("remember_fact", "forget_fact", "decide_memory_proposal");
     }
 
     @Test

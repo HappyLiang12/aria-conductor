@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -148,6 +149,93 @@ class MemoryProposalServiceTest {
                 .containsExactly("timezone", "person:happy");
         assertThat(operatorView).extracting(MemoryProposalView::valueText)
                 .containsExactly("value", "Happy");
+    }
+
+    /**
+     * M1 (UI surface review). The ENTITY card filtered ONE 50-row page of the merged global inbox
+     * client-side, so with more than 50 PENDING facts across entities an entity's own batch fell
+     * off the page and the card said "adding the entity alone" while {@code decideEntity} promoted
+     * all of them. The per-entity read is a query filter, never a page of the global inbox, and it
+     * returns the complete batch — the same rows the decision promotes.
+     */
+    @Test
+    void theEntityFilterReturnsOneEntitysWholeBatchInsteadOfAGlobalInboxPage() {
+        UUID happy = UUID.randomUUID();
+        List<MemoryFact> otherEntities = new ArrayList<>();
+        for (int i = 0; i < MemoryProposalService.INBOX_LIMIT; i++) {
+            otherEntities.add(fact(UUID.randomUUID(), "key-" + i, FactStatus.PENDING, OLD.plusSeconds(i)));
+        }
+        MemoryFact timezone = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(3));
+        MemoryFact language = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(2));
+        MemoryFact theme = fact(happy, "theme", FactStatus.PENDING, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(otherEntities);
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language, theme));
+        when(entities.findById(happy)).thenReturn(Optional.of(pendingEntity(happy)));
+
+        List<MemoryProposalView> globalPage = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(globalPage).as("the bug's premise: the bounded inbox page is full")
+                .hasSize(MemoryProposalService.INBOX_LIMIT);
+        assertThat(globalPage).extracting(MemoryProposalView::factKey)
+                .as("and none of the entity's facts are on it")
+                .doesNotContain("timezone", "language", "theme");
+
+        clearInvocations(facts, relations, entities);
+        List<MemoryProposalView> batch = proposals.listProposalsForEntity(FactStatus.PENDING, happy, OPERATOR);
+
+        assertThat(batch).extracting(MemoryProposalView::factKey)
+                .as("the filter read returns every fact of the entity and its own proposal")
+                .containsExactly("timezone", "language", "theme", "person:happy");
+        assertThat(batch).extracting(MemoryProposalView::id).contains(timezone.getId().toString());
+        assertThat(batch).extracting(MemoryProposalView::createdAt).isSortedAccordingTo(Comparator.reverseOrder());
+        verify(facts).findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING);
+        verify(facts, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
+        verify(relations, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
+    }
+
+    /**
+     * The entity filter composes with the status it is asked for and keeps the actor rule of the
+     * inbox: the PENDING entity row is review material, its own PENDING facts are not.
+     */
+    @Test
+    void theEntityFilterComposesWithTheStatusAndTheActor() {
+        UUID happy = UUID.randomUUID();
+        MemoryFact active = fact(happy, "timezone", FactStatus.ACTIVE, OLD);
+        MemoryFact pending = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(5));
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.ACTIVE))
+                .thenReturn(List.of(active));
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(pending));
+        when(entities.findById(happy)).thenReturn(Optional.of(entity(happy)));
+
+        List<MemoryProposalView> activeBatch =
+                proposals.listProposalsForEntity(FactStatus.ACTIVE, happy, OPERATOR);
+
+        assertThat(activeBatch).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "ENTITY");
+        assertThat(activeBatch).extracting(MemoryProposalView::status).containsOnly("ACTIVE");
+
+        when(entities.findById(happy)).thenReturn(Optional.of(pendingEntity(happy)));
+        List<MemoryProposalView> workerView =
+                proposals.listProposalsForEntity(FactStatus.PENDING, happy, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView =
+                proposals.listProposalsForEntity(FactStatus.PENDING, happy, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("the worker sees the batch it proposed, not the PENDING entity's identity")
+                .containsExactly("FACT");
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "ENTITY");
+    }
+
+    @Test
+    void theEntityFilterRequiresAnEntityId() {
+        assertThatThrownBy(() -> proposals.listProposalsForEntity(FactStatus.PENDING, null, OPERATOR))
+                .isInstanceOf(MemoryValidationException.class)
+                .hasMessageContaining("entityId");
+        verifyNoInteractions(facts, relations, entities);
     }
 
     @Test

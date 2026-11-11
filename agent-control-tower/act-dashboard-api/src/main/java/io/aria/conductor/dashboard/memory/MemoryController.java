@@ -248,11 +248,20 @@ public class MemoryController {
      * M2 finding, deliberately not fixed here). Passing the operator keeps the entity card on the
      * dashboard; a worker's own read of the same rows goes through the MCP tool, which passes the
      * transport actor instead.
+     * <p>
+     * {@code entityId} is the ENTITY card's read (UI surface review M1): it narrows the same route
+     * to one entity's own batch, applied in the query and never as a slice of the merged inbox
+     * page, and it composes with {@code status} (default PENDING). The response shape is the same
+     * list of proposal rows; the filtered read is complete rather than page-limited because the
+     * entity decision promotes the whole batch.
      */
     @GetMapping("/proposals")
     public List<MemoryProposalView> listProposals(
-            @RequestParam(required = false, defaultValue = "PENDING") FactStatus status) {
-        return proposals.listProposals(status, INBOX_REVIEWER);
+            @RequestParam(required = false, defaultValue = "PENDING") FactStatus status,
+            @RequestParam(required = false) UUID entityId) {
+        return entityId == null
+                ? proposals.listProposals(status, INBOX_REVIEWER)
+                : proposals.listProposalsForEntity(status, entityId, INBOX_REVIEWER);
     }
 
     @PostMapping("/proposals/{id}/decide")

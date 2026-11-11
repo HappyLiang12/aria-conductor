@@ -415,6 +415,36 @@ class MemoryControllerTest {
                 .isEqualTo(MemoryActorType.OPERATOR);
     }
 
+    /**
+     * UI surface review M1: the ENTITY card read one 50-row global page and filtered it
+     * client-side, so a big inbox made the card claim an empty batch. The route now takes the
+     * entity id and passes it to the query-level read (which returns the whole batch); nothing is
+     * filtered after pagination here.
+     */
+    @Test
+    void listsOneEntitysProposalBatchThroughTheServerSideFilter() throws Exception {
+        UUID entityId = UUID.randomUUID();
+        UUID factId = UUID.randomUUID();
+        when(proposals.listProposalsForEntity(eq(FactStatus.PENDING), eq(entityId), any(MemoryActor.class)))
+                .thenReturn(List.of(new MemoryProposalView(
+                        factId.toString(), "FACT", entityId.toString(), "timezone", "UTC",
+                        null, null, "PENDING", "EXTRACTION", "INTERNAL", BigDecimal.valueOf(0.9), NOW, NOW)));
+
+        mvc.perform(get("/api/v1/memory/proposals")
+                        .param("status", "PENDING")
+                        .param("entityId", entityId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].id").value(factId.toString()))
+                .andExpect(jsonPath("$[0].entityId").value(entityId.toString()))
+                .andExpect(jsonPath("$[0].factKey").value("timezone"));
+
+        ArgumentCaptor<MemoryActor> reviewer = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(proposals).listProposalsForEntity(eq(FactStatus.PENDING), eq(entityId), reviewer.capture());
+        assertThat(reviewer.getValue().type()).isEqualTo(MemoryActorType.OPERATOR);
+        verify(proposals, never()).listProposals(eq(FactStatus.PENDING), any(MemoryActor.class));
+    }
+
     @Test
     void decidesAProposal() throws Exception {
         UUID subjectId = UUID.randomUUID();

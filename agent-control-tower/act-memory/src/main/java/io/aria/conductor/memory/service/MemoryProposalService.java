@@ -28,10 +28,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -132,10 +134,66 @@ public class MemoryProposalService {
                 inbox.add(MemoryProposalView.fromEntity(entity));
             }
         }
-        inbox.sort(Comparator.comparing(MemoryProposalView::createdAt,
-                        Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(MemoryProposalView::subjectType)
-                .thenComparing(MemoryProposalView::id, Comparator.nullsLast(Comparator.naturalOrder())));
+        return pageOf(inbox, pageSize);
+    }
+
+    /**
+     * One entity's own proposal batch: every fact and relation of {@code entityId} in
+     * {@code status} plus the entity row itself when its lifecycle status matches.
+     * <p>
+     * M1 (UI surface review): the ENTITY card used to filter ONE {@link #INBOX_LIMIT}-row page of
+     * the merged global inbox client-side, so with more than 50 PENDING facts across entities an
+     * entity's own facts fell off the page and the card claimed "approving adds the entity alone"
+     * while {@link #decideEntity} promoted every one of them. The filter is therefore a query
+     * (entity + status), never a post-pagination slice, and it is deliberately unbounded: the
+     * decision promotes the entity's whole PENDING batch, so a truncated read would under-report
+     * what one click does. The actor rule of the inbox is unchanged — a PENDING ENTITY row is
+     * included only for an OPERATOR (T11 C1).
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposalsForEntity(FactStatus status, UUID entityId, MemoryActor actor) {
+        if (entityId == null) {
+            throw new MemoryValidationException("entityId is required");
+        }
+        FactStatus target = status == null ? FactStatus.PENDING : status;
+        boolean operator = actor != null && actor.type() == MemoryActorType.OPERATOR;
+        List<MemoryProposalView> batch = new ArrayList<>();
+        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(entityId, target))) {
+            if (fact != null) {
+                batch.add(MemoryProposalView.fromFact(fact));
+            }
+        }
+        Set<UUID> seen = new LinkedHashSet<>();
+        for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(entityId, target))) {
+            addRelation(relation, seen, batch);
+        }
+        for (MemoryRelation relation : safe(relations.findByToEntityIdAndStatus(entityId, target))) {
+            addRelation(relation, seen, batch);
+        }
+        MemoryEntity entity = entities.findById(entityId).orElse(null);
+        if (entity != null && entity.getStatus() == entityStatusOf(target)
+                && (operator || entity.getStatus() != EntityStatus.PENDING)) {
+            batch.add(MemoryProposalView.fromEntity(entity));
+        }
+        return List.copyOf(batch.stream().sorted(NEWEST_FIRST).toList());
+    }
+
+    /** One edge at most once: a self relation is both outgoing and incoming. */
+    private static void addRelation(MemoryRelation relation, Set<UUID> seen, List<MemoryProposalView> batch) {
+        if (relation != null && seen.add(relation.getId())) {
+            batch.add(MemoryProposalView.fromRelation(relation));
+        }
+    }
+
+    /** Newest first, then subject type and id so the order is deterministic. */
+    private static final Comparator<MemoryProposalView> NEWEST_FIRST =
+            Comparator.comparing(MemoryProposalView::createdAt,
+                            Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(MemoryProposalView::subjectType)
+                    .thenComparing(MemoryProposalView::id, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    private static List<MemoryProposalView> pageOf(List<MemoryProposalView> inbox, int pageSize) {
+        inbox.sort(NEWEST_FIRST);
         return inbox.size() > pageSize ? List.copyOf(inbox.subList(0, pageSize)) : inbox;
     }
 

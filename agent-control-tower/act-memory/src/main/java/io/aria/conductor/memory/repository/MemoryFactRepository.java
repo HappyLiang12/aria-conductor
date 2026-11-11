@@ -47,4 +47,13 @@ public interface MemoryFactRepository extends JpaRepository<MemoryFact, UUID> {
      * inbox must not enumerate the fact history to find the few PENDING rows.
      */
     List<MemoryFact> findByStatusOrderByCreatedAtDesc(FactStatus status, Pageable page);
+
+    /**
+     * One entity's own proposals in one status, newest first. The ENTITY card reads its batch
+     * through this filter instead of filtering a page of the global inbox client-side, because
+     * with more than one page of PENDING facts the entity's rows fall off that page (UI surface
+     * review M1). Unbounded on purpose: {@code decideEntity} promotes the same unbounded set, so
+     * a truncated read would under-report what one click does.
+     */
+    List<MemoryFact> findByEntityIdAndStatusOrderByCreatedAtDesc(UUID entityId, FactStatus status);
 }

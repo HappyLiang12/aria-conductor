@@ -158,13 +158,16 @@ class ApprovalToolsTest {
 
         String json = tools.decideApproval(id, true, "lgtm", new ToolContext(Map.of()));
 
-        // No exchange means no actor, so the guard speaks the one operator-authority
-        // voice itself: the action plus the surface where the caller fixes it (m1).
+        // No exchange means no actor, so the guard refuses before any authority is
+        // considered: it names the missing credential and the surface where the caller
+        // fixes it (m1), without claiming an authority decision that was never made
+        // (T48 / rev-mcp m3).
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
-                .contains("\"message\":\"Operator authority required: calling a tool without an "
-                        + "authenticated credential is an operator decision. Reconnect the MCP client "
-                        + "with an authenticated credential: the operator bearer credential "
+                .contains("\"message\":\"MCP authentication required: this call carried no "
+                        + "verifiable credential, so its caller was not identified and the tool "
+                        + "refused it before any authority decision. Reconnect the MCP client with "
+                        + "an authenticated credential: the operator bearer credential "
                         + "(aria.operator.bearer-token) or a run-scoped worker token issued to the run.\"");
         verifyNoInteractions(permissionCoordinator);
     }

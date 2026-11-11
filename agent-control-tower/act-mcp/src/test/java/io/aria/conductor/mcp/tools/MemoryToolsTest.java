@@ -814,9 +814,10 @@ class MemoryToolsTest {
 
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
-                .contains("Operator authority required: calling a tool without an "
-                        + "authenticated credential is an operator decision. Reconnect the MCP client "
-                        + "with an authenticated credential: the operator bearer credential "
+                .contains("MCP authentication required: this call carried no verifiable "
+                        + "credential, so its caller was not identified and the tool refused it "
+                        + "before any authority decision. Reconnect the MCP client with an "
+                        + "authenticated credential: the operator bearer credential "
                         + "(aria.operator.bearer-token) or a run-scoped worker token issued to the run.");
         verifyNoInteractions(commands);
     }

@@ -53,14 +53,18 @@ public final class McpActorContext {
     }
 
     /**
-     * The unauthenticated refusal: the shared operator-authority sentence, with the
-     * only remedy available at this layer — the credential on the MCP session. It
-     * deliberately does not say which of the two credentials to use, because either
-     * resolves a valid actor; what is missing is a credential that verifies at all.
+     * The unauthenticated refusal: the credential half of the shared operator-authority
+     * voice, with the only remedy available at this layer — the credential on the MCP
+     * session. It deliberately does not say which of the two credentials to use, because
+     * either resolves a valid actor; what is missing is a credential that verifies at all.
+     *
+     * <p>T48 (re-review rev-mcp m3): this used {@link ToolResponses#operatorOnly}, whose tail
+     * says "is an operator decision" — false here. No authority decision was made; nothing
+     * identified the caller. {@link ToolResponses#unauthenticated} keeps the actionable
+     * surface and drops the misattribution.
      */
     private static SecurityException unauthenticated() {
-        return new SecurityException(ToolResponses.operatorOnly(
-                "calling a tool without an authenticated credential",
+        return new SecurityException(ToolResponses.unauthenticated(
                 "Reconnect the MCP client with an authenticated credential: the operator bearer "
                         + "credential (aria.operator.bearer-token) or a run-scoped worker token "
                         + "issued to the run."));

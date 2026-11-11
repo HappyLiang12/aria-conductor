@@ -407,6 +407,13 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
       expect(screen.getByText(/may be waiting for your approval/)).toBeInTheDocument();
       expect(screen.getByText(/open the Review Queue to check/)).toBeInTheDocument();
       expect(screen.getByText(/refused \(operator-only\)/)).toBeInTheDocument();
+      // Task 37 / Item 6 (T35 audit row 15): saying the check was refused without
+      // naming a remedy left the operator at a dead end. The report now carries
+      // the shared remedy — and never the advice that cannot work.
+      expect(
+        screen.getByText(/open the dashboard on the machine that runs the backend/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/reload the page and retry/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
       expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();

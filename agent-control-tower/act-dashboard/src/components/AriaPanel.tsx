@@ -3,6 +3,7 @@ import { streamMessage } from '../api/aria';
 import type { MemoryProposalSignal, StreamError } from '../api/aria';
 import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
+import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
 import { cancelRun, getRun } from '../api/runs';
 import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
@@ -851,7 +852,12 @@ export function AriaPanel() {
           'Aria may be waiting for your approval — open the Review Queue to check; the request continues in the background.',
         );
         if (checkRefused) {
-          paragraphs.push('The pending-approval check was refused (operator-only), so this tab could not verify the queue itself.');
+          // Task 37 Item 6 (audit row 15): the report named no remedy. The shared
+          // constant is the one remedy every refusal surface composes.
+          paragraphs.push(
+            'The pending-approval check was refused (operator-only), so this tab could not verify the queue itself. '
+            + OPERATOR_REMEDY_COPY,
+          );
         }
       }
       paragraphs.push(`Conversation ID: \`${eventConversationId}\` (include this when reporting issues)`);

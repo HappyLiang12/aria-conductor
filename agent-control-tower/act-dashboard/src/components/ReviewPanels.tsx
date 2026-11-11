@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, finalizeRun, rejectApproval } from '../api/approvals';
 import { applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
-import { presentError, type PresentedError } from '../api/errorPresentation';
+import { presentError, OPERATOR_REMEDY_COPY, type PresentedError } from '../api/errorPresentation';
 import ErrorNotice from './ErrorNotice';
 import { ApprovalToolDetails } from './ApprovalToolDetails';
 import { formatTimestamp } from '../utils/formatTime';
@@ -210,12 +210,13 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
         ✎ Request changes (starts 1 fresh run)
       </button>
       {error && <ErrorNotice className="kanban-form-error" presented={error} />}
+      {/* Task 35: the remedy clause is the shared `OPERATOR_REMEDY_COPY`; the
+          panel keeps its own frame (what was refused, and that it decided
+          nothing) because a refusal here may also carry the server's wording. */}
       {operatorRejected && (
         <div className="ask-ctx">
-          Approvals are operator-only. On this machine, loopback requests are the operator
-          automatically — reload the page and retry. From a remote machine, the operator who
-          runs the backend must grant access (the server's operator credential); the dashboard
-          has no remote token entry. Nothing was decided by the refused call.
+          Approvals are operator-only. {OPERATOR_REMEDY_COPY} Nothing was decided by the
+          refused call.
         </div>
       )}
     </div>

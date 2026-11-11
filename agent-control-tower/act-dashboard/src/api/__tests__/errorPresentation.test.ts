@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { apiErrorMessage } from '../operatorSession';
 import {
+  OPERATOR_REMEDY_COPY,
   errorActionFor,
   errorActionForSurface,
   openConfigure,
+  operatorSessionMessage,
   presentError,
   presentRunError,
   type ErrorAction,
@@ -151,6 +153,32 @@ describe('presentError', () => {
   it('falls back without an action when the backend gave no usable text', () => {
     expect(presentError(new Error('network down'), 'Something failed'))
       .toEqual({ text: 'Something failed' });
+  });
+});
+
+describe('the operator remedy is one copy (Task 35)', () => {
+  // A 401/403 is an authority problem, not a transient one: a reload cannot
+  // change who the server thinks the operator is, and on a remote machine the
+  // operator is refused by design. The one remedy that can work lives here and
+  // every refusal surface composes it, so this pin is the source of truth.
+  it('names a remedy the operator can carry out, and never either reload phrase', () => {
+    expect(OPERATOR_REMEDY_COPY).toMatch(/open the dashboard on the machine that runs the backend/i);
+    expect(OPERATOR_REMEDY_COPY).toMatch(/loopback requests are the operator automatically/i);
+    expect(OPERATOR_REMEDY_COPY).toMatch(/the operator who runs the backend must grant access/i);
+    expect(OPERATOR_REMEDY_COPY).not.toMatch(/reload the page and retry/i);
+    expect(OPERATOR_REMEDY_COPY).not.toMatch(/reload and try again/i);
+  });
+
+  // `operatorSessionMessage` used to be a second, stale copy with no caller.
+  // It is now the producer the shared notice renders, so it has to build on the
+  // constant rather than repeat it.
+  it('builds the labelled refusal on that constant', () => {
+    const message = operatorSessionMessage('Applying the fleet runtime');
+
+    expect(message).toContain('Applying the fleet runtime is operator-only, so the server refused it.');
+    expect(message).toContain(OPERATOR_REMEDY_COPY);
+    expect(message).not.toMatch(/reload the page and retry/i);
+    expect(message).not.toMatch(/reload and try again/i);
   });
 });
 

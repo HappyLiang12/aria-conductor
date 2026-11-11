@@ -384,7 +384,46 @@ describe('MemoryPage — proposal inbox', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(await screen.findByText('proposal already decided')).toBeInTheDocument();
+    // Task 35 / Item 2: the refusal renders where the operator is looking —
+    // inside the confirmation dialog that caused it. It used to render in the
+    // inbox BEHIND the dialog's overlay, which is a notice nobody can see.
+    const dialog = screen.getByRole('dialog', { name: /confirm memory decision/i });
+    const refusal = await within(dialog).findByText('proposal already decided');
+    expect(refusal).toBeVisible();
+    // The confirmation stays open: the pin above has always required that.
+    expect(screen.getByRole('dialog', { name: /confirm memory decision/i })).toBeInTheDocument();
+    // Moved, not duplicated: a second copy behind the dialog would make the
+    // document-wide query ambiguous and the refusal look handled twice.
+    expect(screen.getAllByText('proposal already decided')).toHaveLength(1);
+    const outside = within(document.body)
+      .queryAllByText('proposal already decided')
+      .filter((node) => !dialog.contains(node));
+    expect(outside).toHaveLength(0);
+  });
+
+  // Task 33 fixed the same defect for the create dialog; the decide-proposal
+  // confirmation was the remaining one. A 401/403 is an authority problem, so
+  // it must read as the shared operator notice — inside the dialog, not behind
+  // it — while any other status keeps the server's own wording.
+  it.each([401, 403])('renders a %i refusal inside the decision dialog, not behind it', async (status) => {
+    routeGets({ proposals: (s) => (s === 'PENDING' ? [proposal()] : []) });
+    post.mockRejectedValue({
+      response: { status, data: { message: 'DECIDE_RAW_SERVER_TEXT' } },
+    });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    const dialog = screen.getByRole('dialog', { name: /confirm memory decision/i });
+    const notice = await within(dialog).findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/deciding a memory proposal is operator-only/i);
+    expect(notice).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    expect(notice).not.toHaveTextContent(/reload the page and retry/i);
+    // The server's own refusal text points at no fix; it is not the report.
+    expect(within(dialog).queryByText(/DECIDE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    // One notice, and it is the one inside the dialog.
+    expect(screen.queryAllByTestId('operator-session-notice')).toHaveLength(1);
     expect(screen.getByRole('dialog', { name: /confirm memory decision/i })).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { answerAsk } from '../api/approvals';
+import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
@@ -38,11 +39,11 @@ export function AriaClarificationCard({
       setError(
         isOperatorRejection(err)
           // Same posture as the Review panels: say the refusal, say what the
-          // operator can do about it, and say that nothing was sent.
+          // operator can do about it, and say that nothing was sent. The remedy
+          // is the shared copy (Task 35) — a reload cannot restore an operator
+          // session, so this card must not suggest one.
           ? `Your operator session was refused this answer: ${apiErrorMessage(err, 'operator-only route')}. `
-            + 'Answering is operator-only — on this machine loopback requests are the operator '
-            + 'automatically, so reload and try again; from a remote machine the operator who runs '
-            + 'the backend must grant access. Nothing was sent by the refused call.'
+            + `Answering is operator-only. ${OPERATOR_REMEDY_COPY} Nothing was sent by the refused call.`
           : apiErrorMessage(err, 'The answer could not be sent — the question is still waiting; retry.'),
       );
     } finally {

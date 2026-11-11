@@ -127,19 +127,32 @@ export function presentError(error: unknown, fallback: string): PresentedError {
 }
 
 /**
- * What an operator reads when an operator-only route refused them (401/403).
+ * The ONE remedy for an operator-only route's 401/403 refusal.
  *
  * The resolver's documented deployment is single-operator localhost, so a
  * loopback request is the operator automatically; a remote operator is refused
- * by design and there is no token entry in the dashboard. Saying both — and
- * saying it once, for every gated mutation — is the point: the alternative was
- * each page echoing a transport message that points at no fix.
+ * by design and there is no token entry in the dashboard. A reload cannot
+ * change who the server thinks the operator is, so "reload the page and retry"
+ * was advice that could not work — the operator reloaded, was refused again,
+ * and the notice was indistinguishable from a decoration.
+ *
+ * Every surface that reports a refusal composes this constant instead of
+ * restating the remedy: the shared notice, the approval and clarification
+ * cards, the Review panel and the error notice. `errorPresentation.test.ts`
+ * pins it as the working remedy and pins both bad phrases out.
+ */
+export const OPERATOR_REMEDY_COPY = (
+  'Open the dashboard on the machine that runs the backend — loopback requests are the operator '
+  + 'automatically. From another machine, the operator who runs the backend must grant access with '
+  + 'the server\'s operator credential; the dashboard has no token entry. Reloading the page cannot '
+  + 'change who the server thinks you are.'
+);
+
+/**
+ * What an operator reads when an operator-only route refused a named action
+ * (401/403). The producer of the shared notice; it builds on
+ * `OPERATOR_REMEDY_COPY` so the remedy has exactly one source.
  */
 export function operatorSessionMessage(actionLabel: string): string {
-  return (
-    `${actionLabel} is operator-only, so the server refused it. `
-    + 'On this machine, loopback requests are the operator automatically — reload the page and retry. '
-    + 'From a remote machine, the operator who runs the backend must grant access with the server\'s '
-    + 'operator credential; the dashboard has no remote token entry.'
-  );
+  return `${actionLabel} is operator-only, so the server refused it. ${OPERATOR_REMEDY_COPY}`;
 }

@@ -525,6 +525,13 @@ export function AriaPanel() {
       lastSentSkillIdRef.current = skillId;
       slash.clearSkill();
 
+      // A turn belongs to the conversation it was sent in. Frames from a turn
+      // whose conversation the operator has since cleared or replaced must not
+      // write into the new transcript — the parked run keeps living on the
+      // server, it just stops owning this panel.
+      const turnConversationId = conversationId;
+      const staleTurn = (): boolean => conversationIdRef.current !== turnConversationId;
+
       // The live turn's activity strip is keyed by the run id: Task 4's reducer
       // groups restored strips by runId, so a live strip must share that key to be
       // replaced — never duplicated — by the durable rows after a reconcile.
@@ -541,18 +548,22 @@ export function AriaPanel() {
         history,
         {
           onThinking: (runId) => {
+            if (staleTurn()) return;
             if (runId) {
               activeRunIdRef.current = runId; // M1: capture run id for cancel
               turnIdRef.current = runId;
             }
           },
           onToolCall: (name) => {
+            if (staleTurn()) return;
             dispatch({ type: 'toolCall', turnId: turnId(), name });
           },
           onToolResult: (name, result) => {
+            if (staleTurn()) return;
             dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok: true });
           },
           onMessage: (content) => {
+            if (staleTurn()) return;
             dispatch({
               type: 'assistantMessage',
               id: crypto.randomUUID(),
@@ -561,6 +572,7 @@ export function AriaPanel() {
             });
           },
           onApprovalRequired: (ask) => {
+            if (staleTurn()) return;
             dispatch({
               type: 'approvalRequired',
               approvalId: ask.approvalId,
@@ -571,6 +583,7 @@ export function AriaPanel() {
             });
           },
           onWaitingInput: (ask) => {
+            if (staleTurn()) return;
             dispatch({
               type: 'waitingInput',
               approvalId: ask.approvalId,
@@ -579,6 +592,7 @@ export function AriaPanel() {
             });
           },
           onDone: (data) => {
+            if (staleTurn()) return;
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             // Adopt the server-issued conversationId so multi-turn context persists (#36).
             if (data?.conversationId) {
@@ -587,6 +601,7 @@ export function AriaPanel() {
             setBusy(false);
           },
           onError: (errorDetail) => {
+            if (staleTurn()) return;
             if (cancelledRef.current) return; // M1: user cancelled — don't show an error bubble
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
@@ -685,6 +700,13 @@ export function AriaPanel() {
       });
     }
     const newConversationId = crypto.randomUUID();
+    // Stop reading the cleared conversation's turn here; the run itself stays
+    // alive on the server and is reconcilable later. Without this, a parked
+    // turn's frames would be drawn into the new transcript.
+    cancelledRef.current = true;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    abortRef.current?.abort();
+    activeRunIdRef.current = null;
     adoptConversationId(newConversationId);
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.

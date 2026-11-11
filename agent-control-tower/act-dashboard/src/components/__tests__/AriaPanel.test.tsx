@@ -696,6 +696,31 @@ describe('AriaPanel in-flow decisions', () => {
     expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
   });
 
+  it('stops the cleared conversation\'s parked turn from writing into the new one', async () => {
+    let emitLateFrame: ((content: string) => void) | null = null;
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      emitLateFrame = (content: string) => args[3]?.onMessage?.(content);
+      return new Promise<void>(() => {}); // the parked turn keeps its stream open
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+
+    // The card belonged to the conversation that was just cleared.
+    expect(screen.queryByText(TOOL)).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer or cancel the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+
+    // A frame the cleared turn emits afterwards must not land in the new transcript.
+    act(() => { emitLateFrame?.('late reply from the parked turn'); });
+    expect(screen.queryByText('late reply from the parked turn')).not.toBeInTheDocument();
+  });
+
   it('names the runs the timeline shows as still unanswered', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([

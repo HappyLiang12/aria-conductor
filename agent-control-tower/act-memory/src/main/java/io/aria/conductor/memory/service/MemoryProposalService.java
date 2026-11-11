@@ -155,6 +155,14 @@ public class MemoryProposalService {
      * decision promotes the entity's whole PENDING batch, so a truncated read would under-report
      * what one click does. The actor rule of the inbox is unchanged — a PENDING ENTITY row is
      * included only for an OPERATOR (T11 C1).
+     * <p>
+     * T31 Item 2: the PENDING read is {@link #decideEntity}'s own query, {@code valid_to IS NULL}
+     * included, because the batch has to be the set the decision decides. A PENDING row whose
+     * {@code valid_to} is already stamped (a row a re-proposal or an earlier decision closed) is
+     * skipped by the decision, so listing it on the card would report a decision the click does not
+     * make — the same under-reporting M1 fixed, one predicate later. The ACTIVE and RETIRED variants
+     * are history views rather than batches and keep the unfiltered query: a RETIRED row always
+     * carries {@code valid_to}, so the decision predicate would empty that read.
      */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposalsForEntity(FactStatus status, UUID entityId, MemoryActor actor) {
@@ -163,8 +171,11 @@ public class MemoryProposalService {
         }
         FactStatus target = status == null ? FactStatus.PENDING : status;
         boolean operator = actor != null && actor.type() == MemoryActorType.OPERATOR;
+        List<MemoryFact> rows = target == FactStatus.PENDING
+                ? safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, target))
+                : safe(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(entityId, target));
         List<MemoryProposalView> batch = new ArrayList<>();
-        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(entityId, target))) {
+        for (MemoryFact fact : rows) {
             if (fact != null) {
                 batch.add(MemoryProposalView.fromFact(fact));
             }

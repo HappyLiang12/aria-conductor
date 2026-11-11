@@ -460,7 +460,14 @@ function RuntimePane() {
       void queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
-    onError: (err: unknown) => setApplyError(err),
+    onError: (err: unknown) => {
+      setApplyError(err);
+      // The confirmation is a modal with its own full-screen overlay, so a
+      // notice rendered in this pane sits behind it: the operator's only
+      // visible outcome was an unchanged dialog. Closing it puts the failure
+      // (refusal or fault) in front of the operator, in the pane it concerns.
+      setConfirmOpen(false);
+    },
   });
 
   const canApply = coreId !== '' && mode !== '';

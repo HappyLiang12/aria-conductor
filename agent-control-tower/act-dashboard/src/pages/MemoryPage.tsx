@@ -95,6 +95,14 @@ export function MemoryPage() {
   // A refused memory mutation is an authority problem: it renders the
   // operator-session notice instead of a retry line or a toast.
   const [refusal, setRefusal] = useState<{ error: unknown; action: string } | null>(null);
+  // The create dialog has its own refusal slot. The page-level one renders
+  // under the dialog's `position: fixed; z-index: 2000` overlay, so a refused
+  // create would be invisible: the operator would see a dialog that silently
+  // did nothing. This one renders inside the dialog, beside the form they are
+  // still filling in.
+  const [createRefusal, setCreateRefusal] = useState<{ error: unknown; action: string } | null>(
+    null,
+  );
   const [retireTarget, setRetireTarget] = useState<MemoryEntityView | null>(null);
   const [retireFactTarget, setRetireFactTarget] = useState<MemoryFactView | null>(null);
   const [pendingDecision, setPendingDecision] = useState<{
@@ -142,13 +150,15 @@ export function MemoryPage() {
       setShowCreate(false);
       setForm(EMPTY_FORM);
       setFormError(null);
+      setCreateRefusal(null);
       setRefusal(null);
       setToast('Entity created');
     },
     onError: (err: unknown) => {
       if (isOperatorRejection(err)) {
+        // In the dialog, not on the page: the dialog stays open over it.
         setFormError(null);
-        setRefusal({ error: err, action: 'Creating a memory entity' });
+        setCreateRefusal({ error: err, action: 'Creating a memory entity' });
         return;
       }
       setFormError(apiErrorMessage(err, 'The entity was not created — retry.'));
@@ -227,6 +237,7 @@ export function MemoryPage() {
       return;
     }
     setFormError(null);
+    setCreateRefusal(null);
     createMut.mutate(form);
   };
 
@@ -258,7 +269,13 @@ export function MemoryPage() {
           >
             ↻ Refresh
           </button>
-          <button className="btn primary" onClick={() => setShowCreate(true)}>
+          <button
+            className="btn primary"
+            onClick={() => {
+              setCreateRefusal(null);
+              setShowCreate(true);
+            }}
+          >
             + New Entity
           </button>
         </div>
@@ -589,6 +606,16 @@ export function MemoryPage() {
                   <option value="RESTRICTED">Restricted</option>
                 </select>
               </div>
+              {createRefusal && (
+                <ErrorNotice
+                  presented={presentError(
+                    createRefusal.error,
+                    'The memory change was refused.',
+                  )}
+                  operatorSession
+                  actionLabel={createRefusal.action}
+                />
+              )}
               {formError && (
                 <div className="error-text" role="alert">
                   {formError}
@@ -598,7 +625,14 @@ export function MemoryPage() {
                 <button type="submit" className="btn primary" disabled={createMut.isPending}>
                   {createMut.isPending ? 'Creating…' : 'Create entity'}
                 </button>
-                <button type="button" className="btn" onClick={() => setShowCreate(false)}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setCreateRefusal(null);
+                    setShowCreate(false);
+                  }}
+                >
                   Cancel
                 </button>
               </div>

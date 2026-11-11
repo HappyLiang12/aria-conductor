@@ -394,6 +394,13 @@ public class MemoryCommandService {
             throw new MemoryConflictException("fact " + factId + " moved from the expected version "
                     + command.expectedVersion() + " to " + current.getVersion() + "; re-read before superseding");
         }
+        // T34 Item 1 (P2): a supersede opens a fresh ACTIVE value, so it is a producer of current
+        // memory and owes the same dependent-read guard an addFact owes (T29 Item 2). Without it a
+        // fact whose parent was retired or merged gained an ACTIVE value no read path can see —
+        // recall matches ACTIVE entities only, the context contributor reads through recall, the
+        // default list is ACTIVE-only, and a MERGED source is not reachable from its survivor.
+        // Before any side effect: before the slot claim, the retire and the insert.
+        requireEntityForFact(current.getEntityId(), FactStatus.ACTIVE);
         if (origin == MemoryOrigin.RUN) {
             requireStructuralKey(current.getFactKey());
             requireProvenance(command.sourceRef());
@@ -800,10 +807,22 @@ public class MemoryCommandService {
     private MemoryEntity requireEntityForFact(UUID entityId, FactStatus factStatus) {
         MemoryEntity entity = requireEntity(entityId);
         if (factStatus == FactStatus.ACTIVE && entity.getStatus() != EntityStatus.ACTIVE) {
-            String reason = entity.getStatus() == EntityStatus.PENDING
-                    ? "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved"
-                    : "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
-                    + "no read path can see, and a MERGED source is not reachable from its survivor";
+            // T34 Item 2 (P3): one "else" branch told a RETIRED parent about a merge that never
+            // happened. A refusal names the case it found and the action that resolves it.
+            String reason;
+            if (entity.getStatus() == EntityStatus.PENDING) {
+                reason = "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved";
+            } else if (entity.getStatus() == EntityStatus.RETIRED) {
+                reason = "is RETIRED; an ACTIVE fact cannot be attached to a retired parent that no read "
+                        + "path can see; re-propose the entity and approve it before writing the fact";
+            } else if (entity.getStatus() == EntityStatus.MERGED) {
+                reason = "is MERGED; an ACTIVE fact cannot be attached to a merged source that no read "
+                        + "path can see; write the fact on the surviving entity"
+                        + (entity.getMergedInto() == null ? "" : " " + entity.getMergedInto());
+            } else {
+                reason = "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
+                        + "no read path can see";
+            }
             throw new MemoryConflictException("entity " + entityId + " " + reason);
         }
         return entity;

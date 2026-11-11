@@ -109,6 +109,11 @@ class AriaPromptContributorTest {
      * T29 Item 7 (P3): the pinned sentence used to promise that one call always proposes the
      * entity and its first fact together, which is false when the canonical key already exists —
      * then only the fact is proposed. The pin now holds the corrected meaning for both cases.
+     * <p>
+     * T34 Item 4 (P3): the corrected sentence still promised a fact-only shape for a key that
+     * exists, but a RETIRED or MERGED key is re-proposed as an entity row too (the command path
+     * resets the identity row to PENDING and publishes the card again), so the operator got an
+     * entity card the prompt never predicted. The pin now covers all three key states.
      */
     @Test
     void policyTellsAriaToRecallAndProposeDurableFacts() {
@@ -123,7 +128,9 @@ class AriaPromptContributorTest {
         assertThat(flat).contains("propose it with remember_fact");
         assertThat(flat).contains("pass kind and canonicalKey (e.g. person / person:happy)");
         assertThat(flat).contains("one call proposes the entity and its first fact together for a new key");
-        assertThat(flat).contains("and only the fact when the key already exists");
+        assertThat(flat).contains("only the fact when the key is active or pending");
+        assertThat(flat).contains("and the entity again when the key was retired or merged");
+        assertThat(flat).doesNotContain("only the fact when the key already exists");
         assertThat(flat).doesNotContain("one call proposes the new entity and its first fact together");
         assertThat(flat).contains("Never claim a fact is remembered, saved or known until it is approved");
         assertThat(flat).contains("say it is waiting for the operator");

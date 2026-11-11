@@ -44,7 +44,12 @@ export function ErrorNotice({ presented, className, operatorSession, actionLabel
 }) {
   const action = presented.action;
   if (operatorSession && presented.operatorRejected) {
-    return <OperatorSessionNotice actionLabel={actionLabel ?? 'This action'} />;
+    return (
+      <OperatorSessionNotice
+        actionLabel={actionLabel ?? 'This action'}
+        crossOrigin={presented.crossOriginRejected}
+      />
+    );
   }
   return (
     <div

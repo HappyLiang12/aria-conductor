@@ -70,6 +70,7 @@ describe('ErrorNotice operator-session refusal', () => {
     text: string;
     action?: { tab: 'llm' | 'runtime' | 'config'; label: string } | { path: string; label: string };
     operatorRejected?: true;
+    crossOriginRejected?: true;
   }) {
     render(
       <MemoryRouter initialEntries={['/runs']}>
@@ -121,5 +122,24 @@ describe('ErrorNotice operator-session refusal', () => {
     expect(notice).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
     // The advice that cannot work must be gone, not merely softened.
     expect(notice).not.toHaveTextContent(/reload the page and retry/i);
+  });
+
+  // Task 37 / Item 2: a 403 carrying the cross-origin marker is not an authority
+  // refusal. Telling the operator to "grant access" for a forged cross-site page
+  // is advice about the wrong problem, so that sentence must not appear.
+  it('renders the cross-site remedy, not the operator-grant remedy, for a cross-origin 403', () => {
+    renderOperatorNotice({
+      text: 'Cross-origin operator mutation rejected',
+      operatorRejected: true,
+      crossOriginRejected: true,
+    });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/cross-site request/i);
+    expect(notice).toHaveTextContent(/origin the backend trusts/i);
+    expect(notice).not.toHaveTextContent(/must grant access/i);
+    expect(notice).not.toHaveTextContent(/loopback requests are the operator automatically/i);
+    // Still the one notice, still saying nothing was changed.
+    expect(notice).toHaveTextContent(/nothing was changed by the refused call/i);
   });
 });

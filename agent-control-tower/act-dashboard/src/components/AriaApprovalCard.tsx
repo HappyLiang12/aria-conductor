@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { decideApproval } from '../api/approvals';
-import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
-import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { OPERATOR_REMEDY_COPY, crossSiteSessionMessage } from '../api/errorPresentation';
+import {
+  apiErrorMessage,
+  applyOperatorHeaders,
+  isCrossOriginRejection,
+  isOperatorRejection,
+} from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
 export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
@@ -54,7 +59,12 @@ export function AriaApprovalCard({
         return;
       }
       setError(
-        isOperatorRejection(err)
+        isCrossOriginRejection(err)
+          // Task 37: a 403 carrying the cross-origin marker is not an authority
+          // refusal — the request came from a page the backend does not trust, so
+          // "the operator must grant access" would answer the wrong question.
+          ? `${crossSiteSessionMessage('Approving this ask')} Nothing was decided by the refused call.`
+          : isOperatorRejection(err)
           // Same posture as the Review panels: say the refusal, say what the
           // operator can do about it, and say that nothing was decided. The
           // remedy is the shared copy (Task 35) — a reload cannot restore an

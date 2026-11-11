@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { decideMemoryProposal, listMemoryProposals, type MemoryProposalDecision, type MemoryProposalView } from '../api/memory';
-import { OPERATOR_REMEDY_COPY, operatorSessionMessage } from '../api/errorPresentation';
-import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { OPERATOR_REMEDY_COPY, crossSiteSessionMessage, operatorSessionMessage } from '../api/errorPresentation';
+import {
+  apiErrorMessage,
+  applyOperatorHeaders,
+  isCrossOriginRejection,
+  isOperatorRejection,
+} from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
 /** Task 4's in-panel proposal item; this card adds no contract of its own. */
@@ -186,7 +191,11 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // settled item wins, so the panel stays the single owner of restored history.
   const [local, setLocal] = useState<ProposalSettledState | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
-  const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
+  const [error, setError] = useState<{
+    text: string;
+    operatorRejected: boolean;
+    crossOriginRejected: boolean;
+  } | null>(null);
   // The entity whose pending proposal owns this card's decision, when the server
   // refused it for that reason. Empty string: the marker matched, the id did not.
   const [blockedEntityId, setBlockedEntityId] = useState<string | null>(null);
@@ -246,6 +255,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
               'The pending facts this decision also decides could not be re-read, so nothing was decided — retry.',
             ),
             operatorRejected: isOperatorRejection(err),
+            crossOriginRejected: isCrossOriginRejection(err),
           });
           return;
         }
@@ -292,6 +302,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       setError({
         text: apiErrorMessage(err, 'The proposal was not decided — retry.'),
         operatorRejected: isOperatorRejection(err),
+        crossOriginRejected: isCrossOriginRejection(err),
       });
     } finally {
       setInFlight(null);
@@ -427,7 +438,12 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           <div className="error-text" role="alert">
             {error.text}
           </div>
-          {error.operatorRejected && <OperatorSessionNotice />}
+          {error.operatorRejected && (
+            // The operator case keeps the memory-decision wording this card has
+            // always shown (T35's pin); the cross-site case names no action it
+            // cannot attribute and uses the origin remedy.
+            <OperatorSessionNotice crossOrigin={error.crossOriginRejected} />
+          )}
         </>
       )}
     </div>
@@ -443,17 +459,29 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
  * caller with no single action to name omits it and keeps the memory wording,
  * which covers the Memory page's refused reads as well as its decisions.
  *
- * The root is a `<span>` rather than a `<div>` because one caller (the
- * decide-proposal confirmation, `ConfirmDialog`) renders its message inside a
- * `<p>`, where a block element is invalid HTML. Every other caller places it as
- * the only child of a block container, so it still occupies its own line.
+ * `crossOrigin` selects the cross-site remedy instead: the 403 said the request
+ * came from a page the backend does not trust, so the operator-session remedy
+ * would answer the wrong question. Same notice, same testid, one copy each.
+ *
+ * The root is a `<span>` with `role="status"` rather than a `<div>`: one caller
+ * (the decide-proposal confirmation, `ConfirmDialog`) renders its message inside
+ * a `<p>`, where a block element is invalid HTML, and a refusal must be
+ * announced, not merely drawn — the ordinary error path beside it is
+ * `role="alert"`. Every other caller places it as the only child of a block
+ * container, so it still occupies its own line.
  */
-export function OperatorSessionNotice({ actionLabel }: { actionLabel?: string } = {}) {
+export function OperatorSessionNotice({
+  actionLabel,
+  crossOrigin,
+}: { actionLabel?: string; crossOrigin?: boolean } = {}) {
+  const text = crossOrigin
+    ? crossSiteSessionMessage(actionLabel ?? 'This change')
+    : actionLabel === undefined
+      ? `Memory decisions are operator-only. ${OPERATOR_REMEDY_COPY}`
+      : operatorSessionMessage(actionLabel);
   return (
-    <span className="ask-ctx" data-testid="operator-session-notice">
-      {actionLabel === undefined
-        ? `Memory decisions are operator-only. ${OPERATOR_REMEDY_COPY}`
-        : operatorSessionMessage(actionLabel)}{' '}
+    <span className="ask-ctx" data-testid="operator-session-notice" role="status">
+      {text}{' '}
       Nothing was changed by the refused call.
     </span>
   );

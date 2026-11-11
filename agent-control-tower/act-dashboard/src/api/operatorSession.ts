@@ -170,8 +170,53 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The server's own wording when it refuses a MUTATION for its Origin rather than
+ * for want of the operator. Three producers serve it verbatim:
+ * `OperatorSessionService.rejectCrossSiteOrigin`, its stricter
+ * `validateMutation` (cookie path), and `RunController`'s origin guard.
+ *
+ * The envelope is spec-closed (`ok`/`errorType`/`message`, both cases a 403
+ * `FORBIDDEN`), so this marker is the only discriminator — a Java lane pins it
+ * server-side.
+ */
+export const CROSS_ORIGIN_REJECTION_MARKER = 'Cross-origin operator mutation rejected';
+
+/** Why an operator-only route refused a call, when it did. */
+export type OperatorRefusalKind =
+  /** The caller is not the operator (a missing/expired/untrusted session). */
+  | 'operator'
+  /** The request came from a page whose Origin the backend does not trust. */
+  | 'cross-origin';
+
+/**
+ * Which operator refusal this error is, or null when it is not one (a fault, a
+ * network failure, an unanswered call). A 401 is always an authority refusal; a
+ * 403 is a cross-site one only when it carries the marker, because the same
+ * status also serves genuine authority refusals.
+ */
+export function operatorRefusalKind(error: unknown): OperatorRefusalKind | null {
+  const response = (error as {
+    response?: { status?: number; data?: { message?: unknown } };
+  } | undefined)?.response;
+  const status = response?.status;
+  if (status !== 401 && status !== 403) return null;
+  const message = response?.data?.message;
+  return typeof message === 'string' && message.includes(CROSS_ORIGIN_REJECTION_MARKER)
+    ? 'cross-origin'
+    : 'operator';
+}
+
 /** True when an operator-only route refused the call for a missing/expired session (401/403). */
 export function isOperatorRejection(error: unknown): boolean {
-  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
-  return status === 401 || status === 403;
+  return operatorRefusalKind(error) !== null;
+}
+
+/**
+ * True when the refusal was for the request's ORIGIN, not its authority: the page
+ * that sent it is not one the backend trusts. Still a refusal (`isOperatorRejection`
+ * is true for it), but it must not be answered with the operator-session remedy.
+ */
+export function isCrossOriginRejection(error: unknown): boolean {
+  return operatorRefusalKind(error) === 'cross-origin';
 }

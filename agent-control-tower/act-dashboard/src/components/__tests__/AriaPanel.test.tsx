@@ -1724,6 +1724,121 @@ describe('AriaPanel proposals decided elsewhere', () => {
 // trailing failure; neither behaviour was pinned. This pins the chosen one.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Task 41 Major 3: `blocked-on-entity` is a present-tense server claim ("its
+// entity ent-7 is still pending"), and nothing used to move a blocked card when
+// a later PENDING read no longer listed its row — the entity card could read
+// `approved` beside a fact card still insisting "decide the entity proposal".
+// The reconcile read already proves a departure for a pending card; it must do
+// the same for a blocked one, with the same cap rule and the same honest
+// `decided-elsewhere` state (never a fabricated approved/rejected).
+// ---------------------------------------------------------------------------
+describe('AriaPanel blocked-on-entity settlement on reconcile', () => {
+  const PARENT_PENDING_409 = {
+    response: {
+      status: 409,
+      data: {
+        ok: false,
+        errorType: 'CONFLICT',
+        message:
+          'memory fact p1 belongs to entity ent-7, which is still PENDING; decide the entity '
+          + 'proposal ent-7 to promote or retire the whole batch instead of approving one fact',
+      },
+    },
+  };
+
+  /** Mounts a PENDING inbox card, Approves it, and lands in `blocked-on-entity`. */
+  async function mountBlocked(): Promise<void> {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListMemoryProposals.mockResolvedValue([proposalRow()]);
+    mockDecideMemoryProposal.mockRejectedValue(PARENT_PENDING_409);
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await screen.findByTestId('aria-proposal-blocked-on-entity');
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute(
+      'data-state',
+      'blocked-on-entity',
+    );
+  }
+
+  function blockedCard(): HTMLElement {
+    const card = screen
+      .getAllByTestId('aria-proposal-card')
+      .find((el) => el.getAttribute('data-proposal-id') === 'p1');
+    expect(card).toBeDefined();
+    return card as HTMLElement;
+  }
+
+  it('settles a blocked card the PENDING inbox no longer lists as decided-elsewhere', async () => {
+    await mountBlocked();
+
+    // The entity proposal was approved (its card is gone from this snapshot
+    // because this restore is the global inbox): the fact row left PENDING too.
+    mockListMemoryProposals.mockResolvedValue([]);
+    const reconcilesBefore = mockGetTimeline.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesBefore);
+    // Honest settlement: the bounded inbox cannot say approved vs rejected, so
+    // the card must never fabricate either verdict…
+    expect(blockedCard()).toHaveAttribute('data-state', 'decided-elsewhere');
+    expect(within(blockedCard()).getByTestId('aria-proposal-decided-elsewhere')).toHaveTextContent(
+      /no longer pending/i,
+    );
+    expect(screen.queryByText(/now active/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/will never become memory/i)).not.toBeInTheDocument();
+    // …and the stale present-tense claim is gone (no contradiction with the
+    // entity card the operator just approved).
+    expect(screen.queryByTestId('aria-proposal-blocked-on-entity')).not.toBeInTheDocument();
+    expect(screen.queryByText(/is still pending/i)).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('keeps a blocked card while the PENDING inbox still lists its row', async () => {
+    await mountBlocked();
+
+    // Positive control: the entity proposal is still undecided, so the row is
+    // still PENDING and the card's claim is still true.
+    mockListMemoryProposals.mockResolvedValue([proposalRow()]);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(blockedCard()).toHaveAttribute('data-state', 'blocked-on-entity');
+    expect(within(blockedCard()).getByTestId('aria-proposal-blocked-on-entity')).toHaveTextContent(
+      /is still pending/i,
+    );
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+  });
+
+  it('does not settle a blocked card from a PENDING page that filled the cap', async () => {
+    await mountBlocked();
+
+    // p1 may simply be below the cap, so absence proves nothing here either.
+    mockListMemoryProposals.mockResolvedValue(
+      Array.from({ length: PROPOSAL_INBOX_LIMIT }, (_, i) =>
+        proposalRow({ id: `other-${i}`, entityId: 'ent-other' }),
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(blockedCard()).toHaveAttribute('data-state', 'blocked-on-entity');
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+  });
+});
+
 describe('AriaPanel retry transcript shape', () => {
   it('keeps the failed turn as history above the retried prompt', async () => {
     mockListApprovals.mockResolvedValue([]);

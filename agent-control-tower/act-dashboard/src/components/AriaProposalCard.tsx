@@ -232,7 +232,11 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
     return () => { cancelled = true; };
   }, [isBatchDecision, entityId]);
 
-  const state = local ?? item.state;
+  // The panel's item state wins once it is no longer `pending`: the reconcile
+  // settles a card the PENDING inbox no longer lists (Task 41 Major 3), and a
+  // local settle layered over it would keep a stale `blocked-on-entity` claim on
+  // screen. While the item is still pending, the card's own click result wins.
+  const state = item.state === 'pending' ? local ?? 'pending' : item.state;
 
   const decide = async (decision: MemoryProposalDecision) => {
     setInFlight(decision);

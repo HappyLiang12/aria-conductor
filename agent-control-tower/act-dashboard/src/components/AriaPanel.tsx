@@ -436,9 +436,9 @@ export function AriaPanel() {
   );
 
   /**
-   * Settles a local pending proposal a PENDING inbox read no longer lists: it
-   * was decided elsewhere (the Memory page, another operator). Left pending,
-   * the card could only 409 and would keep the composer locked behind a false
+   * Settles a local proposal a PENDING inbox read no longer lists: it was
+   * decided elsewhere (the Memory page, another operator). Left pending, the
+   * card could only 409 and would keep the composer locked behind a false
    * "still pending" copy. The inbox has no by-id outcome read and its bounded
    * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so the
    * panel does not claim a verdict — the reducer's `decided-elsewhere` state
@@ -448,6 +448,10 @@ export function AriaPanel() {
    * snapshot speaks for it", the rule the approval settle applies to a run): a
    * live frame can arrive before its row, so an empty read must not settle what
    * it has never seen. A read that failed or was refused never reaches here.
+   * `blocked-on-entity` is the exception: the 409 that produced it already said
+   * the row is PENDING, so the server itself spoke for it — and its copy is a
+   * present-tense claim ("its entity is still pending") that would otherwise
+   * contradict the entity card the operator just approved, forever.
    *
    * And only a read whose page was NOT capped can prove a departure: the inbox
    * is one bounded page (`PROPOSAL_INBOX_LIMIT`, newest first across all
@@ -472,9 +476,9 @@ export function AriaPanel() {
       const departed = pageProvablyComplete
         ? itemsRef.current.flatMap((item) =>
           item.kind === 'proposal'
-            && item.state === 'pending'
-            && confirmed.has(item.proposalId)
             && !listedIds.has(item.proposalId)
+            && (item.state === 'blocked-on-entity'
+              || (item.state === 'pending' && confirmed.has(item.proposalId)))
             ? [item.proposalId]
             : [],
         )

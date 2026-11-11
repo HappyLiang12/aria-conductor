@@ -92,8 +92,8 @@ class RunControllerTest extends WebMvcTestBase {
 
     @Test
     void getRun_serializesAnUnobservedTokenTotalAsJsonNull() throws Exception {
-        // F9: the dashboard treats null as "not reported by this core"; a real provider zero
-        // must still arrive as 0.
+        // F9/Task 7: the dashboard treats null as "not reported by this core", which is the
+        // only way it can avoid rendering a zero cost.
         UUID id = UUID.randomUUID();
         when(runService.getRun(id)).thenReturn(run(id, UUID.randomUUID(), RunStatus.COMPLETED));
 
@@ -104,6 +104,9 @@ class RunControllerTest extends WebMvcTestBase {
 
     @Test
     void getRun_serializesAGenuineReportedZero() throws Exception {
+        // Mapper-level pin: a zero total in the response must serialize as 0, never be
+        // dropped to null (a REPORTED run can carry a zero total when only the parts are
+        // positive). Task 7 classifies the source run; this test owns the JSON shape.
         UUID id = UUID.randomUUID();
         when(runService.getRun(id)).thenReturn(RunResponse.builder()
                 .id(id).agentId(UUID.randomUUID()).status(RunStatus.COMPLETED)

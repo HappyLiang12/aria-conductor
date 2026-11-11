@@ -18,6 +18,11 @@ import org.springframework.stereotype.Component;
  * repositories directly (there is no dashboard service), so this wrapper injects
  * the same repositories and returns the same DashboardSummary DTO — MCP and REST
  * stay at parity on field names and values.
+ *
+ * <p>The prompt-call repository stays injected for that wiring parity but is
+ * deliberately never read here: Task 7 (spec 5.4) moved the token burn to the runs'
+ * reported counters, and {@code DashboardToolsTest} pins that {@code findAll()} is
+ * never called on this path.
  */
 @Component
 @RequiredArgsConstructor

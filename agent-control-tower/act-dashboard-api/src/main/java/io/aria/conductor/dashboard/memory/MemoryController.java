@@ -34,6 +34,7 @@ import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import io.aria.conductor.memory.service.MemoryCommandService;
+import io.aria.conductor.memory.service.MemoryConflictException;
 import io.aria.conductor.memory.service.MemoryProposalService;
 import io.aria.conductor.memory.service.MemoryQueryService;
 import io.aria.conductor.memory.service.MemoryRecallService;
@@ -154,7 +155,23 @@ public class MemoryController {
     public ResponseEntity<MemoryEntityView> createEntity(@RequestBody CreateEntityRequest body,
                                                          HttpServletRequest request) {
         MemoryEntity entity = command.createEntity(body.toCommand(), operator(request));
-        return ResponseEntity.status(HttpStatus.CREATED).body(MemoryEntityView.from(entity));
+        MemoryEntityView view = MemoryEntityView.from(entity);
+        // For an existing non-terminal key `createEntity` returns the stored row unchanged (the
+        // re-propose path applies the fields; a new row carries them). So a request that names a
+        // display name or sensitivity the stored row does not carry created nothing and applied
+        // nothing, and answering 201 with the old row told the operator their edit had landed.
+        // The honest answer is the governed conflict — the closed CONFLICT code, no new field —
+        // that points at the route which can actually make that change.
+        boolean ignoredDisplayName = body.displayName() != null && !body.displayName().isBlank()
+                && !body.displayName().equals(view.displayName());
+        boolean ignoredSensitivity = body.sensitivity() != null
+                && !body.sensitivity().name().equals(view.sensitivity());
+        if (ignoredDisplayName || ignoredSensitivity) {
+            throw new MemoryConflictException("an entity with kind " + view.kind()
+                    + " and canonical key '" + view.canonicalKey() + "' already exists; PATCH it to "
+                    + "change its display name or sensitivity");
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(view);
     }
 
     /**

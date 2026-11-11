@@ -7,6 +7,7 @@ import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.test.WebMvcTestBase;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
@@ -18,6 +19,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -186,6 +188,55 @@ class ReportControllerAuthorityTest extends WebMvcTestBase {
                 .andExpect(status().isNoContent());
 
         verify(reportService).archive(RPT);
+    }
+
+    // ------------------------- the deliberately ungated writes: worker positive controls
+
+    /**
+     * T47 item 5. The release note promises {@code POST /generate} and {@code POST /{id}/amend}
+     * stay worker-permitted because their MCP twins {@code generate_report} / {@code amend_report}
+     * are {@code WORKER_WRITE}: a run-scoped worker calls them under a per-call approval and a
+     * one-use grant, never with an operator credential. Nothing pinned that a worker SUCCEEDS, so
+     * "ungated on purpose" could have rotted into "broken for workers" with every test still green.
+     * The worker token is live here, so adding an operator gate to either route reddens these.
+     */
+    @Test
+    void generate_workerBearerStillGenerates() throws Exception {
+        workerTokenIsLive();
+        when(reportService.generate(any(GenerateReportRequest.class)))
+                .thenReturn(sample(RPT, 1, "GENERATED"));
+
+        mvc.perform(post("/api/v1/reports/generate")
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(GenerateReportRequest.builder()
+                                .title("Sample")
+                                .description("Summarize last week")
+                                .build())))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(RPT));
+
+        verify(reportService).generate(any(GenerateReportRequest.class));
+    }
+
+    @Test
+    void amend_workerBearerStillAmends() throws Exception {
+        workerTokenIsLive();
+        when(reportService.amend(eq(RPT), any(AmendReportRequest.class)))
+                .thenReturn(sample(RPT, 2, "AMENDED"));
+
+        mvc.perform(post("/api/v1/reports/" + RPT + "/amend")
+                        .with(remote())
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(AmendReportRequest.builder()
+                                .instruction("Add critical blockers section")
+                                .build())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(2));
+
+        verify(reportService).amend(eq(RPT), any(AmendReportRequest.class));
     }
 
     /**

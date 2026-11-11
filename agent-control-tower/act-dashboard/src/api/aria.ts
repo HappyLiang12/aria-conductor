@@ -160,7 +160,13 @@ export interface MemoryProposalSignal {
 
 export interface StreamCallbacks {
   onThinking?: (runId?: string) => void;
-  onToolCall?: (name: string) => void;
+  /**
+   * A live `tool_call` frame (`runId`, `name`, `toolCallId`, `args`). `args` is
+   * the redacted text the audit row stores — rendered as received; the client
+   * does not redact again and must not log the raw value. Absent (an older
+   * backend, or a call with no input) is not an error.
+   */
+  onToolCall?: (name: string, args?: string) => void;
   onToolResult?: (name: string, result: string, ok: boolean) => void;
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
@@ -286,7 +292,9 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       cb.onThinking?.(String(p.runId ?? ''));
       break;
     case 'tool_call':
-      cb.onToolCall?.(String(p.name ?? 'tool'));
+      // The producer redacts `args` before it leaves the server (T44), so this is
+      // rendered verbatim: absent/null/blank means "no argument to show", never an error.
+      cb.onToolCall?.(String(p.name ?? 'tool'), optionalText(p.args));
       break;
     case 'tool_result':
       // `ok` is `!isError` from the core payload and is always present on the

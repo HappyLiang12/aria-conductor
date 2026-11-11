@@ -1276,6 +1276,25 @@ describe('AriaPanel live tool results', () => {
     expect(await screen.findByText(/1 tool call · 1 failed/i)).toBeInTheDocument();
   });
 
+  it('hands the live call\'s arguments to the strip', async () => {
+    // The `tool_call` frame carries the server-redacted `args`
+    // (`CoreEventTelemetry#streamSignal`). The panel used to drop them, so the
+    // expanded strip could only ever show a result, never the arguments.
+    const args = '{"path":"notes.md","content":"[REDACTED]"}';
+    mockStream.mockImplementation(async (...call: StreamArgs) => {
+      call[3]?.onThinking?.('r1');
+      call[3]?.onToolCall?.('mcp__aria-conductor__write_file', args);
+      call[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(/^1 tool call$/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /1 tool call/ }));
+    expect(screen.getByText(args)).toBeInTheDocument();
+  });
+
   it('renders a successful live tool result as ok', async () => {
     // Positive control for the case above: ok: true is still a success, so the
     // failed-count only appears when the frame said so.

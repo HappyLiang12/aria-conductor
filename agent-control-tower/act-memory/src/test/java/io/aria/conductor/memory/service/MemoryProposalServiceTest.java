@@ -200,6 +200,32 @@ class MemoryProposalServiceTest {
     }
 
     /**
+     * T47 item 3. The actorless overloads defaulted to {@code null} actor — the WORKER view —
+     * while reading, at the call site, like the whole inbox. T11 C1's rule is that a null actor is
+     * a non-operator, so the read is named for that authority and this pins what it means: the
+     * PENDING fact proposals are there (a worker must see its own work), a PENDING entity's
+     * identity is not. Re-pointing the default at the operator view fails this test.
+     */
+    @Test
+    void theWorkerNamedReadIsTheNonOperatorViewNotTheWholeInbox() {
+        MemoryEntity entityProposal = pendingEntity(UUID.randomUUID());
+        MemoryFact ownFact = fact(UUID.randomUUID(), "timezone", FactStatus.PENDING, OLD.plusSeconds(10));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(ownFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(entityProposal));
+
+        List<MemoryProposalView> inbox = proposals.listWorkerProposals(FactStatus.PENDING);
+
+        assertThat(inbox).extracting(MemoryProposalView::subjectType)
+                .as("the worker's own fact proposal, and no PENDING entity identity")
+                .containsExactly("FACT");
+        assertThat(inbox).extracting(MemoryProposalView::factKey).containsExactly("timezone");
+    }
+
+    /**
      * M1 (UI surface review). The ENTITY card filtered ONE 50-row page of the merged global inbox
      * client-side, so with more than 50 PENDING facts across entities an entity's own batch fell
      * off the page and the card said "adding the entity alone" while {@code decideEntity} promoted
@@ -481,7 +507,7 @@ class MemoryProposalServiceTest {
         when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
                 .thenReturn(List.of(pendingRelation));
 
-        List<MemoryProposalView> pending = proposals.listProposals(FactStatus.PENDING);
+        List<MemoryProposalView> pending = proposals.listWorkerProposals(FactStatus.PENDING);
 
         assertThat(pending).extracting(MemoryProposalView::subjectType)
                 .containsExactly("FACT", "RELATION");
@@ -511,7 +537,7 @@ class MemoryProposalServiceTest {
         when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
                 .thenReturn(pendingRelations);
 
-        List<MemoryProposalView> inbox = proposals.listProposals(null);
+        List<MemoryProposalView> inbox = proposals.listWorkerProposals(null);
 
         assertThat(inbox).as("the inbox page is capped").hasSize(MemoryProposalService.INBOX_LIMIT);
         assertThat(inbox).extracting(MemoryProposalView::createdAt)
@@ -800,7 +826,7 @@ class MemoryProposalServiceTest {
         when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
                 .thenReturn(List.of());
 
-        assertThat(proposals.listProposals(null))
+        assertThat(proposals.listWorkerProposals(null))
                 .extracting(MemoryProposalView::status)
                 .containsExactly("PENDING");
     }

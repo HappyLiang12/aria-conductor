@@ -25,7 +25,14 @@ export type PanelItem =
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
   | { kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string }
   | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired' }
-  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' }
+  /**
+   * `decided-elsewhere` is the proposal's third settled state: a PENDING inbox
+   * read no longer listed it. The inbox is a bounded page with no by-id outcome
+   * read, so it cannot say whether the departure was an approval, a rejection,
+   * or a later retirement — the card says "decided elsewhere" instead of
+   * inventing a verdict. It is settled for gating (see `hasUnansweredCard`).
+   */
+  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' }
   | { kind: 'queued'; id: string; runIds: string[] };
 export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
@@ -51,7 +58,13 @@ export type PanelEvent =
   | { type: 'waitingInput'; approvalId: string; runId: string; question: string }
   | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired' }
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
-  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' }
+  /**
+   * `decided-elsewhere` settles a proposal the PENDING inbox no longer lists.
+   * It is NOT a verdict: the bounded inbox cannot tell an approval from a
+   * rejection, so a caller that only knows "it left the PENDING page" must use
+   * this state and the card will say so.
+   */
+  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' | 'decided-elsewhere' }
   | { type: 'queuedRuns'; runIds: string[] }
   | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean; now?: number };
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
@@ -417,6 +430,18 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
   }
 
   for (const proposal of event.proposals) {
+    // CONVERSATION SCOPE — KNOWN GAP (task 20 / ui-surface-review m3). This list
+    // is the GLOBAL PENDING inbox: `GET /api/v1/memory/proposals?status=PENDING`
+    // is not conversation-scoped and `MemoryProposalView` carries no conversation
+    // or run field, so unlike the approvals loop above (`runIds.has(...)`) there
+    // is nothing to guard on here: a proposal raised in another conversation is
+    // restored into this transcript. The key must come from the server, in this
+    // order: persist the raising run on the proposal row (`MemoryTools.java:117-124`
+    // already holds `ActorPrincipal.runId()` at the write, `MemoryCommandService`
+    // `addFact` is the write path), expose it on
+    // `act-memory/.../dto/MemoryProposalView.java`, mirror it in
+    // `src/api/memory.ts` (`MemoryProposalView`) and in `MemoryProposalSummary`
+    // below, and this loop becomes `if (!runIds.has(proposal.runId)) continue;`.
     if (proposalIds.has(proposal.id)) continue;
     proposalIds.add(proposal.id);
     items.push({

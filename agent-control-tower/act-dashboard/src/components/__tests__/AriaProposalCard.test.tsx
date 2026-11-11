@@ -248,6 +248,34 @@ describe('AriaProposalCard', () => {
     expect(within(batch).queryByText(/adds the entity alone/i)).not.toBeInTheDocument();
   });
 
+  // Task 16 settled a proposal the PENDING inbox no longer lists, but the reducer
+  // had no state for it, so the card could not say why it settled — and any
+  // non-pending state rendered as "Rejected". The bounded inbox cannot tell an
+  // approval from a rejection, so the card must say "decided elsewhere" and
+  // never invent a verdict.
+  it('renders a proposal decided elsewhere honestly, never as approved or rejected', () => {
+    render(<AriaProposalCard item={proposal({ state: 'decided-elsewhere' })} onSettled={vi.fn()} />);
+
+    const notice = screen.getByTestId('aria-proposal-decided-elsewhere');
+    expect(notice).toHaveTextContent(/no longer pending/i);
+    expect(notice).toHaveTextContent(/cannot say/i);
+    // No invented verdict…
+    expect(screen.queryByText(/will never become memory/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/now active/i)).not.toBeInTheDocument();
+    // …and no control that could only 409.
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+  });
+
+  it('does not read an entity batch for a proposal already decided elsewhere', () => {
+    render(<AriaProposalCard item={entityItem({ state: 'decided-elsewhere' })} onSettled={vi.fn()} />);
+
+    expect(listMemoryProposals).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('proposal-batch')).not.toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
+  });
+
   it('does not read the proposals inbox for a single fact', () => {
     render(<AriaProposalCard item={proposal()} onSettled={vi.fn()} />);
 

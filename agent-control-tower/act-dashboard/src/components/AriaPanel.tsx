@@ -48,8 +48,12 @@ function turnFailureReason(errorDetail?: StreamError): string | null {
 /** Prefix the backend's synthetic failed-turn timeline entry (A1) carries. */
 const FAILED_TURN_CONTENT_PREFIX = '回合執行失敗：';
 
-/** No proposal has been decided elsewhere in this conversation. */
-const NO_PROPOSAL_IDS: ReadonlySet<string> = new Set();
+/**
+ * `MemoryProposalService.INBOX_LIMIT`: the PENDING proposal inbox is ONE bounded
+ * newest-first page across all entities, so a full page cannot prove that a
+ * proposal is absent from it.
+ */
+const PROPOSAL_INBOX_LIMIT = 50;
 
 /**
  * A failed turn's synthetic timeline entry is appended the moment the run turns
@@ -313,33 +317,19 @@ export function AriaPanel() {
   // panel's business when its run is one of them (a single-conversation panel
   // must not render another conversation's ask).
   const conversationRunIdsRef = useRef<Set<string>>(new Set());
-  // Proposals a later PENDING inbox read no longer listed, keyed by the
-  // conversation they were seen in: they were decided elsewhere (the Memory
-  // page, another operator). The inbox has no by-id outcome read, so the panel
-  // says "decided elsewhere" instead of inventing a verdict. Keying by
-  // conversation means Clear reopens nothing stale.
-  const [decidedElsewhere, setDecidedElsewhere] = useState<{ conversationId: string; ids: ReadonlySet<string> }>(
-    { conversationId: '', ids: new Set() },
-  );
   // Proposal ids a PENDING inbox read has actually listed: only those may be
   // settled, the rule the approval settle below applies to a run. A live frame
   // can precede its rows, so an empty read must not settle what it never saw.
+  // The settled card itself lives in the reducer (`decided-elsewhere`), keyed by
+  // conversation, so Clear reopens nothing stale.
   const confirmedProposalIdsRef = useRef<{ conversationId: string; ids: Set<string> }>(
     { conversationId: '', ids: new Set() },
   );
 
   const items = state.items;
-  const decidedElsewhereIds = decidedElsewhere.conversationId === state.conversationId
-    ? decidedElsewhere.ids
-    : NO_PROPOSAL_IDS;
-  // A proposal decided elsewhere is settled for gating: its card becomes an
-  // honest notice without decision controls, so it must not lock the composer.
-  const gated = hasUnansweredCard(decidedElsewhereIds.size === 0 ? state : {
-    ...state,
-    items: state.items.filter(
-      (item) => !(item.kind === 'proposal' && decidedElsewhereIds.has(item.proposalId)),
-    ),
-  });
+  // A proposal is settled as `decided-elsewhere` inside the state, so it is no
+  // longer `pending` and cannot lock the composer.
+  const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
   // The latest transcript for the reconcile's settle step: a reconcile resolves
@@ -400,39 +390,55 @@ export function AriaPanel() {
    * was decided elsewhere (the Memory page, another operator). Left pending,
    * the card could only 409 and would keep the composer locked behind a false
    * "still pending" copy. The inbox has no by-id outcome read and its bounded
-   * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so
-   * the panel does not claim a verdict — the card says "decided elsewhere".
+   * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so the
+   * panel does not claim a verdict — the reducer's `decided-elsewhere` state
+   * makes the card say exactly that.
    *
    * Only a proposal a PENDING read has actually listed is settle-able ("the
    * snapshot speaks for it", the rule the approval settle applies to a run): a
    * live frame can arrive before its row, so an empty read must not settle what
    * it has never seen. A read that failed or was refused never reaches here.
+   *
+   * And only a read whose page was NOT capped can prove a departure: the inbox
+   * is one bounded page (`PROPOSAL_INBOX_LIMIT`, newest first across all
+   * entities), so a still-pending proposal can be pushed below it and read as
+   * gone. A capped page therefore confirms what it lists and settles nothing —
+   * a false "decided elsewhere" would take the operator's decision away from a
+   * proposal that is still pending.
+   *
+   * Residual, NOT fixable on this side (task 16, disclosed): a live proposal
+   * whose row commits after the last PENDING read and which is then decided
+   * elsewhere before any later read lists it is never "spoken for", so it stays
+   * pending — the same race the approval path has, and a bounded read cannot
+   * distinguish it from a row that has not landed yet.
    */
   const settleDepartedProposals = useCallback(
-    (targetConversationId: string, listed: MemoryProposalSummary[]) => {
+    (targetConversationId: string, listed: MemoryProposalSummary[], pageProvablyComplete: boolean) => {
       if (conversationIdRef.current !== targetConversationId) return;
       const confirmed = confirmedProposalIdsRef.current.conversationId === targetConversationId
         ? confirmedProposalIdsRef.current.ids
         : new Set<string>();
       const listedIds = new Set(listed.map((proposal) => proposal.id));
-      const departed = itemsRef.current.flatMap((item) =>
-        item.kind === 'proposal'
-          && item.state === 'pending'
-          && confirmed.has(item.proposalId)
-          && !listedIds.has(item.proposalId)
-          ? [item.proposalId]
-          : [],
-      );
+      const departed = pageProvablyComplete
+        ? itemsRef.current.flatMap((item) =>
+          item.kind === 'proposal'
+            && item.state === 'pending'
+            && confirmed.has(item.proposalId)
+            && !listedIds.has(item.proposalId)
+            ? [item.proposalId]
+            : [],
+        )
+        : [];
       confirmedProposalIdsRef.current = {
         conversationId: targetConversationId,
         ids: new Set([...confirmed, ...listedIds]),
       };
       if (departed.length === 0) return;
-      setDecidedElsewhere((prev) => {
-        const ids = new Set(prev.conversationId === targetConversationId ? prev.ids : []);
-        for (const proposalId of departed) ids.add(proposalId);
-        return { conversationId: targetConversationId, ids };
-      });
+      for (const proposalId of departed) {
+        // The state, not a local set: the card says why it settled and the item
+        // stops gating because it is no longer `pending`.
+        dispatch({ type: 'proposalSettled', proposalId, state: 'decided-elsewhere' });
+      }
     },
     [],
   );
@@ -449,7 +455,7 @@ export function AriaPanel() {
    * re-delivered, and the reducer's merge never reopens a settled card. A read
    * that answers also settles a local pending proposal it no longer lists (a
    * decision taken elsewhere); a refused or failed read proves nothing and
-   * settles none of them.
+   * settles none of them, and neither does a page that hit the inbox cap.
    */
   const reconcile = useCallback(async (targetConversationId: string) => {
     const timeline = await getConversationTimeline(targetConversationId);
@@ -467,9 +473,12 @@ export function AriaPanel() {
     }
     let proposals: MemoryProposalSummary[] = [];
     let proposalsListed = false; // only a PENDING read that actually answered may settle a proposal
+    let proposalPageComplete = false; // only a page below the cap is the whole inbox
     try {
-      proposals = proposalSummaries(await listMemoryProposals('PENDING'));
+      const rows = await listMemoryProposals('PENDING');
+      proposals = proposalSummaries(rows);
       proposalsListed = true;
+      proposalPageComplete = rows.length < PROPOSAL_INBOX_LIMIT;
     } catch (err) {
       if (!isOperatorRejection(err)) console.warn('[Aria] pending-proposal reconcile failed:', err);
       proposals = [];
@@ -482,7 +491,7 @@ export function AriaPanel() {
     const queued = await queuedRunIds(timeline, activeRunIdRef.current);
     if (conversationIdRef.current !== targetConversationId) return;
     dispatch({ type: 'queuedRuns', runIds: queued });
-    if (proposalsListed) settleDepartedProposals(targetConversationId, proposals);
+    if (proposalsListed) settleDepartedProposals(targetConversationId, proposals, proposalPageComplete);
     if (!pendingListed) return;
     await settleDepartedAsks(targetConversationId, approvals, runIds);
   }, [settleDepartedAsks, settleDepartedProposals]);
@@ -1226,28 +1235,9 @@ export function AriaPanel() {
                 // it and settles the item, so one decision renders one settlement.
                 // A pending proposal counts toward `hasUnansweredCard`, so it must
                 // be drawn with its own decision controls — gating the composer on
-                // a card the operator cannot act on is an invisible lock.
-                if (decidedElsewhereIds.has(item.proposalId)) {
-                  // Decided on the Memory page or by another operator. The inbox
-                  // cannot say whether it was approved or rejected, so the panel
-                  // says so and drops the controls that could only 409.
-                  return (
-                    <div
-                      key={item.id}
-                      className="ask-card"
-                      data-testid="aria-proposal-decided-elsewhere"
-                      data-proposal-id={item.proposalId}
-                    >
-                      <div className="ask-q">Memory proposal decided elsewhere</div>
-                      <div className="ask-ctx" role="status">
-                        This proposal is no longer pending — it was decided outside this
-                        panel (the Memory page or another operator). The inbox cannot say
-                        whether it was approved or rejected; open the Memory page to see
-                        its outcome.
-                      </div>
-                    </div>
-                  );
-                }
+                // a card the operator cannot act on is an invisible lock. A
+                // `decided-elsewhere` item renders the same card, which says why it
+                // settled and drops the controls that could only 409.
                 return (
                   <AriaProposalCard
                     key={item.id}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, vi, type Mock } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AriaPanel from '../AriaPanel';
@@ -1429,8 +1429,13 @@ describe('AriaPanel proposals decided elsewhere', () => {
     expect(settled).toHaveTextContent(/no longer pending/i);
     // Honest about what the surface cannot say.
     expect(settled).toHaveTextContent(/cannot say/i);
-    expect(screen.queryByTestId('aria-proposal-card')).not.toBeInTheDocument();
+    // The card stays in the transcript to say WHY it settled, in a state of its
+    // own — the reducer's `decided-elsewhere`, never an invented verdict.
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    expect(screen.queryByText(/will never become memory/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/now active/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
   });
@@ -1520,7 +1525,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
       window.dispatchEvent(new Event('focus'));
     });
     await act(async () => {});
-    expect(screen.getByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
 
     // Then it is decided elsewhere: the next read no longer lists it.
     mockListMemoryProposals.mockResolvedValue([]);
@@ -1530,8 +1535,39 @@ describe('AriaPanel proposals decided elsewhere', () => {
     await act(async () => {});
 
     expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
-    expect(screen.queryByTestId('aria-proposal-card')).not.toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
+  });
+
+  // Task 16's first disclosed limit: the PENDING inbox is ONE bounded page
+  // (`MemoryProposalService.INBOX_LIMIT`), so a proposal can fall off it while it
+  // is still pending. A capped read therefore cannot prove a departure, and the
+  // panel must not claim "decided elsewhere" for a proposal it can still see.
+  it('does not call a proposal decided elsewhere when the PENDING page was capped', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // A full page of OTHER still-pending proposals: this one may simply be below it.
+    mockListMemoryProposals.mockResolvedValue(
+      Array.from({ length: 50 }, (_, i) => proposalRow({ id: `other-${i}`, entityId: 'ent-other' })),
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    // p1 is the proposal this test cares about (the page also lists 50 others —
+    // the restore is not conversation-scoped yet, m3): it is still pending.
+    const card = screen.getAllByTestId('aria-proposal-card')
+      .find((el) => el.getAttribute('data-proposal-id') === 'p1');
+    expect(card).toHaveAttribute('data-state', 'pending');
+    // Still the operator's to decide, and still gating: the panel cannot prove it left.
+    expect(within(card as HTMLElement).getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
   });
 });
 

@@ -386,6 +386,67 @@ class RunServiceTest {
         assertThat(responses).extracting(RunResponse::getTotalTokensUsed).containsExactly(null, 150L);
     }
 
+    // Task 7 / spec 5.4 (decision B2): a run that reported nothing is NOT_REPORTED,
+    // never a fabricated zero. The three classifications are pinned exactly.
+
+    @Test
+    void anAllZeroUsageReportIsNotReportedRatherThanMeasured() {
+        Run run = TestDataBuilder.aRun().withTotalTokensUsed(0L).build();
+        run.setInputTokens(0L);
+        run.setOutputTokens(0L);
+        assertThat(RunService.usageStateOf(run)).isEqualTo("NOT_REPORTED");
+    }
+
+    @Test
+    void aPositiveCountIsReported() {
+        Run run = TestDataBuilder.aRun().withTotalTokensUsed(120L).build();
+        run.setInputTokens(100L);
+        run.setOutputTokens(20L);
+        assertThat(RunService.usageStateOf(run)).isEqualTo("REPORTED");
+    }
+
+    @Test
+    void neverObservedStaysNotReported() {
+        Run run = TestDataBuilder.aRun().withTotalTokensUsed(0L).build();
+        assertThat(RunService.usageStateOf(run)).isEqualTo("NOT_REPORTED");
+    }
+
+    @Test
+    void getRun_carriesTheReportedPartsAndTheReportedState() {
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
+                .withTotalTokensUsed(120L).build();
+        run.setInputTokens(100L);
+        run.setOutputTokens(20L);
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getInputTokens()).isEqualTo(100L);
+        assertThat(response.getOutputTokens()).isEqualTo(20L);
+        assertThat(response.getTotalTokensUsed()).isEqualTo(120L);
+        assertThat(response.getUsageState()).isEqualTo("REPORTED");
+    }
+
+    @Test
+    void getRun_carriesNoNumbersForAPlaceholderReport() {
+        // The classification is only useful if the placeholder zeros are not handed to
+        // the UI as if they were a measurement.
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
+                .withTotalTokensUsed(0L).build();
+        run.setInputTokens(0L);
+        run.setOutputTokens(0L);
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getInputTokens()).isNull();
+        assertThat(response.getOutputTokens()).isNull();
+        assertThat(response.getTotalTokensUsed()).isNull();
+        assertThat(response.getUsageState()).isEqualTo("NOT_REPORTED");
+    }
+
     @Test
     void getRun_throwsNotFoundWhenMissing() {
         UUID id = UUID.randomUUID();

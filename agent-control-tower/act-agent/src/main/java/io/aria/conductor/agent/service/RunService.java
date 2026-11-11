@@ -492,6 +492,8 @@ public class RunService {
     }
 
     private RunResponse toResponse(Run run, RunExecutionBinding binding) {
+        String usageState = usageStateOf(run);
+        boolean usageReported = "REPORTED".equals(usageState);
         return RunResponse.builder()
                 .id(run.getId())
                 .agentId(run.getAgentId())
@@ -499,6 +501,9 @@ public class RunService {
                 .promptSeed(run.getPromptSeed())
                 .maxIterations(run.getMaxIterations())
                 .totalTokensUsed(observedTotalTokens(run))
+                .inputTokens(usageReported ? run.getInputTokens() : null)
+                .outputTokens(usageReported ? run.getOutputTokens() : null)
+                .usageState(usageState)
                 .iterationCount(run.getIterationCount())
                 .errorMessage(run.getErrorMessage())
                 .errorCode(run.getErrorCode())
@@ -514,25 +519,32 @@ public class RunService {
     }
 
     /**
+     * A real LLM call cannot consume zero input tokens, so an all-zero report is the pinned
+     * CLI's placeholder shape, not a measurement. Both columns null means nothing was ever
+     * observed. Either way the product must say NOT_REPORTED rather than show a zero cost.
+     */
+    static String usageStateOf(Run run) {
+        Long input = run.getInputTokens();
+        Long output = run.getOutputTokens();
+        boolean observed = (input != null && input > 0) || (output != null && output > 0)
+                || run.getTotalTokensUsed() > 0;
+        return observed ? "REPORTED" : "NOT_REPORTED";
+    }
+
+    /**
      * The usage value the API reports (F9/Task 7), or null when the run never reported
      * a real measurement.
      *
      * <p>The stored total is a non-null column defaulting to 0, so it cannot by
      * itself distinguish "the provider reported usage" from "no usage was ever
-     * observed". The provider-reported input/output columns (F9's telemetry) are
-     * that evidence: a zero total with both columns null means nothing was reported,
-     * and a zero total with both columns zero is the pinned CLI's placeholder shape
-     * (a real LLM call cannot consume zero input tokens), so neither is a
-     * measurement. A total the engine accounted without the provider columns stays
-     * as reported.
+     * observed". {@link #usageStateOf} is that rule: a zero total with both provider
+     * columns null means nothing was reported, and a zero total with both columns zero
+     * is the pinned CLI's placeholder shape (a real LLM call cannot consume zero input
+     * tokens), so neither is a measurement. A total the engine accounted without the
+     * provider columns stays as reported. Routing both readings through one classifier
+     * keeps the DTO's total and its usage state from ever disagreeing.
      */
     private static Long observedTotalTokens(Run run) {
-        long total = run.getTotalTokensUsed();
-        boolean nothingReported = (run.getInputTokens() == null || run.getInputTokens() == 0)
-                && (run.getOutputTokens() == null || run.getOutputTokens() == 0);
-        if (total == 0 && nothingReported) {
-            return null;
-        }
-        return total;
+        return "REPORTED".equals(usageStateOf(run)) ? run.getTotalTokensUsed() : null;
     }
 }

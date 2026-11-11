@@ -157,12 +157,14 @@ public class MemoryProposalService {
      * included only for an OPERATOR (T11 C1).
      * <p>
      * T31 Item 2: the PENDING read is {@link #decideEntity}'s own query, {@code valid_to IS NULL}
-     * included, because the batch has to be the set the decision decides. A PENDING row whose
-     * {@code valid_to} is already stamped (a row a re-proposal or an earlier decision closed) is
-     * skipped by the decision, so listing it on the card would report a decision the click does not
-     * make — the same under-reporting M1 fixed, one predicate later. The ACTIVE and RETIRED variants
-     * are history views rather than batches and keep the unfiltered query: a RETIRED row always
-     * carries {@code valid_to}, so the decision predicate would empty that read.
+     * included, so the batch equals the set the decision decides by construction. That equality must
+     * not rest on an invariant nothing enforces: no shipped writer leaves a PENDING row with a
+     * stamped {@code valid_to} — every {@code setValidTo} site pairs it with a terminal status — but
+     * the schema permits the combination, and if such a row ever appeared the card would report a
+     * decision the click does not make (the same under-reporting M1 fixed, one predicate later).
+     * The ACTIVE and RETIRED variants are history views rather than batches and keep the unfiltered
+     * query: a RETIRED row always carries {@code valid_to}, so the decision predicate would empty
+     * that read.
      */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposalsForEntity(FactStatus status, UUID entityId, MemoryActor actor) {

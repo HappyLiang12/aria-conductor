@@ -22,7 +22,7 @@ class CoreE2eApplicationTest {
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addLast(new MapPropertySource(
                 "applicationConfig: [classpath:/application.yml]",
-                Map.of("aria.runs.max-active", "6", "aria.runs.aria-reserved", "1")));
+                Map.of("aria.runs.max-active", "6", "aria.runs.aria-reserved", "3")));
 
         CoreE2eApplication.disableRunAdmissionLimit(environment);
 

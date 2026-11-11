@@ -15,6 +15,7 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -25,30 +26,40 @@ import java.util.UUID;
  * In-process admission queue for run-owned cores: at most
  * {@code aria.runs.max-active} non-Aria runs and {@code aria.runs.aria-reserved}
  * Aria runs execute at once; the rest park here as PENDING (their mirror cards
- * wait in TODO) and start FIFO when a slot frees. Slots release on every
- * terminal transition (the component listens to RunCompletedEvent), and a run
- * cancelled while queued is dequeued with a truthful ABORTED refusal.
+ * wait in TODO) and start FIFO when a slot frees. Aria runs additionally
+ * serialize per conversation: a parked Aria turn holds only its own
+ * conversation, so another conversation is admitted while it waits. Slots
+ * release on every terminal transition (the component listens to
+ * RunCompletedEvent), and a run cancelled while queued is dequeued with a
+ * truthful ABORTED refusal.
  */
 @Slf4j
 @Component
 public class RunAdmissionQueue {
 
-    private record Waiter(UUID runId, UUID agentId, Instant createdAt) {
+    private record Waiter(UUID runId, UUID agentId, Instant createdAt, String conversationId) {
         boolean aria() {
             return AriaConstants.ARIA_AGENT_ID.equals(agentId);
         }
     }
+
+    /** A held permit: which pool it belongs to and, for Aria, which conversation it occupies. */
+    private record Permit(boolean aria, String conversationId) {}
 
     private final RunAdmissionProperties properties;
     private final Object monitor = new Object();
     /** Waiting runs, per pool, FIFO by (createdAt, runId). */
     private final Deque<Waiter> workersWaiting = new ArrayDeque<>();
     private final Deque<Waiter> ariaWaiting = new ArrayDeque<>();
-    /** Runs currently holding a permit: runId -> isAria. */
-    private final Map<UUID, Boolean> active = new HashMap<>();
+    /** Runs currently holding a permit. */
+    private final Map<UUID, Permit> active = new HashMap<>();
 
     public RunAdmissionQueue(RunAdmissionProperties properties) {
         this.properties = Objects.requireNonNull(properties, "properties");
+    }
+
+    public void acquire(UUID runId, UUID agentId, Instant createdAt) {
+        acquire(runId, agentId, createdAt, null);
     }
 
     /**
@@ -56,9 +67,9 @@ public class RunAdmissionQueue {
      * {@link TaskExecutionException.Cause#ABORTED} when the run left the queue
      * (cancelled) before a slot was free.
      */
-    public void acquire(UUID runId, UUID agentId, Instant createdAt) {
+    public void acquire(UUID runId, UUID agentId, Instant createdAt, String conversationId) {
         Objects.requireNonNull(runId, "runId");
-        Waiter waiter = new Waiter(runId, agentId, createdAt != null ? createdAt : Instant.now());
+        Waiter waiter = new Waiter(runId, agentId, createdAt != null ? createdAt : Instant.now(), conversationId);
         synchronized (monitor) {
             insertSorted(waiter);
             promote();
@@ -127,13 +138,13 @@ public class RunAdmissionQueue {
 
     int activeWorkerCount() {
         synchronized (monitor) {
-            return (int) active.values().stream().filter(aria -> !aria).count();
+            return (int) active.values().stream().filter(permit -> !permit.aria()).count();
         }
     }
 
     int activeAriaCount() {
         synchronized (monitor) {
-            return (int) active.values().stream().filter(aria -> aria).count();
+            return (int) active.values().stream().filter(Permit::aria).count();
         }
     }
 
@@ -159,20 +170,50 @@ public class RunAdmissionQueue {
         monitor.notifyAll();
     }
 
-    /** Admits head waiters while their pool has capacity (called under monitor). */
+    /** Admits waiters while their pool has capacity (called under monitor). */
     private void promote() {
-        grantHead(workersWaiting, properties.getMaxActive(), false);
-        grantHead(ariaWaiting, properties.getAriaReserved(), true);
+        grantHead(workersWaiting, properties.getMaxActive());
+        grantAria();
     }
 
-    private void grantHead(Deque<Waiter> waiting, int capacity, boolean aria) {
+    private void grantHead(Deque<Waiter> waiting, int capacity) {
         // 0 = unlimited: the whole pool drains immediately.
-        while (!waiting.isEmpty() && (capacity == 0 || (aria ? activeAriaCount() : activeWorkerCount()) < capacity)) {
+        while (!waiting.isEmpty() && (capacity == 0 || activeWorkerCount() < capacity)) {
             Waiter granted = waiting.poll();
-            active.put(granted.runId(), aria);
-            log.info("Admitted run {} ({}) to the {} pool", granted.runId(),
-                    granted.aria() ? "aria" : "worker", granted.aria() ? "aria" : "worker");
+            active.put(granted.runId(), new Permit(false, null));
+            log.info("Admitted run {} to the worker pool", granted.runId());
         }
+    }
+
+    /**
+     * Aria grants skip a waiter whose conversation is already occupied instead of
+     * stopping at the head, so one parked conversation cannot block the others. A
+     * null conversation (legacy caller) is never isolated.
+     */
+    private void grantAria() {
+        int capacity = properties.getAriaReserved();
+        Iterator<Waiter> it = ariaWaiting.iterator();
+        while (it.hasNext()) {
+            if (capacity != 0 && activeAriaCount() >= capacity) {
+                return;
+            }
+            Waiter candidate = it.next();
+            if (conversationOccupied(candidate.conversationId())) {
+                continue;
+            }
+            it.remove();
+            active.put(candidate.runId(), new Permit(true, candidate.conversationId()));
+            log.info("Admitted run {} to the aria pool (conversation {})",
+                    candidate.runId(), candidate.conversationId());
+        }
+    }
+
+    private boolean conversationOccupied(String conversationId) {
+        if (conversationId == null) {
+            return false;
+        }
+        return active.values().stream()
+                .anyMatch(permit -> permit.aria() && conversationId.equals(permit.conversationId()));
     }
 
     private void insertSorted(Waiter waiter) {

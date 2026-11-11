@@ -7,10 +7,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RunAdmissionPropertiesTest {
 
     @Test
-    void defaultsAreSixWorkersPlusOneAriaSlot() {
+    void defaultsAreSixWorkersPlusThreeAriaSlots() {
         RunAdmissionProperties properties = new RunAdmissionProperties();
         assertThat(properties.getMaxActive()).isEqualTo(6);
-        assertThat(properties.getAriaReserved()).isEqualTo(1);
+        assertThat(properties.getAriaReserved()).isEqualTo(3);
     }
 
     @Test

@@ -5,8 +5,11 @@ import io.aria.conductor.agent.dto.LlmProviderResponse;
 import io.aria.conductor.agent.service.LlmProviderService;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.LlmProviderType;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.mcp.McpActorContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -20,12 +23,24 @@ import java.util.UUID;
  * apiKeyMasked only. SECURITY: the raw apiKey is never returned — in particular
  * LlmProviderService.getActiveProvider() is deliberately never called, since it
  * returns the entity with the unmasked key.
+ *
+ * <p>The five mutations (create, update, delete, activate, test) are OPERATOR_ONLY in the
+ * reviewed catalog: they move the credential the whole installation runs on. Each one
+ * re-checks the transport-resolved actor and refuses a run-scoped worker before the
+ * service is reached, naming the Providers page (spec C4/F9).
  */
 @Component
 @RequiredArgsConstructor
 public class ProviderTools implements McpTool {
 
+    static final String CREATE_LLM_PROVIDER = "create_llm_provider";
+    static final String UPDATE_LLM_PROVIDER = "update_llm_provider";
+    static final String DELETE_LLM_PROVIDER = "delete_llm_provider";
+    static final String ACTIVATE_LLM_PROVIDER = "activate_llm_provider";
+    static final String TEST_LLM_PROVIDER = "test_llm_provider";
+
     private final LlmProviderService llmProviderService;
+    private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
 
     @Tool(name = "list_llm_providers",
@@ -52,15 +67,19 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "create_llm_provider",
-            description = "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096.")
+            description = "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no provider is created.")
     public String createLlmProvider(
             @ToolParam(description = "Display name") String name,
             @ToolParam(description = "OPENAI, ANTHROPIC, AZURE or LOCAL") String type,
             @ToolParam(description = "Base URL, e.g. https://api.openai.com/v1", required = false) String baseUrl,
             @ToolParam(description = "API key (stored; never returned raw)", required = false) String apiKey,
             @ToolParam(description = "Default model name", required = false) String defaultModel,
-            @ToolParam(description = "Default max tokens (defaults to 4096)", required = false) Integer maxTokens) {
+            @ToolParam(description = "Default max tokens (defaults to 4096)", required = false) Integer maxTokens,
+            ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "adding an LLM provider", "Add it on the Providers page.");
+            toolPolicies.requireAuthority(CREATE_LLM_PROVIDER, actor);
             LlmProviderResponse created = llmProviderService.create(LlmProviderRequest.builder()
                     .name(name)
                     .type(parseType(type))
@@ -70,6 +89,8 @@ public class ProviderTools implements McpTool {
                     .maxTokens(maxTokens)
                     .build());
             return ToolResponses.ok(created);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
@@ -80,7 +101,7 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "update_llm_provider",
-            description = "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked.")
+            description = "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is unchanged.")
     public String updateLlmProvider(
             @ToolParam(description = "Provider id") UUID id,
             @ToolParam(description = "New display name", required = false) String name,
@@ -88,8 +109,12 @@ public class ProviderTools implements McpTool {
             @ToolParam(description = "New base URL", required = false) String baseUrl,
             @ToolParam(description = "New API key (stored; never returned raw)", required = false) String apiKey,
             @ToolParam(description = "New default model name", required = false) String defaultModel,
-            @ToolParam(description = "New default max tokens", required = false) Integer maxTokens) {
+            @ToolParam(description = "New default max tokens", required = false) Integer maxTokens,
+            ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "changing an LLM provider", "Edit it on the Providers page.");
+            toolPolicies.requireAuthority(UPDATE_LLM_PROVIDER, actor);
             LlmProviderRequest request = LlmProviderRequest.builder()
                     .name(name)
                     .type(type == null || type.isBlank() ? null : parseType(type))
@@ -100,6 +125,8 @@ public class ProviderTools implements McpTool {
                     .build();
             LlmProviderResponse updated = llmProviderService.update(id, request);
             return ToolResponses.ok(updated);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
@@ -110,11 +137,16 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "delete_llm_provider",
-            description = "Delete an LLM provider by id.")
-    public String deleteLlmProvider(@ToolParam(description = "Provider id") UUID id) {
+            description = "Delete an LLM provider by id. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is kept.")
+    public String deleteLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "deleting an LLM provider", "Delete it on the Providers page.");
+            toolPolicies.requireAuthority(DELETE_LLM_PROVIDER, actor);
             llmProviderService.delete(id);
             return ToolResponses.ok(Map.of("id", id.toString(), "deleted", true));
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -123,11 +155,16 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "activate_llm_provider",
-            description = "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked.")
-    public String activateLlmProvider(@ToolParam(description = "Provider id") UUID id) {
+            description = "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the active provider is unchanged.")
+    public String activateLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "activating an LLM provider", "Activate it on the Providers page.");
+            toolPolicies.requireAuthority(ACTIVATE_LLM_PROVIDER, actor);
             LlmProviderResponse activated = llmProviderService.activate(id);
             return ToolResponses.ok(activated);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
@@ -136,11 +173,16 @@ public class ProviderTools implements McpTool {
     }
 
     @Tool(name = "test_llm_provider",
-            description = "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully.")
-    public String testLlmProvider(@ToolParam(description = "Provider id") UUID id) {
+            description = "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no request is sent.")
+    public String testLlmProvider(@ToolParam(description = "Provider id") UUID id, ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "testing an LLM provider", "Test it on the Providers page.");
+            toolPolicies.requireAuthority(TEST_LLM_PROVIDER, actor);
             boolean reachable = llmProviderService.testConnection(id);
             return ToolResponses.ok(Map.of("id", id.toString(), "reachable", reachable));
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {

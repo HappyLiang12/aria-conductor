@@ -14,6 +14,17 @@ export type AriaClarificationItem = Extract<PanelItem, { kind: 'clarification' }
 export type ClarificationOutcome = Exclude<AriaClarificationItem['state'], 'pending'>;
 
 /**
+ * The backend answers 409 when the ask is no longer waiting for an answer — it
+ * expired, the run was finalized, or a concurrent answer already won
+ * (`ApprovalController.java:239-262`). That is not a transient failure and not
+ * something a retry can fix; the approval card classifies it the same way.
+ */
+function isUnsettleableAsk(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+  return status === 409;
+}
+
+/**
  * A parked question rendered in the conversation (spec A3, F1). The question
  * ships as the ask's content; the answer goes through the existing
  * `/api/v1/approvals/{id}/answer` route, which wakes the WAITING_INPUT run that
@@ -24,7 +35,7 @@ export function AriaClarificationCard({
   onSettled,
 }: {
   item: AriaClarificationItem;
-  onSettled: (state: ClarificationOutcome) => void;
+  onSettled: (state: ClarificationOutcome, reason?: string) => void;
 }) {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -41,6 +52,14 @@ export function AriaClarificationCard({
       await answerAsk(item.approvalId, { approved: true, answer: text });
       onSettled('answered');
     } catch (err) {
+      if (isUnsettleableAsk(err)) {
+        // The question can no longer be answered. T45 Item 2: say so with the
+        // backend's own wording via the settled line, instead of promising that
+        // the question is still waiting and inviting a retry that repeats the
+        // 409 forever behind a locked composer.
+        onSettled('expired', apiErrorMessage(err, 'This question is no longer waiting for an answer.'));
+        return;
+      }
       setError(
         isCrossOriginRejection(err)
           // Task 37: the cross-origin 403 is not an authority refusal; its remedy
@@ -74,6 +93,7 @@ export function AriaClarificationCard({
       {settled ? (
         <div className="ai-decision-settled">
           {item.state === 'answered' ? 'Answered' : 'Expired before an answer'}
+          {item.reason !== undefined && item.reason !== '' ? ` — ${item.reason}` : ''}
         </div>
       ) : (
         <div className="ask-actions ai-decision-actions">

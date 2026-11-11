@@ -49,6 +49,97 @@ describe('panelReducer', () => {
     expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ state: 'approved' });
   });
 
+  // T45 Item 1 (spec:229-234, decision 2): the composer gate covers a PARKED
+  // TURN — an approval or a clarification — not every undecided card. A memory
+  // proposal is decided on its own card and parks nothing, so gating on it let
+  // one conversation's undecided proposal disable another conversation's
+  // composer, because the PENDING proposal inbox is global.
+  it('does not gate the composer on a memory proposal, only on a parked ask', () => {
+    const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
+    let s = panelReducer(base, { type: 'proposalCreated', proposal });
+    expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'pending' });
+    expect(hasUnansweredCard(s)).toBe(false);
+
+    // The parked ask still gates, and only until it is settled.
+    s = panelReducer(s, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'remember_fact' });
+    expect(hasUnansweredCard(s)).toBe(true);
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'denied' });
+    expect(hasUnansweredCard(s)).toBe(false);
+
+    s = panelReducer(s, { type: 'waitingInput', approvalId: 'c1', runId: 'r1', question: 'Which repo?' });
+    expect(hasUnansweredCard(s)).toBe(true);
+    s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'answered' });
+    expect(hasUnansweredCard(s)).toBe(false);
+    // The proposal card survived all of it, still the operator's to decide.
+    expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
+  });
+
+  it('keeps the gate open when the global inbox restores another conversation\'s proposal', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'user', content: 'run my report' }), row({ role: 'assistant', content: 'done' })],
+      approvals: [],
+      proposals: [{ id: 'p-other', subjectType: 'ENTITY' as const, entityId: 'e-other', valueText: 'Acme' }],
+    });
+    expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
+  // T45 Item 3: the SSE frame carries no arguments (RunSignalSseListener), so a
+  // live ask is drawn blind and the reconcile used to skip an already-drawn id
+  // outright. Refreshing the drawn card from the PENDING snapshot is how a
+  // reconcile fills the argument summary the operator approves.
+  it('refreshes an already-drawn pending ask from the snapshot, but never a settled one', () => {
+    const timeline = [row({ role: 'user', content: 'go' })];
+    let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1', timeline,
+      approvals: [{
+        id: 'a1', runId: 'r1', status: 'PENDING', toolName: 'bash',
+        arguments: '{"command":"ls"}', riskTier: 'WRITE_LOCAL',
+      } as never],
+      proposals: [],
+    });
+    expect(s.items.filter((i) => i.kind === 'approval')).toHaveLength(1);
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({
+      args: '{"command":"ls"}', riskTier: 'WRITE_LOCAL', state: 'pending',
+    });
+
+    // The operator decided: a later snapshot may not rewrite the card's record.
+    s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'approved' });
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1', timeline,
+      approvals: [{
+        id: 'a1', runId: 'r1', status: 'PENDING', toolName: 'bash',
+        arguments: '{"command":"rm -rf /"}', riskTier: 'GLOBAL_WRITE',
+      } as never],
+      proposals: [],
+    });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({
+      state: 'approved', args: '{"command":"ls"}', riskTier: 'WRITE_LOCAL',
+    });
+  });
+
+  it('marks an ask whose arguments are still being read, and says so when they cannot be read', () => {
+    let s = panelReducer(base, {
+      type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash', argsStatus: 'reading',
+    });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ argsStatus: 'reading' });
+
+    // The read answered: the summary replaces the reading marker.
+    s = panelReducer(s, {
+      type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash', args: '{"command":"ls"}',
+    });
+    const card = s.items.find((i) => i.kind === 'approval');
+    expect(card).toMatchObject({ args: '{"command":"ls"}' });
+    expect(card).not.toHaveProperty('argsStatus');
+
+    // A read that failed is not "no arguments": the card must say it could not
+    // read them instead of drawing an empty argument list.
+    s = panelReducer(s, { type: 'approvalArgsUnreadable', approvalId: 'a1' });
+    expect(s.items.find((i) => i.kind === 'approval')).toMatchObject({ argsStatus: 'unavailable' });
+  });
+
   it('keeps a settled card visible with its reason instead of removing it', () => {
     let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'bash' });
     s = panelReducer(s, { type: 'approvalSettled', approvalId: 'a1', state: 'expired', reason: 'Auto-rejected: approval expired' });
@@ -517,10 +608,14 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(s.items.find((i) => i.kind === 'clarification')).toMatchObject({ state: 'answered' });
   });
 
-  it('gates on a pending proposal and keeps it after approval', () => {
+  // T45 Item 1 changed this pin: a pending proposal used to gate the composer,
+  // and the PENDING proposal inbox is GLOBAL, so one conversation's undecided
+  // proposal disabled another conversation's composer. The spec's gate is a
+  // parked turn (spec:229-234); the card is still the operator's to decide.
+  it('keeps a pending proposal decidable without gating the composer', () => {
     const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
     let s = panelReducer(base, { type: 'proposalCreated', proposal });
-    expect(hasUnansweredCard(s)).toBe(true);
+    expect(hasUnansweredCard(s)).toBe(false);
     expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({
       proposalId: 'p1', subjectType: 'FACT', factKey: 'timezone', valueText: 'Asia/Shanghai', state: 'pending',
     });
@@ -548,7 +643,8 @@ describe('panelReducer clarifications, proposals and queue', () => {
   it('settles a proposal decided elsewhere without claiming a verdict', () => {
     const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
     let s = panelReducer(base, { type: 'proposalCreated', proposal });
-    expect(hasUnansweredCard(s)).toBe(true);
+    // Never a gate, pending or settled (T45 Item 1).
+    expect(hasUnansweredCard(s)).toBe(false);
     // The bounded PENDING inbox cannot tell an approval from a rejection, so the
     // item settles into a state of its own rather than into either verdict.
     s = panelReducer(s, { type: 'proposalSettled', proposalId: 'p1', state: 'decided-elsewhere' });
@@ -556,7 +652,7 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(card).toMatchObject({ state: 'decided-elsewhere' });
     expect(card).not.toMatchObject({ state: 'approved' });
     expect(card).not.toMatchObject({ state: 'rejected' });
-    // Settled for gating: its decision controls could only 409.
+    // The card's decision controls could only 409: the card is settled.
     expect(hasUnansweredCard(s)).toBe(false);
   });
 
@@ -585,8 +681,9 @@ describe('panelReducer clarifications, proposals and queue', () => {
       expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({
         proposalId: 'ent-1', subjectType: 'ENTITY', state: 'pending',
       });
-      // Actionable again: the row is PENDING, so the operator must be able to act.
-      expect(hasUnansweredCard(s)).toBe(true);
+      // Actionable again: the row is PENDING, so the card carries its controls
+      // again — and, as always for a proposal, it does not gate the composer.
+      expect(hasUnansweredCard(s)).toBe(false);
     });
 
     it('reopens a decided-elsewhere card on the live re-proposal signal', () => {
@@ -595,7 +692,7 @@ describe('panelReducer clarifications, proposals and queue', () => {
       s = panelReducer(s, { type: 'proposalCreated', proposal: reproposed });
 
       expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'pending' });
-      expect(hasUnansweredCard(s)).toBe(true);
+      expect(hasUnansweredCard(s)).toBe(false);
     });
 
     it('never reopens an approved card, nor downgrades it to a verdict it is not', () => {
@@ -635,7 +732,7 @@ describe('panelReducer clarifications, proposals and queue', () => {
   it('settles a proposal blocked on its pending entity without inventing a verdict', () => {
     const proposal = { id: 'f1', subjectType: 'FACT' as const, entityId: 'ent-7', factKey: 'timezone', valueText: 'Asia/Shanghai' };
     let s = panelReducer(base, { type: 'proposalCreated', proposal });
-    expect(hasUnansweredCard(s)).toBe(true);
+    expect(hasUnansweredCard(s)).toBe(false);
 
     s = panelReducer(s, { type: 'proposalSettled', proposalId: 'f1', state: 'blocked-on-entity' });
 
@@ -644,7 +741,8 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(card).not.toMatchObject({ state: 'approved' });
     expect(card).not.toMatchObject({ state: 'rejected' });
     expect(card).not.toMatchObject({ state: 'decided-elsewhere' });
-    // Settled for gating: the card's only remaining control could 409 forever.
+    // Settled for the card: its only remaining control could 409 forever. A
+    // proposal never gates, so the composer was never its hostage either way.
     expect(hasUnansweredCard(s)).toBe(false);
   });
 
@@ -682,6 +780,17 @@ describe('panelReducer clarifications, proposals and queue', () => {
     // Nor may a live re-delivery of the same id reopen it.
     s = panelReducer(settled, { type: 'proposalCreated', proposal });
     expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'blocked-on-entity' });
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
+  // T45 Minor: `settleClarification` lacked the guard `settleApproval` keeps, so
+  // a late settle (an expiry racing the operator's answer) could rewrite a
+  // settled question and reopen it.
+  it('never reopens a settled clarification with a later settle', () => {
+    let s = panelReducer(base, { type: 'waitingInput', approvalId: 'c1', runId: 'r1', question: 'Which repo?' });
+    s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'answered' });
+    s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'expired', reason: 'Auto-rejected: approval expired' });
+    expect(s.items.find((i) => i.kind === 'clarification')).toMatchObject({ state: 'answered' });
     expect(hasUnansweredCard(s)).toBe(false);
   });
 

@@ -1,11 +1,14 @@
 package io.aria.conductor.execution.engine;
 
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -55,12 +58,13 @@ class RunSignalSseListenerTest {
     @Mock RunStreamRegistry registry;
     @Mock ApprovalRepository approvals;
     @Mock ToolRiskResolver resolver;
+    @Mock RunRepository runs;
 
     private RunSignalSseListener listener;
 
     @BeforeEach
     void setUp() {
-        listener = new RunSignalSseListener(registry, approvals, resolver);
+        listener = new RunSignalSseListener(registry, approvals, resolver, runs);
     }
 
     @Test
@@ -157,6 +161,7 @@ class RunSignalSseListenerTest {
         when(registry.hasStream(runId)).thenReturn(true);
         when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
                 ApprovalSource.CLARIFICATION)).thenReturn(List.of(ask));
+        when(runs.findById(runId)).thenReturn(Optional.of(parked(runId)));
         when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
 
         listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
@@ -168,6 +173,26 @@ class RunSignalSseListenerTest {
                 .containsEntry("runId", runId.toString())
                 .containsEntry("approvalId", askId.toString())
                 .containsEntry("question", "Which database should the migration target?");
+    }
+
+    @Test
+    void aRunWhoseParkWasRefusedEmitsNoWaitingInput() {
+        // The park is one conditional write (AgentLoopEngine:736): when it is refused the engine
+        // wakes the run instead of parking it, so the CLARIFICATION ask exists while the run is
+        // not parked -- and is usually already terminal. Emitting here would render a question
+        // card for a run that can no longer act on the answer.
+        UUID runId = UUID.randomUUID();
+        Approval ask = clarification(runId, Instant.parse("2026-11-11T10:00:00Z"),
+                "Which database should the migration target?");
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
+                ApprovalSource.CLARIFICATION)).thenReturn(List.of(ask));
+        when(runs.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.FAILED).build()));
+
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        verify(registry, never()).emit(any(), any(), any());
     }
 
     @Test
@@ -196,6 +221,7 @@ class RunSignalSseListenerTest {
         when(registry.hasStream(runId)).thenReturn(true);
         when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
                 ApprovalSource.CLARIFICATION)).thenReturn(List.of(stale, live));
+        when(runs.findById(runId)).thenReturn(Optional.of(parked(runId)));
         when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
 
         listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
@@ -221,6 +247,7 @@ class RunSignalSseListenerTest {
         when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
                 ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of(lowerId, higherId), List.of(higherId, lowerId));
+        when(runs.findById(runId)).thenReturn(Optional.of(parked(runId)));
         when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
 
         listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
@@ -268,6 +295,7 @@ class RunSignalSseListenerTest {
         when(approvals.findById(askId)).thenReturn(Optional.of(ask));
         when(approvals.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING,
                 ApprovalSource.CLARIFICATION)).thenReturn(List.of(ask));
+        when(runs.findById(runId)).thenReturn(Optional.of(parked(runId)));
         when(registry.emit(eq(runId), eq("waiting_input"), any())).thenReturn(true);
         // Stubbed leniently on purpose: the pre-fix producer also emits approval_required here,
         // and Mockito's strict stubbing would fail that call before the never() assertion below
@@ -416,6 +444,11 @@ class RunSignalSseListenerTest {
 
     private static Approval clarification(UUID runId, Instant requestedAt, String question) {
         return clarification(UUID.randomUUID(), runId, requestedAt, question);
+    }
+
+    /** A run the engine did park: the status its conditional park write committed. */
+    private static Run parked(UUID runId) {
+        return Run.builder().id(runId).status(RunStatus.WAITING_INPUT).build();
     }
 
     private static Approval clarification(UUID id, UUID runId, Instant requestedAt, String question) {

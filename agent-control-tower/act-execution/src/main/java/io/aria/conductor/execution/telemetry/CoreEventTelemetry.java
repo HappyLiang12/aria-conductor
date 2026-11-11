@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.execution.engine.RunStreamRegistry;
 import io.aria.conductor.execution.runtime.CoreEvent;
+import io.aria.conductor.execution.security.CredentialRedactor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -38,9 +39,9 @@ import java.util.UUID;
  * </ul>
  *
  * <p>It is also the producer of the live {@code tool_call} / {@code tool_result} signals the
- * Aria panel's activity strip renders ({@code tool-event-contract.md}): a recorded tool event is
- * handed to the run's own stream, never before the write succeeded. A run without a live stream
- * (a sync turn, a closed panel) keeps the row and streams nothing.
+ * Aria panel's activity strip renders (read by {@code act-dashboard/src/api/aria.ts}: a recorded
+ * tool event is handed to the run's own stream, never before the write succeeded. A run without a
+ * live stream (a sync turn, a closed panel) keeps the row and streams nothing.
  *
  * <p>Plain object on purpose: the mapping is testable without a Spring context.
  * The bean is the production wiring seam the coordinator receives.
@@ -139,14 +140,17 @@ public class CoreEventTelemetry {
             return false;
         }
         // Only a recorded event is streamed: the panel must never show a tool call or result
-        // that the audit rows do not have.
+        // that the audit rows do not have -- nor less redacted than they are.
         streamSignal(targetRunId, event.type(), payload);
         return true;
     }
 
     /**
      * Hands a recorded tool event to the run's live stream as the activity strip's
-     * {@code tool_call} / {@code tool_result} frame (tool-event-contract.md).
+     * {@code tool_call} / {@code tool_result} frame (consumed by {@code act-dashboard/src/api/aria.ts}).
+     *
+     * <p>The {@code args} / {@code result} values are the redacted text the audit row stores, so the
+     * panel can never show a credential the row beside it masked.
      *
      * <p>No call here escapes into the core event path: a run with no live stream is the normal
      * case (a sync turn, a panel that already closed) and {@link RunStreamRegistry#emit} reports
@@ -170,10 +174,14 @@ public class CoreEventTelemetry {
         signal.put("runId", runId.toString());
         signal.put("name", text(payload, "toolName"));
         signal.put("toolCallId", text(payload, "toolCallId"));
+        // The two values below are the ones the audit row stores, so they are redacted exactly where
+        // RunTelemetryService redacts before persisting (recordToolCall/recordToolResult). CredentialRedactor
+        // stays the single authority on what counts as a credential; this frame must carry the same text the
+        // row carries, because the panel renders both side by side. The key names stay the frame contract.
         if ("tool.call".equals(type)) {
-            signal.put("args", serialized(payload, "input"));
+            signal.put("args", CredentialRedactor.redact(serialized(payload, "input")));
         } else {
-            signal.put("result", serialized(payload, "result"));
+            signal.put("result", CredentialRedactor.redact(serialized(payload, "result")));
             // Always present: an absent flag is "not an error", never a measured success.
             signal.put("ok", !flag(payload, "isError"));
         }

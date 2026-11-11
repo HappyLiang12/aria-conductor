@@ -14,6 +14,32 @@ export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
 export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
 
 /**
+ * The arguments as a compact, truthful summary (spec A3, T45 Item 3): a JSON
+ * object becomes one `key: value` line per entry, so a command and its target
+ * are legible at a glance; anything else is shown verbatim. Nothing is invented
+ * and nothing is dropped except JSON punctuation — the operator is approving
+ * this payload, not a paraphrase of it.
+ */
+export function argumentSummary(args: string): string {
+  const text = args.trim();
+  if (text === '') return '';
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const entries = Object.entries(parsed as Record<string, unknown>);
+      if (entries.length > 0) {
+        return entries
+          .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
+          .join('\n');
+      }
+    }
+  } catch {
+    /* not JSON: the raw text IS the argument */
+  }
+  return text;
+}
+
+/**
  * The backend answers 409 when the ask is no longer PENDING (it expired, the
  * run was cancelled, or the decision was already taken elsewhere). That is not
  * a transient failure and not something a retry can fix.
@@ -42,6 +68,11 @@ export function AriaApprovalCard({
   const [submitting, setSubmitting] = useState<'allow' | 'deny' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const settled = item.state !== 'pending';
+  const summary = item.args !== undefined ? argumentSummary(item.args) : '';
+  // The backend serves `toolPolicy: null` for a tool the catalog does not
+  // classify (ApprovalDetail), so the type's optionality is not enough: only a
+  // real policy name may be rendered as a reviewed authority.
+  const toolPolicy = typeof item.toolPolicy === 'string' && item.toolPolicy !== '' ? item.toolPolicy : null;
 
   async function decide(approved: boolean): Promise<void> {
     if (submitting !== null || settled) return;
@@ -84,15 +115,28 @@ export function AriaApprovalCard({
         <span className="ask-q ai-decision-tool"><code>{item.toolName}</code></span>
         <span className="ai-decision-tags">
           {item.riskTier !== undefined && <span className="pill risk">{item.riskTier}</span>}
-          {item.toolPolicy !== undefined && <span className="pill dim">{item.toolPolicy}</span>}
+          {/* Spec :504-505: a tool the catalog does not classify still resolves to
+              READ for backward compatibility, but the card must say it is
+              unclassified rather than let a bare tier imply it was reviewed. */}
+          {toolPolicy !== null
+            ? <span className="pill dim">{toolPolicy}</span>
+            : <span className="pill dim ai-decision-unclassified">unclassified</span>}
         </span>
       </div>
       <div className="ask-meta ai-decision-meta">
         Run <code>{item.runId.slice(0, 8)}</code> · this tool needs your decision before it runs
       </div>
-      {item.args !== undefined && item.args !== '' && (
-        <pre className="ask-args ai-decision-args">{item.args}</pre>
-      )}
+      {summary !== '' ? (
+        <pre className="ask-args ai-decision-args" title={item.args}>{summary}</pre>
+      ) : item.argsStatus === 'unavailable' ? (
+        // Not "no arguments": the read failed. Say so, so the operator knows the
+        // card is showing them less than the ask carries.
+        <div className="ask-meta ai-decision-meta ai-decision-args-unavailable">
+          The arguments could not be read, so this ask is shown by tool name only.
+        </div>
+      ) : item.argsStatus === 'reading' ? (
+        <div className="ask-meta ai-decision-meta ai-decision-args-reading">Reading the arguments…</div>
+      ) : null}
       {settled ? (
         <div className="ai-decision-settled">
           {item.state === 'approved' ? 'Allowed once' : item.state === 'denied' ? 'Denied' : 'Expired before a decision'}

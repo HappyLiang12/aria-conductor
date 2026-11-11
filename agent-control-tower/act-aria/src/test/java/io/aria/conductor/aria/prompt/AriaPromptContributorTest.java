@@ -27,7 +27,7 @@ class AriaPromptContributorTest {
         ContextSection section = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0);
 
         assertThat(section.id()).isEqualTo("policy.aria");
-        assertThat(section.content()).contains("instantiate_template");
+        assertThat(section.content()).contains("instantiate_workflow_template");
         assertThat(section.content()).doesNotContain("list_agents:");
         assertThat(section.content()).doesNotContain("decide_approval");
         assertThat(section.content()).doesNotContain("## Available Tools");
@@ -55,7 +55,7 @@ class AriaPromptContributorTest {
 
         assertThat(content).contains("Start a governed workflow TEMPLATE by its knowledge item id (templateId)");
         assertThat(content).contains("USE THIS for the spec-driven development loop.");
-        assertThat(content).contains("NEVER use create_workflow for the BA->Dev->QA loop; always use instantiate_template.");
+        assertThat(content).contains("NEVER create the BA->Dev->QA chain directly; always use instantiate_workflow_template.");
         assertThat(content).contains("Always pass issueRepo (owner/repo) and repoUrl parameters");
         assertThat(content).contains("answer trivial questions yourself from the issue body before escalating to the user.");
     }

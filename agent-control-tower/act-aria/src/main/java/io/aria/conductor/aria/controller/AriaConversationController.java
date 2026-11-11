@@ -201,8 +201,11 @@ public class AriaConversationController {
      * stops can take seconds, and a run created for this conversation in that window is not
      * in the read list. A detach keyed to the stale list left the late run's link alive and
      * {@code /latest} answered the cleared conversation again. The statement below therefore
-     * also detaches a run this request never read; such a run keeps its record and its
-     * transcript (Clear purges only what it read, and it is never cancelled here).
+     * also detaches a run this request never read. That run is never cancelled here, and the
+     * trajectory and tool-call purges are keyed to the ids read before the cancels, so it keeps
+     * its record, its trajectories and its tool calls. Its audit log entries do not survive:
+     * the audit purge is keyed to the conversation ({@code deleteByConversationId}), so the
+     * conversation-scoped audit rows go with the conversation, a late run's included.
      * <p>
      * T42 Item 4: this route purges history and cancels runs, and it resolved no authority at all,
      * so a run-scoped worker bearer was ignored and an anonymous remote caller was not refused

@@ -149,6 +149,22 @@ class MemoryQueryServiceTest {
                 .containsExactly("proposed-person");
     }
 
+    /**
+     * Spec :309-313 — the operator cannot approve what they cannot see. The explicit PENDING
+     * detail read is a separate flag, so the default read pinned above stays fail-closed for
+     * every agent-facing caller.
+     */
+    @Test
+    void theExplicitPendingDetailReadReturnsThePendingEntity() {
+        MemoryEntity proposed = entity("proposed-person", EntityStatus.PENDING);
+        when(entities.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+
+        MemoryEntityView view = query.getEntity(proposed.getId(), true);
+
+        assertThat(view.status()).isEqualTo("PENDING");
+        assertThat(view.canonicalKey()).isEqualTo("proposed-person");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private static MemoryEntity entity(String canonicalKey, EntityStatus status) {

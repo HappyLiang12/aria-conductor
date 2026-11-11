@@ -813,8 +813,16 @@ public class MemoryCommandService {
             if (entity.getStatus() == EntityStatus.PENDING) {
                 reason = "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved";
             } else if (entity.getStatus() == EntityStatus.RETIRED) {
+                // T39 Item 1 (P2): the T34 copy said "re-propose the entity and approve it", but
+                // only an EXTRACTION actor re-proposes (createEntity lands PENDING for EXTRACTION
+                // and resets a row to PENDING only when it is terminal), so an operator repeating
+                // the same kind+canonicalKey got this row back unchanged and remember_fact gave
+                // this same conflict — a silent loop. The remedy names the one real producer and
+                // the operator's half of the sequence.
                 reason = "is RETIRED; an ACTIVE fact cannot be attached to a retired parent that no read "
-                        + "path can see; re-propose the entity and approve it before writing the fact";
+                        + "path can see; a run's extraction re-proposes this kind and key to PENDING "
+                        + "(a worker's remember_fact), and the operator then approves the entity before "
+                        + "the fact can be written";
             } else if (entity.getStatus() == EntityStatus.MERGED) {
                 reason = "is MERGED; an ACTIVE fact cannot be attached to a merged source that no read "
                         + "path can see; write the fact on the surviving entity"

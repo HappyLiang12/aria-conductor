@@ -144,9 +144,12 @@ export interface WaitingInputSignal {
 
 /**
  * A governed memory write proposed by the run (Wave C consumes the callback;
- * the signal is dispatched here so the dispatcher stays stable).
+ * the signal is dispatched here so the dispatcher stays stable). Field names
+ * mirror the frame's keys except `id`, which is the producer's `proposalId`
+ * (RunSignalSseListener): the panel and its decide call are addressed by it.
  */
 export interface MemoryProposalSignal {
+  runId: string;
   id: string;
   subjectType: string;
   entityId?: string;
@@ -329,12 +332,18 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       });
       break;
     case 'memory_proposal': {
+      // The producer keys the decidable id `proposalId` (RunSignalSseListener),
+      // not `id`. Without it the card could only POST its decide call to
+      // nothing, so such a frame is dropped rather than dispatched empty.
+      const proposalId = optionalText(p.proposalId);
+      if (proposalId === undefined) break;
       const entityId = optionalText(p.entityId);
       const factKey = optionalText(p.factKey);
       const valueText = optionalText(p.valueText);
       const sensitivity = optionalText(p.sensitivity);
       cb.onMemoryProposal?.({
-        id: String(p.id ?? ''),
+        runId: String(p.runId ?? ''),
+        id: proposalId,
         subjectType: String(p.subjectType ?? ''),
         ...(entityId !== undefined ? { entityId } : {}),
         ...(factKey !== undefined ? { factKey } : {}),

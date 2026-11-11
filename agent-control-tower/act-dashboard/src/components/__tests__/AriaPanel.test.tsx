@@ -1258,6 +1258,7 @@ describe('AriaPanel memory proposals', () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');
       args[3]?.onMemoryProposal?.({
+        runId: 'r1',
         id: 'p1',
         subjectType: 'FACT',
         factKey: 'release.channel',
@@ -1292,7 +1293,7 @@ describe('AriaPanel memory proposals', () => {
   it('ignores a proposal frame it cannot classify instead of drawing a blank card', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');
-      args[3]?.onMemoryProposal?.({ id: 'p2', subjectType: 'SOMETHING_NEW' });
+      args[3]?.onMemoryProposal?.({ runId: 'r1', id: 'p2', subjectType: 'SOMETHING_NEW' });
       args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
     });
     renderPanel();

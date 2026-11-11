@@ -108,10 +108,14 @@ describe('aria streamMessage decision signals', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it('dispatches memory_proposal with the proposal summary the panel merges by id', async () => {
+  // The producer is `RunSignalSseListener.java:149-157`: it keys the decidable
+  // id `proposalId` and also carries `runId`. These fixtures are that payload
+  // verbatim, so a rename on either side fails a test instead of silently
+  // emptying the id the card's decide call is addressed to.
+  it('dispatches memory_proposal with the producer keys the panel merges by id', async () => {
     fetchMock.mockResolvedValue(
       sseResponse([
-        'event: memory_proposal\ndata: {"id":"p1","subjectType":"FACT","entityId":"e1","factKey":"preferred_channel","valueText":"email","sensitivity":"INTERNAL"}\n\n',
+        'event: memory_proposal\ndata: {"runId":"r1","proposalId":"p1","subjectType":"FACT","entityId":"e1","factKey":"preferred_channel","valueText":"email","sensitivity":"INTERNAL"}\n\n',
       ]),
     );
     const onMemoryProposal = vi.fn();
@@ -119,6 +123,7 @@ describe('aria streamMessage decision signals', () => {
     await streamMessage('c1', 'hi', [], { onMemoryProposal });
 
     expect(onMemoryProposal).toHaveBeenCalledWith({
+      runId: 'r1',
       id: 'p1',
       subjectType: 'FACT',
       entityId: 'e1',
@@ -126,6 +131,21 @@ describe('aria streamMessage decision signals', () => {
       valueText: 'email',
       sensitivity: 'INTERNAL',
     });
+  });
+
+  it('does not dispatch a proposal frame with no decidable id', async () => {
+    // Every key except the id: a card that reached the panel with an empty id
+    // could only POST its decide call to nothing, so the frame is dropped.
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: memory_proposal\ndata: {"runId":"r1","subjectType":"FACT","entityId":"e1","factKey":"preferred_channel","valueText":"email","sensitivity":"INTERNAL"}\n\n',
+      ]),
+    );
+    const onMemoryProposal = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onMemoryProposal });
+
+    expect(onMemoryProposal).not.toHaveBeenCalled();
   });
 
   it('leaves an unknown signal alone and still dispatches the known ones around it', async () => {

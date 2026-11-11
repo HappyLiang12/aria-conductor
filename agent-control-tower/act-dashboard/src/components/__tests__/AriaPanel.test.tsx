@@ -59,7 +59,7 @@ vi.mock('../../api/ariaConversations', () => ({
   getConversationTimeline: vi.fn(),
   deleteConversation: vi.fn(),
 }));
-vi.mock('../../api/runs', () => ({ cancelRun: vi.fn() }));
+vi.mock('../../api/runs', () => ({ cancelRun: vi.fn(), getRun: vi.fn() }));
 vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
 vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn(), getApproval: vi.fn() }));
 
@@ -67,7 +67,7 @@ import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
 import { getApproval, listApprovals } from '../../api/approvals';
-import { cancelRun } from '../../api/runs';
+import { cancelRun, getRun } from '../../api/runs';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
@@ -77,6 +77,7 @@ const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
 const mockGetApproval = getApproval as Mock;
 const mockCancelRun = cancelRun as Mock;
+const mockGetRun = getRun as Mock;
 
 type StreamArgs = [
   string, // conversationId
@@ -132,6 +133,9 @@ beforeEach(() => {
   // unanswered probe (null) must never settle a card on its own.
   mockGetApproval.mockResolvedValue(null);
   mockCancelRun.mockResolvedValue(undefined);
+  // The queued indicator asks the run itself: only an admitted (PENDING) run is
+  // queued, so the default fixture is the admitted case.
+  mockGetRun.mockResolvedValue({ id: 'run-bbbb2222', status: 'PENDING' });
   mockStream.mockImplementation(async (...args: StreamArgs) => {
     args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: 'chat' });
   });
@@ -740,12 +744,54 @@ describe('AriaPanel in-flow decisions', () => {
       { role: 'user', content: 'second', timestamp: '2026-11-11T09:00:02Z', runId: 'run-bbbb2222' },
     ]);
     mockListApprovals.mockResolvedValue([]);
+    mockGetRun.mockResolvedValue({ id: 'run-bbbb2222', status: 'PENDING' });
     renderPanel();
     await openPanelForTest();
 
     expect(await screen.findByText(/Queued · run-bbbb/)).toBeInTheDocument();
+    // The indicator is the run's own status, not the shape of the transcript.
+    expect(mockGetRun).toHaveBeenCalledWith('run-bbbb2222');
     // The answered turn is not queued (negative control).
     expect(screen.queryByText(/Queued · run-aaaa/)).not.toBeInTheDocument();
+  });
+
+  it('does not call a running or dead trailing turn queued', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'first', timestamp: '2026-11-11T09:00:00Z', runId: 'run-aaaa1111' },
+      { role: 'assistant', content: 'done', timestamp: '2026-11-11T09:00:01Z', runId: 'run-aaaa1111' },
+      { role: 'user', content: 'second', timestamp: '2026-11-11T09:00:02Z', runId: 'run-bbbb2222' },
+    ]);
+    mockListApprovals.mockResolvedValue([]);
+    // A trailing prompt whose run is RUNNING is a hungry/hung turn, not an
+    // admitted one; it must not read as "Queued" on a governance surface.
+    mockGetRun.mockResolvedValue({ id: 'run-bbbb2222', status: 'RUNNING' });
+    renderPanel();
+    await openPanelForTest();
+
+    // Positive control: the transcript did render the trailing prompt.
+    expect(await screen.findByText('second')).toBeInTheDocument();
+    expect(screen.queryByText(/Queued ·/)).not.toBeInTheDocument();
+  });
+
+  it('clears the queued pill once the operator sends a new prompt', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'second', timestamp: '2026-11-11T09:00:02Z', runId: 'run-bbbb2222' },
+    ]);
+    mockListApprovals.mockResolvedValue([]);
+    mockGetRun.mockResolvedValue({ id: 'run-bbbb2222', status: 'PENDING' });
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText(/Queued · run-bbbb/)).toBeInTheDocument();
+
+    // The next turn is the one being watched; leaving the old pill up would name
+    // a run that is no longer the transcript's trailing turn.
+    fireEvent.change(textarea(), { target: { value: 'third' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter', shiftKey: false });
+    await act(async () => {});
+
+    expect(screen.queryByText(/Queued ·/)).not.toBeInTheDocument();
   });
 });
 

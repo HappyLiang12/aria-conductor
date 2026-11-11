@@ -3,7 +3,7 @@ import { streamMessage } from '../api/aria';
 import type { StreamError } from '../api/aria';
 import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
-import { cancelRun } from '../api/runs';
+import { cancelRun, getRun } from '../api/runs';
 import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 import type { TimelineEntry } from '../api/ariaConversations';
@@ -79,19 +79,24 @@ async function readFailedTurnEntry(conversationId: string): Promise<TimelineEntr
 
 /**
  * A queued turn (spec A3): the run is admitted but still PENDING, and there is
- * no QUEUED engine status, so the indicator is derived from the timeline. A
- * timeline row carries a run id but no run status, so the one pending signal it
- * offers is a trailing unanswered prompt: the last row is the operator's own
- * message and no reply (assistant or tool) has landed for it. Earlier prompts
- * are answered by construction — the conversation has moved past them — and a
- * turn whose stream this panel holds is not queued, it is the turn being
- * watched.
+ * no QUEUED engine status, so the indicator is derived from the timeline — a
+ * trailing unanswered prompt names the run — and then confirmed against the run
+ * itself. The status read is what makes the label true: a trailing prompt whose
+ * run is RUNNING is a hung turn, and one that FAILED or was cancelled is dead;
+ * neither is admitted-and-waiting, so neither is called Queued. An unreadable
+ * status claims nothing. A turn whose stream this panel holds is not queued, it
+ * is the turn being watched.
  */
-function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): string[] {
+async function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): Promise<string[]> {
   const last = timeline[timeline.length - 1];
   if (!last || last.role !== 'user' || !last.runId) return [];
   if (last.runId === activeRunId) return [];
-  return [last.runId];
+  try {
+    const run = await getRun(last.runId);
+    return run?.status === 'PENDING' ? [last.runId] : [];
+  } catch {
+    return []; // no evidence of admission: no claim
+  }
 }
 
 /** What an ask that left the PENDING list turned into, as its card must say it. */
@@ -339,7 +344,9 @@ export function AriaPanel() {
     if (conversationIdRef.current !== targetConversationId) return;
     conversationRunIdsRef.current = runIds;
     dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
-    dispatch({ type: 'queuedRuns', runIds: queuedRunIds(timeline, activeRunIdRef.current) });
+    const queued = await queuedRunIds(timeline, activeRunIdRef.current);
+    if (conversationIdRef.current !== targetConversationId) return;
+    dispatch({ type: 'queuedRuns', runIds: queued });
     if (!pendingListed) return;
     await settleDepartedAsks(targetConversationId, approvals, runIds);
   }, [settleDepartedAsks]);
@@ -663,8 +670,7 @@ export function AriaPanel() {
       const skillId = skillIdOverride ?? pendingSkillId;
 
       // Abort any prior in-flight stream defensively.
-      abortRef.current?.abort();
-      cancelledRef.current = false; // M1: reset per-request cancel state
+      abortRef.current?.abort();      cancelledRef.current = false; // M1: reset per-request cancel state
       activeRunIdRef.current = null;
       turnIdRef.current = '';
       const ctrl = new AbortController();
@@ -680,6 +686,9 @@ export function AriaPanel() {
         content: text,
         timestamp: new Date().toISOString(),
       });
+      // The previous turn is no longer the transcript's trailing one, so a
+      // queued pill naming its run would be stale until the next reconcile.
+      dispatch({ type: 'queuedRuns', runIds: [] });
       setInput('');
       setBusy(true);
       setLastSentMessage(text);

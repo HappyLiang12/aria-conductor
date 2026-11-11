@@ -138,8 +138,20 @@ public class MemoryController {
         return ResponseEntity.status(HttpStatus.CREATED).body(MemoryEntityView.from(entity));
     }
 
+    /**
+     * The detail read. The default stays fail-closed ACTIVE-only — a PENDING entity is review
+     * material and answers 404. An explicit {@code status=PENDING} is the operator's review
+     * read (spec :309-313: the operator cannot approve what they cannot see), so authority is
+     * resolved first and a worker credential is refused rather than silently downgraded.
+     */
     @GetMapping("/entities/{id}")
-    public MemoryEntityDetail getEntity(@PathVariable UUID id) {
+    public MemoryEntityDetail getEntity(@PathVariable UUID id,
+                                        @RequestParam(required = false) EntityStatus status,
+                                        HttpServletRequest request) {
+        boolean includePending = status == EntityStatus.PENDING;
+        if (includePending) {
+            operatorAuthority.resolveOperator(request, false);
+        }
         List<MemoryRelationView> entityRelations = new ArrayList<>();
         for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(id, FactStatus.ACTIVE))) {
             entityRelations.add(MemoryMapper.relationView(relation));
@@ -155,7 +167,7 @@ public class MemoryController {
                 safe(assertions.findBySubjectTypeAndSubjectIdOrderByCreatedAtAsc(MemorySubjectType.ENTITY, id));
 
         return new MemoryEntityDetail(
-                query.getEntity(id),
+                query.getEntity(id, includePending),
                 query.factHistory(id),
                 entityRelations,
                 entityLinks.stream().map(MemoryMapper::linkView).toList(),

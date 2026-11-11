@@ -220,6 +220,85 @@ describe('panelReducer restore parsing', () => {
   });
 });
 
+describe('panelReducer restored tool status', () => {
+  function onlyStrip(s: ReturnType<typeof panelReducer>) {
+    const strip = s.items.find((i) => i.kind === 'activity');
+    if (strip?.kind !== 'activity') throw new Error('activity strip missing');
+    return strip;
+  }
+
+  it.each([
+    ['COMPLETED', 'ok'],
+    ['FAILED', 'error'],
+    ['DENIED', 'error'],
+    ['PENDING', 'running'],
+    ['EXECUTING', 'running'],
+  ])('restores a %s tool result as %s instead of claiming success', (toolStatus, expected) => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'tool_call: bash {"cmd":"ls"}' }),
+        row({ role: 'tool', content: 'output', toolStatus }),
+      ],
+      approvals: [], proposals: [],
+    });
+    expect(onlyStrip(s).tools[0]).toMatchObject({ name: 'bash', status: expected, result: 'output' });
+  });
+
+  it('keeps ok for a result row the timeline says nothing about (an older backend)', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'tool_call: list_agents {}' }),
+        row({ role: 'tool', content: '{"ok":true}' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    expect(onlyStrip(s).tools[0]).toMatchObject({ name: 'list_agents', status: 'ok', result: '{"ok":true}' });
+  });
+
+  it('does not claim success for a status it does not recognise', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'tool_call: bash {}' }),
+        row({ role: 'tool', content: 'output', toolStatus: 'CANCELLED' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    // An unknown name is not evidence of success: leave the tool unsettled.
+    expect(onlyStrip(s).tools[0]).toMatchObject({ name: 'bash', status: 'running', result: 'output' });
+  });
+
+  it('attributes each restored result by tool-call id, not by position', () => {
+    // callA and callB overlap; callA finishes first. The positional rule would hand
+    // callA's output to the last running tool (callB) and report it as a success.
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'tool_call: read_file {"path":"a"}', runId: 'r1', toolCallId: 'callA' }),
+        row({ role: 'tool', content: 'tool_call: write_file {"path":"b"}', runId: 'r1', toolCallId: 'callB' }),
+        row({ role: 'tool', content: 'a-out', runId: 'r1', toolCallId: 'callA', toolStatus: 'COMPLETED' }),
+        row({ role: 'tool', content: 'b-out', runId: 'r1', toolCallId: 'callB', toolStatus: 'FAILED' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    expect(onlyStrip(s).tools.map((t) => [t.name, t.status, t.result])).toEqual([
+      ['read_file', 'ok', 'a-out'],
+      ['write_file', 'error', 'b-out'],
+    ]);
+  });
+
+  it('restores an orphan result with a failing status as an error', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'tool', content: 'denied by policy', runId: 'r9', toolStatus: 'DENIED' })],
+      approvals: [], proposals: [],
+    });
+    expect(onlyStrip(s).tools[0]).toMatchObject({ name: '(tool output)', status: 'error', result: 'denied by policy' });
+  });
+});
+
 describe('panelReducer restore merge', () => {
   it('keeps a live frame that arrived during a restore, exactly once', () => {
     let s = panelReducer(base, { type: 'approvalRequired', approvalId: 'a1', runId: 'r1', toolName: 'remember_fact', riskTier: 'WRITE_LOCAL' });

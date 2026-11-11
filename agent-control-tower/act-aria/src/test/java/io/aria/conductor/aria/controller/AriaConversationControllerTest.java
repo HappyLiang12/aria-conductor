@@ -11,6 +11,8 @@ import io.aria.conductor.common.exception.GlobalExceptionHandler;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
+import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -326,6 +328,96 @@ class AriaConversationControllerTest {
     }
 
     @Test
+    void timeline_carriesTheToolStatusAndToolCallIdOfEachRestoredToolRow() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run run = run("conv-tools", RunStatus.COMPLETED, base);
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-tools"))
+                .thenReturn(List.of(run));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(run.getId())))
+                .thenReturn(List.of(
+                        trajectory(run.getId(), 1, "tool", "tool_call: bash {\"cmd\":\"rm -rf /\"}", "call-a"),
+                        trajectory(run.getId(), 2, "tool", "denied by policy", "call-a"),
+                        trajectory(run.getId(), 3, "tool", "tool_call: list_agents {}", "call-b"),
+                        trajectory(run.getId(), 4, "tool", "{\"ok\":true}", "call-b")));
+        when(toolCallRepository.findByRunId(run.getId())).thenReturn(List.of(
+                toolCall(run.getId(), "call-a", ToolCallStatus.DENIED),
+                toolCall(run.getId(), "call-b", ToolCallStatus.COMPLETED)));
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-tools"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].toolCallId").value("call-a"))
+                .andExpect(jsonPath("$[0].toolStatus").value("DENIED"))
+                .andExpect(jsonPath("$[1].toolCallId").value("call-a"))
+                .andExpect(jsonPath("$[1].toolStatus").value("DENIED"))
+                .andExpect(jsonPath("$[2].toolCallId").value("call-b"))
+                .andExpect(jsonPath("$[2].toolStatus").value("COMPLETED"))
+                .andExpect(jsonPath("$[3].toolCallId").value("call-b"))
+                .andExpect(jsonPath("$[3].toolStatus").value("COMPLETED"));
+    }
+
+    @Test
+    void timeline_reportsAnInFlightStatusVerbatimInsteadOfCallingItASuccess() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run run = run("conv-running", RunStatus.RUNNING, base);
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-running"))
+                .thenReturn(List.of(run));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(run.getId())))
+                .thenReturn(List.of(
+                        trajectory(run.getId(), 1, "tool", "tool_call: bash {\"cmd\":\"sleep 60\"}", "call-c")));
+        when(toolCallRepository.findByRunId(run.getId())).thenReturn(List.of(
+                toolCall(run.getId(), "call-c", ToolCallStatus.EXECUTING)));
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-running"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].toolStatus").value("EXECUTING"))
+                .andExpect(jsonPath("$[0].toolCallId").value("call-c"));
+    }
+
+    @Test
+    void timeline_omitsBothFieldsForAToolRowWithoutAToolCallId() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run run = run("conv-anon", RunStatus.COMPLETED, base);
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-anon"))
+                .thenReturn(List.of(run));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(run.getId())))
+                .thenReturn(List.of(
+                        trajectory(run.getId(), 1, "tool", "tool_call: bash {}", "  "),
+                        trajectory(run.getId(), 2, "tool", "some output", null)));
+        when(toolCallRepository.findByRunId(run.getId())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-anon"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].toolStatus").doesNotExist())
+                .andExpect(jsonPath("$[0].toolCallId").doesNotExist())
+                .andExpect(jsonPath("$[1].toolStatus").doesNotExist())
+                .andExpect(jsonPath("$[1].toolCallId").doesNotExist());
+    }
+
+    @Test
+    void timeline_omitsTheStatusRatherThanGuessingItWhenNoToolCallRowExists() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run run = run("conv-nocalls", RunStatus.COMPLETED, base);
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-nocalls"))
+                .thenReturn(List.of(run));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(run.getId())))
+                .thenReturn(List.of(
+                        trajectory(run.getId(), 1, "tool", "tool_call: bash {}", "call-d"),
+                        trajectory(run.getId(), 2, "tool", "output", "call-d")));
+        when(toolCallRepository.findByRunId(run.getId())).thenReturn(List.of());
+
+        // The id is the trajectory row's own column, so it stands on its own; the status
+        // is only ever read off a tool_calls row, and a missing one is not a success.
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-nocalls"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].toolStatus").doesNotExist())
+                .andExpect(jsonPath("$[0].toolCallId").value("call-d"))
+                .andExpect(jsonPath("$[1].toolStatus").doesNotExist());
+    }
+
+    @Test
     void delete_returns404WhenConversationHasNoRuns() throws Exception {
         when(runRepository.findByConversationIdOrderByCreatedAtAsc("ghost")).thenReturn(List.of());
 
@@ -447,6 +539,23 @@ class AriaConversationControllerTest {
         return SessionTrajectory.builder()
                 .id(UUID.randomUUID()).runId(runId).turnNumber(turn)
                 .role(role).content(content).createdAt(Instant.now())
+                .build();
+    }
+
+    private SessionTrajectory trajectory(UUID runId, int turn, String role, String content, String toolCallId) {
+        SessionTrajectory row = trajectory(runId, turn, role, content);
+        row.setToolCallId(toolCallId);
+        return row;
+    }
+
+    /** A persisted tool call, keyed by the same derivation the telemetry service writes. */
+    private ToolCall toolCall(UUID runId, String rawToolCallId, ToolCallStatus status) {
+        return ToolCall.builder()
+                .id(ToolCallRowId.of(runId, rawToolCallId))
+                .runId(runId)
+                .toolName("bash")
+                .status(status)
+                .createdAt(Instant.now())
                 .build();
     }
 

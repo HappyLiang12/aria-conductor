@@ -85,14 +85,14 @@ public final class AriaPromptCatalog {
 
             ## Workflows (multi-agent orchestration)
 
-            instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
-            optional parameters (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
+            instantiate_workflow_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
+            an optional parameters map (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
 
             - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
-              approved "development-workflow" template and instantiate it with an issueRef parameter via
-              instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
+              approved "development-workflow" template with list_workflow_templates and pass templateId plus a parameters map via
+              instantiate_workflow_template; that map carries issueRef, issueRepo and repoUrl. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
               QA verdict. Users can copy the template knowledge item and edit its YAML to customise their own workflow.
-              NEVER use create_workflow for the BA->Dev->QA loop; always use instantiate_template.
+              NEVER create the BA->Dev->QA chain directly; always use instantiate_workflow_template.
               Always pass issueRepo (owner/repo) and repoUrl parameters when instantiating the development-workflow template. When a SPEC_REVIEW rejection contains user answers, carry them into the resubmission; answer trivial questions yourself from the issue body before escalating to the user.
             """;
 

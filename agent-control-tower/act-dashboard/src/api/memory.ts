@@ -216,9 +216,23 @@ export async function createMemoryEntity(
   return data;
 }
 
-/** `GET /entities/{id}` — 404s a PENDING entity (pending entities are the list + inbox). */
-export async function getMemoryEntity(id: string): Promise<MemoryEntityDetail> {
-  const { data } = await client.get<MemoryEntityDetail>(`/api/v1/memory/entities/${id}`);
+/**
+ * `GET /entities/{id}` — the fail-closed default read (ACTIVE-only), or, with
+ * `'PENDING'`, the operator-authorised review read of a pending entity
+ * (spec :309-313: the operator cannot approve what they cannot see). The server
+ * honours no other status value here, so the argument is typed to the only one
+ * it does. When it is absent the request carries no params at all: widening the
+ * default read would break a security boundary, not just a test.
+ */
+export async function getMemoryEntity(
+  id: string,
+  reviewStatus?: 'PENDING',
+): Promise<MemoryEntityDetail> {
+  const path = `/api/v1/memory/entities/${id}`;
+  const { data } =
+    reviewStatus === 'PENDING'
+      ? await client.get<MemoryEntityDetail>(path, { params: { status: 'PENDING' } })
+      : await client.get<MemoryEntityDetail>(path);
   return data;
 }
 

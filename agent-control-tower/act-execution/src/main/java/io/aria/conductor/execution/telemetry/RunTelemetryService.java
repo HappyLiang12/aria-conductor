@@ -159,6 +159,15 @@ public class RunTelemetryService {
         if (!reported) {
             return;
         }
+        // Task 7 (spec 5.4): an all-zero report is the pinned CLI's placeholder shape --
+        // a real LLM call cannot consume zero input tokens. Writing it would turn "not
+        // reported" into a fabricated zero, and could overwrite a real measurement with
+        // one, so the placeholder is ignored and the run stays NOT_REPORTED.
+        if (isNullOrZero(usage.inputTokens()) && isNullOrZero(usage.outputTokens())
+                && isNullOrZero(usage.totalTokens())) {
+            log.debug("Ignoring an all-zero usage report for run {} (placeholder, not a measurement)", runId);
+            return;
+        }
         Run run = runs.findById(runId).orElse(null);
         if (run == null) {
             log.warn("Usage for unknown run {} was ignored", runId);
@@ -187,6 +196,11 @@ public class RunTelemetryService {
     /** The terminal statuses a usage write must never overwrite (mirrors the engine's set). */
     private static final List<RunStatus> TERMINAL_STATUSES = List.of(
             RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
+
+    /** An absent or zero report carries no measurement; only a positive count does. */
+    private static boolean isNullOrZero(Long value) {
+        return value == null || value == 0L;
+    }
 
     /** Deterministic row id: a re-delivered event updates its own row. */
     private static UUID toolCallRowId(UUID runId, String toolCallId) {

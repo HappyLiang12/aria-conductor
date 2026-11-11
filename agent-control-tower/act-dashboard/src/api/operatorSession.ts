@@ -172,13 +172,14 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
 
 /**
  * The server's own wording when it refuses a MUTATION for its Origin rather than
- * for want of the operator. Three producers serve it verbatim:
- * `OperatorSessionService.rejectCrossSiteOrigin`, its stricter
- * `validateMutation` (cookie path), and `RunController`'s origin guard.
+ * for want of the operator: `OperatorSessionService.rejectCrossSiteOrigin`, its
+ * stricter `validateMutation` (cookie path), and `RunController`'s origin guard.
  *
- * The envelope is spec-closed (`ok`/`errorType`/`message`, both cases a 403
- * `FORBIDDEN`), so this marker is the only discriminator — a Java lane pins it
- * server-side.
+ * The controllers that catch the refusal serve it under `{ error }`
+ * (`ApprovalController`, `MaintenanceController`, `OperatorSessionController`,
+ * `RunController`); the memory advice serves the spec-closed envelope
+ * (`ok`/`errorType`/`message`) instead. Both cases are a 403 `FORBIDDEN`, so this
+ * marker is the only discriminator — a Java lane pins it server-side.
  */
 export const CROSS_ORIGIN_REJECTION_MARKER = 'Cross-origin operator mutation rejected';
 
@@ -190,6 +191,15 @@ export type OperatorRefusalKind =
   | 'cross-origin';
 
 /**
+ * The keys the servers put a refusal's text under. Same list `apiErrorMessage`
+ * documents, because the marker must be read from the field each producer
+ * actually serves: the approvals/maintenance/run/operator-session controllers
+ * serve `{ error }` (Task 41 measured), the shared exception handler and the
+ * memory advice serve `{ message }`. A bodyless 403 carries no marker.
+ */
+const REFUSAL_TEXT_KEYS = ['message', 'error', 'reason', 'detail'] as const;
+
+/**
  * Which operator refusal this error is, or null when it is not one (a fault, a
  * network failure, an unanswered call). A 401 is always an authority refusal; a
  * 403 is a cross-site one only when it carries the marker, because the same
@@ -197,14 +207,18 @@ export type OperatorRefusalKind =
  */
 export function operatorRefusalKind(error: unknown): OperatorRefusalKind | null {
   const response = (error as {
-    response?: { status?: number; data?: { message?: unknown } };
+    response?: { status?: number; data?: Record<string, unknown> };
   } | undefined)?.response;
   const status = response?.status;
   if (status !== 401 && status !== 403) return null;
-  const message = response?.data?.message;
-  return typeof message === 'string' && message.includes(CROSS_ORIGIN_REJECTION_MARKER)
-    ? 'cross-origin'
-    : 'operator';
+  if (status === 401) return 'operator';
+  for (const key of REFUSAL_TEXT_KEYS) {
+    const value = response?.data?.[key];
+    if (typeof value === 'string' && value.includes(CROSS_ORIGIN_REJECTION_MARKER)) {
+      return 'cross-origin';
+    }
+  }
+  return 'operator';
 }
 
 /** True when an operator-only route refused the call for a missing/expired session (401/403). */

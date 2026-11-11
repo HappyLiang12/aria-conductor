@@ -191,6 +191,29 @@ function loadOpenState(): boolean {
   }
 }
 
+/**
+ * The action label of the shared refusal notice for one or more refused
+ * reconcile reads. One read is named alone; several are composed into ONE noun
+ * phrase ("Reading the approval queue or the memory proposal inbox") so the
+ * sentence `operatorSessionMessage` builds keeps a single verb and no stray
+ * capital — the previous `A and B` join read "Reading the approval queue and
+ * Reading the memory proposal inbox is operator-only".
+ */
+function refusedReadsLabel(actions: string[]): string {
+  const labels = [...new Set(actions)];
+  if (labels.length === 0) return 'Reading the Aria panel';
+  if (labels.length === 1) return labels[0];
+  const [first, ...rest] = labels;
+  const [verb, ...firstWords] = first.split(' ');
+  const tails = rest.map((label) => {
+    const words = label.split(' ');
+    const shared = words[0].toLowerCase() === verb.toLowerCase() ? words.slice(1) : words;
+    const tail = shared.join(' ');
+    return tail.charAt(0).toLowerCase() + tail.slice(1);
+  });
+  return `${verb} ${[firstWords.join(' '), ...tails].join(' or ')}`;
+}
+
 /** Compact, allocation-light markdown renderer for assistant bubbles (m2: + tables & horizontal rules). */
 function renderMarkdown(text: string): string {
   if (!text) return '<p></p>';
@@ -436,9 +459,9 @@ export function AriaPanel() {
   );
 
   /**
-   * Settles a local pending proposal a PENDING inbox read no longer lists: it
-   * was decided elsewhere (the Memory page, another operator). Left pending,
-   * the card could only 409 and would keep the composer locked behind a false
+   * Settles a local proposal a PENDING inbox read no longer lists: it was
+   * decided elsewhere (the Memory page, another operator). Left pending, the
+   * card could only 409 and would keep the composer locked behind a false
    * "still pending" copy. The inbox has no by-id outcome read and its bounded
    * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so the
    * panel does not claim a verdict — the reducer's `decided-elsewhere` state
@@ -448,6 +471,10 @@ export function AriaPanel() {
    * snapshot speaks for it", the rule the approval settle applies to a run): a
    * live frame can arrive before its row, so an empty read must not settle what
    * it has never seen. A read that failed or was refused never reaches here.
+   * `blocked-on-entity` is the exception: the 409 that produced it already said
+   * the row is PENDING, so the server itself spoke for it — and its copy is a
+   * present-tense claim ("its entity is still pending") that would otherwise
+   * contradict the entity card the operator just approved, forever.
    *
    * And only a read whose page was NOT capped can prove a departure: the inbox
    * is one bounded page (`PROPOSAL_INBOX_LIMIT`, newest first across all
@@ -472,9 +499,9 @@ export function AriaPanel() {
       const departed = pageProvablyComplete
         ? itemsRef.current.flatMap((item) =>
           item.kind === 'proposal'
-            && item.state === 'pending'
-            && confirmed.has(item.proposalId)
             && !listedIds.has(item.proposalId)
+            && (item.state === 'blocked-on-entity'
+              || (item.state === 'pending' && confirmed.has(item.proposalId)))
             ? [item.proposalId]
             : [],
         )
@@ -1146,6 +1173,10 @@ export function AriaPanel() {
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.
     dispatch({ type: 'restore', conversationId: newConversationId, timeline: [], approvals: [], proposals: [] });
+    // A refusal belongs to the reads of the conversation on screen; the cleared
+    // conversation's failure must not greet the operator in the empty transcript
+    // (a fresh conversation reconciles only after the next turn is sent).
+    setReconcileFailure([]);
     console.log(`[Aria] New conversation: ${newConversationId}`);
     setInput('');
     setBusy(false);
@@ -1288,10 +1319,9 @@ export function AriaPanel() {
             {reconcileFailure.some((failure) => failure.operatorRejected) && (
               <div style={{ margin: '8px 12px' }}>
                 <OperatorSessionNotice
-                  actionLabel={reconcileFailure
+                  actionLabel={refusedReadsLabel(reconcileFailure
                     .filter((failure) => failure.operatorRejected)
-                    .map((failure) => failure.action)
-                    .join(' and ')}
+                    .map((failure) => failure.action))}
                 />
               </div>
             )}

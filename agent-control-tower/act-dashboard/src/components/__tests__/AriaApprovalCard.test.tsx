@@ -87,10 +87,12 @@ describe('AriaApprovalCard', () => {
   // Task 37 / Item 2: the same 403 also serves the cross-site rejection, and its
   // remedy is not "grant access" — the request came from a page the backend does
   // not trust. Positive control for the test above: that copy must be untouched.
+  // Task 41: the body is the one ApprovalController.decideApproval actually
+  // serves — `{ error }`, not `{ message }`.
   it('gives the cross-site remedy, not the operator-grant one, for a cross-origin 403', async () => {
     const onSettled = vi.fn();
     mockDecide.mockRejectedValueOnce({
-      response: { status: 403, data: { message: 'Cross-origin operator mutation rejected' } },
+      response: { status: 403, data: { error: 'Cross-origin operator mutation rejected' } },
     });
     render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
 
@@ -104,7 +106,8 @@ describe('AriaApprovalCard', () => {
     expect(onSettled).not.toHaveBeenCalled();
   });
 
-  it('denies with an explicit refusal and reports it', async () => {    const onSettled = vi.fn();
+  it('denies with an explicit refusal and reports it', async () => {
+    const onSettled = vi.fn();
     render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^deny$/i }));

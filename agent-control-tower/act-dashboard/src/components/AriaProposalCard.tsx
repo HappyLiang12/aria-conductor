@@ -232,7 +232,11 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
     return () => { cancelled = true; };
   }, [isBatchDecision, entityId]);
 
-  const state = local ?? item.state;
+  // The panel's item state wins once it is no longer `pending`: the reconcile
+  // settles a card the PENDING inbox no longer lists (Task 41 Major 3), and a
+  // local settle layered over it would keep a stale `blocked-on-entity` claim on
+  // screen. While the item is still pending, the card's own click result wins.
+  const state = item.state === 'pending' ? local ?? 'pending' : item.state;
 
   const decide = async (decision: MemoryProposalDecision) => {
     setInFlight(decision);
@@ -399,21 +403,35 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           </button>
         </div>
       ) : state === 'blocked-on-entity' ? (
-        // The server refused this decision because the proposal's parent entity
-        // is still PENDING: the ENTITY proposal is the batch that owns it. This
-        // card's own decision can only be refused again, so it offers none — and
-        // it never claims the proposal left the queue, which is what
-        // `decided-elsewhere` means and would be false here.
-        <div className="ask-ctx" role="status" data-testid="aria-proposal-blocked-on-entity">
-          {blockedEntityId
-            ? <>Approving this on its own was refused: its entity{' '}
-              <span className="cell-mono">{blockedEntityId}</span> is still pending. Decide the entity
-              proposal {blockedEntityId} first — that one decision promotes or retires its whole batch.
-              Nothing was decided here.</>
-            : <>Approving this on its own was refused: its entity is still pending. Decide the entity
-              proposal first — that one decision promotes or retires its whole batch. Nothing was
-              decided here.</>}
-        </div>
+        // The server refused the APPROVAL because the proposal's parent entity
+        // is still PENDING: the ENTITY proposal is the batch that owns the
+        // promotion. But only approval is refused — `decideFact` returns for
+        // REJECT before its parent-status check, so retiring this one fact is
+        // still accepted. Keep that control, state exactly what was refused and
+        // what still works, and never claim the proposal left the queue (which
+        // is what `decided-elsewhere` means and would be false here).
+        <>
+          <div className="ask-ctx" role="status" data-testid="aria-proposal-blocked-on-entity">
+            {blockedEntityId
+              ? <>Approving this fact on its own was refused: its entity{' '}
+                <span className="cell-mono">{blockedEntityId}</span> is still pending. Decide the
+                entity proposal {blockedEntityId} to promote or retire its whole batch. Rejecting
+                this fact alone still works — it retires only this fact.</>
+              : <>Approving this fact on its own was refused: its entity is still pending. Decide
+                the entity proposal to promote or retire its whole batch. Rejecting this fact alone
+                still works — it retires only this fact.</>}
+          </div>
+          <div className="ask-actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={inFlight !== null}
+              onClick={() => void decide('REJECT')}
+            >
+              {inFlight === 'REJECT' ? 'Rejecting…' : 'Reject'}
+            </button>
+          </div>
+        </>
       ) : state === 'decided-elsewhere' ? (
         // A PENDING inbox read no longer listed it, and that inbox is a bounded
         // page with no by-id outcome read: it cannot say whether the departure

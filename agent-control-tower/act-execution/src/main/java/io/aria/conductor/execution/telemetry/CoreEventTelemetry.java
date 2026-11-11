@@ -39,9 +39,9 @@ import java.util.UUID;
  * </ul>
  *
  * <p>It is also the producer of the live {@code tool_call} / {@code tool_result} signals the
- * Aria panel's activity strip renders ({@code tool-event-contract.md}): a recorded tool event is
- * handed to the run's own stream, never before the write succeeded. A run without a live stream
- * (a sync turn, a closed panel) keeps the row and streams nothing.
+ * Aria panel's activity strip renders (read by {@code act-dashboard/src/api/aria.ts}: a recorded
+ * tool event is handed to the run's own stream, never before the write succeeded. A run without a
+ * live stream (a sync turn, a closed panel) keeps the row and streams nothing.
  *
  * <p>Plain object on purpose: the mapping is testable without a Spring context.
  * The bean is the production wiring seam the coordinator receives.
@@ -147,7 +147,7 @@ public class CoreEventTelemetry {
 
     /**
      * Hands a recorded tool event to the run's live stream as the activity strip's
-     * {@code tool_call} / {@code tool_result} frame (tool-event-contract.md).
+     * {@code tool_call} / {@code tool_result} frame (consumed by {@code act-dashboard/src/api/aria.ts}).
      *
      * <p>The {@code args} / {@code result} values are the redacted text the audit row stores, so the
      * panel can never show a credential the row beside it masked.

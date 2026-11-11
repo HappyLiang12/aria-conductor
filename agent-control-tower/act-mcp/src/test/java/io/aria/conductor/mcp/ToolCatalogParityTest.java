@@ -307,6 +307,36 @@ class ToolCatalogParityTest {
     }
 
     /**
+     * The {@code remember_fact} wording debt (T14 review): the description promised the two
+     * shapes and the proposal rule but never said that one operator decision promotes the entity
+     * and its first fact together. The sentence is asserted on BOTH copies — the registered
+     * {@code @Tool} annotation and the catalog mirror — because byte parity alone would let the
+     * sentence be deleted from both sides at once.
+     */
+    @Test
+    void rememberFactStatesThatOneEntityDecisionPromotesTheEntityAndItsFirstFact() {
+        String sentence = "One operator decision on the entity proposal promotes the new entity "
+                + "and its first fact together.";
+
+        assertThat(catalog.find("remember_fact").orElseThrow().description())
+                .as("catalog mirror")
+                .contains(sentence);
+        assertThat(registeredRememberFactDescription())
+                .as("registered @Tool annotation")
+                .contains(sentence);
+    }
+
+    private static String registeredRememberFactDescription() {
+        for (Method method : MemoryTools.class.getDeclaredMethods()) {
+            Tool annotation = method.getAnnotation(Tool.class);
+            if (annotation != null && "remember_fact".equals(annotation.name())) {
+                return annotation.description();
+            }
+        }
+        throw new AssertionError("MemoryTools has no @Tool 'remember_fact'");
+    }
+
+    /**
      * The REST summary counts a parked (WAITING_INPUT) run as live work; this tool counts RUNNING
      * only. The descriptions must state that divergence instead of promising the two payloads are
      * the same.

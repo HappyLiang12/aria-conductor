@@ -97,7 +97,7 @@ public class MemoryTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "remember_fact",
-            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
+            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. One operator decision on the entity proposal promotes the new entity and its first fact together. Returns the fact with id, status, origin, sensitivity and validity.")
     public String rememberFact(
             @ToolParam(description = "Existing memory entity id (UUID); supply this or kind + canonicalKey, not both",
                     required = false)

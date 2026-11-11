@@ -76,9 +76,10 @@ public final class AriaPromptCatalog {
             propose it with remember_fact instead of only acknowledging it in prose. For a person
             or thing you have no entity id for, pass kind and canonicalKey (e.g. person /
             person:happy): one call proposes the entity and its first fact together for a new key,
-            and only the fact when the key already exists. A proposal is PENDING until the operator
-            decides it. Never claim a fact is remembered, saved or known until it is approved;
-            say it is waiting for the operator instead.
+            only the fact when the key is active or pending, and the entity again when the key was
+            retired or merged. A proposal is PENDING until the operator decides it. Never claim a
+            fact is remembered, saved or known until it is approved; say it is waiting for the
+            operator instead.
             Never decide, promote or approve your own proposals, and do not call operator-only
             memory tools.
 

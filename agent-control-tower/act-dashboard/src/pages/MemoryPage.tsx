@@ -205,6 +205,7 @@ export function MemoryPage() {
     // The dialog stays open on failure so the operator can retry or cancel.
     onError: () => undefined,
   });
+
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 2600);

@@ -117,7 +117,18 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
           </div>
         )}
       </div>
-      {error && <ErrorNotice presented={error} />}
+      {/* Task 37 / Item 6: these decide/answer routes are operator-only, and
+          `presentError` already marks the refusal. Rendering the bare text left
+          the operator with "Decision failed." and no remedy; the shared notice
+          replaces it and names the action that was refused. A non-refusal keeps
+          the ordinary error path. */}
+      {error && (
+        <ErrorNotice
+          presented={error}
+          operatorSession
+          actionLabel={clarification ? 'Answering the ask' : 'Deciding the ask'}
+        />
+      )}
     </li>
   );
 }

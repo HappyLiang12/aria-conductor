@@ -7,7 +7,7 @@ import {
 } from '../api/ops';
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
-import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
+import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from '../components/ErrorNotice';
 import {
@@ -113,6 +113,12 @@ export default function OpsPage() {
   const qc = useQueryClient();
   const [now, setNow] = useState<Date>(new Date());
   const [toast, setToast] = useState<{ kind: 'ok' | 'info' | 'err'; msg: string } | null>(null);
+  // Task 37 / Item 6: a refused decision is an authority problem with a remedy,
+  // so it renders as the shared notice in the approvals panel instead of a toast
+  // repeating whatever the transport said.
+  const [approvalRefusal, setApprovalRefusal] = useState<
+    { error: unknown; action: string } | null
+  >(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   // Heartbeat for "generated at" + relative timestamps.
@@ -173,9 +179,19 @@ export default function OpsPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+      setApprovalRefusal(null);
       setToast({ kind: 'ok', msg: 'Approval granted — agent unblocked.' });
     },
-    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Approve failed. Retry.') }),
+    // Task 37 / Item 6: /decide is operator-only, so a refusal has a remedy and
+    // belongs in the panel, not in a toast reading "Approve failed. Retry." —
+    // advice that cannot work when the route refused for want of the operator.
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setApprovalRefusal({ error: err, action: 'Approving the ask' });
+        return;
+      }
+      setToast({ kind: 'err', msg: apiErrorMessage(err, 'Approve failed.') });
+    },
   });
 
   const rejectM = useMutation({
@@ -185,9 +201,16 @@ export default function OpsPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+      setApprovalRefusal(null);
       setToast({ kind: 'ok', msg: 'Approval denied.' });
     },
-    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Deny failed. Retry.') }),
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setApprovalRefusal({ error: err, action: 'Denying the ask' });
+        return;
+      }
+      setToast({ kind: 'err', msg: apiErrorMessage(err, 'Deny failed.') });
+    },
   });
 
   /* ---------- Derived: Activity Timeline ---------- */
@@ -337,6 +360,17 @@ export default function OpsPage() {
 
             {pendingQ.isLoading && (
               <div className="body" style={{ color: 'var(--text-dim)' }}>Loading queue…</div>
+            )}
+            {/* The refused decision, in the panel it was made from: the route is
+                operator-only, so the notice names the action and the remedy. */}
+            {approvalRefusal != null && (
+              <div className="body">
+                <ErrorNotice
+                  presented={presentError(approvalRefusal.error, 'The decision was refused.')}
+                  operatorSession
+                  actionLabel={approvalRefusal.action}
+                />
+              </div>
             )}
             {pendingQ.isError && (
               <div className="body">

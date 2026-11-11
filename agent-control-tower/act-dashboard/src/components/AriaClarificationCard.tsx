@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { answerAsk } from '../api/approvals';
-import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
-import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { OPERATOR_REMEDY_COPY, crossSiteSessionMessage } from '../api/errorPresentation';
+import {
+  apiErrorMessage,
+  applyOperatorHeaders,
+  isCrossOriginRejection,
+  isOperatorRejection,
+} from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
 export type AriaClarificationItem = Extract<PanelItem, { kind: 'clarification' }>;
@@ -37,7 +42,11 @@ export function AriaClarificationCard({
       onSettled('answered');
     } catch (err) {
       setError(
-        isOperatorRejection(err)
+        isCrossOriginRejection(err)
+          // Task 37: the cross-origin 403 is not an authority refusal; its remedy
+          // is the trusted origin, not a grant.
+          ? `${crossSiteSessionMessage('Answering this question')} Nothing was sent by the refused call.`
+          : isOperatorRejection(err)
           // Same posture as the Review panels: say the refusal, say what the
           // operator can do about it, and say that nothing was sent. The remedy
           // is the shared copy (Task 35) — a reload cannot restore an operator

@@ -332,6 +332,13 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
       await sendThenTimeOut();
 
       expect(screen.getByText(/2 pending asks in the Review Queue/)).toBeInTheDocument();
+      // Task 37 Item 3: the count comes from a snapshot the panel read earlier
+      // (the reconcile's, before this turn), so the report must say when it was
+      // taken. Stated as current, a lost frame would invite a resend onto a live
+      // run — the number is a fact about the last refresh, not right now.
+      expect(
+        screen.getByText(/2 pending asks in the Review Queue as of this panel's last refresh/),
+      ).toBeInTheDocument();
       // The one read is the reconcile's: it happened before this turn was sent,
       // and the timeout report consumed it instead of asking a second time.
       expect(mockGetTimeline).toHaveBeenCalled();
@@ -400,6 +407,13 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
       expect(screen.getByText(/may be waiting for your approval/)).toBeInTheDocument();
       expect(screen.getByText(/open the Review Queue to check/)).toBeInTheDocument();
       expect(screen.getByText(/refused \(operator-only\)/)).toBeInTheDocument();
+      // Task 37 / Item 6 (T35 audit row 15): saying the check was refused without
+      // naming a remedy left the operator at a dead end. The report now carries
+      // the shared remedy — and never the advice that cannot work.
+      expect(
+        screen.getByText(/open the dashboard on the machine that runs the backend/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/reload the page and retry/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
       expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();
@@ -1412,6 +1426,38 @@ describe('AriaPanel memory proposals', () => {
     expect(textarea()).toBeEnabled();
   });
 
+  // Task 37 Item 1, panel level: the card settles, so the composer must be usable
+  // again. Before this, a fact whose parent entity is still PENDING kept the gate
+  // ("Answer the pending decision first.") on an ask this card can never decide.
+  it('releases the composer when a fact decision is blocked on its pending entity', async () => {
+    streamProposal();
+    mockDecideMemoryProposal.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message:
+            'memory fact p1 belongs to entity ent-7, which is still PENDING; decide the entity '
+            + 'proposal ent-7 to promote or retire the whole batch instead of approving one fact',
+        },
+      },
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    const notice = await screen.findByTestId('aria-proposal-blocked-on-entity');
+    expect(notice).toHaveTextContent(/decide the entity proposal ent-7/i);
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+  });
+
   it('restores the PENDING proposals the memory inbox lists, after the transcript they belong to', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([
@@ -1774,5 +1820,78 @@ describe('AriaPanel cleared-conversation guard on the REST plane', () => {
 
     expect(screen.queryByText('first turn')).not.toBeInTheDocument();
     expect(conversationIdText(container)).toBe(clearedId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 37 review fold-in: both REST reconciles swallowed an operator refusal —
+// the only effect was a suppressed console line, so the operator saw a panel
+// that simply had no approvals and no proposals. The panel keeps its own error
+// surface: a refusal there reads as the shared notice, a fault as its text.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
+  const timelineWithRun = [
+    { role: 'user', content: 'brief me', timestamp: '2026-09-30T10:00:00Z', runId: 'run-1' },
+  ];
+
+  async function reconcileOnce() {
+    renderPanel();
+    await act(async () => {}); // the mount reconcile
+    await openPanel();
+  }
+
+  it('shows the operator notice when the pending-approval read is refused', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({
+      response: { status: 403, data: { message: 'RECONCILE_RAW_SERVER_TEXT' } },
+    });
+
+    await reconcileOnce();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/reading the approval queue is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText(/RECONCILE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+  });
+
+  it('shows the operator notice when the pending-proposal read is refused', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListMemoryProposals.mockRejectedValue({ response: { status: 401, data: {} } });
+
+    await reconcileOnce();
+
+    expect(await screen.findByTestId('operator-session-notice'))
+      .toHaveTextContent(/reading the memory proposal inbox is operator-only/i);
+  });
+
+  // Positive controls: a fault is not a refusal. It keeps the server's text and
+  // must not fabricate a session notice.
+  it('shows the server text and no notice when the approval read fails', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({
+      response: { status: 500, data: { message: 'approval store unavailable' } },
+    });
+
+    await reconcileOnce();
+
+    expect(await screen.findByText(/approval store unavailable/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  it('shows the server text and no notice when the proposal read fails', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListMemoryProposals.mockRejectedValue({
+      response: { status: 500, data: { message: 'proposal inbox unavailable' } },
+    });
+
+    await reconcileOnce();
+
+    expect(await screen.findByText(/proposal inbox unavailable/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });

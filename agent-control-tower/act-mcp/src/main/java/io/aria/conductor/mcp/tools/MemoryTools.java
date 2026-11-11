@@ -106,10 +106,12 @@ public class MemoryTools implements McpTool {
             @ToolParam(description = "Fact value; credential-like values are rejected") String valueText,
             @ToolParam(description = "Provenance pointer (tool call, message, extraction job)", required = false)
             String sourceRef,
-            @ToolParam(description = "Kind of the new entity, e.g. person or repo; requires canonicalKey",
+            @ToolParam(description = "Kind of the entity, e.g. person or repo; requires canonicalKey. "
+                    + "An existing kind + canonicalKey reuses the stored entity instead of creating one",
                     required = false)
             String kind,
-            @ToolParam(description = "Canonical key of the new entity, e.g. person:happy; requires kind",
+            @ToolParam(description = "Canonical key of that entity, e.g. person:happy; requires kind. "
+                    + "A key that already exists resolves to its entity; a new key creates it",
                     required = false)
             String canonicalKey,
             ToolContext toolContext) {

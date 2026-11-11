@@ -17,7 +17,7 @@ import {
   type MemoryProposalView,
   type MemorySensitivity,
 } from '../api/memory';
-import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
+import { apiErrorMessage, isCrossOriginRejection, isOperatorRejection } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import ErrorNotice from '../components/ErrorNotice';
 import { StateNotice } from '../components/StateNotice';
@@ -286,7 +286,13 @@ export function MemoryPage() {
         </div>
       </div>
 
-      {refused && <OperatorSessionNotice />}
+      {refused && (
+        <OperatorSessionNotice
+          actionLabel="Reading memory"
+          crossOrigin={isCrossOriginRejection(entitiesQuery.error)
+            || isCrossOriginRejection(proposalsQuery.error)}
+        />
+      )}
       {refusal != null && (
         <div className="memory-notice">
           <ErrorNotice
@@ -674,7 +680,10 @@ export function MemoryPage() {
               <>
                 {' '}
                 {isOperatorRejection(decideFailure) ? (
-                  <OperatorSessionNotice actionLabel="Deciding a memory proposal" />
+                  <OperatorSessionNotice
+                    actionLabel="Deciding a memory proposal"
+                    crossOrigin={isCrossOriginRejection(decideFailure)}
+                  />
                 ) : (
                   <span className="error-text" role="alert">
                     {apiErrorMessage(decideFailure, 'The proposal was not decided.')}

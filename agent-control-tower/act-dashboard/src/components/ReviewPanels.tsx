@@ -2,8 +2,13 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, finalizeRun, rejectApproval } from '../api/approvals';
-import { applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
-import { presentError, OPERATOR_REMEDY_COPY, type PresentedError } from '../api/errorPresentation';
+import { applyOperatorHeaders, isCrossOriginRejection, isOperatorRejection } from '../api/operatorSession';
+import {
+  presentError,
+  OPERATOR_REMEDY_COPY,
+  crossSiteSessionMessage,
+  type PresentedError,
+} from '../api/errorPresentation';
 import ErrorNotice from './ErrorNotice';
 import { ApprovalToolDetails } from './ApprovalToolDetails';
 import { formatTimestamp } from '../utils/formatTime';
@@ -44,6 +49,9 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const [requestFeedback, setRequestFeedback] = useState('');
   const [error, setError] = useState<PresentedError | null>(null);
   const [operatorRejected, setOperatorRejected] = useState(false);
+  // Task 37: the 403 that carries the cross-origin marker is not an authority
+  // refusal, so it must not be answered with the operator-grant remedy.
+  const [crossOriginRejected, setCrossOriginRejected] = useState(false);
 
   // A native permission ask is authorizable exactly once, never in bulk: the
   // batch control below skips them so a batch action can never stand in for a
@@ -84,6 +92,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
     },
     onError: (err: unknown) => {
       setOperatorRejected(isOperatorRejection(err));
+      setCrossOriginRejected(isCrossOriginRejection(err));
       setError(presentError(err, 'Action rejected — please retry.'));
     },
   });
@@ -215,8 +224,17 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
           nothing) because a refusal here may also carry the server's wording. */}
       {operatorRejected && (
         <div className="ask-ctx">
-          Approvals are operator-only. {OPERATOR_REMEDY_COPY} Nothing was decided by the
-          refused call.
+          {crossOriginRejected ? (
+            <>
+              {crossSiteSessionMessage('Approving this ask')} Nothing was decided by the refused
+              call.
+            </>
+          ) : (
+            <>
+              Approvals are operator-only. {OPERATOR_REMEDY_COPY} Nothing was decided by the
+              refused call.
+            </>
+          )}
         </div>
       )}
     </div>

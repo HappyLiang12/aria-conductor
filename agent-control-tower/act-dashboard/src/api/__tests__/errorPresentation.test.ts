@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { apiErrorMessage } from '../operatorSession';
 import {
+  CROSS_SITE_REMEDY_COPY,
   OPERATOR_REMEDY_COPY,
+  crossSiteSessionMessage,
   errorActionFor,
   errorActionForSurface,
   openConfigure,
@@ -182,8 +184,55 @@ describe('the operator remedy is one copy (Task 35)', () => {
   });
 });
 
-describe('openConfigure', () => {
-  it('dispatches the tab-aware configure event the modal listens for', () => {
+// Task 37 / Item 2: a cross-origin 403 is not "you are not the operator". The
+// marker the backend serves says the request came from a page it does not trust,
+// so the remedy is the trusted origin — the operator-session remedy ("the
+// operator who runs the backend must grant access") is false for it.
+describe('the cross-site remedy is its own copy (Task 37)', () => {
+  it('names the origin remedy and not the operator-grant remedy', () => {
+    expect(CROSS_SITE_REMEDY_COPY).toMatch(/origin the backend trusts/i);
+    expect(CROSS_SITE_REMEDY_COPY).toMatch(/not a missing operator session/i);
+    expect(CROSS_SITE_REMEDY_COPY).not.toMatch(/must grant access/i);
+    expect(CROSS_SITE_REMEDY_COPY).not.toMatch(/reload the page and retry/i);
+  });
+
+  it('builds the labelled refusal on that constant, naming the refusal kind', () => {
+    const message = crossSiteSessionMessage('Applying the fleet runtime');
+
+    expect(message).toContain('Applying the fleet runtime was refused as a cross-site request');
+    expect(message).toContain(CROSS_SITE_REMEDY_COPY);
+    expect(message).not.toMatch(/must grant access/i);
+  });
+});
+
+describe('presentError classifies a cross-origin refusal apart from an authority one', () => {
+  function denied(status: number, message: string) {
+    return { response: { status, data: { ok: false, errorType: 'FORBIDDEN', message } } };
+  }
+
+  it('marks a cross-origin 403 as both refused and cross-origin', () => {
+    const presented = presentError(denied(403, 'Cross-origin operator mutation rejected'), 'x');
+
+    expect(presented).toMatchObject({ operatorRejected: true, crossOriginRejected: true });
+  });
+
+  it.each([401, 403])('marks a plain %i as an authority refusal only', (status) => {
+    const presented = presentError(denied(status, 'operator session required'), 'x');
+
+    expect(presented.operatorRejected).toBe(true);
+    // Absent rather than false, so no consumer ever reads a new key by accident.
+    expect('crossOriginRejected' in presented).toBe(false);
+  });
+
+  it('leaves a 500 with neither marker', () => {
+    const presented = presentError(denied(500, 'store unavailable'), 'x');
+
+    expect('operatorRejected' in presented).toBe(false);
+    expect('crossOriginRejected' in presented).toBe(false);
+  });
+});
+
+describe('openConfigure', () => {  it('dispatches the tab-aware configure event the modal listens for', () => {
     const listener = vi.fn();
     window.addEventListener('act:open-configure', listener);
 

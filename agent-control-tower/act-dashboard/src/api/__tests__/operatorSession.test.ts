@@ -2,12 +2,16 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import client from '../client';
 import {
+  CROSS_ORIGIN_REJECTION_MARKER,
   OPERATOR_CSRF_HEADER,
   OPERATOR_SESSION_STORAGE_KEY,
   applyOperatorHeaders,
   clearOperatorSession,
   establishOperatorSession,
+  isCrossOriginRejection,
+  isOperatorRejection,
   loadOperatorSession,
+  operatorRefusalKind,
   operatorSessionState,
 } from '../operatorSession';
 
@@ -113,5 +117,58 @@ describe('operator session storage move (local-authority Task 3)', () => {
 
     expect(localStorage.getItem(OPERATOR_SESSION_STORAGE_KEY)).not.toBeNull();
     expect(loadOperatorSession()?.csrfToken).toBe('csrf-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 37 / Item 2: a 403 has TWO producers on the operator routes, and they do
+// not mean the same thing. OperatorSessionService.rejectCrossSiteOrigin refuses
+// a mutation whose Origin names a page the backend does not trust
+// ("Cross-origin operator mutation rejected"), while a genuine authority refusal
+// means the caller is not the operator. The status alone cannot tell them apart,
+// so the served marker does — and it is the marker the Java lane freezes
+// server-side.
+// ---------------------------------------------------------------------------
+describe('operator rejection classification (Task 37)', () => {
+  function denied(status: number, message?: string) {
+    return {
+      response: {
+        status,
+        data: message === undefined ? {} : { ok: false, errorType: 'FORBIDDEN', message },
+      },
+    };
+  }
+
+  it('classifies the cross-origin marker as a cross-site rejection, not an authority refusal', () => {
+    const error = denied(403, 'Cross-origin operator mutation rejected');
+
+    expect(operatorRefusalKind(error)).toBe('cross-origin');
+    expect(isCrossOriginRejection(error)).toBe(true);
+    // Still a refusal: every caller that only asks "was it refused?" keeps working.
+    expect(isOperatorRejection(error)).toBe(true);
+  });
+
+  it('keeps a plain 403 and a 401 as genuine authority refusals', () => {
+    for (const status of [401, 403]) {
+      const error = denied(status, 'operator session required');
+
+      expect(operatorRefusalKind(error)).toBe('operator');
+      expect(isCrossOriginRejection(error)).toBe(false);
+      expect(isOperatorRejection(error)).toBe(true);
+    }
+  });
+
+  it('never classifies anything else as a rejection', () => {
+    // Positive controls: a fault, a bare error and an absent value.
+    expect(operatorRefusalKind(denied(500, 'store unavailable'))).toBeNull();
+    expect(operatorRefusalKind(new Error('network down'))).toBeNull();
+    expect(operatorRefusalKind(undefined)).toBeNull();
+    expect(isOperatorRejection(denied(500, 'store unavailable'))).toBe(false);
+  });
+
+  it('pins the marker to the wording the backend serves', () => {
+    // rejectCrossSiteOrigin, validateMutation and RunController's origin guard
+    // all serve exactly this string.
+    expect(CROSS_ORIGIN_REJECTION_MARKER).toBe('Cross-origin operator mutation rejected');
   });
 });

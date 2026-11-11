@@ -89,6 +89,53 @@ describe('DecisionQueue', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Answer was rejected');
   });
 
+  // Task 37 / Item 6 (T35 audit row 12): `presentError` marks a 401/403 as
+  // `operatorRejected`, but this row rendered the plain text — so a refusal on
+  // the Overview read as "Decision failed." with no remedy anywhere on the page.
+  it('renders the operator notice, not the server text, for a refused decision', () => {
+    renderQueue({
+      actionError: {
+        id: 'ap-1',
+        presented: { text: 'Decision failed.', operatorRejected: true },
+      },
+    });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/deciding the ask is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText('Decision failed.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // Positive control: a 500-shaped presented error keeps the ordinary path.
+  it('keeps the server text and no notice for a non-refusal action error', () => {
+    renderQueue({ actionError: { id: 'ap-1', presented: { text: 'Decision failed.' } } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Decision failed.');
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  // The clarification row answers rather than decides, and the notice must name
+  // the action the operator actually took.
+  it('names answering for a refused answer on a clarification row', () => {
+    renderQueue({
+      rows: [{
+        ...row,
+        taskId: null,
+        state: 'WAITING_INPUT',
+        askType: 'CLARIFICATION',
+        source: 'CLARIFICATION',
+      }],
+      actionError: {
+        id: 'ap-1',
+        presented: { text: 'Answer failed.', operatorRejected: true },
+      },
+    });
+
+    expect(screen.getByTestId('operator-session-notice'))
+      .toHaveTextContent(/answering the ask is operator-only/i);
+  });
+
   it('collapses only to the one-line all-clear section', () => {
     renderQueue({ rows: [], count: 0, collapsed: true });
     expect(screen.getByText(/no decisions waiting/i)).toBeInTheDocument();

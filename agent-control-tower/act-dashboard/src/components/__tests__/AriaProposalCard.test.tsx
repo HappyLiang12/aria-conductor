@@ -183,6 +183,9 @@ describe('AriaProposalCard', () => {
 
     expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
     expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    // Positive control for the parent-PENDING branch: the already-decided body
+    // does not carry that marker, so it must not settle as blocked on an entity.
+    expect(screen.queryByTestId('aria-proposal-blocked-on-entity')).not.toBeInTheDocument();
     // Nothing is decided by this call, and no control that could only 409 again.
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
@@ -190,6 +193,69 @@ describe('AriaProposalCard', () => {
       screen.queryByText(/a decided proposal cannot be reopened/),
     ).not.toBeInTheDocument();
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'decided-elsewhere');
+  });
+
+  // Task 37 Item 1: a FACT proposal whose parent entity is still PENDING answers
+  // its own 409 — `MemoryProposalService.decideFact` refuses the single-fact
+  // approval with "which is still PENDING; decide the entity proposal <id>".
+  // That is not retryable: the same click 409s until the ENTITY proposal is
+  // decided. The card must say so, name the decision that resolves it (the
+  // message carries the entity id), offer no control that can only fail again,
+  // and stop gating the composer.
+  it('settles a parent-still-PENDING 409 on the entity decision, naming it and offering no retry', async () => {
+    vi.mocked(decideMemoryProposal).mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message:
+            'memory fact e4d7 belongs to entity ent-7, which is still PENDING; decide the entity '
+            + 'proposal ent-7 to promote or retire the whole batch instead of approving one fact',
+        },
+      },
+    });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    const notice = await screen.findByTestId('aria-proposal-blocked-on-entity');
+    // What happened, and the operator action that resolves it — the entity id
+    // comes from the served message, not from a guess.
+    expect(notice).toHaveTextContent(/ent-7/);
+    expect(notice).toHaveTextContent(/decide the entity proposal/i);
+    // The proposal itself is still pending on the server: this card must not
+    // claim it left the queue (that copy belongs to `decided-elsewhere`).
+    expect(notice).not.toHaveTextContent(/no longer pending/i);
+    // No verdict was recorded, and no control that could only 409 again.
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute(
+      'data-state',
+      'blocked-on-entity',
+    );
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(onSettled).toHaveBeenCalledWith('e4d7', 'blocked-on-entity');
+  });
+
+  // The same marker on the ENTITY batch card would be a contradiction (an entity
+  // card cannot be blocked on its own decision), so the settled copy is chosen by
+  // STATE, not by subject type: an entity card in this state still names the
+  // entity decision and never claims the proposal left the PENDING queue.
+  it('never tells an entity batch card its proposal is no longer pending', () => {
+    render(
+      <AriaProposalCard
+        item={entityItem({ state: 'blocked-on-entity' })}
+        onSettled={vi.fn()}
+      />,
+    );
+
+    const notice = screen.getByTestId('aria-proposal-blocked-on-entity');
+    expect(notice).toHaveTextContent(/entity proposal/i);
+    expect(notice).not.toHaveTextContent(/no longer pending/i);
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
   });
 
   // Task 32 Item 2: the same handler maps a retryable optimistic-lock conflict to
@@ -218,6 +284,7 @@ describe('AriaProposalCard', () => {
       await screen.findByText(/changed while its proposal was being decided/i),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-blocked-on-entity')).not.toBeInTheDocument();
     expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
@@ -279,6 +346,7 @@ describe('AriaProposalCard', () => {
 
     expect(await screen.findByText('memory store unavailable')).toBeInTheDocument();
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-blocked-on-entity')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(onSettled).not.toHaveBeenCalled();
     expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');

@@ -489,8 +489,8 @@ test('a run-scoped worker credential cannot self-approve over either MCP transpo
   // refusal (never a transport failure) naming the exact FORBIDDEN code and the
   // exact operator-authority message.
   expect(attempts).toEqual([
-    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required' },
-    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required' },
+    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required: deciding an approval is an operator decision. Decide it in the Review Queue.' },
+    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required: deciding an approval is an operator decision. Decide it in the Review Queue.' },
   ]);
 
   const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);

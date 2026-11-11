@@ -252,6 +252,39 @@ class ToolCatalogParityTest {
     }
 
     /**
+     * A catalog entry that advertises a tool without saying the platform refuses a worker is the
+     * same dishonesty class this program removes. Ten operator-only tools refuse a run-scoped
+     * worker credential with FORBIDDEN, so all ten descriptions must say so; dropping one sentence
+     * from any entry fails here rather than silently widening what the prompt promises.
+     */
+    @Test
+    void everyOperatorOnlyDescriptionStatesThatAWorkerIsRefused() {
+        assertThat(catalog.tools())
+                .filteredOn(tool -> tool.policy() == ToolPolicy.OPERATOR_ONLY)
+                .hasSize(10)
+                .allSatisfy(tool -> assertThat(tool.description())
+                        .as("description of '%s'", tool.name())
+                        .contains("Operator authority only:")
+                        .contains("refused with FORBIDDEN"));
+    }
+
+    /**
+     * The two entity reads refuse a PENDING view to a worker, so their descriptions must say that
+     * PENDING is a review status with an operator-only listing/read rather than leaving the reader
+     * with ACTIVE/MERGED/RETIRED as the whole status set.
+     */
+    @Test
+    void theEntityReadDescriptionsStateThePendingOperatorGuard() {
+        assertThat(catalog.find("list_memory_entities").orElseThrow().description())
+                .contains("status=PENDING")
+                .contains("operator authority only")
+                .contains("refused with FORBIDDEN");
+        assertThat(catalog.find("get_memory_entity").orElseThrow().description())
+                .contains("PENDING entity is review material")
+                .contains("not readable");
+    }
+
+    /**
      * The catalog covers the registered MCP surface plus the cores' own
      * read-only web tools; only the registered names are the inventory.
      */

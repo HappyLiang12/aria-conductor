@@ -46,7 +46,7 @@ import java.util.Map;
  * <p>The admission limit ({@code aria.runs.max-active}/{@code aria-reserved})
  * is unlimited here because the suite's pause/approval specs intentionally
  * leave PAUSED runs behind, and PAUSED holds a slot by design -- with the
- * production cap (6+1) a long shard saturates its worker slots and later specs'
+ * production cap (6+3) a long shard saturates its worker slots and later specs'
  * runs stay PENDING and time out. The harness runs a stub bridge with no
  * sandbox daemons (nothing the cap protects against), and the cap has its own
  * dedicated unit + integration coverage.

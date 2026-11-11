@@ -17,6 +17,7 @@ import {
 } from '../components/NativePermissionAsk';
 import HousekeepingPanel from '../components/HousekeepingPanel';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
+import { shortRunId } from '../utils/shortRunId';
 import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -440,7 +441,7 @@ export default function OpsPage() {
                           {avatarInitials(requester?.name ?? 'AG')}
                         </span>
                         <span style={{ color: 'var(--text)' }}>{requester?.name ?? 'Unknown agent'}</span>
-                        <span style={{ color: 'var(--text-mute)' }}>· run {a.runId.slice(0, 8)}</span>
+                        <span style={{ color: 'var(--text-mute)' }}>· run {shortRunId(a.runId)}</span>
                       </div>
 
                       {permission && (

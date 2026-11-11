@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
 import { applyOperatorHeaders } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
+import { shortRunId } from '../utils/shortRunId';
 import { ErrorNotice } from './ErrorNotice';
 import DiffPreview from './DiffPreview';
 import { ApprovalToolDetails } from './ApprovalToolDetails';
@@ -109,7 +110,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
           const pending = approveMutation.isPending || rejectMutation.isPending;
           const permission = nativePermissionOf(approval);
           return (
-            <div key={approval.id} className={`qitem${isFirst ? ' highlight' : ''}`}>
+            <div key={approval.id ?? `row-${idx}`} className={`qitem${isFirst ? ' highlight' : ''}`}>
               <div className="h">
                 {permission ? (
                   <NativePermissionKindPill permission={permission} />
@@ -128,11 +129,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                   <>
                     <span className="cell-mono">{approval.toolName}</span>
                     {' · Run '}
-                    <span className="cell-mono">{approval.runId.slice(0, 8)}</span>
+                    <span className="cell-mono">{shortRunId(approval.runId)}</span>
                   </>
                 ) : (
                   <>
-                    Run · <span className="cell-mono">{approval.runId.slice(0, 8)}</span>
+                    Run · <span className="cell-mono">{shortRunId(approval.runId)}</span>
                   </>
                 )}
               </div>
@@ -151,7 +152,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                   when the payload predates the fields. */}
               <ApprovalToolDetails ask={approval} includeToolName={false} />
               {(approval.toolName === 'git_push' || approval.toolName === 'git_create_pr'
-                || approval.riskTier === 'PUSH') && <DiffPreview runId={approval.runId} />}
+                || approval.riskTier === 'PUSH') && approval.runId && <DiffPreview runId={approval.runId} />}
               {approval.source === 'CLARIFICATION' ? (
                 // Waiting-input (2026-10-05): the backend refuses /decide on a
                 // CLARIFICATION ask (409 + hint) — it is answered (Answer &

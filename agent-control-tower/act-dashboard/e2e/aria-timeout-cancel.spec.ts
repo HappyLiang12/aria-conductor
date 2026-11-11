@@ -153,19 +153,32 @@ test('Error message on silent stream close', async ({ page }) => {
     });
   });
 
+  // T51: the silent-close report states the pending-approval count of the
+  // snapshot the panel took at its last refresh — the panel mounts with the
+  // shell (Layout.tsx:113) and its mount reconcile reads
+  // GET /api/v1/approvals?status=PENDING before any post-load stub exists.
+  // Registering this stub after openAriaPanel (as this spec used to) therefore
+  // left the count at whatever the shared harness had accumulated from earlier
+  // specs, making the pinned "1 pending ask" order-dependent. Serving exactly
+  // one PENDING ask from BEFORE the first navigation makes the precondition the
+  // spec's own: the report must name the situation this test established.
+  await page.route('**/api/v1/approvals**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/v1/approvals') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ id: 'e2e-ask-1', runId: 'e2e-run-1', status: 'PENDING' }]),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   await openAriaPanel(page);
-
-  // Pin the pending-approval check the panel makes on the failure path only —
-  // registered after the shell has loaded so no other surface sees the stub.
-  await page.route('**/api/v1/approvals**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([{ id: 'e2e-ask-1', status: 'PENDING' }]),
-    });
-  });
 
   // Send a message — the intercepted stream will close silently.
   await typeAndSend(page, 'Test silent close');

@@ -83,6 +83,18 @@ describe('useDecisionQueue', () => {
     expect(result.current.count).toBeNull();
   });
 
+  // T51: the same sparse payload that blanked the Review Queue reaches this
+  // queue's row title. It must stay a row with an unknown run, never throw.
+  it('keeps a row with an unknown run when the approval carries no runId', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([approval({ runId: undefined })] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].title).toBe('Run unknown');
+  });
+
   it('reports an error phase when the approvals source fails but the board succeeds', async () => {
     // Approvals own the row identity: a successful board cannot turn a failed
     // approvals fetch into an all-clear or a partial view with zero rows.

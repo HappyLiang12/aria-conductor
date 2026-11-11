@@ -154,9 +154,20 @@ describe('AriaProposalCard', () => {
   // (the Memory page, another operator, a re-proposal superseded). Retrying can
   // never succeed, so the card settles as `decided-elsewhere` — the same honest
   // state the panel's reconcile uses — instead of offering the decision again.
-  it('settles a 409 as decided elsewhere instead of offering a retry', async () => {
+  //
+  // The body is the one `MemoryExceptionHandler` actually serves for that case:
+  // `409 { ok:false, errorType:'CONFLICT', message }` with the fixed
+  // "a decided proposal cannot be reopened" wording.
+  it('settles an already-decided 409 as decided elsewhere instead of offering a retry', async () => {
     vi.mocked(decideMemoryProposal).mockRejectedValue({
-      response: { status: 409, data: { message: 'proposal already decided' } },
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message: 'memory entity ent-7 is already ACTIVE; a decided proposal cannot be reopened',
+        },
+      },
     });
     const onSettled = vi.fn();
     render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
@@ -168,8 +179,84 @@ describe('AriaProposalCard', () => {
     // Nothing is decided by this call, and no control that could only 409 again.
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('proposal already decided')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/a decided proposal cannot be reopened/),
+    ).not.toBeInTheDocument();
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'decided-elsewhere');
+  });
+
+  // Task 32 Item 2: the same handler maps a retryable optimistic-lock conflict to
+  // 409 as well, with the same `errorType`. Reporting that as "decided outside
+  // this panel" is false and throws away a retry that would have worked, so only
+  // the already-decided wording settles the card.
+  it('keeps a retryable lock-conflict 409 as an ordinary error with a retry', async () => {
+    vi.mocked(decideMemoryProposal).mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message:
+            'memory entity ent-7 changed while its proposal was being decided; re-read before deciding',
+        },
+      },
+    });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    // The server's own reason, the decision still open, and the card not settled.
+    expect(
+      await screen.findByText(/changed while its proposal was being decided/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  // Positive control for the retry above: the queue really does accept the second
+  // attempt, and it flips the card then.
+  it('decides on the retry after a lock-conflict 409', async () => {
+    vi.mocked(decideMemoryProposal)
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            ok: false,
+            errorType: 'CONFLICT',
+            message:
+              'memory fact e4d7 changed while the approval was being written; re-read before deciding',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        id: 'e4d7',
+        subjectType: 'FACT',
+        entityId: 'ent-1',
+        factKey: 'preferred_editor',
+        valueText: 'IntelliJ IDEA',
+        predicate: null,
+        toEntityId: null,
+        status: 'ACTIVE',
+        origin: 'OPERATOR',
+        sensitivity: 'INTERNAL',
+        confidence: null,
+        createdAt: null,
+        validFrom: null,
+      });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await screen.findByText(/changed while the approval was being written/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByText(/now active/i)).toBeInTheDocument();
+    expect(onSettled).toHaveBeenCalledWith('e4d7', 'approved');
   });
 
   // Positive control for the 409 above: any other failure is still an error the

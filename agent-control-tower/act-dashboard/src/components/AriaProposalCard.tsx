@@ -11,9 +11,10 @@ export interface AriaProposalCardProps {
   /**
    * Called once the proposal settled locally, so the panel can settle the card
    * through the same state it merges every other plane into. `decided-elsewhere`
-   * is reported for a 409: the server says the proposal is already settled, and
-   * the card cannot know by which verdict. A refused decision never calls it —
-   * nothing was decided.
+   * is reported for a 409 whose body says the proposal was ALREADY decided: the
+   * server says it is settled, and the card cannot know by which verdict. A 409
+   * the handler serves for a retryable lock conflict does not settle anything,
+   * and a refused decision never calls it — nothing was decided.
    */
   onSettled?: (proposalId: string, state: 'approved' | 'rejected' | 'decided-elsewhere') => void;
 }
@@ -22,6 +23,32 @@ export interface AriaProposalCardProps {
 function responseStatus(error: unknown): number | null {
   const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
   return typeof status === 'number' ? status : null;
+}
+
+/**
+ * `MemoryExceptionHandler` serves ONE memory error envelope — `{ ok: false,
+ * errorType, message }` — and maps BOTH `MemoryConflictException` and a
+ * retryable `OptimisticLockingFailureException` to `409 CONFLICT`. Status and
+ * `errorType` are therefore identical for the two cases, and the fixed wording
+ * is the only discriminator the body carries:
+ *
+ * - already decided (retry cannot succeed): every such throw in
+ *   `MemoryProposalService` ends "a decided proposal cannot be reopened";
+ * - lost version race (retry can succeed): the row "changed while ... was being
+ *   ...; re-read before deciding" / "another writer won the race".
+ *
+ * So a 409 settles the card only when the body says the proposal was already
+ * decided. Anything else keeps the ordinary error path and its retry.
+ */
+const ALREADY_DECIDED_MARKER = 'a decided proposal cannot be reopened';
+
+function isAlreadyDecidedConflict(error: unknown): boolean {
+  if (responseStatus(error) !== 409) return false;
+  const data = (error as {
+    response?: { data?: { errorType?: unknown; message?: unknown } };
+  } | undefined)?.response?.data;
+  if (data?.errorType !== 'CONFLICT') return false;
+  return typeof data.message === 'string' && data.message.includes(ALREADY_DECIDED_MARKER);
 }
 
 /** Human title per subject type; ENTITY and FACT are the two shipped today. */
@@ -184,14 +211,15 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       setLocal(next);
       onSettled?.(item.proposalId, next);
     } catch (err: unknown) {
-      // A 409 is the server saying the proposal is ALREADY settled — decided on
-      // the Memory page, by another operator, or superseded by a re-proposal.
-      // Offering the decision again would retry something that cannot succeed,
-      // and the panel's item is now wrong: settle both as `decided-elsewhere`,
-      // the verdict-free state the reconcile already uses. Every other status is
-      // a real failure (the proposal may well still be pending) and keeps the
+      // A 409 saying the proposal is ALREADY settled — decided on the Memory
+      // page, by another operator, or superseded by a re-proposal — cannot be
+      // retried and leaves the panel's item wrong: settle both as
+      // `decided-elsewhere`, the verdict-free state the reconcile already uses.
+      // The handler serves a retryable optimistic-lock conflict as a 409 too, so
+      // the body decides (see `isAlreadyDecidedConflict`): that one, and every
+      // other status, is a real failure the proposal may survive, and keeps the
       // error with its retry.
-      if (responseStatus(err) === 409) {
+      if (isAlreadyDecidedConflict(err)) {
         setLocal('decided-elsewhere');
         onSettled?.(item.proposalId, 'decided-elsewhere');
         return;

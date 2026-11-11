@@ -59,10 +59,14 @@ class ApprovalToolsTest {
     }
 
     private ApprovalDetail detail(UUID id, String type, String status) {
+        return detail(id, type, status, null);
+    }
+
+    private ApprovalDetail detail(UUID id, String type, String status, String toolPolicy) {
         return new ApprovalDetail(id, UUID.randomUUID(), null, ApprovalStatus.valueOf(status),
                 "Spec resubmitted", Instant.now(), null, Instant.now().plusSeconds(1800),
                 type, "## spec", "MARKDOWN", UUID.randomUUID(), null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, toolPolicy);
     }
 
     private ToolContext context(ActorPrincipal actor) {
@@ -80,6 +84,26 @@ class ApprovalToolsTest {
         String json = tools.listApprovals("PENDING");
 
         assertThat(json).contains("SPEC_REVIEW").contains(id.toString());
+    }
+
+    /**
+     * B1 (spec §5.3): the payload the approval card renders also carries the reviewed tool
+     * policy, resolved from the one catalog, so a {@code remember_fact} / {@code
+     * decide_memory_proposal} card can say WORKER_WRITE / OPERATOR_ONLY instead of read-only.
+     * The same record is what both the REST route and this MCP tool return.
+     */
+    @Test
+    void listApprovals_carriesTheReviewedToolPolicyOfTheAsk() {
+        UUID id = UUID.randomUUID();
+        when(approvalQueryService.list(ApprovalStatus.PENDING))
+                .thenReturn(List.of(detail(id, "TOOL_CALL", "PENDING", "OPERATOR_ONLY")));
+
+        String json = tools.listApprovals("PENDING");
+
+        assertThat(json).contains("\"toolPolicy\":\"OPERATOR_ONLY\"");
+        assertThat(detail(id, "TOOL_CALL", "PENDING"))
+                .as("an unclassified ask has no policy rather than an invented one")
+                .extracting(ApprovalDetail::toolPolicy).isNull();
     }
 
     @Test

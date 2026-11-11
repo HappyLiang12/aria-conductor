@@ -35,7 +35,7 @@ public class DashboardTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "get_dashboard_summary",
-            description = "Get the dashboard summary: active/healthy/degraded agents, running runs, pending approvals and total tokens burned. Same payload as GET /api/v1/dashboard/summary.")
+            description = "Get the dashboard summary: active/healthy/degraded agents, running runs, pending approvals and total tokens burned. Same shape as GET /api/v1/dashboard/summary (runningRuns counts RUNNING only here; the REST summary also counts WAITING_INPUT).")
     public String getDashboardSummary() {
         try {
             long healthyAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY);

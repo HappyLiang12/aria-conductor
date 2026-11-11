@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -114,9 +115,10 @@ public class AriaConversationController {
                         ? t.getToolCallId()
                         : null;
                 // Only a present tool_calls row yields a status. A row with no matching
-                // call leaves both fields absent rather than guessing a success.
+                // call leaves both fields absent rather than guessing a success. The row id
+                // is the producer's own derivation, shared rather than re-stated.
                 ToolCallStatus status = rawToolCallId != null
-                        ? statusByRowId.get(ToolCallRowId.of(run.getId(), rawToolCallId))
+                        ? statusByRowId.get(RunTelemetryService.toolCallRowId(run.getId(), rawToolCallId))
                         : null;
                 timeline.add(TimelineEntry.builder()
                         .role(t.getRole())

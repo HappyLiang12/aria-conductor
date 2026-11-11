@@ -67,7 +67,7 @@ public class ToolCatalog implements ToolCatalogProvider {
             // auditability without a per-read click. Writes and operator-only tools are unchanged;
             // ToolCatalogParityTest pins this.
             write("remember_fact",
-                    "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity."),
+                    "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity."),
             read("recall_memory",
                     "Recall ranked memory for a piece of text: matched entities and their current ACTIVE facts, filtered by the fail-closed INTERNAL sensitivity ceiling, each carrying id, origin, sensitivity and validity. Deterministic for the same state and query; never returns PENDING proposals.",
                     true),
@@ -75,7 +75,7 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.",
                     true),
             read("get_memory_entity",
-                    "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material and is not readable through this detail read.",
+                    "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page.",
                     true),
             operatorOnly("forget_fact",
                     "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."),
@@ -136,7 +136,7 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Move a kanban item to a new status. WARNING: this has side effects — it can spawn an agent run (TODO/IN_PROGRESS), resume or pause a linked run (REVIEW/BACKLOG/TODO), create HITL review asks (REVIEW) or cancel a run (CANCELLED). Repeating the current status is a no-op. A refused move answers an error envelope carrying the rejection code in errorType (NO_ELIGIBLE_AGENT, AGENT_NOT_ELIGIBLE, RUN_ALREADY_FINISHED, RUN_NOT_FOUND, CORRUPT_RUN_LINK, LINKED_RUN_ACTIVE) and the reason in message: a tool error here is a governance refusal, not a transport failure."),
             // dashboard
             read("get_dashboard_summary",
-                    "Get the dashboard summary: active/healthy/degraded agents, running runs, pending approvals and total tokens burned. Same payload as GET /api/v1/dashboard/summary.",
+                    "Get the dashboard summary: active/healthy/degraded agents, running runs, pending approvals and total tokens burned. Same shape as GET /api/v1/dashboard/summary (runningRuns counts RUNNING only here; the REST summary also counts WAITING_INPUT).",
                     true),
             // definition of done
             write("init_dod",

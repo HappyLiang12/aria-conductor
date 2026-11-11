@@ -202,8 +202,18 @@ public class RunTelemetryService {
         return value == null || value == 0L;
     }
 
-    /** Deterministic row id: a re-delivered event updates its own row. */
-    private static UUID toolCallRowId(UUID runId, String toolCallId) {
+    /**
+     * The one derivation of a {@code tool_calls} primary key from a raw bridge id.
+     *
+     * <p>{@code ToolCall} carries no raw-id column, so the row id is derived rather than
+     * stored. A re-delivered event updates its own row instead of duplicating the audit
+     * trail, and any reader that has to join a trajectory row back to its call row — the
+     * Aria conversation restore path is the one other consumer — must compute this same
+     * value. It is public for exactly that reason: a second copy of the formula in a
+     * consumer is a silent detach waiting to happen, and {@code ToolCallRowIdTest} pins
+     * the id this producer actually persists to this function and to a fixed golden value.
+     */
+    public static UUID toolCallRowId(UUID runId, String toolCallId) {
         if (toolCallId == null || toolCallId.isBlank()) {
             return UUID.randomUUID();
         }

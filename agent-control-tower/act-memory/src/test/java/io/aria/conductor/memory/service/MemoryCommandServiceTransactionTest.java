@@ -28,10 +28,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -64,6 +70,7 @@ import static org.mockito.Mockito.when;
  */
 @DataJpaTest
 @ContextConfiguration(classes = MemoryJpaSliceConfig.class)
+@Import(MemoryCommandServiceTransactionTest.TransactionalCommandServiceConfig.class)
 class MemoryCommandServiceTransactionTest {
 
     @Autowired
@@ -80,6 +87,15 @@ class MemoryCommandServiceTransactionTest {
 
     @Autowired
     PlatformTransactionManager transactionManager;
+
+    /**
+     * The service behind its Spring transaction proxy. The @Transactional annotation on a
+     * {@code new MemoryCommandService(...)} is inert, so the service-owned transaction boundary can
+     * only be tested through a bean: the rejected-first-fact test below drives this instance with
+     * no ambient transaction, so a rollback there can only come from the service's own annotation.
+     */
+    @Autowired
+    MemoryCommandService transactionalCommand;
 
     @MockitoBean
     MemoryAssertionRepository assertions;
@@ -134,8 +150,15 @@ class MemoryCommandServiceTransactionTest {
      * transaction. A fact the value guard rejects (a credential-like value) must therefore leave
      * no PENDING entity behind — a proposal card the operator can never decide is worse than no
      * card, and the entity row would be exactly that.
+     * <p>
+     * The call runs with NO ambient transaction (the class-level {@code @DataJpaTest} transaction
+     * is suspended here) and through the service <em>bean</em>, not the manually constructed
+     * instance: a {@code @Transactional} annotation on {@code new MemoryCommandService(...)} is
+     * inert, and the earlier version of this test asserted a rollback produced by its own
+     * {@code REQUIRES_NEW} template. Deleting the service annotation must red this test.
      */
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void aRejectedFirstFactLeavesNoPendingEntityBehind() {
         ownTransaction.executeWithoutResult(status -> {
             facts.deleteAll();
@@ -144,11 +167,11 @@ class MemoryCommandServiceTransactionTest {
         assertThat(entities.count()).as("baseline").isZero();
         assertThat(facts.count()).as("baseline").isZero();
 
-        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> command.addFactByKey(
+        assertThatThrownBy(() -> transactionalCommand.addFactByKey(
                 "PERSON", "person:careful",
                 new AddFactCommand("preferred_editor", "sk-live-0123456789abcdef", "STRING",
                         Sensitivity.INTERNAL, null),
-                new MemoryActor(MemoryActorType.EXTRACTION, UUID.randomUUID().toString()))))
+                new MemoryActor(MemoryActorType.EXTRACTION, UUID.randomUUID().toString())))
                 .isInstanceOf(MemoryValidationException.class);
 
         assertThat(entities.count())
@@ -515,5 +538,25 @@ class MemoryCommandServiceTransactionTest {
                     .validFrom(Instant.now())
                     .build());
         });
+    }
+
+    /**
+     * Exposes {@link MemoryCommandService} as a bean so the container's transaction proxy applies
+     * its {@code @Transactional} annotations. The service has no interface, so the default
+     * CGLIB proxy of the auto-configuration is what makes the boundary real.
+     */
+    @TestConfiguration
+    static class TransactionalCommandServiceConfig {
+
+        @Bean
+        MemoryCommandService transactionalCommandService(MemoryEntityRepository entities,
+                                                         MemoryFactRepository facts,
+                                                         MemoryRelationRepository relations,
+                                                         MemoryKnowledgeLinkRepository links,
+                                                         MemoryAssertionRepository assertions,
+                                                         ApplicationEventPublisher events) {
+            return new MemoryCommandService(entities, facts, relations, links, assertions, new MemoryValueGuard(),
+                    new MemoryProposalWriter(facts, assertions), new MemoryCurrentValueSlot(entities), events);
+        }
     }
 }

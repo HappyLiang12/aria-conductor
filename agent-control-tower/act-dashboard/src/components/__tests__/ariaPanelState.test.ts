@@ -346,3 +346,20 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(s.items[0]).toMatchObject({ kind: 'assistant', content: '回合執行失敗：boom', error: true, retryText: 'redo it', noRetry: false });
   });
 });
+
+describe('panelReducer live clock', () => {
+  it('reads the supplied clock for live timestamps instead of the wall clock', () => {
+    let s = panelReducer(base, { type: 'toolCall', turnId: 't1', name: 'list_agents', now: 1_000 });
+    const started = s.items.find((i) => i.kind === 'activity');
+    if (started?.kind !== 'activity') throw new Error('activity strip missing');
+    expect(started.tools[0].startedAt).toBe(1_000);
+
+    s = panelReducer(s, { type: 'toolResult', turnId: 't1', name: 'list_agents', result: '{}', ok: true, now: 1_750 });
+    const settled = s.items.find((i) => i.kind === 'activity');
+    if (settled?.kind !== 'activity') throw new Error('activity strip missing');
+    expect(settled.tools[0].durationMs).toBe(750);
+
+    const failed = panelReducer(base, { type: 'turnFailed', id: 'm1', content: 'boom', now: 0 });
+    expect(failed.items[0]).toMatchObject({ timestamp: '1970-01-01T00:00:00.000Z' });
+  });
+});

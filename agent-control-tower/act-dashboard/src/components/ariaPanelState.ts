@@ -12,9 +12,10 @@ import type { Approval } from '../types';
  * survives a reconnect instead of disappearing behind a raw JSON bubble.
  *
  * Pure in the React sense: the state is never mutated, and no event depends on
- * anything but the state and the event — except the two places where a live
- * event has to be timestamped (a live tool's start and a live failed turn),
- * because the event shape carries no clock.
+ * anything but the state and the event. The three events that a live plane has
+ * to timestamp (a tool's start, its result, a failed turn) accept an optional
+ * `now` clock so a caller — and a test — can supply one; it defaults to
+ * `Date.now()` inside the reducer.
  */
 
 export type ToolActivity = { name: string; status: 'running' | 'ok' | 'error'; startedAt: number; durationMs?: number; args?: string; result?: string };
@@ -30,8 +31,8 @@ export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
   | { type: 'restore'; conversationId: string; timeline: TimelineEntry[]; approvals: Approval[]; proposals: MemoryProposalSummary[] }
   | { type: 'userSent'; id: string; content: string; timestamp: string }
-  | { type: 'toolCall'; turnId: string; name: string; args?: string }
-  | { type: 'toolResult'; turnId: string; name: string; result: string; ok: boolean }
+  | { type: 'toolCall'; turnId: string; name: string; args?: string; now?: number }
+  | { type: 'toolResult'; turnId: string; name: string; result: string; ok: boolean; now?: number }
   | { type: 'assistantMessage'; id: string; content: string; timestamp: string }
   | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
@@ -40,7 +41,7 @@ export type PanelEvent =
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
   | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' }
   | { type: 'queuedRuns'; runIds: string[] }
-  | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean };
+  | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean; now?: number };
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
 
 type RestoreEvent = Extract<PanelEvent, { type: 'restore' }>;
@@ -80,7 +81,7 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         kind: 'assistant',
         id: event.id,
         content: event.content,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date(event.now ?? Date.now()).toISOString(),
         error: true,
         ...(event.retryText !== undefined ? { retryText: event.retryText } : {}),
         noRetry: event.noRetry === true,
@@ -132,7 +133,7 @@ function applyToolCall(state: PanelState, event: Extract<PanelEvent, { type: 'to
   const tool: ToolActivity = {
     name: event.name,
     status: 'running',
-    startedAt: Date.now(),
+    startedAt: event.now ?? Date.now(),
     ...(event.args !== undefined ? { args: event.args } : {}),
   };
   if (index < 0) {
@@ -160,7 +161,7 @@ function applyToolResult(state: PanelState, event: Extract<PanelEvent, { type: '
     ...tool,
     status: event.ok ? 'ok' : 'error',
     result: event.result,
-    durationMs: Math.max(0, Date.now() - tool.startedAt),
+    durationMs: Math.max(0, (event.now ?? Date.now()) - tool.startedAt),
   };
   const tools = strip.tools.slice();
   tools[target] = settled;

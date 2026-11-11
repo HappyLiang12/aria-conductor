@@ -9,6 +9,7 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.execution.approval.PendingClarificationAsks;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import static io.aria.conductor.execution.engine.AgentLoopEngine.parseMaxIterationsFromConfig;
 import io.aria.conductor.execution.llm.*;
@@ -125,15 +126,17 @@ public class AriaService {
 
     /**
      * The ask a parked run is waiting on (A4): its pending CLARIFICATION approval,
-     * whose {@code content} is the question. Guarded like the tool-call lookup — a
-     * failed read must not turn a parked reply into an error; the reply then carries
-     * the observed status only and never a fabricated question.
+     * whose {@code content} is the question. The pick is
+     * {@link PendingClarificationAsks#newest} — the same rule the panel's
+     * {@code waiting_input} card uses, so the sync reply and the live card of one
+     * park can never name two different questions. Guarded like the tool-call
+     * lookup — a failed read must not turn a parked reply into an error; the reply
+     * then carries the observed status only and never a fabricated question.
      */
     private Approval findPendingClarification(UUID runId) {
         try {
-            List<Approval> asks = approvalRepository.findByRunIdAndStatusAndSource(
-                    runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION);
-            return asks == null || asks.isEmpty() ? null : asks.get(0);
+            return PendingClarificationAsks.newest(approvalRepository.findByRunIdAndStatusAndSource(
+                    runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION)).orElse(null);
         } catch (Exception e) {
             log.warn("Failed to load the parked clarification for run {}: {}", runId, e.getMessage());
             return null;

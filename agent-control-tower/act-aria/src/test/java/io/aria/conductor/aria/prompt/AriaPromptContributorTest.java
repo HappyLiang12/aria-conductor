@@ -71,8 +71,31 @@ class AriaPromptContributorTest {
         assertThat(content).contains("IMPORTANT — you are an orchestrator, not a worker:");
         assertThat(content).contains("IMPORTANT — delegation:");
         assertThat(content).contains("IMPORTANT — no guessing:");
-        // Operator-only tools are described as unavailable, without listing them.
-        assertThat(content).containsIgnoringCase("not available");
+        // Operator-only tools are described without listing them (Task 11 replaced
+        // "not available" with the honest rule: they exist and the platform refuses them).
+        assertThat(content).contains("IMPORTANT — operator-only tools:");
+        assertThat(content).contains("the platform refuses your");
+    }
+
+    /**
+     * Task 11 / F9: the prompt must be honest about the authority boundary it cannot
+     * cross. Operator-only tools exist and are refused — not absent — and Aria must not
+     * claim it surfaced a decision card it has no tool for. The forbidden tool name stays
+     * out of the prompt: the catalog, not the prompt, enumerates tools.
+     */
+    @Test
+    void policyStatesThatOperatorOnlyToolsExistButAreRefused() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+
+        assertThat(content).contains("IMPORTANT — operator-only tools:");
+        assertThat(content).contains("Some tools in your list are operator-only. They exist, but the platform refuses your");
+        assertThat(content).contains("never claim a tool is absent when it is only refused");
+        assertThat(content).contains("Approval and memory-promotion decisions belong to the operator.");
+        assertThat(content).contains("the platform shows the operator's decision card in the");
+        assertThat(content).contains("You cannot show that card yourself and you cannot decide it.");
+        assertThat(content).contains("an empty match is not an empty catalog");
+        assertThat(content).doesNotContain("decide_approval");
+        assertThat(content).doesNotContain("## Available Tools");
     }
 
     private static ContextRequest requestFor(UUID agentId) {

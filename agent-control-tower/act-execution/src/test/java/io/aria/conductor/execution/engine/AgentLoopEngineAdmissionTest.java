@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -395,9 +396,14 @@ class AgentLoopEngineAdmissionTest {
             assertThat(secondRunning.getCount())
                     .as("a second turn of the SAME conversation must not run beside the first")
                     .isEqualTo(1);
-            assertThat(second.getStatus())
-                    .as("and the queue never admitted it: the run is still PENDING")
-                    .isEqualTo(RunStatus.PENDING);
+            // The claim is "the queue never admitted it", asserted at the boundary the engine
+            // crosses rather than on the fixture: admission precedes every status write, so a
+            // run still inside acquire has had NONE. Asserting `second.getStatus() == PENDING`
+            // only restates the fixture — the entity reflects status writes solely because the
+            // test double mirrors them — while this fails on the mutant that writes a status
+            // before (or instead of) waiting for the permit.
+            verify(runRepository, never()).updateStatusUnlessTerminal(eq(second.getId()),
+                    any(), any(), anyList());
             releaseFirst.countDown();
             assertThat(secondRunning.await(15, TimeUnit.SECONDS))
                     .as("and it runs as soon as the first turn releases the conversation")

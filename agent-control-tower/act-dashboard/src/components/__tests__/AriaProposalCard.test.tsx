@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { AriaProposalCard } from '../AriaProposalCard';
 import type { PanelItem } from '../ariaPanelState';
 
-vi.mock('../../api/memory', () => ({ decideMemoryProposal: vi.fn() }));
+vi.mock('../../api/memory', () => ({
+  decideMemoryProposal: vi.fn(),
+  listMemoryProposals: vi.fn(),
+}));
 // Partial mock: the refusal classification and the backend message parse are the
 // real contract; only the header application is observed.
 vi.mock('../../api/operatorSession', async (importOriginal) => {
@@ -11,7 +14,8 @@ vi.mock('../../api/operatorSession', async (importOriginal) => {
   return { ...actual, applyOperatorHeaders: vi.fn() };
 });
 
-import { decideMemoryProposal } from '../../api/memory';
+import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
+import type { MemoryProposalView } from '../../api/memory';
 import { applyOperatorHeaders } from '../../api/operatorSession';
 
 type ProposalItem = Extract<PanelItem, { kind: 'proposal' }>;
@@ -30,8 +34,43 @@ function proposal(over: Partial<ProposalItem> = {}): ProposalItem {
   };
 }
 
+/** One row of `GET /api/v1/memory/proposals?status=PENDING`, as the server serves it. */
+function proposalRow(over: Partial<MemoryProposalView> = {}): MemoryProposalView {
+  return {
+    id: 'f1',
+    subjectType: 'FACT',
+    entityId: 'ent-7',
+    factKey: 'preferred_editor',
+    valueText: 'vim',
+    predicate: null,
+    toEntityId: null,
+    status: 'PENDING',
+    origin: 'EXTRACTION',
+    sensitivity: 'INTERNAL',
+    confidence: null,
+    createdAt: '2026-11-11T09:00:00Z',
+    validFrom: null,
+    ...over,
+  };
+}
+
+function entityItem(over: Partial<ProposalItem> = {}): ProposalItem {
+  return proposal({
+    id: 'proposal:p7',
+    proposalId: 'ent-7',
+    subjectType: 'ENTITY',
+    entityId: 'ent-7',
+    factKey: 'person:happy',
+    valueText: 'Happy',
+    ...over,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // The batch read is ENTITY-only; a card that reads it must be told what the
+  // inbox holds. Default: nothing attached beyond the entity itself.
+  vi.mocked(listMemoryProposals).mockResolvedValue([]);
   vi.mocked(decideMemoryProposal).mockResolvedValue({
     id: 'e4d7',
     subjectType: 'FACT',
@@ -64,7 +103,7 @@ describe('AriaProposalCard', () => {
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'approved');
   });
 
-  it('renders an entity proposal with its display name and key', () => {
+  it('renders an entity proposal with its display name and key', async () => {
     render(
       <AriaProposalCard
         item={proposal({
@@ -78,6 +117,9 @@ describe('AriaProposalCard', () => {
         onSettled={vi.fn()}
       />,
     );
+    // The batch read settles asynchronously; await its region so the card's own
+    // state updates land before the assertions read the DOM.
+    expect(await screen.findByTestId('proposal-batch')).toBeInTheDocument();
     expect(screen.getByText('person:happy')).toBeInTheDocument();
     expect(screen.getByText(/new entity/i)).toBeInTheDocument();
     expect(screen.getByText('Happy')).toBeInTheDocument();
@@ -126,5 +168,49 @@ describe('AriaProposalCard', () => {
 
     expect(screen.getByText(/will never become memory/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+  });
+
+  // Spec C1/C2: one entity decision promotes the entity AND every PENDING fact of
+  // it. The operator cannot approve a batch they cannot read, so the card lists
+  // that batch before the decision — read from the same proposals inbox the page
+  // decides from, filtered to this entity.
+  it('lists the pending facts an entity decision also decides', async () => {
+    vi.mocked(listMemoryProposals).mockResolvedValue([
+      proposalRow(),
+      proposalRow({ id: 'ent-7', subjectType: 'ENTITY', factKey: 'person:happy', valueText: 'Happy' }),
+      proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      proposalRow({ id: 'f3', entityId: 'ent-other', factKey: 'timezone', valueText: 'UTC' }),
+    ]);
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    expect(listMemoryProposals).toHaveBeenCalledWith('PENDING');
+    // Exactly this entity's facts: not the entity's own row (already the title),
+    // not another entity's fact.
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(batch).getByText('preferred_editor')).toBeInTheDocument();
+    expect(within(batch).getByText(/vim/)).toBeInTheDocument();
+    expect(within(batch).getByText('release_channel')).toBeInTheDocument();
+    expect(within(batch).queryByText(/timezone/)).not.toBeInTheDocument();
+    expect(within(batch).queryByText(/person:happy/)).not.toBeInTheDocument();
+    // Listing the batch does not decide anything: the card is still the operator's.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+  });
+
+  it('does not read the proposals inbox for a single fact', () => {
+    render(<AriaProposalCard item={proposal()} onSettled={vi.fn()} />);
+
+    expect(listMemoryProposals).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('proposal-batch')).not.toBeInTheDocument();
+  });
+
+  it('says an unreadable entity batch could not be read and stays decidable', async () => {
+    vi.mocked(listMemoryProposals).mockRejectedValue({ response: { status: 403, data: {} } });
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    // A refused read proves nothing about the entity itself.
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });

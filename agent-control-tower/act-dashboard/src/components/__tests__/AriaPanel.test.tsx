@@ -67,12 +67,20 @@ vi.mock('../../api/approvals', () => ({
   decideApproval: vi.fn(),
   answerAsk: vi.fn(),
 }));
+// The memory proposal card owns both the decide call and the entity batch read;
+// the panel's only memory read is the PENDING inbox it reconciles against.
+vi.mock('../../api/memory', () => ({
+  decideMemoryProposal: vi.fn(),
+  listMemoryProposals: vi.fn(),
+}));
 
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
 import { decideApproval, getApproval, listApprovals } from '../../api/approvals';
 import { cancelRun, getRun } from '../../api/runs';
+import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
+import type { MemoryProposalView } from '../../api/memory';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
@@ -84,6 +92,8 @@ const mockGetApproval = getApproval as Mock;
 const mockDecideApproval = decideApproval as Mock;
 const mockCancelRun = cancelRun as Mock;
 const mockGetRun = getRun as Mock;
+const mockDecideMemoryProposal = decideMemoryProposal as Mock;
+const mockListMemoryProposals = listMemoryProposals as Mock;
 
 type StreamArgs = [
   string, // conversationId
@@ -139,6 +149,24 @@ beforeEach(() => {
   // unanswered probe (null) must never settle a card on its own.
   mockGetApproval.mockResolvedValue(null);
   mockDecideApproval.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
+  // The PENDING inbox the panel reconciles against: nothing to decide unless a
+  // test lists it. A decision answers the entity/fact view the route returns.
+  mockListMemoryProposals.mockResolvedValue([]);
+  mockDecideMemoryProposal.mockResolvedValue({
+    id: 'p1',
+    subjectType: 'FACT',
+    entityId: 'ent-1',
+    factKey: 'release.channel',
+    valueText: 'email',
+    predicate: null,
+    toEntityId: null,
+    status: 'ACTIVE',
+    origin: 'OPERATOR',
+    sensitivity: 'INTERNAL',
+    confidence: null,
+    createdAt: null,
+    validFrom: null,
+  });
   mockCancelRun.mockResolvedValue(undefined);
   // The queued indicator asks the run itself: only an admitted (PENDING) run is
   // queued, so the default fixture is the admitted case.
@@ -546,6 +574,26 @@ function pendingToolAsk(id = 'a1', runId = 'r1'): Approval {
 async function openPanelForTest() {
   await act(async () => {}); // flush the conversation load
   fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+}
+
+/** One row of `GET /api/v1/memory/proposals?status=PENDING`, as the server serves it. */
+function proposalRow(over: Partial<MemoryProposalView> = {}): MemoryProposalView {
+  return {
+    id: 'p1',
+    subjectType: 'FACT',
+    entityId: 'ent-1',
+    factKey: 'release.channel',
+    valueText: 'email',
+    predicate: null,
+    toEntityId: null,
+    status: 'PENDING',
+    origin: 'EXTRACTION',
+    sensitivity: 'INTERNAL',
+    confidence: null,
+    createdAt: '2026-11-11T09:00:00Z',
+    validFrom: null,
+    ...over,
+  };
 }
 
 beforeEach(() => {
@@ -1196,15 +1244,17 @@ describe('AriaPanel deciding an ask in place', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Memory proposals (m5): a PENDING proposal counts as an unanswered card in
-// `hasUnansweredCard`, so it gates the composer. Rendering nothing for it would
-// lock the conversation behind an invisible control. Task 12 owns the full
-// proposal card (decide controls, linked fact); this pins the minimum — the
-// proposal is visible, names what it would write, and says it holds the turn.
+// Memory proposals (m5, Task 12b): a PENDING proposal counts as an unanswered
+// card in `hasUnansweredCard`, so it gates the composer. Rendering nothing for
+// it would lock the conversation behind an invisible control — and gating on a
+// card that cannot be decided is the same defect one step later. The panel
+// mounts the real `AriaProposalCard` (it owns the decide call) and reconciles
+// PENDING proposals from the memory inbox on mount / focus / reconnect.
 // ---------------------------------------------------------------------------
 
 describe('AriaPanel memory proposals', () => {
-  it('renders a live memory proposal instead of gating the composer invisibly', async () => {
+  /** One streamed turn that raises a FACT proposal, then finishes. */
+  function streamProposal(): void {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');
       args[3]?.onMemoryProposal?.({
@@ -1216,17 +1266,25 @@ describe('AriaPanel memory proposals', () => {
       });
       args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
     });
+  }
+
+  it('renders a live memory proposal as a decidable card instead of gating the composer invisibly', async () => {
+    streamProposal();
     renderPanel();
     await openPanelForTest();
     fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
 
-    // The proposal is on screen and names the write it proposes.
-    expect(await screen.findByText('Memory proposal')).toBeInTheDocument();
+    const card = await screen.findByTestId('aria-proposal-card');
+    expect(card).toHaveAttribute('data-subject-type', 'FACT');
+    expect(card).toHaveAttribute('data-state', 'pending');
+    // The card names the write it proposes...
     expect(screen.getByText('release.channel')).toBeInTheDocument();
-    expect(screen.getByText(/email/, { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('email')).toBeInTheDocument();
     expect(screen.getByText('INTERNAL')).toBeInTheDocument();
+    // ...it carries the decision controls the gate refers to...
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
     // ...and it is the reason the composer is gated, not an invisible lock.
-    expect(screen.getByText(/holds new prompts/i)).toBeInTheDocument();
     expect(screen.getByText('Answer the pending decision first.')).toBeInTheDocument();
     expect(textarea()).toBeDisabled();
   });
@@ -1243,8 +1301,88 @@ describe('AriaPanel memory proposals', () => {
 
     // Positive control: the turn rendered (its prompt is on screen).
     expect(await screen.findByText('My schedule today')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText('Memory proposal')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('aria-proposal-card')).not.toBeInTheDocument());
     expect(textarea()).toBeEnabled();
+  });
+
+  it('decides on the card, releases the composer, and a stale snapshot never reopens it', async () => {
+    streamProposal();
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    // The panel must not decide anything itself: the card's click is the only
+    // decide call, or one decision would render two settlements.
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(mockDecideMemoryProposal).toHaveBeenCalledWith('p1', 'APPROVE'));
+    expect(mockDecideMemoryProposal).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/now active/i)).toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+
+    // A reconcile whose snapshot still lists the decided proposal (read before
+    // the decision committed) must not reopen the card: the decision stands.
+    mockListMemoryProposals.mockResolvedValue([proposalRow()]);
+    const reconcilesBefore = mockGetTimeline.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesBefore);
+    expect(screen.getAllByTestId('aria-proposal-card')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/now active/i)).toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('restores the PENDING proposals the memory inbox lists, after the transcript they belong to', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my editor', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListMemoryProposals.mockResolvedValue([
+      proposalRow({ id: 'p9', entityId: null, factKey: 'preferred_editor', valueText: 'vim' }),
+    ]);
+    renderPanel();
+    await openPanelForTest();
+
+    const card = await screen.findByTestId('aria-proposal-card');
+    expect(mockListMemoryProposals).toHaveBeenCalledWith('PENDING');
+    expect(screen.getByText('preferred_editor')).toBeInTheDocument();
+    expect(screen.getByText('vim')).toBeInTheDocument();
+    // Arrival order: the restored turn stays above the card it raised.
+    const prompt = screen.getByText('remember my editor');
+    expect(prompt.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A restored pending proposal gates the composer only because it is visible.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('keeps a live proposal through a reconcile that does not list it yet', async () => {
+    streamProposal();
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // The snapshot was read before the turn's rows landed: it holds neither the
+    // prompt nor the proposal. The live frame must survive it.
+    mockListMemoryProposals.mockResolvedValue([]);
+    const reconcilesBefore = mockGetTimeline.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesBefore);
+    expect(screen.getAllByTestId('aria-proposal-card')).toHaveLength(1);
+    // Still the operator's to decide — carried, not settled by an empty read.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
   });
 });
 

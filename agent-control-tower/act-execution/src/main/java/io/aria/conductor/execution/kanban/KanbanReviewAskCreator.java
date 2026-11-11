@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.model.Approval;
@@ -95,10 +96,15 @@ public class KanbanReviewAskCreator {
                         .append("**Agent:** ").append(item.getAssignee() != null ? item.getAssignee() : "n/a").append('\n')
                         .append("**Run:** ").append(runId).append('\n');
                 if (run != null) {
+                    // The same usage rule as the run DTO (fix round 1, m5/M1): a silence
+                    // is printed as "not reported", never as a measured zero, and a
+                    // parts-only report prints the part-derived total.
+                    Long reportedTokens = RunService.observedTotalTokens(run);
                     // Truthful: never fabricate a completion timestamp; print n/a when absent.
                     ctx.append("**Completed:** ").append(run.getCompletedAt() != null ? run.getCompletedAt().toString() : "n/a").append('\n')
                        .append("**Iterations:** ").append(run.getIterationCount())
-                       .append(" | **Tokens:** ").append(run.getTotalTokensUsed()).append('\n');
+                       .append(" | **Tokens:** ")
+                       .append(reportedTokens == null ? "not reported" : reportedTokens).append('\n');
                     if (item.getDescription() != null && !item.getDescription().isBlank()) {
                         ctx.append('\n').append(shorten(item.getDescription(), 1500));
                     } else if (run.getPromptSeed() != null) {

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { decideMemoryProposal, type MemoryProposalDecision } from '../api/memory';
+import { useEffect, useState } from 'react';
+import { decideMemoryProposal, listMemoryProposals, type MemoryProposalDecision, type MemoryProposalView } from '../api/memory';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
@@ -28,6 +28,48 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
   }
 }
 
+/** The batch read's outcome: the facts, or that the inbox could not be read. */
+type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
+
+/**
+ * The PENDING facts an ENTITY decision decides with the entity, read from the
+ * proposals inbox the operator decides from (there is no per-entity PENDING
+ * read: a pending entity 404s the detail route). Null while the read is in
+ * flight, and undefined for any subject type that is not an entity — only the
+ * entity proposal is a batch decision.
+ */
+function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
+  const entityId = item.entityId;
+  const isEntity = item.subjectType === 'ENTITY';
+  const [batch, setBatch] = useState<BatchRead | null | undefined>(undefined);
+
+  useEffect(() => {
+    // An entity proposal without its entity id cannot be attributed a batch;
+    // listing every pending fact would misrepresent what this decision covers.
+    if (!isEntity || !entityId) {
+      setBatch(undefined);
+      return undefined;
+    }
+    let cancelled = false;
+    setBatch(null);
+    listMemoryProposals('PENDING')
+      .then((rows) => {
+        if (cancelled) return;
+        setBatch({
+          facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
+        });
+      })
+      .catch(() => {
+        // A refused or failed read proves nothing about the batch; say so rather
+        // than present an empty one, which would claim the entity stands alone.
+        if (!cancelled) setBatch({ unreadable: true });
+      });
+    return () => { cancelled = true; };
+  }, [isEntity, entityId]);
+
+  return batch;
+}
+
 /**
  * The in-conversation memory proposal card (spec C1/C2): Aria proposes a
  * memory entity or fact from inside the chat, and the operator decides it right
@@ -35,7 +77,9 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
  *
  * The card is presentational over Task 4's `proposal` item: the item's
  * `factKey`/`valueText` carry `canonicalKey`/`displayName` for an ENTITY
- * proposal (Task 10's mapping), so one card renders both shapes. A decision is
+ * proposal (Task 10's mapping), so one card renders both shapes. An ENTITY
+ * decision is the whole batch — it promotes (or retires) every PENDING fact of
+ * the entity — so that card lists the batch before the decision. A decision is
  * authoritative on the server; the card flips to the settled state only after
  * the call resolves, and a 401/403 renders the local operator-session notice
  * instead of pretending the proposal was decided.
@@ -46,6 +90,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   const [local, setLocal] = useState<'approved' | 'rejected' | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
   const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
+  const batch = useEntityBatch(item);
 
   const state = local ?? item.state;
 
@@ -85,6 +130,34 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       {item.valueText && (
         <div className="ask-ctx">
           <span data-testid="proposal-value">{item.valueText}</span>
+        </div>
+      )}
+      {item.subjectType === 'ENTITY' && state === 'pending' && (
+        <div className="ask-facts" data-testid="proposal-batch">
+          <div className="ask-ctx">
+            One decision decides this entity and every pending fact of it.
+          </div>
+          {batch === null && <div className="ask-ctx">Reading its pending facts…</div>}
+          {batch !== null && batch !== undefined && 'unreadable' in batch && (
+            <div className="ask-ctx">
+              The pending facts this decision also decides could not be read.
+            </div>
+          )}
+          {batch !== null && batch !== undefined && 'facts' in batch && (
+            batch.facts.length === 0 ? (
+              <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
+            ) : (
+              <ul className="ask-facts-list">
+                {batch.facts.map((fact) => (
+                  <li key={fact.id}>
+                    <code>{fact.factKey ?? '—'}</code>
+                    {' = '}
+                    <span>{fact.valueText ?? '—'}</span>
+                  </li>
+                ))}
+              </ul>
+            )
+          )}
         </div>
       )}
       <div className="ask-meta">

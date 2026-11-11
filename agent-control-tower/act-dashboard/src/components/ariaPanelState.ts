@@ -68,6 +68,8 @@ const TOOL_CALL_PREFIX = 'tool_call:';
 const FAILURE_REASON_SEPARATOR = '：';
 /** A tool result row whose call row is missing still names itself in the strip. */
 const ORPHAN_TOOL_NAME = '(tool output)';
+/** An orphan strip's turn id when the run already has one: `<runId>#orphan-<n>`. */
+const ORPHAN_SUFFIX = '#orphan-';
 /** The single queued indicator is keyed by its kind, not by a run. */
 const QUEUED_ID = 'queued';
 
@@ -201,6 +203,39 @@ function activityIndex(items: PanelItem[], turnId: string): number {
 
 function activityId(turnId: string): string {
   return `activity:${turnId}`;
+}
+
+/**
+ * A result row whose call row never landed, as its own one-tool strip. The tool is
+ * named after the row, not after a call the timeline does not hold, and its `ok`
+ * carries the same limit as a restored result below.
+ *
+ * Several orphans can belong to one run, so the strip needs an identity of its own:
+ * the bare run id while it is free (a run with no other strip), then
+ * `<runId>#orphan-<n>`. Without it two orphans of one run share an `id` (a React key
+ * collision) and a `turnId`, and the next restore's turnId dedupe drops the second.
+ */
+function orphanStrip(items: PanelItem[], turnId: string, startedAt: number, content: string): ActivityItem {
+  const identity = freeOrphanTurnId(items, turnId);
+  return {
+    kind: 'activity',
+    id: activityId(identity),
+    turnId: identity,
+    tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: content }],
+    collapsed: true,
+  };
+}
+
+/** The run id when no activity strip holds it yet, else the first free `#orphan-n`. */
+function freeOrphanTurnId(items: PanelItem[], turnId: string): string {
+  const taken = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'activity') taken.add(item.turnId);
+  }
+  if (!taken.has(turnId)) return turnId;
+  let suffix = 0;
+  while (taken.has(`${turnId}${ORPHAN_SUFFIX}${suffix}`)) suffix += 1;
+  return `${turnId}${ORPHAN_SUFFIX}${suffix}`;
 }
 
 // === approval cards ===
@@ -605,16 +640,11 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
 
     // Any other tool row is the result of the tool still running in this run.
     // A result whose call row never landed is still audited output: render it
-    // as its own one-tool strip instead of dropping it. Its `ok` carries the
-    // same limit as the restored status below.
+    // as its own one-tool strip instead of dropping it — even when the run
+    // already has a strip, because it is the call row of this result that is
+    // missing. Its `ok` carries the same limit as the restored status below.
     if (at < 0) {
-      items.push({
-        kind: 'activity',
-        id: activityId(turnId),
-        turnId,
-        tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: entry.content }],
-        collapsed: true,
-      });
+      items.push(orphanStrip(items, turnId, startedAt, entry.content));
       return;
     }
     const strip = items[at] as ActivityItem;
@@ -627,7 +657,10 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
         break;
       }
     }
-    if (target < 0) return;
+    if (target < 0) {
+      items.push(orphanStrip(items, turnId, startedAt, entry.content));
+      return;
+    }
     const tool = strip.tools[target];
     const durationMs = tool.startedAt > 0 && startedAt >= tool.startedAt ? startedAt - tool.startedAt : undefined;
     const tools = strip.tools.slice();

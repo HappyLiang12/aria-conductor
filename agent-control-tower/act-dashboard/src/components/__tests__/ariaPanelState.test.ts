@@ -151,6 +151,47 @@ describe('panelReducer restore parsing', () => {
     expect(strip.tools[0]).toMatchObject({ name: '(tool output)', status: 'ok', result: 'orphaned output' });
   });
 
+  it('renders a tool result row with no call row even when the run already has a strip', () => {
+    // The run's call row and first result landed; a later result row's call row was
+    // lost. Its output is still audited output and must not disappear behind the
+    // strip the run already has.
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'tool_call: list_agents {}', runId: 'r1' }),
+        row({ role: 'tool', content: '{"ok":true}', runId: 'r1' }),
+        row({ role: 'tool', content: 'second output', runId: 'r1' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const strips = s.items.flatMap((item) => (item.kind === 'activity' ? [item] : []));
+    expect(strips).toHaveLength(2);
+    expect(strips[0].tools.map((t) => [t.name, t.status, t.result])).toEqual([['list_agents', 'ok', '{"ok":true}']]);
+    expect(strips[1].tools.map((t) => [t.name, t.status, t.result])).toEqual([['(tool output)', 'ok', 'second output']]);
+    expect(new Set(strips.map((strip) => strip.id)).size).toBe(2);
+    expect(new Set(strips.map((strip) => strip.turnId)).size).toBe(2);
+  });
+
+  it('gives two orphan result rows of one run distinct identities', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'tool', content: 'first output', runId: 'r9' }),
+        row({ role: 'tool', content: 'second output', runId: 'r9' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const strips = s.items.flatMap((item) => (item.kind === 'activity' ? [item] : []));
+    expect(strips).toHaveLength(2);
+    expect(strips.map((strip) => strip.tools.map((t) => t.result))).toEqual([['first output'], ['second output']]);
+    // Distinct ids: two strips of one run must not collide as React keys.
+    expect(new Set(strips.map((strip) => strip.id)).size).toBe(2);
+    expect(new Set(strips.map((strip) => strip.turnId)).size).toBe(2);
+    // Distinct turn ids: the next restore's turnId dedupe must keep the second one.
+    const again = panelReducer(s, { type: 'restore', conversationId: 'conv-1', timeline: [], approvals: [], proposals: [] });
+    expect(again.items.flatMap((item) => (item.kind === 'activity' ? [item] : []))).toHaveLength(2);
+  });
+
   it('restores a failed turn as an assistant bubble with its retry prompt', () => {
     const s = panelReducer(base, {
       type: 'restore', conversationId: 'conv-1',

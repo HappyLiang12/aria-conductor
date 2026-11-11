@@ -198,3 +198,51 @@ describe('ExecutiveSummary honest states', () => {
     );
   });
 });
+
+describe('ExecutiveSummary usage truth', () => {
+  function tokenCell(): HTMLElement {
+    return screen.getByText('Recorded tokens').closest('.stat') as HTMLElement;
+  }
+
+  it('shows not reported instead of a zero token cost', async () => {
+    mockedSummary.mockResolvedValue({
+      activeAgents: 2, degradedAgents: 0, runningRuns: 0,
+      totalTokensBurned: 0, runsWithoutUsage: 29,
+    } as never);
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    await waitFor(() =>
+      expect(tokenCell().querySelector('.v')).toHaveTextContent('not reported'),
+    );
+    expect(tokenCell()).toHaveTextContent('29 runs reported no usage');
+  });
+
+  it('shows the measured total when at least one run reported usage', async () => {
+    mockedSummary.mockResolvedValue({
+      activeAgents: 2, degradedAgents: 0, runningRuns: 0,
+      totalTokensBurned: 120, runsWithoutUsage: 1,
+    } as never);
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    await waitFor(() => expect(tokenCell().querySelector('.v')).toHaveTextContent('120'));
+    expect(tokenCell()).not.toHaveTextContent('not reported');
+    expect(tokenCell()).not.toHaveTextContent('runs reported no usage');
+  });
+
+  it('keeps a real zero when no run was silent about usage', async () => {
+    mockedSummary.mockResolvedValue({
+      activeAgents: 2, degradedAgents: 0, runningRuns: 0,
+      totalTokensBurned: 0, runsWithoutUsage: 0,
+    } as never);
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    await waitFor(() => expect(tokenCell().querySelector('.v')).toHaveTextContent('0'));
+    expect(tokenCell()).not.toHaveTextContent('not reported');
+  });
+});

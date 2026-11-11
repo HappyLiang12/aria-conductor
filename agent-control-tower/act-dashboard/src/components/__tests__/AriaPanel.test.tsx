@@ -11,6 +11,41 @@ beforeAll(() => {
   Element.prototype.scrollTo = () => {};
 });
 
+// The panel subscribes to /topic/events for the first time (spec A3). The
+// socket is a live connection in the browser and an unconnectable one under
+// jsdom, so it is replaced by this controllable bridge: tests emit frames and
+// flip the connection state, nothing else.
+const wsBridge = vi.hoisted(() => {
+  type Frame = { type: string; payload: Record<string, unknown>; timestamp: string };
+  const handlers = new Set<(frame: Frame) => void>();
+  const state = { isConnected: false };
+  return {
+    handlers,
+    state,
+    emit(event: { type: string; payload?: Record<string, unknown> }) {
+      const frame: Frame = {
+        type: event.type,
+        payload: event.payload ?? {},
+        timestamp: new Date().toISOString(),
+      };
+      handlers.forEach((handler) => handler(frame));
+    },
+    subscribe(handler: (frame: Frame) => void) {
+      handlers.add(handler);
+      return { unsubscribe: () => { handlers.delete(handler); } };
+    },
+  };
+});
+
+vi.mock('../../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({
+    lastMessage: null,
+    isConnected: wsBridge.state.isConnected,
+    send: () => {},
+    subscribe: wsBridge.subscribe,
+  }),
+}));
+
 vi.mock('../../api/aria', () => ({
   streamMessage: vi.fn(),
   sendMessage: vi.fn(),
@@ -452,5 +487,253 @@ describe('AriaPanel aria:compose handling', () => {
     });
 
     expect(mockStream).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// In-flow decisions (spec A3, findings F1/F4/F7). An ask announced on the
+// turn's own ordered stream becomes a card inside the conversation; the
+// composer is gated until it settles; the WebSocket plane and the REST
+// reconcile merge into the same card by ask id, never a duplicate; restored
+// tool rows become an activity strip, never raw JSON bubbles.
+// ---------------------------------------------------------------------------
+
+const TOOL = 'mcp__aria-conductor__remember_fact';
+
+function summary(conversationId = 'conv-1') {
+  return { conversationId, lastMessageAt: '2026-11-11T09:00:00Z', runCount: 2 };
+}
+
+/** A pending tool ask on the REST plane, carrying the governance labels. */
+function pendingToolAsk(id = 'a1', runId = 'r1'): Approval {
+  return {
+    id,
+    runId,
+    toolCallId: null,
+    status: 'PENDING',
+    reason: 'write_file on the workspace',
+    requestedAt: '2026-11-11T09:00:00Z',
+    decidedAt: null,
+    expiresAt: '2026-11-11T09:10:00Z',
+    toolName: TOOL,
+    riskTier: 'WRITE_LOCAL',
+    toolPolicy: 'WORKER_WRITE',
+  };
+}
+
+async function openPanelForTest() {
+  await act(async () => {}); // flush the conversation load
+  fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+}
+
+beforeEach(() => {
+  wsBridge.handlers.clear();
+  wsBridge.state.isConnected = false;
+});
+
+describe('AriaPanel in-flow decisions', () => {
+  it('renders an approval_required frame as a card and gates the composer until it settles', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({
+        runId: 'r1',
+        approvalId: 'a1',
+        toolName: TOOL,
+        riskTier: 'WRITE_LOCAL',
+        toolPolicy: 'WORKER_WRITE',
+      });
+      // The turn is parked; the operator's client may stop reading the stream
+      // (timeout) while the ask is still the thing to answer.
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+
+    // Positive control: with no ask outstanding the composer is usable.
+    expect(textarea()).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(screen.getByText('WRITE_LOCAL')).toBeInTheDocument();
+    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
+    // A decision is pending: the composer is gated with an explicit reason.
+    expect(screen.getByText('Answer or cancel the pending decision first.')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('settles the card from the WebSocket plane, releasing the composer without a duplicate', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    act(() => {
+      wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'a1', decision: 'APPROVED' } });
+    });
+
+    expect(screen.getByText(/allowed once/i)).toBeInTheDocument();
+    expect(screen.queryByText('Answer or cancel the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+
+    // A re-delivery of the same decision (another plane, a reconnect) draws nothing new.
+    act(() => {
+      wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'a1', decision: 'APPROVED' } });
+    });
+    expect(screen.getAllByText(TOOL)).toHaveLength(1);
+    expect(screen.getByText(/allowed once/i)).toBeInTheDocument();
+  });
+
+  it('leaves an ask untouched when a decision names a different id', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    act(() => {
+      wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'other-ask', decision: 'APPROVED' } });
+    });
+
+    // The card is still the operator's to decide (positive control for the
+    // unknown-id no-op: the same frame with a1 settles it in the test above).
+    expect(screen.getByText('Answer or cancel the pending decision first.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+  });
+
+  it('renders a waiting_input frame as a question card that gates the composer', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onWaitingInput?.({ runId: 'r1', approvalId: 'a2', question: 'Which PR should I review?' });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText('Which PR should I review?')).toBeInTheDocument();
+    expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    act(() => {
+      wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'a2', decision: 'APPROVED' } });
+    });
+    expect(screen.getByText(/answered/i)).toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('restores tool rows as an activity strip instead of raw JSON bubbles', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'how many runs', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+      {
+        role: 'tool',
+        content: 'tool_call: mcp__aria-conductor__list_runs {"status":"RUNNING"}',
+        timestamp: '2026-11-11T09:00:01Z',
+        runId: 'r1',
+      },
+      { role: 'tool', content: '{"total":3}', timestamp: '2026-11-11T09:00:02Z', runId: 'r1' },
+      { role: 'assistant', content: 'Three runs are live.', timestamp: '2026-11-11T09:00:03Z', runId: 'r1' },
+    ]);
+    mockListApprovals.mockResolvedValue([]);
+    renderPanel();
+    await openPanelForTest();
+
+    expect(await screen.findByText('mcp__aria-conductor__list_runs')).toBeInTheDocument();
+    expect(screen.getByText(/1 tool call/)).toBeInTheDocument();
+    expect(screen.getByText('Three runs are live.')).toBeInTheDocument();
+    // No raw row and no raw result JSON in the transcript.
+    expect(screen.queryByText(/tool_call:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\{"total":3\}/)).not.toBeInTheDocument();
+  });
+
+  it('merges a REST-reconciled pending ask with the card already on screen', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListApprovals.mockResolvedValue([pendingToolAsk()]);
+    renderPanel();
+    await openPanelForTest();
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
+    const reconcilesAfterMount = mockGetTimeline.mock.calls.length;
+
+    // A second reconcile (focus / reconnect) re-delivers the same pending ask.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
+    expect(screen.getAllByText(TOOL)).toHaveLength(1);
+  });
+
+  it('re-reconciles the conversation when the socket reconnects', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'hello', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListApprovals.mockResolvedValue([]);
+    renderPanel();
+    await openPanelForTest();
+    const reconcilesAfterMount = mockGetTimeline.mock.calls.length;
+
+    wsBridge.state.isConnected = true;
+    fireEvent.change(textarea(), { target: { value: 'still here?' } });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
+  });
+
+  it('stops the cleared conversation\'s parked turn from writing into the new one', async () => {
+    let emitLateFrame: ((content: string) => void) | null = null;
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      emitLateFrame = (content: string) => args[3]?.onMessage?.(content);
+      return new Promise<void>(() => {}); // the parked turn keeps its stream open
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+
+    // The card belonged to the conversation that was just cleared.
+    expect(screen.queryByText(TOOL)).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer or cancel the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+
+    // A frame the cleared turn emits afterwards must not land in the new transcript.
+    act(() => { emitLateFrame?.('late reply from the parked turn'); });
+    expect(screen.queryByText('late reply from the parked turn')).not.toBeInTheDocument();
+  });
+
+  it('names the runs the timeline shows as still unanswered', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'first', timestamp: '2026-11-11T09:00:00Z', runId: 'run-aaaa1111' },
+      { role: 'assistant', content: 'done', timestamp: '2026-11-11T09:00:01Z', runId: 'run-aaaa1111' },
+      { role: 'user', content: 'second', timestamp: '2026-11-11T09:00:02Z', runId: 'run-bbbb2222' },
+    ]);
+    mockListApprovals.mockResolvedValue([]);
+    renderPanel();
+    await openPanelForTest();
+
+    expect(await screen.findByText(/Queued · run-bbbb/)).toBeInTheDocument();
+    // The answered turn is not queued (negative control).
+    expect(screen.queryByText(/Queued · run-aaaa/)).not.toBeInTheDocument();
   });
 });

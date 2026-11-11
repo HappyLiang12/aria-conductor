@@ -28,10 +28,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -80,7 +82,7 @@ public class MemoryProposalService {
     /** The review inbox: the newest {@link #INBOX_LIMIT} facts and relations in {@code status}. */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposals(FactStatus status) {
-        return listProposals(status, INBOX_LIMIT);
+        return listProposals(status, INBOX_LIMIT, null);
     }
 
     /**
@@ -90,9 +92,32 @@ public class MemoryProposalService {
      */
     @Transactional(readOnly = true)
     public List<MemoryProposalView> listProposals(FactStatus status, int limit) {
+        return listProposals(status, limit, null);
+    }
+
+    /** The review inbox read on behalf of {@code actor} (see {@link #listProposals(FactStatus, int, MemoryActor)}). */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposals(FactStatus status, MemoryActor actor) {
+        return listProposals(status, INBOX_LIMIT, actor);
+    }
+
+    /**
+     * One bounded page of the review inbox, newest first, read on behalf of {@code actor}.
+     * <p>
+     * T11 C1: {@code list_memory_proposals} is an auto-approved worker read, and a PENDING entity
+     * row carries the canonical key and display name that {@code list_memory_entities(status=
+     * PENDING)} refuses to the same worker — the guard was cosmetic while this read was actorless.
+     * The rule is therefore part of the read contract: a PENDING ENTITY row is included only for
+     * an OPERATOR actor. PENDING FACT and RELATION rows stay visible to every actor — a worker
+     * must see the proposal it just made. A null actor (no transport identity) is treated as a
+     * non-operator, so a missing identity can never widen the read.
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposals(FactStatus status, int limit, MemoryActor actor) {
         FactStatus target = status == null ? FactStatus.PENDING : status;
         int pageSize = limit <= 0 ? INBOX_LIMIT : limit;
         Pageable page = PageRequest.of(0, pageSize);
+        boolean operator = actor != null && actor.type() == MemoryActorType.OPERATOR;
         List<MemoryProposalView> inbox = new ArrayList<>();
         for (MemoryFact fact : safe(facts.findByStatusOrderByCreatedAtDesc(target, page))) {
             if (fact != null) {
@@ -105,14 +130,70 @@ public class MemoryProposalService {
             }
         }
         for (MemoryEntity entity : safe(entities.findByStatusOrderByUpdatedAtDesc(entityStatusOf(target), page))) {
-            if (entity != null) {
+            if (entity != null && (operator || entity.getStatus() != EntityStatus.PENDING)) {
                 inbox.add(MemoryProposalView.fromEntity(entity));
             }
         }
-        inbox.sort(Comparator.comparing(MemoryProposalView::createdAt,
-                        Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(MemoryProposalView::subjectType)
-                .thenComparing(MemoryProposalView::id, Comparator.nullsLast(Comparator.naturalOrder())));
+        return pageOf(inbox, pageSize);
+    }
+
+    /**
+     * One entity's own proposal batch: every fact and relation of {@code entityId} in
+     * {@code status} plus the entity row itself when its lifecycle status matches.
+     * <p>
+     * M1 (UI surface review): the ENTITY card used to filter ONE {@link #INBOX_LIMIT}-row page of
+     * the merged global inbox client-side, so with more than 50 PENDING facts across entities an
+     * entity's own facts fell off the page and the card claimed "approving adds the entity alone"
+     * while {@link #decideEntity} promoted every one of them. The filter is therefore a query
+     * (entity + status), never a post-pagination slice, and it is deliberately unbounded: the
+     * decision promotes the entity's whole PENDING batch, so a truncated read would under-report
+     * what one click does. The actor rule of the inbox is unchanged — a PENDING ENTITY row is
+     * included only for an OPERATOR (T11 C1).
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryProposalView> listProposalsForEntity(FactStatus status, UUID entityId, MemoryActor actor) {
+        if (entityId == null) {
+            throw new MemoryValidationException("entityId is required");
+        }
+        FactStatus target = status == null ? FactStatus.PENDING : status;
+        boolean operator = actor != null && actor.type() == MemoryActorType.OPERATOR;
+        List<MemoryProposalView> batch = new ArrayList<>();
+        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(entityId, target))) {
+            if (fact != null) {
+                batch.add(MemoryProposalView.fromFact(fact));
+            }
+        }
+        Set<UUID> seen = new LinkedHashSet<>();
+        for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(entityId, target))) {
+            addRelation(relation, seen, batch);
+        }
+        for (MemoryRelation relation : safe(relations.findByToEntityIdAndStatus(entityId, target))) {
+            addRelation(relation, seen, batch);
+        }
+        MemoryEntity entity = entities.findById(entityId).orElse(null);
+        if (entity != null && entity.getStatus() == entityStatusOf(target)
+                && (operator || entity.getStatus() != EntityStatus.PENDING)) {
+            batch.add(MemoryProposalView.fromEntity(entity));
+        }
+        return List.copyOf(batch.stream().sorted(NEWEST_FIRST).toList());
+    }
+
+    /** One edge at most once: a self relation is both outgoing and incoming. */
+    private static void addRelation(MemoryRelation relation, Set<UUID> seen, List<MemoryProposalView> batch) {
+        if (relation != null && seen.add(relation.getId())) {
+            batch.add(MemoryProposalView.fromRelation(relation));
+        }
+    }
+
+    /** Newest first, then subject type and id so the order is deterministic. */
+    private static final Comparator<MemoryProposalView> NEWEST_FIRST =
+            Comparator.comparing(MemoryProposalView::createdAt,
+                            Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(MemoryProposalView::subjectType)
+                    .thenComparing(MemoryProposalView::id, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    private static List<MemoryProposalView> pageOf(List<MemoryProposalView> inbox, int pageSize) {
+        inbox.sort(NEWEST_FIRST);
         return inbox.size() > pageSize ? List.copyOf(inbox.subList(0, pageSize)) : inbox;
     }
 
@@ -213,6 +294,10 @@ public class MemoryProposalService {
             proposal.setStatus(FactStatus.RETIRED);
             proposal.setValidTo(now);
             facts.save(proposal);
+            // N3 (T10 fix round 1 re-review): flush here, not only at the entity flush that follows
+            // a batch rejection. Otherwise a lost fact version is reported as a lost entity row and
+            // the conflict points the operator at the wrong card during an incident.
+            flushFacts(proposal, "the rejection");
             assertions.save(assertion(MemorySubjectType.FACT, proposal.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", FactStatus.RETIRED.name(), "factKey", proposal.getFactKey())));
             return MemoryProposalView.fromFact(proposal);
@@ -224,14 +309,22 @@ public class MemoryProposalService {
         // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
         // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
         // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        // N2 (T10 fix round 1 re-review): the invariant is "current memory has an ACTIVE parent",
+        // not "not PENDING". A proposal raised under an ACTIVE entity can survive its parent being
+        // retired or merged, and approving it then produced the same invisible ACTIVE value under a
+        // dead parent. Every non-ACTIVE parent is refused, and the message names which case it is.
         MemoryEntity parent = entities.findById(proposal.getEntityId())
                 .orElseThrow(() -> new MemoryNotFoundException(
                         "memory entity " + proposal.getEntityId() + " not found"));
-        if (parent.getStatus() == EntityStatus.PENDING) {
+        if (parent.getStatus() != EntityStatus.ACTIVE) {
+            String reason = parent.getStatus() == EntityStatus.PENDING
+                    ? "which is still PENDING; decide the entity proposal " + proposal.getEntityId()
+                    + " to promote or retire the whole batch instead of approving one fact"
+                    : "which is " + parent.getStatus()
+                    + "; the entity is no longer active, so approving this fact would make it "
+                    + "current memory under a parent no read path can see";
             throw new MemoryConflictException("memory fact " + proposal.getId()
-                    + " belongs to entity " + proposal.getEntityId()
-                    + ", which is still PENDING; decide the entity proposal " + proposal.getEntityId()
-                    + " to promote or retire the whole batch instead of approving one fact");
+                    + " belongs to entity " + proposal.getEntityId() + ", " + reason);
         }
 
         // An approval opens a current ACTIVE value, so it claims the same entity slot an
@@ -270,13 +363,20 @@ public class MemoryProposalService {
      * transaction commit.
      */
     private void flushFacts(MemoryFact proposal) {
+        flushFacts(proposal, "the approval (the proposal or its conflicting current value)");
+    }
+
+    /**
+     * The shared flush translation. {@code what} names the write whose row actually lost the
+     * version race, so the governed conflict is attributable (N3, T10 fix round 1 re-review).
+     */
+    private void flushFacts(MemoryFact proposal, String what) {
         try {
             facts.flush();
         } catch (OptimisticLockingFailureException e) {
             throw new MemoryConflictException("memory fact " + proposal.getId()
                     + " for key '" + proposal.getFactKey()
-                    + "' or its conflicting current value changed while the approval was being "
-                    + "written; re-read before deciding");
+                    + "' changed while " + what + " was being written; re-read before deciding");
         }
     }
 

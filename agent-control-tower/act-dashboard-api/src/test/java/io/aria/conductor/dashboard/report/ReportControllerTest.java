@@ -3,6 +3,9 @@ package io.aria.conductor.dashboard.report;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.exception.GlobalExceptionHandler;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.core.env.Environment;
 import org.junit.jupiter.api.Test;
@@ -10,6 +13,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -38,7 +43,13 @@ class ReportControllerTest {
     @BeforeEach
     void setUp() {
         reportService = mock(ReportService.class);
-        ReportController controller = new ReportController(reportService);
+        // Same construction as ReportControllerAuthorityTest: the real resolver, so the
+        // loopback caller these contract tests use is decided by production code.
+        OperatorAuthorityResolver operatorAuthority = new OperatorAuthorityResolver(
+                new OperatorSessionService("", Duration.ofHours(8), "http://localhost:5173",
+                        false, Clock.systemUTC()),
+                mock(ActorTokenService.class), "");
+        ReportController controller = new ReportController(reportService, operatorAuthority);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler(mockEnv))
                 .build();

@@ -1127,6 +1127,39 @@ class MemoryCommandServiceTest {
                 });
     }
 
+    /**
+     * N4 (T10 fix round 1 re-review). {@code rePropose} saved the identity row without flushing,
+     * so two runs proposing the same terminal key both read version N and the loser threw a raw
+     * optimistic-lock failure at commit — after it had already published a card event inside the
+     * transaction that rolls back. The flush must run inside the method behind the same governed
+     * translation as the decision paths, and before the assertion and the event, so the loser
+     * reports one conflict and publishes nothing.
+     */
+    @Test
+    void aConcurrentReProposalIsAGovernedConflict() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, retired.getId()))
+                .when(entities).flush();
+
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction))
+                .as("a lost re-proposal is the governed conflict, not a raw exception at commit")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(retired.getId().toString())
+                .hasMessageContaining("re-proposed concurrently");
+
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
     @Test
     void aLostUniqueRaceReadsTheWinningEntityBack() {
         MemoryEntity winner = entity(id("winner"));

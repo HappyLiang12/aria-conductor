@@ -191,6 +191,7 @@ public class MemoryCommandService {
         row.setMergedInto(null);
         row.setUpdatedAt(now);
         entities.save(row);
+        flushReproposedEntity(row);
         assertions.save(assertion(MemorySubjectType.ENTITY, row.getId(), MemoryAction.CREATE, actor,
                 null, now, before, audit(
                         "kind", kind,
@@ -253,6 +254,22 @@ public class MemoryCommandService {
 
     private static boolean isTerminal(EntityStatus status) {
         return status == EntityStatus.RETIRED || status == EntityStatus.MERGED;
+    }
+
+    /**
+     * Pushes a re-proposal through the identity row's {@code @Version} inside the method, so two
+     * runs re-proposing the same terminal key surface as the governed conflict here — before the
+     * CREATE assertion and the card event are written — instead of as a raw optimistic-lock
+     * failure at commit, which MCP would report as a failed call with the driver message (N4, T10
+     * fix round 1 re-review). Mirrors the decision paths' flush translation.
+     */
+    private void flushReproposedEntity(MemoryEntity row) {
+        try {
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("memory entity " + row.getId()
+                    + " was re-proposed concurrently; re-read before retrying");
+        }
     }
 
     @Transactional

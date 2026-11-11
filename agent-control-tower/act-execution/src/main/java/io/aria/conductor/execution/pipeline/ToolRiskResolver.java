@@ -8,6 +8,7 @@ import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.common.tool.ToolCatalogProvider;
 import io.aria.conductor.common.tool.ToolDescriptor;
 import io.aria.conductor.common.tool.ToolPolicy;
+import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,8 +49,12 @@ import java.util.Optional;
 @Component
 public class ToolRiskResolver {
 
-    /** The prefix the platform MCP surface binds every tool under. */
-    private static final String PLATFORM_MCP_PREFIX = "mcp__aria-conductor__";
+    /**
+     * The prefix the platform MCP surface binds every tool under. Shared with the
+     * auto-approval provenance check so a rename cannot silently turn every platform
+     * tier back into READ while auto-approval keeps working.
+     */
+    private static final String PLATFORM_MCP_PREFIX = PlatformMcpAutoApproval.PLATFORM_MCP_PREFIX;
 
     /**
      * Native ACP tools, keyed by their case-normalized name. Every native core

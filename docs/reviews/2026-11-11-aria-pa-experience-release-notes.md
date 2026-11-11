@@ -113,12 +113,12 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
 | Start-script self-tests | `bash scripts/lib/workspace-roots.test.sh`; `pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1` | 15 passed / 0 failed; 38 assertions — PASS at `94955f56` |
 | Cross-lane frontend typecheck | `npx tsc --noEmit -p tsconfig.json` | rc=0, 0 bytes — PASS at `9cc22a6a`, `94955f56` |
 | Cross-lane Java compile | `mvn -o -B -T 1C test-compile -DskipTests` | BUILD SUCCESS at `57689bdf` |
-| Frontend unit suite | `npx vitest run` | 89 files / 852 tests passed at `58e20c68` (coverage OFF) |
+| Frontend unit suite | `pnpm exec vitest run` | 90 files / 899 tests passed at `190f1bc8` (lane recovery, coverage OFF). **NOT RUN at the final head**; later lanes ran focused suites (T41: 24 files / 311 tests; T40 recovery: 1 test) |
 | Per-lane module gates | `bash scripts/mvn-lane.sh inner <modules> -am` | green per lane; counts in each task report |
 | Full unit tier | `wave-gate.sh` step `unit` | **NOT RUN** at the final head |
 | Failsafe tier | `wave-gate.sh` step `itg` | **NOT RUN** at the final head |
-| Frontend coverage ratchet | `pnpm test -- --coverage` | **NOT RUN** — no lane ran coverage; this is the first run |
-| MCP server coverage | `pnpm test -- --coverage` | **NOT RUN** |
+| Frontend coverage ratchet | `pnpm test -- --coverage` | preflight at `df93716d`: **90 files / 882 tests passed**, coverage 79.91% lines / 82.28% branches / 66.44% functions against thresholds 5 / 60 / 40 — PASS, no threshold error. **NOT RUN at the final head** |
+| MCP server coverage | `pnpm test -- --coverage` | **NOT RUN** — the preflight covered the dashboard only; this tier has never been exercised |
 | Dashboard build | `pnpm build` | **NOT RUN** at the final head |
 | Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **NOT RUN** at the final head |
 | Clean-room | fresh worktree, no target/node_modules/dist, full gate | **NOT RUN** |
@@ -157,15 +157,23 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    is weaker in one known way: OS/Node/browser portability and the Docker image job are untested locally.
 4. **MariaDB execution** is unverified; every local tier runs the H2 profile.
 5. **The qoder usage spike outcome** is to be measured in the live phase and recorded here.
-6. **Coverage ratchets were exercised once, ahead of the full gate.** A non-`~/.m2`-writing coverage
-   preflight at `df93716d` passed with a wide margin (log:
-   `.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`). The full clean-room
-   gate re-runs both threshold-enforcing tiers; a threshold failure there is a real failure to triage,
-   not to suppress.
-7. **The retryable-409 wordings are not all pinned server-side.** The card's positive-marker rule
-   (above) means a divergent retryable tail cannot mis-settle it: `MemoryCurrentValueSlot.java:50-51`
-   says `another writer won the race — re-read before writing` and `MemoryCommandService.java:781` says
-   `re-read before retrying`, and neither carries the already-decided marker, so both keep a retry.
-   The residual is TEST COVERAGE, not behaviour: the taxonomy pins in `MemoryProposalServiceTest` cover
-   the two proposal flushes, and a fix round is extending them to the slot-claim wording reachable from
-   `decideFact`. Until that lands, a future edit to the slot wording would not be caught by a pin.
+6. **Only ONE of the two coverage ratchets has ever been exercised.** A non-`~/.m2`-writing dashboard
+   coverage preflight at `df93716d` passed with a wide margin (90 files / 882 tests; 79.91% lines /
+   82.28% branches / 66.44% functions against thresholds 5 / 60 / 40). Reproduce it with
+   `cd agent-control-tower/act-dashboard && pnpm test -- --coverage`. The captured log lives in the
+   plan's git-ignored scratch workspace
+   (`.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`) and is therefore
+   NOT a committed artifact — the command and the head are the durable evidence. **The `packages/mcp-server`
+   coverage tier has never been run**, so its threshold is unexercised. The full clean-room gate runs
+   both; a threshold failure there is a real failure to triage, not to suppress.
+7. **The retryable-409 taxonomy is pinned for the decision path only.** The card's positive-marker rule
+   (above) means a divergent retryable tail cannot mis-settle it: neither
+   `MemoryCurrentValueSlot.java:50-51` (`another writer won the race — re-read before writing`) nor
+   `MemoryCommandService.java:781` (`re-read before retrying`) carries the already-decided marker, so
+   both keep a retry. The slot-claim wording IS now pinned
+   (`MemoryProposalServiceTest.SLOT_WON_RACE:106` and
+   `anApprovalThatLosesTheEntitySlotCarriesTheSlotWordingAndNotTheDecidedMarker`), because `decideFact`
+   runs the slot claim before either flush. `re-read before retrying` is deliberately NOT pinned as a
+   decision wording: the taxonomy javadoc (`:94-96`) records that it belongs to the private
+   `MemoryCommandService.flushFacts`, unreachable from a proposal decision. The residual is that a
+   future edit to that command-path wording would not be caught by a decision-path pin.

@@ -2,8 +2,10 @@ package io.aria.conductor.execution.telemetry;
 
 import io.aria.conductor.execution.engine.RunStreamRegistry;
 import io.aria.conductor.execution.runtime.CoreEvent;
+import io.aria.conductor.execution.security.CredentialRedactor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -290,6 +292,104 @@ class CoreEventTelemetryTest {
                 .containsEntry("ok", true)
                 .containsEntry("result", "ok")
                 .containsEntry("name", "Read");
+    }
+
+    /**
+     * A credential-shaped value that must never reach the activity strip. Synthetic on purpose: a
+     * GitHub-PAT shape ({@code ghp_} + 36 characters) made of zeros, so it matches the redactor's
+     * rule and is worth nothing, replacing nothing that was ever issued.
+     */
+    private static final String SYNTHETIC_PAT = "ghp_000000000000000000000000000000000000";
+
+    /** A bash call whose argument carries the synthetic token in an Authorization header. */
+    private static final String TOOL_CALL_WITH_CREDENTIAL = """
+            {"toolCallId":"call-secret","toolName":"Bash","kind":"bash","title":"curl",
+             "input":{"command":"curl -H 'Authorization: Bearer %s' https://example.invalid"}}
+            """.formatted(SYNTHETIC_PAT);
+
+    /** A completed result whose output echoes the synthetic token back. */
+    private static final String TOOL_RESULT_WITH_CREDENTIAL = """
+            {"toolCallId":"call-secret","toolName":"Bash","status":"completed","isError":false,
+             "result":"PUT /repos/acme/widgets -> 201, sent Authorization: token %s"}
+            """.formatted(SYNTHETIC_PAT);
+
+    @Test
+    void aToolCallFrameCarriesExactlyTheArgumentsTheAuditRowStores() {
+        // The persisted row and the frame beside it are read by the same operator in the same panel:
+        // the frame must not show a credential the audit row redacted. The seam is the mocked
+        // telemetry writer, i.e. the exact String the service persists, so this compares the frame
+        // to the redacted form of that same value rather than to a second copy of the rule.
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.call", TOOL_CALL_WITH_CREDENTIAL))).isTrue();
+
+        ArgumentCaptor<RunTelemetryService.ToolCallEvent> persisted =
+                ArgumentCaptor.forClass(RunTelemetryService.ToolCallEvent.class);
+        verify(telemetry).recordToolCall(eq(RUN), persisted.capture());
+        Map<String, Object> frame = payloadOf(stream.frames.get(0));
+
+        assertThat((String) frame.get("args"))
+                .as("the frame carries what the audit row carries, never the raw tool input")
+                .isEqualTo(CredentialRedactor.redact(persisted.getValue().input()))
+                .contains(CredentialRedactor.MASK)
+                .doesNotContain(SYNTHETIC_PAT);
+        assertThat(frame)
+                .as("the frame's key names and its non-secret values are the dashboard's contract")
+                .containsOnlyKeys("runId", "name", "args", "toolCallId")
+                .containsEntry("runId", RUN.toString())
+                .containsEntry("name", "Bash")
+                .containsEntry("toolCallId", "call-secret");
+    }
+
+    @Test
+    void aToolResultFrameCarriesExactlyTheResultTheAuditRowStores() {
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.result", TOOL_RESULT_WITH_CREDENTIAL))).isTrue();
+
+        ArgumentCaptor<RunTelemetryService.ToolResultEvent> persisted =
+                ArgumentCaptor.forClass(RunTelemetryService.ToolResultEvent.class);
+        verify(telemetry).recordToolResult(eq(RUN), persisted.capture());
+        Map<String, Object> frame = payloadOf(stream.frames.get(0));
+
+        assertThat((String) frame.get("result"))
+                .as("the frame carries what the audit row carries, never the raw tool output")
+                .isEqualTo(CredentialRedactor.redact(persisted.getValue().result()))
+                .contains(CredentialRedactor.MASK)
+                .doesNotContain(SYNTHETIC_PAT);
+        assertThat(frame)
+                .as("redacting a value must not disturb the frame's keys or its ok flag")
+                .containsOnlyKeys("runId", "name", "result", "ok", "toolCallId")
+                .containsEntry("runId", RUN.toString())
+                .containsEntry("name", "Bash")
+                .containsEntry("ok", true)
+                .containsEntry("toolCallId", "call-secret");
+    }
+
+    @Test
+    void aCredentialFreeArgumentIsEmittedVerbatim() {
+        // The positive control: redaction must stay targeted. This argument names a secret-bearing
+        // header and the word token, and carries no credential value, so the frame is byte-identical
+        // to the pre-fix output. Without this, "redact everything" would pass the two tests above.
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.call", """
+                {"toolCallId":"call-plain","toolName":"Bash",
+                 "input":{"command":"env | grep -iE 'token|authorization' | head"}}
+                """))).isTrue();
+
+        assertThat((String) payloadOf(stream.frames.get(0)).get("args"))
+                .isEqualTo("{\"command\":\"env | grep -iE 'token|authorization' | head\"}")
+                .doesNotContain(CredentialRedactor.MASK);
     }
 
     @Test

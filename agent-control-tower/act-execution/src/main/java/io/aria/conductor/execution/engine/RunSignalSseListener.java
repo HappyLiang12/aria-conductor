@@ -1,11 +1,13 @@
 package io.aria.conductor.execution.engine;
 
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.approval.PendingClarificationAsks;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
@@ -38,7 +40,10 @@ import java.util.UUID;
  * <p>A signal is emitted only while the run has a live stream. The turn may be
  * a sync chat ({@code AriaService.chat} starts the run with no emitter) or a
  * panel that already closed; in both cases the ask still exists in the
- * database and the REST/WebSocket planes carry it.
+ * database and the REST/WebSocket planes carry it. The {@code waiting_input}
+ * frame additionally requires the run to be parked ({@code WAITING_INPUT}): the
+ * engine's park write can be refused, and it then wakes the run while the ask
+ * already exists.
  *
  * <p>Both listeners run after commit: {@code PermissionCoordinator.register}
  * publishes inside its own transaction, and a panel that fetched the approval
@@ -60,6 +65,7 @@ public class RunSignalSseListener {
     private final RunStreamRegistry registry;
     private final ApprovalRepository approvals;
     private final ToolRiskResolver toolRiskResolver;
+    private final RunRepository runs;
 
     /** {@code approval_required}: the run needs an operator decision. */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
@@ -112,9 +118,14 @@ public class RunSignalSseListener {
                 return;
             }
             // The pick is PendingClarificationAsks.newest — one rule shared with the sync
-            // reader (AriaService), so both surfaces of one park name the same ask.
+            // reader (AriaService), so both surfaces of one park name the same ask. The park is a
+            // conditional write the engine can be refused (it wakes the run and leaves it
+            // un-parked with the ask already persisted), so the frame is emitted only for a run
+            // that is actually parked: the same predicate the sync reader applies before naming
+            // this ask (AriaService).
             PendingClarificationAsks.newest(approvals.findByRunIdAndStatusAndSource(runId,
                             ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                    .filter(ask -> isParked(runId))
                     .ifPresent(ask -> registry.emit(runId, "waiting_input", Map.of(
                             "runId", runId.toString(),
                             "approvalId", ask.getId().toString(),
@@ -123,6 +134,16 @@ public class RunSignalSseListener {
             log.warn("Failed to emit the waiting-input signal for run {}: {}",
                     event.getRunId(), e.getMessage(), e);
         }
+    }
+
+    /**
+     * True when the engine's own park write committed: {@code WAITING_INPUT} is the row-level
+     * meaning of "parked on a question" and is what the sync reader keys the same ask on.
+     */
+    private boolean isParked(UUID runId) {
+        return runs.findById(runId)
+                .map(run -> run.getStatus() == RunStatus.WAITING_INPUT)
+                .orElse(false);
     }
 
     /**

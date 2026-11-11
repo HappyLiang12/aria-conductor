@@ -264,10 +264,12 @@ class RunAdmissionQueueTest {
     }
 
     /**
-     * Today's only production path: every caller still takes the 3-arg acquire, so
-     * its conversation is {@code null}. Nulls must never be bucketed together as one
-     * shared conversation -- they are bounded by the global Aria cap only, and a null
-     * holder must not delay a named conversation either.
+     * The production caller takes the 4-arg acquire with the run's conversation
+     * ({@code AgentLoopEngine.java:281} passes {@code run.getConversationId()}), but the 3-arg
+     * convenience form still exists and passes {@code null}, and a run whose conversation id is
+     * null reaches the 4-arg form with it too. Nulls must never be bucketed together as one
+     * shared conversation -- they are bounded by the global Aria cap only, and a null holder must
+     * not delay a named conversation either.
      */
     @Test
     void nullConversationsAreNeverGroupedTogether() throws Exception {

@@ -290,9 +290,9 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       break;
     case 'tool_result':
       // `ok` is `!isError` from the core payload and is always present on the
-      // producer (tool-event-contract.md). An absent field means an older
-      // backend answered, so it is read as success — never as a measured
-      // failure; an explicit `false` is the only error signal.
+      // producer (CoreEventTelemetry#streamSignal in act-execution). An absent
+      // field means an older backend answered, so it is read as success — never
+      // as a measured failure; an explicit `false` is the only error signal.
       cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''), p.ok !== false);
       break;
     case 'message':

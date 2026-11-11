@@ -27,6 +27,7 @@ import io.aria.conductor.memory.service.MemoryQueryService;
 import io.aria.conductor.memory.service.MemoryRecallService;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import io.aria.conductor.mcp.McpActorContext;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -245,7 +246,8 @@ public class MemoryTools implements McpTool {
      * would be a value read above the deployment ceiling by another name.
      */
     @Tool(name = "forget_fact",
-            description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current.")
+            description = "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String forgetFact(
             @ToolParam(description = "Memory fact id (UUID)") UUID factId,
             ToolContext toolContext) {
@@ -294,7 +296,8 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "decide_memory_proposal",
-            description = "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value.")
+            description = "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."
+                    + ToolCatalog.OPERATOR_SESSION_CLAUSE)
     public String decideMemoryProposal(
             @ToolParam(description = "Subject id of the PENDING proposal (fact or relation)") UUID proposalId,
             @ToolParam(description = "true = approve, false = reject") boolean approve,

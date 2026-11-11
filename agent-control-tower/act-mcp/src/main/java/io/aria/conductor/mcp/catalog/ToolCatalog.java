@@ -34,6 +34,25 @@ public class ToolCatalog implements ToolCatalogProvider {
     /** Core-native read-only tools the auto-approve default lists (D5); not MCP-registered here. */
     private static final Set<String> NATIVE_READ_ONLY_TOOL_NAMES = Set.of("WebSearch", "WebFetch");
 
+    /**
+     * T48 (re-review rev-mcp m2 / N3). The shipped default is
+     * {@code aria.mcp.auth-mode: none} ({@code ARIA_MCP_AUTH_MODE} unset,
+     * {@code act-app/src/main/resources/application.yml:85}): the filter requires no
+     * credential and nothing is injected, so a caller that presents none publishes no actor,
+     * {@code McpActorContext.require} refuses it, and the ten OPERATOR_ONLY tools fail closed
+     * for an operator as well. (Nothing in the default install is broken by this: the mode
+     * simply does not authenticate. A caller that DOES present a valid bearer is still
+     * resolved — {@code McpServerConfig.actorTransportContext} reads the header in every
+     * mode.) Each description said only that a run-scoped worker is refused, which is half
+     * the truth on a default install. The clause is a constant because all ten carry it, in
+     * this catalog AND in the {@code @Tool} annotation — one source, so the two copies cannot
+     * drift.
+     */
+    public static final String OPERATOR_SESSION_CLAUSE =
+            " It requires an operator-authenticated MCP session: with aria.mcp.auth-mode=none "
+                    + "no credential is required or injected, so a call that presents none is "
+                    + "refused.";
+
     private static final List<ToolDescriptor> TOOLS = List.of(
             // workflows
             read("list_workflow_templates",
@@ -78,12 +97,14 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page. Should a PENDING row still reach this read, an operator credential may see it and any other credential is refused with FORBIDDEN.",
                     true),
             operatorOnly("forget_fact",
-                    "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."),
+                    "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."
+                            + OPERATOR_SESSION_CLAUSE),
             read("list_memory_proposals",
                     "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. An entity row is listed for status ACTIVE or RETIRED to any credential; a PENDING entity row, with its canonical key in factKey, is returned to an operator credential only.",
                     true),
             operatorOnly("decide_memory_proposal",
-                    "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."),
+                    "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."
+                            + OPERATOR_SESSION_CLAUSE),
             read("get_context_manifest",
                     "Read every context assembly recorded for a run, in turn order: turnNumber, adapter, section ids with source ids and estimates, dropped sections with reasons, and degraded sections with reasons. Metadata only — prompt content is never stored or returned.",
                     true),
@@ -92,7 +113,8 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "List approval gates. Optional status (PENDING/APPROVED/DENIED/EXPIRED). SPEC_REVIEW approvals carry markdown content and knowledgeItemId; toolCallId is null for them.",
                     true),
             operatorOnly("decide_approval",
-                    "Decide a PENDING approval gate (approve or deny). Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no approval changes state."),
+                    "Decide a PENDING approval gate (approve or deny). Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no approval changes state."
+                            + OPERATOR_SESSION_CLAUSE),
             // agents
             read("list_agents",
                     "List active agents (retired agents excluded). Use get_agent for full details of one agent.",
@@ -105,7 +127,8 @@ public class ToolCatalog implements ToolCatalogProvider {
             write("update_agent",
                     "Update an agent. Only the fields you supply are applied; omitted fields keep their current value."),
             operatorOnly("retire_agent",
-                    "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active."),
+                    "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active."
+                            + OPERATOR_SESSION_CLAUSE),
             // runs
             write("run_agent",
                     "Start a run for an agent with the given prompt. Returns the created run including its id. maxIterations is optional; omit it to use the service default."),
@@ -159,7 +182,8 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Preview leftover resources by category (runs, stuck, kanban, agents, approvals) without deleting anything. Read-only; the stuck category is only reported when includeStuck is true.",
                     false),
             operatorOnly("housekeeping_execute",
-                    "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and nothing is deleted."),
+                    "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and nothing is deleted."
+                            + OPERATOR_SESSION_CLAUSE),
             // skills
             read("list_skills",
                     "List skills. Optional stage (SKILL/SCRIPT/WORKFLOW) and enabled flag (true = enabled only, false = disabled only); omit both to list all.",
@@ -184,15 +208,20 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Get one LLM provider by id. The API key is masked, never returned in full.",
                     true),
             operatorOnly("create_llm_provider",
-                    "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no provider is created."),
+                    "Create an LLM provider (created inactive). type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked; maxTokens defaults to 4096. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no provider is created."
+                            + OPERATOR_SESSION_CLAUSE),
             operatorOnly("update_llm_provider",
-                    "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is unchanged."),
+                    "Update an LLM provider. Omitted (null/blank) arguments keep their current value. type is OPENAI, ANTHROPIC, AZURE or LOCAL. The apiKey is stored and returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is unchanged."
+                            + OPERATOR_SESSION_CLAUSE),
             operatorOnly("delete_llm_provider",
-                    "Delete an LLM provider by id. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is kept."),
+                    "Delete an LLM provider by id. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the provider is kept."
+                            + OPERATOR_SESSION_CLAUSE),
             operatorOnly("activate_llm_provider",
-                    "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the active provider is unchanged."),
+                    "Activate an LLM provider and deactivate the previously active one. The apiKey is returned masked. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the active provider is unchanged."
+                            + OPERATOR_SESSION_CLAUSE),
             operatorOnly("test_llm_provider",
-                    "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no request is sent."),
+                    "Test connectivity to an LLM provider by sending a minimal completion request. Returns reachable=false when the provider does not answer successfully. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and no request is sent."
+                            + OPERATOR_SESSION_CLAUSE),
             // aria assistant surfaces
             read("list_notifications",
                     "List notifications, newest first. Optional page (default 0) and size (default 20).",

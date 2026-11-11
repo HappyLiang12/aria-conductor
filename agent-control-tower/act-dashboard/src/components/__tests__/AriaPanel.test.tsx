@@ -332,6 +332,13 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
       await sendThenTimeOut();
 
       expect(screen.getByText(/2 pending asks in the Review Queue/)).toBeInTheDocument();
+      // Task 37 Item 3: the count comes from a snapshot the panel read earlier
+      // (the reconcile's, before this turn), so the report must say when it was
+      // taken. Stated as current, a lost frame would invite a resend onto a live
+      // run — the number is a fact about the last refresh, not right now.
+      expect(
+        screen.getByText(/2 pending asks in the Review Queue as of this panel's last refresh/),
+      ).toBeInTheDocument();
       // The one read is the reconcile's: it happened before this turn was sent,
       // and the timeout report consumed it instead of asking a second time.
       expect(mockGetTimeline).toHaveBeenCalled();

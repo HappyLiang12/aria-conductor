@@ -835,7 +835,11 @@ export function AriaPanel() {
       const paragraphs: string[] = [];
       if (pendingCount !== null && pendingCount > 0) {
         paragraphs.push(
-          `Aria may be waiting for your approval — ${pendingCount} pending ask${pendingCount === 1 ? '' : 's'} in the Review Queue. ` +
+          // The snapshot this count comes from was taken at the panel's last
+          // refresh (the reconcile's read, reused so the report never asks the
+          // queue a second time), so the sentence dates the claim. Stated as
+          // "now", a lost frame would invite a resend onto a live run.
+          `Aria may be waiting for your approval — ${pendingCount} pending ask${pendingCount === 1 ? '' : 's'} in the Review Queue as of this panel's last refresh. ` +
             'The request continues in the background; approve or deny there to resume it.',
         );
       } else if (pendingCount === 0) {

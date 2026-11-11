@@ -503,6 +503,13 @@ section 8 (opencode) and `docs/reviews/evidence/2026-11-10-e2e-qoder/` (qoder).
   get_context_manifest is global metadata. Lane I was APPROVED WITH FIXES: the ArchUnit
   canary did not exercise the real boundary selectors (fixed with a fixture-based
   violation proof), and the purge test lacked a pre-purge existence assertion.
+  **AMENDED 2026-11-11 (Aria PA experience program, operator decision):** the
+  `autoApproveRead=false` decision recorded above for memory READ tools no longer holds. Memory
+  reads are now auto-approved so a read-only memory turn raises zero operator asks; the writes
+  (`remember_fact` and the other mutating tools) still ask. The historical entry is preserved
+  unchanged because it records what was decided on 2026-11-09. See
+  `docs/superpowers/specs/2026-11-11-aria-pa-experience-design.md` (decision B4) and the shipped
+  catalog flags, which the auto-approve allowlist is pinned equal to.
 - 2026-11-10: Gate B close. Live memory acceptance is VERIFIED at `7f6647ab` (fresh H2,
   real opencode HOST core): teach/recall provenance, restart persistence, six runs each
   with one manifest row and zero prompt/fact text, a real worker-actor MCP

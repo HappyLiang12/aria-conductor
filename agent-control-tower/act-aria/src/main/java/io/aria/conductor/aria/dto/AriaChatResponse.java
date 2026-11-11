@@ -41,4 +41,14 @@ public class AriaChatResponse {
 
     /** Human-readable failure reason for FAILED/ABORTED runs (null otherwise). */
     private String errorMessage;
+
+    /**
+     * The clarification a parked run is waiting on (A4), verbatim from the pending
+     * CLARIFICATION approval's content. Null unless the observed status is
+     * WAITING_INPUT and such an ask exists — the sync contract never invents one.
+     */
+    private String question;
+
+    /** Id of that pending clarification approval, so a client can answer it (null otherwise). */
+    private String approvalId;
 }

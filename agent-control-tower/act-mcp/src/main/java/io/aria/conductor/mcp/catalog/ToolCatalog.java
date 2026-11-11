@@ -60,9 +60,12 @@ public class ToolCatalog implements ToolCatalogProvider {
             // memory (spec §9): a worker write is a PENDING proposal, an operator write is ACTIVE.
             // Decision (2026-11-11 operator amendment, reversing the 2026-11 review): the five
             // memory READ descriptors below are auto-approved for the Aria assistant's coordinated
-            // runs. Memory reads are clamped at INTERNAL and every prompt still records which facts
-            // entered it, so the operator keeps auditability without a per-read click. Writes and
-            // operator-only tools are unchanged; ToolCatalogParityTest pins this.
+            // runs. Four are clamped at the INTERNAL sensitivity ceiling; get_context_manifest is
+            // the exception — it applies no ceiling and returns any run's manifest, a whitelist
+            // metadata projection (never prompt content) that the 2026-11 review deliberately left
+            // cross-run. Every prompt still records which facts entered it, so the operator keeps
+            // auditability without a per-read click. Writes and operator-only tools are unchanged;
+            // ToolCatalogParityTest pins this.
             write("remember_fact",
                     "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity."),
             read("recall_memory",

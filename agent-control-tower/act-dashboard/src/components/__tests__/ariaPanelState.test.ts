@@ -267,6 +267,31 @@ describe('panelReducer restore merge', () => {
     });
     expect(s.items.filter((i) => i.kind === 'user')).toHaveLength(1);
   });
+
+  it('keeps a live settled tool when the snapshot only holds its call row', () => {
+    let s = panelReducer(base, { type: 'toolCall', turnId: 'r1', name: 'recall_memory', now: 1_000 });
+    s = panelReducer(s, { type: 'toolResult', turnId: 'r1', name: 'recall_memory', result: '{"hits":1}', ok: true, now: 1_250 });
+    // The snapshot was read before the result row landed: it has the call row only.
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        row({ role: 'user', content: 'recall it' }),
+        row({ role: 'tool', content: 'tool_call: recall_memory {"q":"x"}', timestamp: '2026-11-11T00:00:00.000Z' }),
+      ],
+      approvals: [], proposals: [],
+    });
+    const strips = s.items.filter((i) => i.kind === 'activity');
+    expect(strips).toHaveLength(1);
+    const strip = strips[0];
+    if (strip.kind !== 'activity') throw new Error('activity strip missing');
+    expect(strip.tools).toHaveLength(1);
+    expect(strip.tools[0]).toMatchObject({
+      name: 'recall_memory',
+      status: 'ok',
+      result: '{"hits":1}',
+      durationMs: 250,
+    });
+  });
 });
 
 describe('panelReducer clarifications, proposals and queue', () => {

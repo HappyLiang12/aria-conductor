@@ -339,7 +339,7 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
 function restore(state: PanelState, event: RestoreEvent): PanelState {
   const fromTimeline = itemsFromTimeline(event.timeline);
   const prior = state.conversationId === event.conversationId ? state.items : [];
-  const items = [...fromTimeline, ...carryOver(prior, fromTimeline)];
+  const items = mergeCarriedStrips(fromTimeline, carryOver(prior, fromTimeline));
   const runIds = new Set(event.timeline.map((entry) => entry.runId).filter((runId) => !!runId));
   const askIds = new Set(
     items.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
@@ -376,11 +376,12 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
 
 /**
  * Prior items the snapshot does not represent. A live frame for a turn the
- * timeline has not persisted yet has no snapshot counterpart, so it is kept;
- * one the timeline now holds is dropped in favour of the durable row.
+ * timeline has not persisted yet has no snapshot counterpart, so it is kept.
+ * A strip the snapshot does hold is kept too and merged by the caller: the
+ * snapshot may have been read before the result row landed, so only its call
+ * rows are visible and the live strip still holds the settled result.
  */
 function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
-  const turnIds = new Set(base.flatMap((item) => (item.kind === 'activity' ? [item.turnId] : [])));
   const askIds = new Set(
     base.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
   );
@@ -392,13 +393,14 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
       messageBudget.set(key, (messageBudget.get(key) ?? 0) + 1);
     }
   }
+  const carriedTurnIds = new Set<string>();
   let queuedDrawn = base.some((item) => item.kind === 'queued');
 
   const carried: PanelItem[] = [];
   for (const item of prior) {
     if (item.kind === 'activity') {
-      if (turnIds.has(item.turnId)) continue;
-      turnIds.add(item.turnId);
+      if (carriedTurnIds.has(item.turnId)) continue;
+      carriedTurnIds.add(item.turnId);
     } else if (item.kind === 'approval' || item.kind === 'clarification') {
       if (askIds.has(item.approvalId)) continue;
       askIds.add(item.approvalId);
@@ -426,6 +428,47 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
 function messageKey(item: Extract<PanelItem, { kind: 'user' | 'assistant' }>): string {
   if (item.kind === 'assistant') return `assistant\u0000${item.error === true ? 'error' : 'ok'}\u0000${item.content}`;
   return `user\u0000${item.content}`;
+}
+
+/**
+ * Fold a carried strip into the restored strip for the same turn. The snapshot
+ * cannot show a result written after it was read, so per tool the live plane's
+ * settled state wins over a restored `running` one; restored-only tools are
+ * kept, and a carried tool the snapshot lacks is kept too. The carried strip is
+ * dropped once its tools are merged, never whole.
+ */
+function mergeCarriedStrips(base: PanelItem[], carried: PanelItem[]): PanelItem[] {
+  const merged = base.slice();
+  const rest: PanelItem[] = [];
+  for (const item of carried) {
+    if (item.kind === 'activity') {
+      const at = merged.findIndex((candidate) => candidate.kind === 'activity' && candidate.turnId === item.turnId);
+      if (at >= 0) {
+        const target = merged[at] as ActivityItem;
+        merged[at] = { ...target, tools: mergeTools(target.tools, item.tools) };
+        continue;
+      }
+    }
+    rest.push(item);
+  }
+  return [...merged, ...rest];
+}
+
+/** Per-name, occurrence-ordered merge of two strips' tools. */
+function mergeTools(restored: ToolActivity[], carried: ToolActivity[]): ToolActivity[] {
+  const used = new Array<boolean>(carried.length).fill(false);
+  const merged = restored.map((tool) => {
+    const match = carried.findIndex((candidate, index) => !used[index] && candidate.name === tool.name);
+    if (match < 0) return tool;
+    used[match] = true;
+    const prior = carried[match];
+    // A settled prior tool knows the outcome; a running prior one does not.
+    return prior.status === 'running' ? tool : prior;
+  });
+  carried.forEach((tool, index) => {
+    if (!used[index]) merged.push(tool);
+  });
+  return merged;
 }
 
 function isClarificationAsk(approval: Approval): boolean {

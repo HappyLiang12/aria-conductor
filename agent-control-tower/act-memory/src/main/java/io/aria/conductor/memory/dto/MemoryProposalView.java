@@ -1,5 +1,6 @@
 package io.aria.conductor.memory.dto;
 
+import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
@@ -43,6 +44,30 @@ public record MemoryProposalView(
                 fact.getConfidence(),
                 fact.getCreatedAt(),
                 fact.getValidFrom());
+    }
+
+    /**
+     * An entity proposal: the decision is addressed to the entity itself, so {@code id} and
+     * {@code entityId} are the same. The canonical key and the display name travel in
+     * {@code factKey} and {@code valueText} — the two fields every proposal card already renders —
+     * so the operator reads "person:happy / Happy" for an entity and "preferred_editor / vim"
+     * for a fact without a second record shape.
+     */
+    public static MemoryProposalView fromEntity(MemoryEntity entity) {
+        return new MemoryProposalView(
+                idString(entity.getId()),
+                MemorySubjectType.ENTITY.name(),
+                idString(entity.getId()),
+                entity.getCanonicalKey(),
+                entity.getDisplayName(),
+                null,
+                null,
+                nameOf(entity.getStatus()),
+                nameOf(entity.getOrigin()),
+                nameOf(entity.getSensitivity()),
+                null,
+                entity.getCreatedAt(),
+                null);
     }
 
     public static MemoryProposalView fromRelation(MemoryRelation relation) {

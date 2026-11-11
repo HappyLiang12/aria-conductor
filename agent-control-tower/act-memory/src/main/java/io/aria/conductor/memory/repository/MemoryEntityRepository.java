@@ -8,10 +8,18 @@ import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface MemoryEntityRepository extends JpaRepository<MemoryEntity, UUID> {
+
+    /**
+     * Identity probe of the write path: {@code UNIQUE (kind, canonical_key)} is the real
+     * identity (V81), so a repeated proposal resolves to the row that already owns the key
+     * instead of inserting a second one.
+     */
+    Optional<MemoryEntity> findByKindAndCanonicalKey(String kind, String canonicalKey);
 
     /**
      * Recall entry point: the entities the mention extractor matched, restricted to one

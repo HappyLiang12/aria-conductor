@@ -12,9 +12,10 @@ import java.util.UUID;
  * <p>
  * {@code proposalId} is the id the decision is addressed to, {@code subjectType} is the
  * {@code MemorySubjectType} name ({@code ENTITY} today, {@code FACT} when a fact proposal also
- * notifies). {@code factKey} and {@code valueText} are null for an entity proposal.
- * {@code runId} addresses the run whose stream renders the card; the event is published only
- * when the actor carries one.
+ * notifies). For an ENTITY proposal {@code factKey} carries the entity's canonical key and
+ * {@code valueText} its display name — the same two fields a fact proposal uses, so one card
+ * renderer serves both. {@code runId} addresses the run whose stream renders the card; the event
+ * is published only when the actor carries one.
  */
 @Getter
 public class MemoryProposalCreatedEvent extends ApplicationEvent {

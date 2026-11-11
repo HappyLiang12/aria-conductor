@@ -247,12 +247,19 @@ public class MemoryCommandService {
     /**
      * Closes one fact row the retired entity left live. The audit payload names the key and the
      * status it closed, never the value: a fact value can be CONFIDENTIAL.
+     * <p>
+     * T29 Item 4 (bounded): the fact flush runs here, before the entity flush that follows, so a
+     * lost fact version is translated while the fact key is the subject of the conflict.
+     * Hibernate flushes the whole persistence context, so without this call the same loss
+     * surfaced from {@code entities.flush()} as "memory entity … was re-proposed concurrently" —
+     * the right rollback and the right single conflict, attributed to the wrong row.
      */
     private void retireLiveFact(MemoryEntity row, MemoryFact fact, MemoryActor actor, Instant now) {
         FactStatus previous = fact.getStatus();
         fact.setStatus(FactStatus.RETIRED);
         fact.setValidTo(now);
         facts.save(fact);
+        flushFacts(fact.getFactKey(), "closed by the entity re-proposal");
         assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
                 null, now,
                 audit("status", previous.name(), "factKey", fact.getFactKey()),

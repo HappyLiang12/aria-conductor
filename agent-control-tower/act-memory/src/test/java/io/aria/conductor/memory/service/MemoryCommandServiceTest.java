@@ -1235,6 +1235,43 @@ class MemoryCommandServiceTest {
     }
 
     /**
+     * T29 Item 4 (P3, bounded). The re-proposal translated only {@code entities.flush()}, but
+     * Hibernate flushes the whole persistence context, so a lost FACT version surfaced from that
+     * call and was reported as "memory entity … was re-proposed concurrently". The result was
+     * already correct (rollback, one governed conflict, no event); the attribution pointed the
+     * incident at the wrong row. The fact rows are now flushed through the same governed
+     * translation before the entity flush, so the conflict names the fact key.
+     */
+    @Test
+    void aReProposalWhoseFactVersionWasLostNamesTheFactNotTheEntity() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryFact live = currentFact(id("fact:timezone"), retired.getId(), "timezone", "UTC", 3);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of(live));
+        // The conflict is raised by the ACTIVE row's flush, so the PENDING read never runs here.
+        lenient().when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(),
+                FactStatus.PENDING)).thenReturn(List.of());
+        lenient().when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        lenient().when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, live.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction))
+                .as("the conflict names the row whose version was lost, not the entity")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("timezone")
+                .hasMessageNotContaining("was re-proposed concurrently");
+
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
+    /**
      * The same resurrection on the graph: approving the re-proposed entity makes its surviving
      * ACTIVE relations current again (recall expands them from an ACTIVE match), so the edges the
      * retired entity left behind must be closed with it. One edge that is both incoming and

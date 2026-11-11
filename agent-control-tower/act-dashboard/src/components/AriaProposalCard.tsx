@@ -37,6 +37,18 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
 }
 
 /**
+ * `MemoryProposalService.INBOX_LIMIT` — the PENDING proposal inbox is ONE
+ * newest-first page of at most this many rows across ALL entities.
+ *
+ * This is the single client-side source of that number: `AriaPanel` imports it
+ * for the reconcile's completeness rule instead of keeping a second copy, so a
+ * lowered server cap cannot leave one surface claiming a truncated page is the
+ * whole inbox. This card's own batch read is the per-entity one, which the
+ * server does not cap — the number bounds the global inbox, not this card.
+ */
+export const PROPOSAL_INBOX_LIMIT = 50;
+
+/**
  * The batch read's outcome: the facts (and whether the whole batch is on
  * screen), or that the batch could not be read.
  */

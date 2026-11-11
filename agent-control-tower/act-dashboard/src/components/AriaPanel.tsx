@@ -17,7 +17,7 @@ import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
-import AriaProposalCard from './AriaProposalCard';
+import AriaProposalCard, { PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
 import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
@@ -51,9 +51,10 @@ const FAILED_TURN_CONTENT_PREFIX = '回合執行失敗：';
 /**
  * `MemoryProposalService.INBOX_LIMIT`: the PENDING proposal inbox is ONE bounded
  * newest-first page across all entities, so a full page cannot prove that a
- * proposal is absent from it.
+ * proposal is absent from it. The number has ONE client-side source — the
+ * proposal card imports-and-exports it — so the panel and the card can never
+ * disagree about what a full page means.
  */
-const PROPOSAL_INBOX_LIMIT = 50;
 
 /**
  * A failed turn's synthetic timeline entry is appended the moment the run turns

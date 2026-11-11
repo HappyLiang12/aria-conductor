@@ -8,6 +8,8 @@ import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
+import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -99,12 +102,28 @@ public class AriaConversationController {
         // error entry lands directly after that run's messages, never after a later run's.
         List<TimelineEntry> timeline = new ArrayList<>();
         for (Run run : runs) {
+            // One read per run: the tool status of a restored tool row lives on its
+            // tool_calls row, keyed by the deterministic id derived from the raw id.
+            Map<UUID, ToolCallStatus> statusByRowId = new HashMap<>();
+            for (ToolCall call : toolCallRepository.findByRunId(run.getId())) {
+                statusByRowId.put(call.getId(), call.getStatus());
+            }
             for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                String rawToolCallId = t.getToolCallId() != null && !t.getToolCallId().isBlank()
+                        ? t.getToolCallId()
+                        : null;
+                // Only a present tool_calls row yields a status. A row with no matching
+                // call leaves both fields absent rather than guessing a success.
+                ToolCallStatus status = rawToolCallId != null
+                        ? statusByRowId.get(ToolCallRowId.of(run.getId(), rawToolCallId))
+                        : null;
                 timeline.add(TimelineEntry.builder()
                         .role(t.getRole())
                         .content(t.getContent())
                         .timestamp(t.getCreatedAt())
                         .runId(t.getRunId().toString())
+                        .toolCallId(rawToolCallId)
+                        .toolStatus(status != null ? status.name() : null)
                         .build());
             }
             // A failed run that died before producing any trajectory would otherwise be

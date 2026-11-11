@@ -203,6 +203,47 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
     }
 
+    // ---------------------------------------------------------------- pending entities
+
+    /**
+     * A PENDING entity is not memory yet, so an ACTIVE fact may not hang off it: the fact would
+     * be current while its parent is invisible to recall, and approving the entity later would
+     * silently publish a value nobody proposed as a proposal.
+     */
+    @Test
+    void anActiveFactCannotBeAttachedToAPendingEntity() {
+        UUID pendingEntityId = id("pending-person");
+        MemoryEntity pending = entity(pendingEntityId);
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findById(pendingEntityId)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> command.addFact(pendingEntityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, "operator message"),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("PENDING");
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /** The positive control for the guard: a PENDING proposal may still depend on a PENDING entity. */
+    @Test
+    void aPendingFactMayHangOffAPendingEntity() {
+        UUID pendingEntityId = id("pending-person");
+        MemoryEntity pending = entity(pendingEntityId);
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findById(pendingEntityId)).thenReturn(Optional.of(pending));
+        when(facts.findByEntityIdOrderByValidFromDesc(pendingEntityId)).thenReturn(List.of());
+
+        MemoryFact fact = command.addFact(pendingEntityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, "run-1"),
+                EXTRACTION);
+
+        assertThat(fact.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(fact.getOrigin()).isEqualTo(MemoryOrigin.EXTRACTION);
+        verify(facts).save(any(MemoryFact.class));
+    }
+
     // ---------------------------------------------------------------- conflicts
 
     @Test

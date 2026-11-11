@@ -150,7 +150,7 @@ public class MemoryCommandService {
         guard.checkValue("valueText", command.valueText());
         MemoryOrigin origin = originOf(actor);
         FactStatus status = statusOf(origin, factKey, command.sourceRef());
-        requireEntity(entityId);
+        requireEntityForFact(entityId, status);
         Instant now = Instant.now();
 
         if (status == FactStatus.ACTIVE) {
@@ -591,6 +591,21 @@ public class MemoryCommandService {
         }
         return entities.findById(entityId)
                 .orElseThrow(() -> new MemoryNotFoundException("memory entity " + entityId + " not found"));
+    }
+
+    /**
+     * The dependent-read guard for facts: a PENDING entity is a proposal, so it may only carry
+     * PENDING facts (the batch the operator decides together). An ACTIVE fact against it would be
+     * current memory whose parent is invisible to recall and to the prompt — exactly the
+     * read-path leak spec §5.5 forbids — so it is a conflict, not an implicit promotion.
+     */
+    private MemoryEntity requireEntityForFact(UUID entityId, FactStatus factStatus) {
+        MemoryEntity entity = requireEntity(entityId);
+        if (factStatus == FactStatus.ACTIVE && entity.getStatus() == EntityStatus.PENDING) {
+            throw new MemoryConflictException("entity " + entityId + " is PENDING; an ACTIVE fact cannot be "
+                    + "attached before the entity proposal is approved");
+        }
+        return entity;
     }
 
     /**

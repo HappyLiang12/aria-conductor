@@ -1,14 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
-import type { StreamError } from '../api/aria';
-import { listApprovals } from '../api/approvals';
+import type { MemoryProposalSignal, StreamError } from '../api/aria';
+import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
-import { cancelRun } from '../api/runs';
-import type { AriaMessage } from '../types';
+import { cancelRun, getRun } from '../api/runs';
+import type { Approval } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 import type { TimelineEntry } from '../api/ariaConversations';
 import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
+import { useWebSocketContext } from './Layout';
+import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
+import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
+import AriaActivityStrip from './AriaActivityStrip';
+import AriaApprovalCard from './AriaApprovalCard';
+import AriaClarificationCard from './AriaClarificationCard';
 import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
@@ -23,23 +29,6 @@ const SUGGESTIONS = [
   'What needs my approval?',
   'Knowledge status summary',
 ];
-
-interface PanelMessage extends AriaMessage {
-  id: string;
-  /** Optional UI-only error tag so we can render a retry affordance per-bubble. */
-  error?: boolean;
-  /**
-   * UI-only: the prompt Retry resends. A failed-turn timeline entry carries its
-   * own prompt, so retry works even when nothing was sent from this tab.
-   */
-  retryText?: string;
-  /**
-   * UI-only: the run may still be alive in the background (the client gave up on
-   * a slow stream or a governed tool ask is waiting), so a blind resend of the
-   * prompt must not be offered next to the message.
-   */
-  noRetry?: boolean;
-}
 
 /**
  * The failure reason of a turn the backend marked FAILED — the only error detail
@@ -86,6 +75,73 @@ async function readFailedTurnEntry(conversationId: string): Promise<TimelineEntr
   if (first) return first;
   await new Promise((resolve) => setTimeout(resolve, FAILED_TURN_RECHECK_WAIT_MS));
   return readLastEntry();
+}
+
+/**
+ * A queued turn (spec A3): the run is admitted but still PENDING, and there is
+ * no QUEUED engine status, so the indicator is derived from the timeline — a
+ * trailing unanswered prompt names the run — and then confirmed against the run
+ * itself. The status read is what makes the label true: a trailing prompt whose
+ * run is RUNNING is a hung turn, and one that FAILED or was cancelled is dead;
+ * neither is admitted-and-waiting, so neither is called Queued. An unreadable
+ * status claims nothing. A turn whose stream this panel holds is not queued, it
+ * is the turn being watched.
+ */
+async function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): Promise<string[]> {
+  const last = timeline[timeline.length - 1];
+  if (!last || last.role !== 'user' || !last.runId) return [];
+  if (last.runId === activeRunId) return [];
+  try {
+    const run = await getRun(last.runId);
+    return run?.status === 'PENDING' ? [last.runId] : [];
+  } catch {
+    return []; // no evidence of admission: no claim
+  }
+}
+
+/** What an ask that left the PENDING list turned into, as its card must say it. */
+type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
+
+/**
+ * A live `memory_proposal` signal as the reducer's summary, or null for a frame
+ * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
+ * counts a pending one), so an unclassifiable subject is dropped rather than
+ * drawn as a blank card nobody can act on.
+ */
+function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
+  const { id, subjectType } = signal;
+  if (!id) return null;
+  if (subjectType !== 'FACT' && subjectType !== 'ENTITY' && subjectType !== 'RELATION') return null;
+  return {
+    id,
+    subjectType,
+    ...(signal.entityId !== undefined ? { entityId: signal.entityId } : {}),
+    ...(signal.factKey !== undefined ? { factKey: signal.factKey } : {}),
+    ...(signal.valueText !== undefined ? { valueText: signal.valueText } : {}),
+    ...(signal.sensitivity !== undefined ? { sensitivity: signal.sensitivity } : {}),
+  };
+}
+
+/**
+ * Reads an ask the PENDING snapshot no longer lists (spec A2's by-id endpoint)
+ * so its card can say what became of it: decided elsewhere, expired, or gone.
+ * A read that fails or that cannot classify the status proves nothing, so it
+ * returns null and the card stays the operator's to decide.
+ */
+async function readAskOutcome(approvalId: string): Promise<AskOutcome | null> {
+  let approval: Approval | null;
+  try {
+    approval = await getApproval(approvalId);
+  } catch {
+    // 404 (the ask no longer exists) or an unreadable read: either way it is not
+    // pending any more — it left the list this reconcile just read.
+    return { state: 'expired', reason: 'this ask no longer exists on the server' };
+  }
+  if (approval === null || typeof approval?.status !== 'string') return null;
+  if (approval.status === 'APPROVED') return { state: 'approved' };
+  if (approval.status === 'DENIED') return { state: 'denied' };
+  if (approval.status === 'PENDING') return null; // the two reads disagree: never decide for the operator
+  return { state: 'expired', reason: approval.reason || 'this ask can no longer be decided' };
 }
 
 function loadOpenState(): boolean {
@@ -187,18 +243,25 @@ function renderMarkdown(text: string): string {
 /**
  * Floating Aria assistant panel — FAB + slide-out chat surface.
  *
- * Wired into the global app shell so the operator can summon Aria from any
- * page without losing route context. Streams responses via Server-Sent Events
- * (`/api/v1/aria/chat/stream`) and falls back to a per-bubble retry button if
- * the backend emits an `error` event mid-stream.
+ * Wired into the global app shell so the operator can summon Aria from any page
+ * without losing route context. The conversation itself lives in
+ * `ariaPanelState`; this component is wiring and layout only. Three planes feed
+ * that state and all three merge by ask id — the turn's ordered SSE stream, the
+ * `/topic/events` WebSocket for what happened elsewhere, and the REST snapshot
+ * used to reconcile on mount, focus and reconnect.
+ *
+ * A parked turn announces its ask on its own stream (`approval_required`,
+ * `waiting_input`), so an approval or a question renders as a card in the
+ * conversation: deciding it resumes the same turn, which still holds this
+ * panel's stream open. Tool activity collapses into one strip per turn instead
+ * of a bubble per row.
  */
 export function AriaPanel() {
   const [open, setOpen] = useState<boolean>(() => loadOpenState());
-  const [messages, setMessages] = useState<PanelMessage[]>([]);
+  const [state, dispatch] = useReducer(panelReducer, emptyState(''));
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState('');
   const [busy, setBusy] = useState(false);
-  const [activeTool, setActiveTool] = useState<string | null>(null);
   const [lastSentMessage, setLastSentMessage] = useState<string | null>(null);
   const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
   const [copied, setCopied] = useState(false);
@@ -211,13 +274,102 @@ export function AriaPanel() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false); // M1: suppress the false "connection closed" error after a user cancel
   const activeRunIdRef = useRef<string | null>(null); // M1: run id for server-side cancellation
-  const [toolElapsed, setToolElapsed] = useState(0); // m3: seconds the current tool has been running
+  const turnIdRef = useRef(''); // the id the live turn's activity strip is keyed by (the run id once known)
+  const conversationIdRef = useRef('');
+  // The runs this conversation's timeline holds: a WebSocket ask is only this
+  // panel's business when its run is one of them (a single-conversation panel
+  // must not render another conversation's ask).
+  const conversationRunIdsRef = useRef<Set<string>>(new Set());
 
-  const isEmpty = messages.length === 0;
+  const items = state.items;
+  const gated = hasUnansweredCard(state);
+  const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
+  // The latest transcript for the reconcile's settle step: a reconcile resolves
+  // after awaits, so it reads the cards as they are now, not as they were when
+  // the callback was created.
+  const itemsRef = useRef<PanelItem[]>(items);
+  itemsRef.current = items;
   // Hoisted primitive so sendStreamed's closure can depend on the id itself —
   // the `slash` object is render-scoped and must not be a hook dep (fix 1).
   const pendingSkillId = slash.pendingSkill?.id;
+
+  const adoptConversationId = useCallback((id: string) => {
+    conversationIdRef.current = id;
+    setConversationId(id);
+  }, []);
+
+  /**
+   * Settles every carried pending card whose ask the PENDING snapshot no longer
+   * lists — a lost `approval.expired` frame, a Cancel while the turn is parked,
+   * a decision taken in another window. Left pending, such a card can only 409
+   * and keeps the composer locked behind a false "still pending" copy, so it is
+   * settled with what the ask actually became. Only a run the snapshot speaks
+   * for is settled: a live turn's ask may simply predate its timeline rows.
+   */
+  const settleDepartedAsks = useCallback(
+    async (targetConversationId: string, listed: Approval[], runIds: Set<string>) => {
+      const listedIds = new Set(listed.map((approval) => approval.id));
+      const departed = itemsRef.current.filter(
+        (item) =>
+          (item.kind === 'approval' || item.kind === 'clarification')
+          && item.state === 'pending'
+          && runIds.has(item.runId)
+          && !listedIds.has(item.approvalId),
+      );
+      for (const card of departed) {
+        if (card.kind !== 'approval' && card.kind !== 'clarification') continue;
+        const outcome = await readAskOutcome(card.approvalId);
+        if (outcome === null) continue;
+        if (conversationIdRef.current !== targetConversationId) return;
+        dispatch({
+          type: 'approvalSettled',
+          approvalId: card.approvalId,
+          state: outcome.state,
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+        });
+        dispatch({
+          type: 'clarificationSettled',
+          approvalId: card.approvalId,
+          state: outcome.state === 'approved' ? 'answered' : 'expired',
+        });
+      }
+    },
+    [],
+  );
+
+  /**
+   * REST reconciliation (spec A3): re-read the durable conversation and merge it
+   * into the panel state. Pending asks are intersected client-side with the
+   * timeline's run ids — there is no conversation-scoped approvals endpoint —
+   * and an operator-only refusal of that read leaves the timeline view intact
+   * instead of failing the whole reconcile.
+   */
+  const reconcile = useCallback(async (targetConversationId: string) => {
+    const timeline = await getConversationTimeline(targetConversationId);
+    const runIds = new Set(timeline.map((entry) => entry.runId).filter((runId) => !!runId));
+    let approvals: Approval[] = [];
+    let pendingListed = false; // only a PENDING read that actually answered may settle a card
+    if (runIds.size > 0) {
+      try {
+        approvals = (await listApprovals('PENDING')).filter((approval) => runIds.has(approval.runId));
+        pendingListed = true;
+      } catch (err) {
+        if (!isOperatorRejection(err)) console.warn('[Aria] pending-approval reconcile failed:', err);
+        approvals = [];
+      }
+    }
+    // A snapshot that resolves after the operator cleared this conversation must
+    // not write the cleared transcript back, nor revert the reducer's id.
+    if (conversationIdRef.current !== targetConversationId) return;
+    conversationRunIdsRef.current = runIds;
+    dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
+    const queued = await queuedRunIds(timeline, activeRunIdRef.current);
+    if (conversationIdRef.current !== targetConversationId) return;
+    dispatch({ type: 'queuedRuns', runIds: queued });
+    if (!pendingListed) return;
+    await settleDepartedAsks(targetConversationId, approvals, runIds);
+  }, [settleDepartedAsks]);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -226,24 +378,18 @@ export function AriaPanel() {
       try {
         const summary = await getLatestConversation();
         if (cancelled) return;
+        // A Clear while this read was in flight already picked this tab's
+        // conversation: this snapshot is stale, so it must not adopt its id or
+        // its transcript.
+        if (conversationIdRef.current !== '') return;
         if (summary) {
-          setConversationId(summary.conversationId);
-          const timeline = await getConversationTimeline(summary.conversationId);
+          adoptConversationId(summary.conversationId);
+          await reconcile(summary.conversationId);
           if (cancelled) return;
-          setMessages(timeline.map((t) => ({
-            id: crypto.randomUUID(),
-            // A failed-turn entry (A1) is a synthetic assistant bubble; it carries
-            // the prompt that re-runs the turn so Retry can resend it.
-            role: t.error
-              ? 'assistant' as const
-              : (t.role === 'user' || t.role === 'assistant') ? t.role : 'assistant' as const,
-            content: t.content,
-            timestamp: t.timestamp,
-            ...(t.error ? { error: true, retryText: t.retryPrompt } : {}),
-          })));
         } else {
           const fresh = crypto.randomUUID();
-          setConversationId(fresh);
+          adoptConversationId(fresh);
+          dispatch({ type: 'restore', conversationId: fresh, timeline: [], approvals: [], proposals: [] });
           console.log(`[Aria] New conversation: ${fresh}`);
         }
       } catch (err) {
@@ -251,14 +397,14 @@ export function AriaPanel() {
         if (!cancelled) {
           setHistoryError(apiErrorMessage(err,
             'Conversation history unavailable — starting a new conversation.'));
-          setConversationId(crypto.randomUUID());
+          adoptConversationId(crypto.randomUUID());
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [adoptConversationId, reconcile]);
 
   // Persist open state only (UI toggle, not data)
   useEffect(() => {
@@ -269,13 +415,13 @@ export function AriaPanel() {
     }
   }, [open]);
 
-  // Auto-scroll on message stack growth
+  // Auto-scroll on transcript growth
   useEffect(() => {
     if (!open) return;
     const el = stackRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [messages, busy, activeTool, open]);
+  }, [items, busy, open]);
 
   // Focus textarea when panel opens
   useEffect(() => {
@@ -291,6 +437,155 @@ export function AriaPanel() {
     abortRef.current?.abort();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
+
+  /**
+   * The WebSocket plane — the panel's first subscription (spec A3). A decision
+   * taken in the Review Queue or in another tab settles the card here, and a
+   * completed run re-reads this conversation's snapshot. Both are merged by ask
+   * id, so a decision delivered twice is a no-op.
+   *
+   * The subscription rides the app-wide connection from `WebSocketProvider`
+   * (Layout.tsx), the same one ConnectionBanner reports: a per-instance
+   * `useWebSocket()` would open a second server session and a second
+   * `/topic/events` SUBSCRIBE per tab, and its reconnect flag could disagree
+   * with the banner about whether the feed came back.
+   */
+  const { subscribe, isConnected } = useWebSocketContext();
+  /**
+   * True when a run is this conversation's own — one the timeline holds, or the
+   * turn this panel is watching right now.
+   */
+  const isThisConversationsRun = useCallback(
+    (runId: string) =>
+      runId !== ''
+      && (runId === activeRunIdRef.current || conversationRunIdsRef.current.has(runId)),
+    [],
+  );
+
+  /**
+   * A WS-announced ask, read by id (spec A2). The `approval.requested` frame
+   * carries no tool name, tier, policy or question, so the panel reads the ask
+   * itself; the frame is the only signal for an ask raised after this panel's
+   * own stream died (client timeout, cancel, a dropped SSE connection), which is
+   * the plane the three-plane design exists for. Only asks of a run this
+   * conversation holds are adopted — the cross-conversation half of the review's
+   * concern is correct: one conversation's panel does not render another's.
+   */
+  const adoptAskById = useCallback(async (approvalId: string) => {
+    const targetConversationId = conversationIdRef.current;
+    let approval: Approval | null;
+    try {
+      approval = await getApproval(approvalId);
+    } catch (err) {
+      console.warn('[Aria] announced ask could not be read:', err);
+      return;
+    }
+    if (!approval || approval.status !== 'PENDING') return;
+    if (conversationIdRef.current !== targetConversationId) return;
+    if (!isThisConversationsRun(approval.runId)) return;
+    if (approval.source === 'CLARIFICATION') {
+      dispatch({
+        type: 'waitingInput',
+        approvalId: approval.id,
+        runId: approval.runId,
+        question: approval.content?.trim() || approval.reason || '',
+      });
+      return;
+    }
+    dispatch({
+      type: 'approvalRequired',
+      approvalId: approval.id,
+      runId: approval.runId,
+      toolName: approval.toolName ?? 'unknown tool',
+      riskTier: approval.riskTier,
+      toolPolicy: approval.toolPolicy,
+      args: approval.arguments,
+    });
+  }, [isThisConversationsRun]);
+
+  useEffect(() => {
+    const subscription = subscribe((event) => {
+      switch (event.type) {
+        case 'approval.requested': {
+          const approvalId = String(event.payload?.approvalId ?? '');
+          if (!approvalId) return;
+          // The frame names the run: a foreign conversation's ask is not read at
+          // all. An absent run id falls through to the by-id read, which decides.
+          const runId = String(event.payload?.runId ?? '');
+          if (runId !== '' && !isThisConversationsRun(runId)) return;
+          void adoptAskById(approvalId);
+          return;
+        }
+        case 'approval.decided': {
+          const approvalId = String(event.payload?.approvalId ?? '');
+          if (!approvalId) return;
+          const decision = String(event.payload?.decision ?? '').toUpperCase();
+          dispatch({
+            type: 'approvalSettled',
+            approvalId,
+            state: decision === 'APPROVED' ? 'approved' : decision === 'DENIED' ? 'denied' : 'expired',
+          });
+          dispatch({ type: 'clarificationSettled', approvalId, state: decision === 'APPROVED' ? 'answered' : 'expired' });
+          return;
+        }
+        case 'approval.expired': {
+          const approvalId = String(event.payload?.approvalId ?? '');
+          if (!approvalId) return;
+          // The frame carries the backend's own reason ("Auto-rejected: approval
+          // expired"), which the Review panel shows; the card says the same.
+          const reason = String(event.payload?.reason ?? '');
+          dispatch({
+            type: 'approvalSettled',
+            approvalId,
+            state: 'expired',
+            ...(reason !== '' ? { reason } : {}),
+          });
+          dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
+          return;
+        }
+        case 'run.waiting_input': {
+          // The frame carries no approvalId, so it cannot key a card itself; it
+          // does mean a run just parked, and the snapshot holds the ask (A2).
+          const id = conversationIdRef.current;
+          if (id) void reconcile(id).catch(() => { /* a background reconcile is best-effort */ });
+          return;
+        }
+        case 'run.completed': {
+          // Only this conversation's live turn justifies a re-read; another
+          // run's completion is not part of this transcript.
+          const runId = String(event.payload?.runId ?? '');
+          if (!runId || runId !== activeRunIdRef.current) return;
+          const id = conversationIdRef.current;
+          if (id) void reconcile(id).catch(() => { /* a background reconcile is best-effort */ });
+          return;
+        }
+        default:
+          return;
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [subscribe, reconcile, adoptAskById, isThisConversationsRun]);
+
+  // Reconcile when the socket comes back: frames missed while it was down are
+  // recovered from the durable snapshot rather than from a replay.
+  const wasConnectedRef = useRef(isConnected);
+  useEffect(() => {
+    if (isConnected && !wasConnectedRef.current) {
+      const id = conversationIdRef.current;
+      if (id) void reconcile(id).catch(() => { /* reconnect reconcile is best-effort */ });
+    }
+    wasConnectedRef.current = isConnected;
+  }, [isConnected, reconcile]);
+
+  // …and when the operator returns to the tab (an ask may have been decided elsewhere).
+  useEffect(() => {
+    const onFocus = () => {
+      const id = conversationIdRef.current;
+      if (id) void reconcile(id).catch(() => { /* a focus read is best-effort */ });
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [reconcile]);
 
   const togglePanel = useCallback(() => setOpen((v) => !v), []);
   const closePanel = useCallback(() => setOpen(false), []);
@@ -316,18 +611,13 @@ export function AriaPanel() {
 
       const failureReason = turnFailureReason(errorDetail);
       if (failureReason !== null) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: `⚠ 上一回合失敗：${failureReason}`,
-            timestamp: new Date().toISOString(),
-            error: true,
-            // The turn is provably dead — a resend of its prompt is safe to offer.
-            noRetry: false,
-          },
-        ]);
+        dispatch({
+          type: 'turnFailed',
+          id: crypto.randomUUID(),
+          content: `⚠ 上一回合失敗：${failureReason}`,
+          // The turn is provably dead — a resend of its prompt is safe to offer.
+          noRetry: false,
+        });
         return;
       }
 
@@ -342,19 +632,14 @@ export function AriaPanel() {
           const reason = failedEntry.content.startsWith(FAILED_TURN_CONTENT_PREFIX)
             ? failedEntry.content.slice(FAILED_TURN_CONTENT_PREFIX.length)
             : failedEntry.content;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: 'assistant',
-              content: `⚠ 上一回合失敗：${reason}`,
-              timestamp: new Date().toISOString(),
-              error: true,
-              // The failed turn is provably dead — Retry resends its own prompt.
-              noRetry: false,
-              retryText: failedEntry.retryPrompt,
-            },
-          ]);
+          dispatch({
+            type: 'turnFailed',
+            id: crypto.randomUUID(),
+            content: `⚠ 上一回合失敗：${reason}`,
+            // The failed turn is provably dead — Retry resends its own prompt.
+            noRetry: false,
+            retryText: failedEntry.retryPrompt,
+          });
           return;
         }
       }
@@ -391,19 +676,14 @@ export function AriaPanel() {
       }
       paragraphs.push(`Conversation ID: \`${eventConversationId}\` (include this when reporting issues)`);
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: `⚠ ${paragraphs.join('\n\n')}`,
-          timestamp: new Date().toISOString(),
-          error: true,
-          // A client timeout never proves the run died, and a pending ask proves
-          // it is alive and waiting — neither may be answered with a resend.
-          noRetry: origin === 'timeout' || (pendingCount !== null && pendingCount > 0),
-        },
-      ]);
+      dispatch({
+        type: 'turnFailed',
+        id: crypto.randomUUID(),
+        content: `⚠ ${paragraphs.join('\n\n')}`,
+        // A client timeout never proves the run died, and a pending ask proves
+        // it is alive and waiting — neither may be answered with a resend.
+        noRetry: origin === 'timeout' || (pendingCount !== null && pendingCount > 0),
+      });
     },
     [],
   );
@@ -411,33 +691,54 @@ export function AriaPanel() {
   const sendStreamed = useCallback(
     (rawText: string, skillIdOverride?: string | undefined) => {
       const text = rawText.trim();
-      if (!text || busy) return;
+      // An unanswered decision owns the turn: a second prompt would pile another
+      // turn onto a parked conversation.
+      if (!text || busy || gated) return;
 
       const skillId = skillIdOverride ?? pendingSkillId;
 
       // Abort any prior in-flight stream defensively.
-      abortRef.current?.abort();
-      cancelledRef.current = false; // M1: reset per-request cancel state
+      abortRef.current?.abort();      cancelledRef.current = false; // M1: reset per-request cancel state
       activeRunIdRef.current = null;
+      turnIdRef.current = '';
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
-      const userMsg: PanelMessage = {
+      // Snapshot prior history BEFORE the new message goes on screen.
+      const history = items.flatMap((item) => (item.kind === 'user' || item.kind === 'assistant'
+        ? [{ role: item.kind, content: item.content }]
+        : []));
+      dispatch({
+        type: 'userSent',
         id: crypto.randomUUID(),
-        role: 'user',
         content: text,
         timestamp: new Date().toISOString(),
-      };
-
-      // Snapshot prior history BEFORE the new message goes on screen.
-      const history = messages.map((m) => ({ role: m.role, content: m.content }));
-      setMessages((prev) => [...prev, userMsg]);
+      });
+      // The previous turn is no longer the transcript's trailing one, so a
+      // queued pill naming its run would be stale until the next reconcile.
+      dispatch({ type: 'queuedRuns', runIds: [] });
       setInput('');
       setBusy(true);
-      setActiveTool(null);
       setLastSentMessage(text);
       lastSentSkillIdRef.current = skillId;
       slash.clearSkill();
+
+      // A turn belongs to the conversation it was sent in. Frames from a turn
+      // whose conversation the operator has since cleared or replaced must not
+      // write into the new transcript — the parked run keeps living on the
+      // server, it just stops owning this panel.
+      const turnConversationId = conversationId;
+      const staleTurn = (): boolean => conversationIdRef.current !== turnConversationId;
+
+      // The live turn's activity strip is keyed by the run id: Task 4's reducer
+      // groups restored strips by runId, so a live strip must share that key to be
+      // replaced — never duplicated — by the durable rows after a reconcile.
+      const turnId = (): string => {
+        if (!turnIdRef.current) {
+          turnIdRef.current = activeRunIdRef.current ?? `turn:${crypto.randomUUID()}`;
+        }
+        return turnIdRef.current;
+      };
 
       void streamMessage(
         conversationId,
@@ -445,36 +746,73 @@ export function AriaPanel() {
         history,
         {
           onThinking: (runId) => {
-            if (runId) activeRunIdRef.current = runId; // M1: capture run id for cancel
-            setActiveTool(null);
+            if (staleTurn()) return;
+            if (runId) {
+              activeRunIdRef.current = runId; // M1: capture run id for cancel
+              turnIdRef.current = runId;
+              // This turn is this conversation's: a WS ask carrying this run id
+              // belongs in this transcript even though its rows may not have
+              // landed yet.
+              conversationRunIdsRef.current.add(runId);
+            }
           },
-          onToolCall: (name) => setActiveTool(name),
-          onToolResult: () => setActiveTool(null),
+          onToolCall: (name) => {
+            if (staleTurn()) return;
+            dispatch({ type: 'toolCall', turnId: turnId(), name });
+          },
+          onToolResult: (name, result, ok) => {
+            if (staleTurn()) return;
+            dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok });
+          },
           onMessage: (content) => {
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: content || 'No response received.',
-                timestamp: new Date().toISOString(),
-              },
-            ]);
+            if (staleTurn()) return;
+            dispatch({
+              type: 'assistantMessage',
+              id: crypto.randomUUID(),
+              content: content || 'No response received.',
+              timestamp: new Date().toISOString(),
+            });
+          },
+          onApprovalRequired: (ask) => {
+            if (staleTurn()) return;
+            dispatch({
+              type: 'approvalRequired',
+              approvalId: ask.approvalId,
+              runId: ask.runId || activeRunIdRef.current || '',
+              toolName: ask.toolName,
+              riskTier: ask.riskTier,
+              toolPolicy: ask.toolPolicy,
+            });
+          },
+          onWaitingInput: (ask) => {
+            if (staleTurn()) return;
+            dispatch({
+              type: 'waitingInput',
+              approvalId: ask.approvalId,
+              runId: ask.runId || activeRunIdRef.current || '',
+              question: ask.question,
+            });
+          },
+          onMemoryProposal: (signal) => {
+            if (staleTurn()) return;
+            const proposal = proposalSummary(signal);
+            if (proposal === null) return;
+            dispatch({ type: 'proposalCreated', proposal });
           },
           onDone: (data) => {
+            if (staleTurn()) return;
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             // Adopt the server-issued conversationId so multi-turn context persists (#36).
             if (data?.conversationId) {
               setConversationId((prev) => prev || data.conversationId);
             }
             setBusy(false);
-            setActiveTool(null);
           },
           onError: (errorDetail) => {
+            if (staleTurn()) return;
             if (cancelledRef.current) return; // M1: user cancelled — don't show an error bubble
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
-            setActiveTool(null);
             void reportRunUncertain(conversationId, 'stream-error', errorDetail);
           },
         },
@@ -487,11 +825,10 @@ export function AriaPanel() {
       timeoutRef.current = setTimeout(() => {
         ctrl.abort();
         setBusy(false);
-        setActiveTool(null);
         void reportRunUncertain(conversationId, 'timeout');
       }, CLIENT_TIMEOUT_MS);
     },
-    [busy, messages, conversationId, pendingSkillId, reportRunUncertain],
+    [busy, gated, items, conversationId, pendingSkillId, reportRunUncertain],
   );
 
   // One-click synthesis (Feature B2): the batch-completion notification composes
@@ -519,19 +856,26 @@ export function AriaPanel() {
     sendStreamed(input);
   }, [input, sendStreamed]);
 
+  const tail = items[items.length - 1];
+
   const handleRetry = useCallback(() => {
-    if (busy) return;
+    if (busy || gated) return;
     // A failed-turn timeline entry knows its own prompt; a stream-sourced failure
     // resends the prompt this tab last sent.
-    const retryText = messages[messages.length - 1]?.retryText ?? lastSentMessage;
+    const retryText = (tail?.kind === 'assistant' ? tail.retryText : undefined) ?? lastSentMessage;
     if (!retryText) return;
-    // Drop the trailing error bubble so the retry doesn't pile up duplicates.
-    setMessages((prev) => {
-      if (prev.length === 0 || !prev[prev.length - 1].error) return prev;
-      return prev.slice(0, -1);
-    });
     sendStreamed(retryText, lastSentSkillIdRef.current);
-  }, [busy, lastSentMessage, messages, sendStreamed]);
+  }, [busy, gated, tail, lastSentMessage, sendStreamed]);
+
+  /** Settles the asks of a run that can no longer decide them (a cancelled run). */
+  const settleRunAsks = useCallback((runId: string, reason: string) => {
+    for (const item of itemsRef.current) {
+      if (item.kind !== 'approval' && item.kind !== 'clarification') continue;
+      if (item.state !== 'pending' || item.runId !== runId) continue;
+      dispatch({ type: 'approvalSettled', approvalId: item.approvalId, state: 'expired', reason });
+      dispatch({ type: 'clarificationSettled', approvalId: item.approvalId, state: 'expired' });
+    }
+  }, []);
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true; // M1: suppress the false close-error bubble
@@ -539,33 +883,30 @@ export function AriaPanel() {
     abortRef.current?.abort();
     // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
     // is known once the first `thinking` event arrives).
-    if (activeRunIdRef.current) {
-      cancelRun(activeRunIdRef.current).catch((err) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: 'The server-side cancel could not be confirmed: '
-              + apiErrorMessage(err, 'unknown error'),
-            timestamp: new Date().toISOString(),
-            error: true,
-          },
-        ]);
+    const cancelledRunId = activeRunIdRef.current;
+    if (cancelledRunId) {
+      cancelRun(cancelledRunId).then(() => {
+        // The run is cancelled, so an ask it raised can no longer be decided:
+        // the card says why instead of staying actionable behind a locked
+        // composer (a decision on it would only 409).
+        settleRunAsks(cancelledRunId, 'the run was cancelled before this ask was decided');
+      }).catch((err) => {
+        dispatch({
+          type: 'turnFailed',
+          id: crypto.randomUUID(),
+          content: 'The server-side cancel could not be confirmed: '
+            + apiErrorMessage(err, 'unknown error'),
+        });
       });
     }
     setBusy(false);
-    setActiveTool(null);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: 'Request cancelled.',
-        timestamp: new Date().toISOString(),
-      },
-    ]);
-  }, []);
+    dispatch({
+      type: 'assistantMessage',
+      id: crypto.randomUUID(),
+      content: 'Request cancelled.',
+      timestamp: new Date().toISOString(),
+    });
+  }, [settleRunAsks]);
 
   const handleCopyConversationId = useCallback(() => {
     navigator.clipboard.writeText(conversationId).then(() => {
@@ -583,16 +924,28 @@ export function AriaPanel() {
       });
     }
     const newConversationId = crypto.randomUUID();
-    setMessages([]);
-    setConversationId(newConversationId);
+    // Stop reading the cleared conversation's turn here; the run itself stays
+    // alive on the server and is reconcilable later. Without this, a parked
+    // turn's frames would be drawn into the new transcript.
+    cancelledRef.current = true;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    abortRef.current?.abort();
+    activeRunIdRef.current = null;
+    // The cleared conversation's runs are no longer this panel's: a late WS ask
+    // for one of them must not become a card in the new transcript.
+    conversationRunIdsRef.current = new Set();
+    adoptConversationId(newConversationId);
+    // A new conversation is a new transcript: the reducer drops the prior items
+    // because the conversation id changed.
+    dispatch({ type: 'restore', conversationId: newConversationId, timeline: [], approvals: [], proposals: [] });
     console.log(`[Aria] New conversation: ${newConversationId}`);
     setInput('');
     setBusy(false);
-    setActiveTool(null);
     setLastSentMessage(null);
     lastSentSkillIdRef.current = undefined;
+    turnIdRef.current = '';
     slash.clearSkill();
-  }, [conversationId]);
+  }, [conversationId, adoptConversationId, slash]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Slash-command menu keyboard navigation takes priority
@@ -620,25 +973,16 @@ export function AriaPanel() {
 
   // Only the trailing bubble may offer a retry; a run-uncertain bubble (noRetry)
   // must never re-expose a retry control.
-  const lastIsRetryable = useMemo(
-    () => messages.length > 0 && !!messages[messages.length - 1].error && !messages[messages.length - 1].noRetry,
-    [messages],
-  );
+  const lastIsRetryable = tail?.kind === 'assistant' && tail.error === true && !tail.noRetry;
 
-  // m3: show elapsed seconds while a tool is running so long calls don't look dead.
-  useEffect(() => {
-    if (!activeTool) {
-      setToolElapsed(0);
-      return undefined;
+  // m2: memoize rendered markdown so it only recomputes when the transcript changes.
+  const assistantHtml = useMemo(() => {
+    const rendered = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind === 'assistant') rendered.set(item.id, renderMarkdown(item.content));
     }
-    const start = Date.now();
-    setToolElapsed(0);
-    const id = window.setInterval(() => setToolElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
-    return () => window.clearInterval(id);
-  }, [activeTool]);
-
-  // m2: memoize rendered markdown so it only recomputes when messages change.
-  const messagesHtml = useMemo(() => messages.map((m) => renderMarkdown(m.content)), [messages]);
+    return rendered;
+  }, [items]);
 
   return (
     <>
@@ -721,39 +1065,120 @@ export function AriaPanel() {
               </div>
             )}
 
-            {messages.map((msg, idx) => (
-              <div key={msg.id} className={`ai-msg ai-msg-${msg.role}`}>
-                <div className="ai-msg-avatar" aria-hidden="true">
-                  {msg.role === 'user' ? 'You' : 'A'}
-                </div>
-                <div className="ai-msg-body">
-                  <div className={`ai-msg-bubble ${msg.error ? 'ai-msg-bubble-error' : ''}`}>
-                    {msg.role === 'assistant' ? (
-                      <div
-                        className="ai-msg-md markdown-content"
-                        dangerouslySetInnerHTML={{ __html: messagesHtml[idx] ?? '' }}
-                      />
+            {items.map((item) => {
+              if (item.kind === 'activity') {
+                return <AriaActivityStrip key={item.id} item={item} />;
+              }
+              if (item.kind === 'approval') {
+                return (
+                  <AriaApprovalCard
+                    key={item.id}
+                    item={item}
+                    onSettled={(settled, reason) => dispatch({
+                      type: 'approvalSettled',
+                      approvalId: item.approvalId,
+                      state: settled,
+                      reason,
+                    })}
+                  />
+                );
+              }
+              if (item.kind === 'clarification') {
+                return (
+                  <AriaClarificationCard
+                    key={item.id}
+                    item={item}
+                    onSettled={(settled) => dispatch({
+                      type: 'clarificationSettled',
+                      approvalId: item.approvalId,
+                      state: settled,
+                    })}
+                  />
+                );
+              }
+              if (item.kind === 'queued') {
+                return (
+                  <div key={item.id} className="ai-queued-pill">
+                    <span className="pill dim">
+                      Queued · {item.runIds.map((runId) => runId.slice(0, 8)).join(', ')}
+                    </span>
+                  </div>
+                );
+              }
+              if (item.kind === 'proposal') {
+                // Task 12 (Wave C) owns the full proposal card — decide controls
+                // and the linked fact. The minimum here is visibility: a pending
+                // proposal already counts toward `hasUnansweredCard`, so drawing
+                // nothing would gate the composer behind an invisible control.
+                // The card names what would be written and says it holds the
+                // turn; it promises no button this panel does not have yet.
+                return (
+                  <div
+                    key={item.id}
+                    className={`ai-decision-card ask-card ai-decision-proposal ai-decision-${item.state}`}
+                  >
+                    <div className="ai-decision-head">
+                      <span className="ask-q ai-decision-tool">Memory proposal</span>
+                      <span className="ai-decision-tags">
+                        <span className="pill dim">{item.subjectType}</span>
+                        {item.sensitivity !== undefined && item.sensitivity !== '' && (
+                          <span className="pill risk">{item.sensitivity}</span>
+                        )}
+                      </span>
+                    </div>
+                    {(item.factKey !== undefined || item.valueText !== undefined) && (
+                      <div className="ask-meta ai-decision-meta">
+                        {item.factKey !== undefined && <code>{item.factKey}</code>}
+                        {item.factKey !== undefined && item.valueText !== undefined && ' = '}
+                        {item.valueText !== undefined && <span>{item.valueText}</span>}
+                      </div>
+                    )}
+                    {item.state === 'pending' ? (
+                      <div className="ask-meta ai-decision-meta">
+                        Awaiting a decision — a pending proposal holds new prompts.
+                      </div>
                     ) : (
-                      <div className="ai-msg-text">{msg.content}</div>
+                      <div className="ai-decision-settled">
+                        {item.state === 'approved' ? 'Approved' : 'Rejected'}
+                      </div>
                     )}
                   </div>
-                  <div className="ai-msg-meta">
-                    {msg.role === 'user' ? 'You' : 'Aria'} ·{' '}
-                    {formatTimestamp(msg.timestamp)}
-                    {msg.error && lastIsRetryable && idx === messages.length - 1 && (
-                      <button
-                        type="button"
-                        className="ai-retry"
-                        onClick={handleRetry}
-                        disabled={busy}
-                      >
-                        Retry
-                      </button>
-                    )}
+                );
+              }
+              return (
+                <div key={item.id} className={`ai-msg ai-msg-${item.kind}`}>
+                  <div className="ai-msg-avatar" aria-hidden="true">
+                    {item.kind === 'user' ? 'You' : 'A'}
+                  </div>
+                  <div className="ai-msg-body">
+                    <div className={`ai-msg-bubble ${item.kind === 'assistant' && item.error ? 'ai-msg-bubble-error' : ''}`}>
+                      {item.kind === 'assistant' ? (
+                        <div
+                          className="ai-msg-md markdown-content"
+                          dangerouslySetInnerHTML={{ __html: assistantHtml.get(item.id) ?? '' }}
+                        />
+                      ) : (
+                        <div className="ai-msg-text">{item.content}</div>
+                      )}
+                    </div>
+                    <div className="ai-msg-meta">
+                      {item.kind === 'user' ? 'You' : 'Aria'} ·{' '}
+                      {formatTimestamp(item.timestamp)}
+                      {item.kind === 'assistant' && item.error === true && lastIsRetryable && item.id === tail?.id && (
+                        <button
+                          type="button"
+                          className="ai-retry"
+                          onClick={handleRetry}
+                          disabled={busy}
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {busy && (
               <div className="ai-msg ai-msg-assistant">
@@ -762,19 +1187,11 @@ export function AriaPanel() {
                 </div>
                 <div className="ai-msg-body">
                   <div className="ai-msg-bubble ai-msg-bubble-thinking">
-                    {activeTool ? (
-                      <div className="ai-tool-tag">
-                        <span className="ai-tool-spark" aria-hidden="true">⟢</span>
-                        Using <code>{activeTool}</code>
-                        <span className="ai-tool-elapsed"> ({toolElapsed}s{toolElapsed >= 30 ? ' · still working…' : ''})</span>
-                      </div>
-                    ) : (
-                      <div className="typing-indicator" aria-label="Aria is thinking">
-                        <span className="typing-dot" />
-                        <span className="typing-dot" />
-                        <span className="typing-dot" />
-                      </div>
-                    )}
+                    <div className="typing-indicator" aria-label="Aria is thinking">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -788,7 +1205,7 @@ export function AriaPanel() {
                     type="button"
                     className="ai-sg"
                     onClick={() => sendStreamed(s)}
-                    disabled={busy}
+                    disabled={busy || gated}
                   >
                     {s}
                   </button>
@@ -796,6 +1213,15 @@ export function AriaPanel() {
               </div>
             )}
           </div>
+
+          {gated && (
+            <div className="ai-gate-hint" role="status">
+              {/* Name only what the cards actually offer: Allow/Deny on an
+                  approval, Answer on a question. There is no cancel affordance
+                  in this panel, so the copy must not promise one. */}
+              Answer the pending decision first.
+            </div>
+          )}
 
           <div className="ai-compose">
             {slash.open && (
@@ -823,7 +1249,7 @@ export function AriaPanel() {
               onKeyDown={handleKeyDown}
               placeholder="Ask Aria anything…  (type / for skills)"
               rows={2}
-              disabled={busy}
+              disabled={busy || gated}
               aria-controls={slash.open ? 'slash-command-listbox' : undefined}
               aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
             />
@@ -842,7 +1268,7 @@ export function AriaPanel() {
                 type="button"
                 className="ai-action-btn"
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!input.trim() || gated}
                 aria-label="Send message"
               >
                 <span className="ai-action-glyph" aria-hidden="true">↗</span>

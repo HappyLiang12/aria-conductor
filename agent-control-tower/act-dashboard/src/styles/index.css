@@ -1134,9 +1134,54 @@ body.light .modal-dialog {
 .ai-tool-spark{color:var(--ai-aurora-2);animation:ai-tool-spin 2.4s linear infinite;display:inline-block}
 @keyframes ai-tool-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 
+/* Activity strip (spec A3 / F7): a turn's tool calls collapse into one row and
+   expand to their arguments and result. Monospace tool names, existing tokens. */
+.ai-activity{border:1px solid var(--ai-edge);border-radius:10px;background:rgba(255,255,255,0.02);overflow:hidden}
+.ai-activity-toggle{display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.45rem 0.6rem;background:transparent;border:none;color:var(--text-muted);font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.66rem;letter-spacing:0.06em;text-align:left;cursor:pointer;transition:background 0.15s}
+.ai-activity-toggle:hover{background:rgba(255,255,255,0.04);color:var(--text)}
+.ai-activity-caret{color:var(--ai-edge-strong);flex-shrink:0}
+.ai-activity-summary{color:var(--text-muted);text-transform:uppercase;letter-spacing:0.12em;flex-shrink:0}
+.ai-activity-tools{display:flex;flex-wrap:wrap;gap:0.35rem;min-width:0}
+.ai-activity-tool{display:inline-flex;align-items:center;gap:0.3rem;padding:0.05rem 0.4rem;border-radius:6px;border:1px solid var(--ai-edge);background:rgba(0,0,0,0.18);color:var(--text-muted);max-width:100%}
+.ai-activity-tool code{font-family:inherit;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-activity-ok .ai-activity-glyph{color:var(--ai-aurora-1)}
+.ai-activity-running .ai-activity-glyph{color:var(--ai-aurora-2);animation:ai-tool-spin 2.4s linear infinite;display:inline-block}
+.ai-activity-error{border-color:rgba(244,67,54,0.45)}
+.ai-activity-error .ai-activity-glyph{color:#ff8d99}
+.ai-activity-duration{color:var(--text-mute);letter-spacing:0.04em}
+.ai-activity-detail{border-top:1px dashed var(--ai-edge);padding:0.5rem 0.6rem;display:flex;flex-direction:column;gap:0.5rem}
+.ai-activity-entry-head{display:flex;align-items:center;justify-content:space-between;gap:0.5rem;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.64rem;color:var(--text-dim)}
+.ai-activity-status{color:var(--text-mute);text-transform:uppercase;letter-spacing:0.12em}
+.ai-activity-json{margin:0.25rem 0 0;padding:0.4rem 0.5rem;max-height:180px;overflow-x:auto;overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,0.22);border:1px solid var(--line-2);border-radius:6px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.66rem;line-height:1.5;color:var(--text-dim)}
+
+/* Decision cards (spec A3 / F1): an ask renders inside the conversation, built
+   on the .ask-card family so it reads like every other decision surface. */
+.ai-decision-card{background:rgba(255,255,255,0.03);border:1px solid var(--ai-edge);border-radius:12px;padding:0.7rem 0.8rem}
+.ai-decision-card.ask-card{border-bottom:1px solid var(--ai-edge)}
+.ai-decision-head{display:flex;align-items:flex-start;justify-content:space-between;gap:0.6rem;margin-bottom:0.2rem}
+.ai-decision-tool{margin:0;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.76rem;font-weight:600;color:var(--text);word-break:break-all}
+.ai-decision-tool code{font-family:inherit;color:var(--ai-aurora-1);background:rgba(94,234,212,0.08);padding:0.05rem 0.35rem;border-radius:6px;border:1px solid rgba(94,234,212,0.25)}
+.ai-decision-question{font-size:0.86rem;font-weight:600;color:var(--text)}
+.ai-decision-tags{display:flex;flex-wrap:wrap;gap:0.3rem;flex-shrink:0}
+.ai-decision-meta{font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-mute);margin-bottom:0.35rem}
+.ai-decision-meta code{font-family:inherit;color:var(--text-dim)}
+.ai-decision-args{margin:0.15rem 0 0.4rem}
+.ai-decision-actions{flex-wrap:wrap}
+.ai-decision-actions .ai-clarify-input{flex:1;min-width:0;padding:0.4rem 0.55rem;background:rgba(255,255,255,0.04);border:1px solid var(--ai-edge);border-radius:8px;color:var(--text);font-family:inherit;font-size:0.82rem;line-height:1.45;resize:none}
+.ai-decision-actions .ai-clarify-input:focus{outline:none;border-color:rgba(129,140,248,0.55);box-shadow:0 0 0 3px rgba(129,140,248,0.15)}
+.ai-decision-settled{font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.66rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-mute);padding:0.25rem 0}
+.ai-decision-error{margin-top:0.45rem;font-size:0.72rem;line-height:1.45;color:#ff8d99}
+body.light .ai-decision-error{color:#c2273a}
+
+/* Composer gate (spec A3): the pending decision is named, not merely disabled. */
+.ai-gate-hint{padding:0.4rem 0.85rem;background:rgba(232,163,61,0.08);border-top:1px solid rgba(232,163,61,0.35);font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.62rem;letter-spacing:0.08em;color:#e8a33d;position:relative;z-index:1}
+
+/* Queued indicator: PENDING turns waiting for an answer, not a new engine state. */
+.ai-queued-pill{display:flex;align-items:center;gap:0.4rem}
+.ai-queued-pill .pill{font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.62rem;letter-spacing:0.08em}
+
 /* Suggestions */
-.ai-suggestions{display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.25rem}
-.ai-sg{padding:0.4rem 0.7rem;background:rgba(255,255,255,0.03);border:1px solid var(--ai-edge);border-radius:999px;color:var(--text-muted);font-size:0.78rem;cursor:pointer;transition:all 0.15s}
+.ai-suggestions{display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.25rem}.ai-sg{padding:0.4rem 0.7rem;background:rgba(255,255,255,0.03);border:1px solid var(--ai-edge);border-radius:999px;color:var(--text-muted);font-size:0.78rem;cursor:pointer;transition:all 0.15s}
 .ai-sg:hover:not(:disabled){color:var(--text);border-color:rgba(129,140,248,0.45);background:rgba(129,140,248,0.08)}
 .ai-sg:disabled{opacity:0.4;cursor:not-allowed}
 

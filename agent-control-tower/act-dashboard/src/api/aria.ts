@@ -121,13 +121,50 @@ export interface StreamErrorDetail {
 /** Terminal stream error: a plain message, or the enriched failed-turn payload. */
 export type StreamError = string | StreamErrorDetail;
 
+/**
+ * An ask the parked turn announces on its own ordered stream (spec A2). The
+ * panel turns it into a decision card in the conversation, so the operator
+ * answers the run in place instead of waiting out the client timeout.
+ */
+export interface ApprovalRequiredSignal {
+  runId: string;
+  approvalId: string;
+  toolName: string;
+  riskTier?: string;
+  toolPolicy?: string;
+  optionsJson?: string;
+  expiresAt?: string;
+}
+
+export interface WaitingInputSignal {
+  runId: string;
+  approvalId: string;
+  question: string;
+}
+
+/**
+ * A governed memory write proposed by the run (Wave C consumes the callback;
+ * the signal is dispatched here so the dispatcher stays stable).
+ */
+export interface MemoryProposalSignal {
+  id: string;
+  subjectType: string;
+  entityId?: string;
+  factKey?: string;
+  valueText?: string;
+  sensitivity?: string;
+}
+
 export interface StreamCallbacks {
   onThinking?: (runId?: string) => void;
   onToolCall?: (name: string) => void;
-  onToolResult?: (name: string, result: string) => void;
+  onToolResult?: (name: string, result: string, ok: boolean) => void;
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
   onError?: (error: StreamError) => void;
+  onApprovalRequired?: (ask: ApprovalRequiredSignal) => void;
+  onWaitingInput?: (ask: WaitingInputSignal) => void;
+  onMemoryProposal?: (proposal: MemoryProposalSignal) => void;
 }
 
 interface ParsedSseEvent {
@@ -249,7 +286,11 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       cb.onToolCall?.(String(p.name ?? 'tool'));
       break;
     case 'tool_result':
-      cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''));
+      // `ok` is `!isError` from the core payload and is always present on the
+      // producer (tool-event-contract.md). An absent field means an older
+      // backend answered, so it is read as success — never as a measured
+      // failure; an explicit `false` is the only error signal.
+      cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''), p.ok !== false);
       break;
     case 'message':
       cb.onMessage?.(String(p.content ?? ''));
@@ -264,8 +305,62 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
     case 'error':
       cb.onError?.(streamErrorDetail(p));
       break;
+    case 'approval_required': {
+      const riskTier = optionalText(p.riskTier);
+      const toolPolicy = optionalText(p.toolPolicy);
+      const optionsJson = optionalJson(p.optionsJson);
+      const expiresAt = optionalText(p.expiresAt);
+      cb.onApprovalRequired?.({
+        runId: String(p.runId ?? ''),
+        approvalId: String(p.approvalId ?? ''),
+        toolName: String(p.toolName ?? 'tool'),
+        ...(riskTier !== undefined ? { riskTier } : {}),
+        ...(toolPolicy !== undefined ? { toolPolicy } : {}),
+        ...(optionsJson !== undefined ? { optionsJson } : {}),
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+      });
+      break;
+    }
+    case 'waiting_input':
+      cb.onWaitingInput?.({
+        runId: String(p.runId ?? ''),
+        approvalId: String(p.approvalId ?? ''),
+        question: String(p.question ?? ''),
+      });
+      break;
+    case 'memory_proposal': {
+      const entityId = optionalText(p.entityId);
+      const factKey = optionalText(p.factKey);
+      const valueText = optionalText(p.valueText);
+      const sensitivity = optionalText(p.sensitivity);
+      cb.onMemoryProposal?.({
+        id: String(p.id ?? ''),
+        subjectType: String(p.subjectType ?? ''),
+        ...(entityId !== undefined ? { entityId } : {}),
+        ...(factKey !== undefined ? { factKey } : {}),
+        ...(valueText !== undefined ? { valueText } : {}),
+        ...(sensitivity !== undefined ? { sensitivity } : {}),
+      });
+      break;
+    }
     default:
       break;
+  }
+}
+
+/** A non-empty string from the payload, or undefined when the key is absent/blank. */
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/** `optionsJson` as a string: the backend may serve it already stringified or as options. */
+function optionalJson(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
   }
 }
 

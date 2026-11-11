@@ -244,6 +244,37 @@ class MemoryToolsTest {
         verifyNoInteractions(commands);
     }
 
+    /**
+     * The half shapes are their own branch of {@code requireExactlyOneShape}: a caller that meant
+     * the (kind, canonicalKey) shape but supplied one half must be told which half is missing.
+     * The positive control is {@link #aWorkerRememberFactWithAnUnknownKeyProposesAPendingEntityAndItsFirstFact}
+     * for the worker actor and {@link #anOperatorRememberFactWithAnUnknownKeyWritesActiveMemory} for
+     * the operator actor; both spell the complete pair and dispatch.
+     */
+    @Test
+    void rememberFactWithKindAndNoCanonicalKeyNamesTheMissingHalf() {
+        String json = tools.rememberFact(null, "timezone", "UTC", null,
+                "person", null, workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"VALIDATION\"")
+                .contains("remember_fact needs both kind and canonicalKey")
+                .contains("canonicalKey is missing");
+        verifyNoInteractions(commands);
+    }
+
+    @Test
+    void rememberFactWithCanonicalKeyAndNoKindNamesTheMissingHalf() {
+        String json = tools.rememberFact(null, "timezone", "UTC", null,
+                null, "person:happy", workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"VALIDATION\"")
+                .contains("remember_fact needs both kind and canonicalKey")
+                .contains("kind is missing");
+        verifyNoInteractions(commands);
+    }
+
     @Test
     void workerCannotDecideAProposal() {
         String json = tools.decideMemoryProposal(FACT_ID, true, null, workerContext());

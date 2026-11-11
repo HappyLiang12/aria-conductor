@@ -249,6 +249,11 @@ export function MemoryPage() {
   const proposalsRefused = isOperatorRejection(proposalsQuery.error);
   const refused = entitiesRefused || proposalsRefused;
   const detail = detailQuery.data;
+  // A refused decision (Task 35): reported inside the confirmation dialog that
+  // caused it, never in the inbox behind that dialog's overlay. A 401/403 is an
+  // authority problem and reads as the shared operator notice; anything else is
+  // the server's own wording.
+  const decideFailure = decideMut.error;
 
   return (
     <div className="view-zone memory-page" data-view="memory">
@@ -459,13 +464,23 @@ export function MemoryPage() {
               <div className="ask-actions">
                 <button
                   className="btn primary"
-                  onClick={() => setPendingDecision({ proposal: row, decision: 'APPROVE' })}
+                  onClick={() => {
+                    // The confirmation dialog is the only place a refused
+                    // decision is reported (Task 35), so a new decision starts
+                    // from no failure: a stale refusal would read as this
+                    // proposal's outcome.
+                    decideMut.reset();
+                    setPendingDecision({ proposal: row, decision: 'APPROVE' });
+                  }}
                 >
                   Approve
                 </button>
                 <button
                   className="btn"
-                  onClick={() => setPendingDecision({ proposal: row, decision: 'REJECT' })}
+                  onClick={() => {
+                    decideMut.reset();
+                    setPendingDecision({ proposal: row, decision: 'REJECT' });
+                  }}
                 >
                   Reject
                 </button>
@@ -475,13 +490,6 @@ export function MemoryPage() {
             )}
           </div>
         ))}
-        {decideMut.error && (
-          <ErrorNotice
-            presented={presentError(decideMut.error, 'The proposal was not decided.')}
-            operatorSession
-            actionLabel="Deciding a memory proposal"
-          />
-        )}
       </section>
 
       {/* ---------- Entity detail ---------- */}
@@ -658,6 +666,22 @@ export function MemoryPage() {
             {pendingDecision?.proposal.subjectType === 'ENTITY'
               ? 'Approving an entity proposal applies its pending facts as one batch.'
               : 'A decision is final for this proposal.'}
+            {/* Task 35 / Item 2: the refusal belongs here, in the dialog the
+                operator is looking at — it used to render in the inbox, behind
+                this dialog's overlay, where it could not be seen. The dialog
+                stays open so the decision can be retried or abandoned. */}
+            {decideFailure != null && (
+              <>
+                {' '}
+                {isOperatorRejection(decideFailure) ? (
+                  <OperatorSessionNotice actionLabel="Deciding a memory proposal" />
+                ) : (
+                  <span className="error-text" role="alert">
+                    {apiErrorMessage(decideFailure, 'The proposal was not decided.')}
+                  </span>
+                )}
+              </>
+            )}
           </>
         }
         onConfirm={() => {

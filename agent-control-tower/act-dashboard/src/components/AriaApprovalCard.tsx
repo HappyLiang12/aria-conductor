@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { decideApproval } from '../api/approvals';
+import { OPERATOR_REMEDY_COPY } from '../api/errorPresentation';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
 
@@ -55,11 +56,11 @@ export function AriaApprovalCard({
       setError(
         isOperatorRejection(err)
           // Same posture as the Review panels: say the refusal, say what the
-          // operator can do about it, and say that nothing was decided.
+          // operator can do about it, and say that nothing was decided. The
+          // remedy is the shared copy (Task 35) — a reload cannot restore an
+          // operator session, so this card must not suggest one.
           ? `Your operator session was refused this decision: ${apiErrorMessage(err, 'operator-only route')}. `
-            + 'Approvals are operator-only — on this machine loopback requests are the operator '
-            + 'automatically, so reload and try again; from a remote machine the operator who runs '
-            + 'the backend must grant access. Nothing was decided by the refused call.'
+            + `Approvals are operator-only. ${OPERATOR_REMEDY_COPY} Nothing was decided by the refused call.`
           : apiErrorMessage(err, 'The decision could not be recorded — the ask is still pending; retry.'),
       );
     } finally {

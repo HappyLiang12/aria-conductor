@@ -58,6 +58,13 @@ describe('AriaClarificationCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /answer/i }));
 
     expect(await screen.findByText(/operator session/i)).toBeInTheDocument();
+    // Task 35: this card says "nothing was sent" where the approval card says
+    // "nothing was decided" — the remedy is the one shared copy, not a reload.
+    const refusal = screen.getByRole('alert');
+    expect(refusal).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    expect(refusal).toHaveTextContent(/nothing was sent by the refused call/i);
+    expect(refusal).not.toHaveTextContent(/reload the page and retry/i);
+    expect(refusal).not.toHaveTextContent(/reload and try again/i);
     expect(onSettled).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/your answer/i)).toBeEnabled();
   });

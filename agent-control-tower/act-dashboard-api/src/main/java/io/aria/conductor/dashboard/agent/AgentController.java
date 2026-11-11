@@ -1,4 +1,4 @@
-package io.aria.conductor.agent.controller;
+package io.aria.conductor.dashboard.agent;
 
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.AgentTemplateDTO;

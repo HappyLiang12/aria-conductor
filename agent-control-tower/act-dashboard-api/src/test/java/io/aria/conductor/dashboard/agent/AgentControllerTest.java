@@ -1,4 +1,4 @@
-package io.aria.conductor.agent.controller;
+package io.aria.conductor.dashboard.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.dto.ApplyRuntimeRequest;

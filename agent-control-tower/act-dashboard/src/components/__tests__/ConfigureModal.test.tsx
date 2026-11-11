@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigureModal } from '../ConfigureModal';
@@ -179,6 +179,71 @@ describe('ConfigureModal runtime apply refusals (Task 30)', () => {
     await applyRuntime();
 
     expect(await screen.findByText('runtime store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});
+
+// Task 33 / Item 2: `ConfirmDialog` is fully controlled and never closed on
+// failure, so the refusal notice rendered in the runtime pane sat behind the
+// dialog's own `z-index: 2000` overlay — the operator saw an unchanged confirm
+// dialog. `getByTestId` on the document cannot see that; these pins scope the
+// notice to the Configure dialog and assert the confirm dialog is gone.
+describe('ConfigureModal runtime apply refusal visibility (Task 33)', () => {
+  beforeEach(() => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' })]);
+  });
+
+  async function confirmApply() {
+    await renderOpenedModal();
+    await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
+    await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'HOST');
+    await userEvent.click(screen.getByRole('button', { name: /Apply to all agents/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Confirm$/ }));
+  }
+
+  /** The dialog the operator is left in once the confirmation closes. */
+  const configureDialog = () =>
+    screen.getByRole('dialog', { name: /configure/i, hidden: true });
+  /** The confirmation that used to stay open, empty, over the refusal. */
+  const applyConfirmDialog = () =>
+    screen.queryByRole('dialog', { name: /apply runtime/i, hidden: true });
+
+  it.each([401, 403])(
+    'closes the confirm dialog and puts the %i refusal in the Configure pane',
+    async (status) => {
+      mockedApply.mockRejectedValue({
+        response: { status, data: { message: 'RUNTIME_RAW_SERVER_TEXT' } },
+      });
+
+      await confirmApply();
+
+      const notice = await within(configureDialog()).findByTestId('operator-session-notice');
+      expect(notice).toHaveTextContent(/applying the fleet runtime is operator-only/i);
+      expect(applyConfirmDialog()).not.toBeInTheDocument();
+    },
+  );
+
+  // Positive control: a 500 is a fault, not an authority problem — it keeps the
+  // ordinary error path, and the dialog must not strand it behind the overlay.
+  it('shows the ordinary 500 error in the pane with the confirm dialog closed', async () => {
+    mockedApply.mockRejectedValue({
+      response: { status: 500, data: { message: 'runtime store unavailable' } },
+    });
+
+    await confirmApply();
+
+    expect(await within(configureDialog()).findByText('runtime store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    expect(applyConfirmDialog()).not.toBeInTheDocument();
+  });
+
+  // Positive control: a successful apply closes the confirmation and leaves no
+  // notice behind either.
+  it('closes the confirm dialog on success and shows no notice', async () => {
+    await confirmApply();
+
+    await waitFor(() => expect(applyConfirmDialog()).not.toBeInTheDocument());
+    expect(mockedApply).toHaveBeenCalledWith('qoder', 'HOST');
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });

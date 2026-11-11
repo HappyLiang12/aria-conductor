@@ -80,7 +80,7 @@ public class ToolCatalog implements ToolCatalogProvider {
             operatorOnly("forget_fact",
                     "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."),
             read("list_memory_proposals",
-                    "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. A PENDING entity row is also listed, with its canonical key in factKey, but only for an operator credential; a worker read receives facts and relations only.",
+                    "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. An entity row is listed for status ACTIVE or RETIRED to any credential; a PENDING entity row, with its canonical key in factKey, is returned to an operator credential only.",
                     true),
             operatorOnly("decide_memory_proposal",
                     "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."),

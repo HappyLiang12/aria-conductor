@@ -11,6 +11,8 @@ import {
 } from '../api/reports';
 import { useWebSocketContext } from '../components/Layout';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from '../components/ErrorNotice';
 import { ReportContentViewer } from '../components/ReportContentViewer';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -81,6 +83,14 @@ export function ReportsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [amendInstruction, setAmendInstruction] = useState('');
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  // A regenerate/archive failure kept as the API error so the shared notice can
+  // decide: an operator-only refusal reads as the operator-session notice, a
+  // fault keeps the ordinary error path. A toast cannot make that distinction.
+  const [actionFailure, setActionFailure] = useState<{
+    error: unknown;
+    action: string;
+    fallback: string;
+  } | null>(null);
   // Delete awaiting confirmation. Archiving is irreversible from the UI, so the
   // Delete control only opens the shared dialog (Task 10).
   const [confirmingArchive, setConfirmingArchive] = useState(false);
@@ -162,10 +172,15 @@ export function ReportsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       queryClient.invalidateQueries({ queryKey: ['report-html'] });
+      setActionFailure(null);
     },
     onError: (err: unknown) => {
-      setCopyToast(apiErrorMessage(err, 'Regeneration failed.'));
-      setTimeout(() => setCopyToast(null), 2800);
+      // A gated route: keep the error itself so a refusal can say who may act.
+      setActionFailure({
+        error: err,
+        action: 'Regenerating a report',
+        fallback: 'Regeneration failed.',
+      });
     },
   });
 
@@ -174,16 +189,20 @@ export function ReportsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       setSelectedId(null);
+      setActionFailure(null);
       // Task 10: the confirmed archive is done — drop the pending confirmation.
       setConfirmingArchive(false);
     },
     onError: (err: unknown) => {
       // The confirmed action is over (it failed) — never leave the confirmation
-      // stuck open. Failures reuse the toolbar notice this page already renders
-      // (no second toast); the state name predates this use.
+      // stuck open. The failure then renders in front of the operator, not
+      // behind the dialog that would have hidden it.
       setConfirmingArchive(false);
-      setCopyToast(apiErrorMessage(err, 'Archive failed. Please retry.'));
-      setTimeout(() => setCopyToast(null), 2800);
+      setActionFailure({
+        error: err,
+        action: 'Archiving a report',
+        fallback: 'Archive failed. Please retry.',
+      });
     },
   });
 
@@ -273,6 +292,16 @@ export function ReportsPage() {
           </button>
         </div>
       </div>
+
+      {actionFailure && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorNotice
+            presented={presentError(actionFailure.error, actionFailure.fallback)}
+            operatorSession
+            actionLabel={actionFailure.action}
+          />
+        </div>
+      )}
 
       {isLoading && (
         <section className="panel" style={{ padding: 18, color: 'var(--text-dim)' }}>

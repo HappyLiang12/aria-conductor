@@ -649,7 +649,12 @@ public class AgentLoopEngine {
     /**
      * Parked-run bookkeeping (2026-10-05): the coordinator parked the run;
      * persist it as WAITING_INPUT and raise the linked CLARIFICATION ask.
+     *
+     * <p>First in the listener order: this event is published before the ask
+     * exists, and every other listener (the board's broadcast, the panel's
+     * ordered {@code waiting_input} signal) must only observe a persisted ask.
      */
+    @Order(Ordered.HIGHEST_PRECEDENCE)
     @EventListener
     public void onRunWaitingForInput(RunWaitingForInputEvent event) {
         try {

@@ -27,6 +27,12 @@ import java.util.UUID;
  * card next to the tool call that caused it instead of the operator hunting for
  * the ask on another page.
  *
+ * <p>Exactly one signal per approval: a {@code CLARIFICATION} approval is the
+ * {@code waiting_input} card, every other source is the {@code approval_required}
+ * card. The engine raises both events for a clarification ask (it publishes
+ * {@code ApprovalRequestedEvent} for the row it just persisted and the run also
+ * parks), so without that gate one decision would render two cards.
+ *
  * <p>A signal is emitted only while the run has a live stream. The turn may be
  * a sync chat ({@code AriaService.chat} starts the run with no emitter) or a
  * panel that already closed; in both cases the ask still exists in the
@@ -62,6 +68,14 @@ public class RunSignalSseListener {
                 return;
             }
             approvals.findById(event.getApprovalId()).ifPresent(row -> {
+                if (row.getSource() == ApprovalSource.CLARIFICATION) {
+                    // One approval, one card. The engine publishes ApprovalRequestedEvent for the
+                    // CLARIFICATION ask it just persisted and the run also parks on
+                    // RunWaitingForInputEvent; onApprovalRequested runs first, so emitting here
+                    // would hand the panel a second decision surface for the same approvalId.
+                    // The waiting_input signal (below) is this approval's card.
+                    return;
+                }
                 ToolPolicy policy = row.getToolName() != null
                         ? toolRiskResolver.policyOf(row.getToolName())
                         : null;

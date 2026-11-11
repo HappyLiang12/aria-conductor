@@ -3,10 +3,14 @@ package io.aria.conductor.execution.telemetry;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.execution.engine.RunStreamRegistry;
 import io.aria.conductor.execution.runtime.CoreEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,6 +36,11 @@ import java.util.UUID;
  *       call.</li>
  * </ul>
  *
+ * <p>It is also the producer of the live {@code tool_call} / {@code tool_result} signals the
+ * Aria panel's activity strip renders ({@code tool-event-contract.md}): a recorded tool event is
+ * handed to the run's own stream, never before the write succeeded. A run without a live stream
+ * (a sync turn, a closed panel) keeps the row and streams nothing.
+ *
  * <p>Plain object on purpose: the mapping is testable without a Spring context.
  * The bean is the production wiring seam the coordinator receives.
  */
@@ -50,8 +59,22 @@ public class CoreEventTelemetry {
 
     private final RunTelemetryService telemetry;
 
+    /**
+     * The run-owned streams that carry the live tool signals, or null when this wiring serves
+     * none. Optional on purpose (the same seam as {@code CoreExecutionService.attachTelemetry}):
+     * the adapter stays constructible without a stream registry, which is what every existing
+     * construction (unit tests, a wiring without the engine) does.
+     */
+    private volatile RunStreamRegistry streamRegistry;
+
     public CoreEventTelemetry(RunTelemetryService telemetry) {
         this.telemetry = telemetry;
+    }
+
+    /** Attaches the run's live-stream seam. Never required: without it the signals are not streamed. */
+    @Autowired(required = false)
+    public void attachStreamRegistry(RunStreamRegistry streamRegistry) {
+        this.streamRegistry = streamRegistry;
     }
 
     /** True when the event type carries telemetry this adapter records. */
@@ -107,13 +130,58 @@ public class CoreEventTelemetry {
                     return false; // unreachable: handles() gated the switch
                 }
             }
-            return true;
         } catch (RuntimeException e) {
             // Observability must never fail the run: a persistence failure is reported and the
             // event dropped, while the core keeps running.
             log.warn("Run {}: the {} event could not be recorded and is dropped: {}",
                     targetRunId, event.type(), e.getMessage(), e);
             return false;
+        }
+        // Only a recorded event is streamed: the panel must never show a tool call or result
+        // that the audit rows do not have.
+        streamSignal(targetRunId, event.type(), payload);
+        return true;
+    }
+
+    /**
+     * Hands a recorded tool event to the run's live stream as the activity strip's
+     * {@code tool_call} / {@code tool_result} frame (tool-event-contract.md).
+     *
+     * <p>No call here escapes into the core event path: a run with no live stream is the normal
+     * case (a sync turn, a panel that already closed) and {@link RunStreamRegistry#emit} reports
+     * it as {@code false}, which is neither an error nor logged as one; a completed emitter is
+     * never resurrected, because the registry only addresses what a live turn bound.
+     */
+    private void streamSignal(UUID runId, String type, JsonNode payload) {
+        RunStreamRegistry registry = this.streamRegistry;
+        if (registry == null) {
+            return;
+        }
+        String eventName = switch (type) {
+            case "tool.call" -> "tool_call";
+            case "tool.result" -> "tool_result";
+            default -> null; // usage carries no live frame
+        };
+        if (eventName == null) {
+            return;
+        }
+        Map<String, Object> signal = new HashMap<>();
+        signal.put("runId", runId.toString());
+        signal.put("name", text(payload, "toolName"));
+        signal.put("toolCallId", text(payload, "toolCallId"));
+        if ("tool.call".equals(type)) {
+            signal.put("args", serialized(payload, "input"));
+        } else {
+            signal.put("result", serialized(payload, "result"));
+            // Always present: an absent flag is "not an error", never a measured success.
+            signal.put("ok", !flag(payload, "isError"));
+        }
+        try {
+            registry.emit(runId, eventName, signal);
+        } catch (RuntimeException e) {
+            // The registry promises not to throw; a run must not depend on that promise.
+            log.debug("Run {}: the {} signal could not be handed to the stream: {}",
+                    runId, eventName, e.getMessage());
         }
     }
 

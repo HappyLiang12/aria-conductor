@@ -1049,6 +1049,84 @@ class MemoryCommandServiceTest {
         assertThat(((MemoryProposalCreatedEvent) published.getValue()).getProposalId()).isEqualTo(merged.getId());
     }
 
+    /**
+     * N1 (T10 fix round 1 re-review). Lifecycle retire writes no fact row, so a RETIRED entity
+     * keeps its {@code status=ACTIVE, valid_to=null} facts. A re-proposal turns the identity row
+     * back to PENDING and, before this fix, left them current: approving the new proposal
+     * silently promoted a value the card never listed and the operator never decided. The
+     * re-proposal must retire the current graph the retired entity left behind, so nothing
+     * ACTIVE can survive under the PENDING row unless it is part of the new batch.
+     */
+    @Test
+    void reProposingARetiredKeyRetiresItsSurvivingActiveFacts() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryFact live = currentFact(id("fact:timezone"), retired.getId(), "timezone", "UTC", 3);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of(live));
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+
+        MemoryEntity reproposed = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(reproposed.getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(live.getStatus())
+                .as("no ACTIVE fact may survive under the re-proposed PENDING row")
+                .isEqualTo(FactStatus.RETIRED);
+        assertThat(live.getValidTo()).as("the surviving value is closed, not current").isNotNull();
+        verify(facts).save(live);
+        List<MemoryAssertion> written = captureAssertions(2);
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.FACT)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(live.getId());
+                    assertThat(assertion.getBeforeJson()).contains("ACTIVE").contains("timezone");
+                    assertThat(assertion.getAfterJson()).contains("RETIRED");
+                });
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> assertThat(assertion.getAction()).isEqualTo(MemoryAction.CREATE));
+    }
+
+    /**
+     * The same resurrection on the graph: approving the re-proposed entity makes its surviving
+     * ACTIVE relations current again (recall expands them from an ACTIVE match), so the edges the
+     * retired entity left behind must be closed with it. One edge that is both incoming and
+     * outgoing (a self relation) is retired once.
+     */
+    @Test
+    void reProposingARetiredKeyRetiresItsSurvivingActiveRelations() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryRelation live = relation(id("relation:owns"), retired.getId(), "OWNS", id("repo:conductor"));
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of(live));
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of(live));
+
+        command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(live.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(live.getValidTo()).isNotNull();
+        verify(relations, times(1)).save(live);
+        assertThat(captureAssertions(2))
+                .filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.RELATION)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(live.getId());
+                });
+    }
+
     @Test
     void aLostUniqueRaceReadsTheWinningEntityBack() {
         MemoryEntity winner = entity(id("winner"));

@@ -121,3 +121,65 @@ test.describe('Aria in-flow decisions (live)', () => {
     await expect(card).toHaveCount(0);
   });
 });
+
+/**
+ * Track A — the half of this task the deterministic core E2E harness can really
+ * drive, unguarded, so hosted CI exercises the panel change (review M4/M9).
+ *
+ * What this covers: the three reconciliation planes the panel owns against a
+ * live backend — the mount read, the focus re-read and Clear — each of which
+ * must leave the composer usable and draw no card, gate hint or queued pill that
+ * nothing raised. What it cannot cover, and does not pretend to: a decision
+ * card, the activity strip and resume-on-approval. Those need a real approval
+ * row (or a real model and the operator credential) and the harness cannot
+ * fabricate a run, an approval or a binding row for a built-in agent, so they
+ * are the live phase's (the guarded describe above) and are recorded as the
+ * residual in `task-6-fix1-report.md`. No route stub, no WebSocket stub and no
+ * fabricated approval row here: a track that needs those is not this track.
+ */
+test.describe('Aria in-flow decisions (deterministic harness)', () => {
+  test('the panel mounts and re-reads reconciled, ungated and with no phantom card', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await openAria(page);
+
+    const compose = page.locator('.ai-panel .ai-compose-input');
+    await expect(compose).toBeEnabled();
+    // The gate belongs to an unanswered card; nothing raised one, so nothing
+    // may hold the composer and nothing may claim a decision is pending.
+    await expect(page.locator('.ai-panel .ai-gate-hint')).toHaveCount(0);
+    await expect(page.locator('.ai-panel .ai-decision-card')).toHaveCount(0);
+    await expect(page.locator('.ai-panel .ai-queued-pill')).toHaveCount(0);
+
+    // The focus plane re-reads the durable conversation. A reconcile that drew a
+    // card, kept a stale one or locked the composer would still show here.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(compose).toBeEnabled();
+    await expect(page.locator('.ai-panel .ai-gate-hint')).toHaveCount(0);
+    await expect(page.locator('.ai-panel .ai-decision-card')).toHaveCount(0);
+  });
+
+  test('Clear starts a fresh conversation that stays usable and card-free', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await openAria(page);
+
+    // The panel adopts an id before Clear, otherwise "a new conversation" would
+    // be indistinguishable from "the load had not answered yet".
+    const idEl = page.locator('.ai-conversation-id');
+    await expect(idEl).not.toHaveText('...', { timeout: 15_000 });
+    const firstConversation = await idEl.getAttribute('title');
+    expect(firstConversation).toBeTruthy();
+
+    await page.getByRole('button', { name: 'Clear and start new conversation' }).click();
+
+    // Restore with an empty timeline: the empty state, a usable composer and no
+    // card of any kind carried over from the cleared transcript.
+    await expect(page.locator('.ai-panel .ai-empty')).toBeVisible();
+    await expect(page.locator('.ai-panel .ai-compose-input')).toBeEnabled();
+    await expect(page.locator('.ai-panel .ai-decision-card')).toHaveCount(0);
+    await expect(page.locator('.ai-panel .ai-gate-hint')).toHaveCount(0);
+    await expect(idEl).not.toHaveText('...');
+    expect(await idEl.getAttribute('title')).not.toBe(firstConversation);
+  });
+});

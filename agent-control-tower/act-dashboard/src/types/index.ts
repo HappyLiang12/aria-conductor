@@ -69,6 +69,11 @@ export interface Run {
    * (F9): the UI renders an explicit "not reported" state instead of a zero.
    */
   totalTokensUsed: number | null;
+  /**
+   * Whether the core reported a usable measurement: REPORTED, NOT_REPORTED or
+   * NEVER_OBSERVED. The total alone cannot tell a measured zero from a silence.
+   */
+  usageState?: string;
   iterationCount: number;
   errorMessage: string | null;
   /** Stable failure identity and repair surface served by the backend. */
@@ -222,6 +227,11 @@ export interface DashboardSummary {
   runningRuns: number;
   pendingApprovals: number;
   totalTokensBurned: number;
+  /**
+   * How many runs reported no usable measurement. A zero token total beside a
+   * non-zero count is a silence, not a measured zero.
+   */
+  runsWithoutUsage: number;
 }
 
 export interface AgentTelemetry {

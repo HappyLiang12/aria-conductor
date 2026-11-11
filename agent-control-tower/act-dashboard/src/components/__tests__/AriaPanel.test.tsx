@@ -2002,6 +2002,22 @@ describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
     expect(notice).not.toHaveTextContent(/and Reading/i);
   });
 
+  // Task 41 m2: a refusal from the cleared conversation stayed on screen in the
+  // brand-new, empty transcript until the next reconcile (which a fresh
+  // conversation runs only after a turn is sent).
+  it('clears a reconcile refusal together with its conversation', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({ response: { status: 401, data: {} } });
+
+    await reconcileOnce();
+    expect(await screen.findByTestId('operator-session-notice')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
   // Positive controls: a fault is not a refusal. It keeps the server's text and
   // must not fabricate a session notice.
   it('shows the server text and no notice when the approval read fails', async () => {

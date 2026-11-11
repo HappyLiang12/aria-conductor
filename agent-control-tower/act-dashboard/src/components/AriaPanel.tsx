@@ -1173,6 +1173,10 @@ export function AriaPanel() {
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.
     dispatch({ type: 'restore', conversationId: newConversationId, timeline: [], approvals: [], proposals: [] });
+    // A refusal belongs to the reads of the conversation on screen; the cleared
+    // conversation's failure must not greet the operator in the empty transcript
+    // (a fresh conversation reconciles only after the next turn is sent).
+    setReconcileFailure([]);
     console.log(`[Aria] New conversation: ${newConversationId}`);
     setInput('');
     setBusy(false);

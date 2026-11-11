@@ -85,9 +85,9 @@ type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
 
 /**
  * This entity's own PENDING facts out of one `GET /proposals?status=PENDING&entityId=`
- * read. The entity's own row (and, before the server's batch correction, a
- * relation) is not part of what a decision promotes, so only FACT rows of THIS
- * entity are kept.
+ * read. Only FACT rows of THIS entity are kept: the entity's own row is already
+ * the card's title, and a relation is not part of a batch (the decision promotes
+ * and retires facts; spec :138/:453 puts the relation graph out of scope).
  */
 function entityFactsOf(rows: MemoryProposalView[], entityId: string): MemoryProposalView[] {
   return rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId);
@@ -96,9 +96,9 @@ function entityFactsOf(rows: MemoryProposalView[], entityId: string): MemoryProp
 /**
  * What the operator can actually see of the batch: the identity and value of
  * every fact the decision would promote. Two reads with the same signature
- * decide the same thing, so a decision may proceed against them; a different one
- * has to be shown first. Null when no list is on screen (still reading, no
- * entity id, or unreadable) — nothing was seen, so nothing may be decided.
+ * decide the same thing, so a decision may proceed; a different one has to be
+ * shown first. Null when no list is on screen (still reading, or the read
+ * failed) — the operator has seen no set, so no fresh read can match it.
  */
 function batchSignature(batch: BatchRead | null | undefined): string | null {
   if (!batch || !('facts' in batch)) return null;

@@ -552,6 +552,10 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
         verify(entities, never()).save(any());
         verify(events, never()).publishEvent(any(ApplicationEvent.class));
+        // T39 Item 3 (P3): the absence above is only falsifiable while this service reaches this
+        // publisher. Measured before the control existed: replacing the publisher mock in setUp
+        // left both absence assertions green, so they could not have failed.
+        assertTheEventPublisherIsReachableFromThisService();
     }
 
     /**
@@ -581,6 +585,8 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
         verify(entities, never()).save(any());
         verify(events, never()).publishEvent(any(ApplicationEvent.class));
+        // T39 Item 3 (P3): the mirrored positive control, so this half cannot be vacuously green.
+        assertTheEventPublisherIsReachableFromThisService();
     }
 
     /**
@@ -1734,5 +1740,29 @@ class MemoryCommandServiceTest {
         ArgumentCaptor<MemoryAssertion> captor = ArgumentCaptor.forClass(MemoryAssertion.class);
         verify(assertions, times(count)).save(captor.capture());
         return captor.getAllValues();
+    }
+
+    /**
+     * T39 Item 3 (P3): the positive control for a "the refused path published nothing" assertion.
+     * An absence assertion can only fail if the service under test can reach the publisher mock it
+     * is verified against; with the publisher replaced in {@code setUp} both
+     * {@code verify(events, never())} calls stayed green, which is what made them unfalsifiable.
+     * The same service instance therefore has to produce a publish it should produce — a
+     * run-created PENDING entity is the one producer of {@link MemoryProposalCreatedEvent} — and
+     * the mock has to observe it exactly once.
+     */
+    private void assertTheEventPublisherIsReachableFromThisService() {
+        UUID runId = UUID.randomUUID();
+        when(entities.findByKindAndCanonicalKey("AGENT", "agent:event-control")).thenReturn(Optional.empty());
+        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MemoryEntity proposed = command.createEntity(
+                new CreateEntityCommand("AGENT", "agent:event-control", "Event control", null),
+                new MemoryActor(MemoryActorType.EXTRACTION, runId.toString()));
+
+        assertThat(proposed.getStatus())
+                .as("a run-created entity is PENDING, so it proposes and publishes")
+                .isEqualTo(EntityStatus.PENDING);
+        verify(events, times(1)).publishEvent(any(ApplicationEvent.class));
     }
 }

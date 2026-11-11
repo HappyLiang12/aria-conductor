@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
@@ -36,6 +37,10 @@ public interface ConversationRunRepository extends Repository<Run, UUID> {
      *
      * @return the number of run rows that carried the conversation
      */
+    // A modifying query needs an actual transaction; this interface extends the bare
+    // Repository marker and therefore inherits none from Spring Data. Clear's @Transactional
+    // supplies one today, but this method must be safe on its own (T50 F-3).
+    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Run r set r.conversationId = null where r.conversationId = :conversationId")
     int detachByConversationId(@Param("conversationId") String conversationId);

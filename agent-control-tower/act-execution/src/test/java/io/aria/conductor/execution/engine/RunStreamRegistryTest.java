@@ -231,19 +231,30 @@ class RunStreamRegistryTest {
         ExecutorService pool = Executors.newFixedThreadPool(9);
         try {
             CountDownLatch start = new CountDownLatch(1);
+            // The completion races the writes only after one of them demonstrably reached
+            // the live stream: otherwise "some writes succeeded" would depend on which
+            // thread the scheduler ran first, not on the registry holding the stream.
+            CountDownLatch firstAccepted = new CountDownLatch(1);
             List<Future<List<Boolean>>> writers = new ArrayList<>();
             for (int i = 0; i < 8; i++) {
                 writers.add(pool.submit(() -> {
                     await(start);
                     List<Boolean> results = new ArrayList<>();
                     for (int n = 0; n < 250; n++) {
-                        results.add(registry.emit(runId, "approval_required", Map.of("n", n)));
+                        boolean accepted = registry.emit(runId, "approval_required", Map.of("n", n));
+                        if (accepted) {
+                            firstAccepted.countDown();
+                        }
+                        results.add(accepted);
                     }
                     return results;
                 }));
             }
             Future<Void> completer = pool.submit(() -> {
                 await(start);
+                assertThat(firstAccepted.await(10, TimeUnit.SECONDS))
+                        .as("a write reached the live stream before the completion raced it")
+                        .isTrue();
                 emitter.complete();
                 return null;
             });

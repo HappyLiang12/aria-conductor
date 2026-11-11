@@ -122,6 +122,12 @@ public class AgentLoopEngine {
      * externally cancelled run can never stay parked.
      */
     private final RunInputCoordinator inputCoordinator;
+    /**
+     * The run-owned emitter registry of the ordered signal contract (spec §5.1): a
+     * streaming turn binds its emitter for the whole time it can be asked something,
+     * so an ask raised on the bridge reader thread reaches the turn's own stream.
+     */
+    private final RunStreamRegistry streamRegistry;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -146,7 +152,8 @@ public class AgentLoopEngine {
                            ObjectProvider<CoreRunLauncher> coreRunLauncherProvider,
                            RunAdmissionQueue admission,
                            KanbanRepository kanbanRepository,
-                           RunInputCoordinator inputCoordinator) {
+                           RunInputCoordinator inputCoordinator,
+                           RunStreamRegistry streamRegistry) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.sessionStateManager = sessionStateManager;
@@ -168,6 +175,7 @@ public class AgentLoopEngine {
         this.dodService = dodService;
         this.kanbanRepository = kanbanRepository;
         this.inputCoordinator = inputCoordinator;
+        this.streamRegistry = streamRegistry;
     }
 
     /**
@@ -217,6 +225,11 @@ public class AgentLoopEngine {
      * @param intent          classified intent for SSE done event
      */
     public void startRunStream(UUID runId, SseEmitter emitter, List<LlmMessage> initialContext, String intent) {
+        // Bind the stream before the turn can be asked anything: an ask arrives on the
+        // bridge reader thread and is emitted only while the run has a live stream.
+        // Every terminal path unbinds it again (completeRun, abandonContext and the run
+        // loop's finally), so a finished turn never receives another signal.
+        streamRegistry.register(runId, emitter);
         startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
     }
 
@@ -303,6 +316,7 @@ public class AgentLoopEngine {
                 if (emitter != null) {
                     try { emitter.complete(); } catch (Exception ignored) {}
                 }
+                streamRegistry.unregister(runId);
             }
         });
     }
@@ -1385,6 +1399,9 @@ public class AgentLoopEngine {
         }
 
         activeContexts.remove(ctx.getRunId());
+        // The turn is over: a late ask must not be delivered to a stream whose run can
+        // no longer act on it (a cancelled run is never resurrected by a signal).
+        streamRegistry.unregister(ctx.getRunId());
     }
 
     private void handleRunFailure(UUID runId, String errorMessage) {
@@ -1470,6 +1487,7 @@ public class AgentLoopEngine {
                     ctx.getRunId(), e.getMessage());
         }
         activeContexts.remove(ctx.getRunId());
+        streamRegistry.unregister(ctx.getRunId());
     }
 
     // ---- SSE helpers —

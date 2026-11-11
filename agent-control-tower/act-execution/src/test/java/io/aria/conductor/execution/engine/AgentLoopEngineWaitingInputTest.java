@@ -77,7 +77,7 @@ class AgentLoopEngineWaitingInputTest {
                 null /* WorkspaceManager */, approvalRepository,
                 null /* coreExecutionServiceProvider */, null /* DoDService */,
                 null /* coreRunLauncherProvider */, null /* RunAdmissionQueue */,
-                kanbanRepository, inputCoordinator);
+                kanbanRepository, inputCoordinator, new RunStreamRegistry());
         stubStatusWrites();
         stubCompletionWrites();
     }

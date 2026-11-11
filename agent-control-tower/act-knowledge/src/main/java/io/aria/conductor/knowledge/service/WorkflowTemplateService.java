@@ -76,27 +76,40 @@ public class WorkflowTemplateService {
     }
 
     /**
+     * The APPROVED workflow templates a listing call returns, together with how many
+     * APPROVED templates exist at all. {@code totalApproved} is what lets a caller tell
+     * "the keyword filter matched nothing" apart from "no template is approved".
+     */
+    public record TemplateListing(List<KnowledgeItemResponse> templates, int totalApproved) {
+    }
+
+    /**
      * Find APPROVED workflow templates matching the given intent keywords.
      * If {@code userIntent} is {@code null} or blank, all APPROVED workflow templates are returned.
+     * The returned {@link TemplateListing#totalApproved()} is the size of the approved list this
+     * call already loaded — never an estimate — so an empty match stays distinguishable from an
+     * empty catalog.
      */
     @Transactional(readOnly = true)
-    public List<KnowledgeItemResponse> findMatchingTemplates(String userIntent) {
+    public TemplateListing findMatchingTemplates(String userIntent) {
         List<KnowledgeItem> allWorkflowTemplates = itemRepository
                 .findByTypeAndStatus(KnowledgeType.WORKFLOW, KnowledgeStatus.APPROVED);
 
+        List<KnowledgeItemResponse> templates;
         if (userIntent == null || userIntent.isBlank()) {
-            return allWorkflowTemplates.stream()
+            templates = allWorkflowTemplates.stream()
+                    .map(knowledgeService::toResponseWithLatestVersion)
+                    .toList();
+        } else {
+            String lowerIntent = userIntent.toLowerCase();
+            templates = allWorkflowTemplates.stream()
+                    .filter(item -> item.getName().toLowerCase().contains(lowerIntent)
+                            || (item.getDescription() != null
+                                && item.getDescription().toLowerCase().contains(lowerIntent)))
                     .map(knowledgeService::toResponseWithLatestVersion)
                     .toList();
         }
-
-        String lowerIntent = userIntent.toLowerCase();
-        return allWorkflowTemplates.stream()
-                .filter(item -> item.getName().toLowerCase().contains(lowerIntent)
-                        || (item.getDescription() != null
-                            && item.getDescription().toLowerCase().contains(lowerIntent)))
-                .map(knowledgeService::toResponseWithLatestVersion)
-                .toList();
+        return new TemplateListing(templates, allWorkflowTemplates.size());
     }
 
     /**

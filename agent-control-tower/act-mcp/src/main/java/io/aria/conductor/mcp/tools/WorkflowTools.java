@@ -29,7 +29,7 @@ public class WorkflowTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "list_workflow_templates",
-            description = "List APPROVED workflow templates. Optional intent keywords filter by name/description; blank lists all.")
+            description = "List APPROVED workflow templates. Returns templates plus totalApproved. Optional intent keywords filter by a literal substring of name or description; an empty templates list with a positive totalApproved means no match, so retry with a blank intent before concluding none exist.")
     public String listWorkflowTemplates(
             @ToolParam(description = "Intent keywords, or blank for all", required = false) String userIntent) {
         try {

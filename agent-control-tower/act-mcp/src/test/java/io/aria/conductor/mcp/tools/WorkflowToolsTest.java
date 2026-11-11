@@ -37,11 +37,56 @@ class WorkflowToolsTest {
     void listWorkflowTemplates_delegatesAndWraps() {
         KnowledgeItemResponse tpl = KnowledgeItemResponse.builder()
                 .id(UUID.randomUUID()).name("development-workflow").type(null).status(null).build();
-        when(workflowTemplateService.findMatchingTemplates("sdd")).thenReturn(List.of(tpl));
+        when(workflowTemplateService.findMatchingTemplates("sdd"))
+                .thenReturn(new WorkflowTemplateService.TemplateListing(List.of(tpl), 1));
 
         String json = tools.listWorkflowTemplates("sdd");
 
         assertThat(json).contains("development-workflow").contains("\"ok\":true");
+    }
+
+    @Test
+    void anEmptyMatchStillReportsHowManyTemplatesAreApproved() {
+        // The operator's catalog has one APPROVED workflow template named "development-workflow";
+        // a multi-word intent is one literal substring, so this filter matches nothing.
+        when(workflowTemplateService.findMatchingTemplates("release note pull request review"))
+                .thenReturn(new WorkflowTemplateService.TemplateListing(List.of(), 1));
+
+        String json = tools.listWorkflowTemplates("release note pull request review");
+
+        assertThat(json).contains("\"totalApproved\":1").contains("\"templates\":[]");
+    }
+
+    @Test
+    void aBlankIntentListsEveryApprovedTemplate() {
+        KnowledgeItemResponse tpl = KnowledgeItemResponse.builder()
+                .id(UUID.randomUUID()).name("development-workflow").type(null).status(null).build();
+        when(workflowTemplateService.findMatchingTemplates(""))
+                .thenReturn(new WorkflowTemplateService.TemplateListing(List.of(tpl), 1));
+
+        String json = tools.listWorkflowTemplates("");
+
+        assertThat(json).contains("\"totalApproved\":1").contains("development-workflow");
+    }
+
+    /**
+     * B3's whole point: an empty {@code templates} list produced by a filter must not read
+     * the same as an empty catalog. The two answers carry different {@code totalApproved}
+     * values, so a caller can retry unfiltered instead of concluding no template is approved.
+     */
+    @Test
+    void anEmptyCatalogIsDistinguishableFromAnEmptyKeywordMatch() {
+        when(workflowTemplateService.findMatchingTemplates("no-such-intent"))
+                .thenReturn(new WorkflowTemplateService.TemplateListing(List.of(), 1));
+        when(workflowTemplateService.findMatchingTemplates(null))
+                .thenReturn(new WorkflowTemplateService.TemplateListing(List.of(), 0));
+
+        String emptyMatch = tools.listWorkflowTemplates("no-such-intent");
+        String emptyCatalog = tools.listWorkflowTemplates(null);
+
+        assertThat(emptyMatch).contains("\"templates\":[]").contains("\"totalApproved\":1");
+        assertThat(emptyCatalog).contains("\"templates\":[]").contains("\"totalApproved\":0");
+        assertThat(emptyMatch).isNotEqualTo(emptyCatalog);
     }
 
     @Test

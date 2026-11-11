@@ -104,12 +104,12 @@ public class WorkflowService {
                 .collect(Collectors.toList());
 
         // R-F4: SDD loop steps (BA/DEV/QA) must be created through the governed
-        // instantiate_template path so the SPEC_REVIEW gate is enforced. This guard is the
+        // instantiate_workflow_template path so the SPEC_REVIEW gate is enforced. This guard is the
         // single choke point for ALL direct callers (REST controller, Aria tool, execute-yaml).
         // WorkflowTemplateService sets allowSddSteps=true after validating an APPROVED template.
         if (!request.isAllowSddSteps() && steps.stream().anyMatch(s -> isSddKind(s.getKind()))) {
             throw new IllegalArgumentException("SDD workflow steps (BA/DEV/QA) must be created via "
-                    + "instantiate_template to ensure the SPEC_REVIEW gate.");
+                    + "instantiate_workflow_template to ensure the SPEC_REVIEW gate.");
         }
 
         WorkflowChain chain = WorkflowChain.builder()

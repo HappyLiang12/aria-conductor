@@ -9,15 +9,20 @@ import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.context.contributor.ToolCatalogContextContributor;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.catalog.ToolCatalog;
-import io.aria.conductor.mcp.tools.DashboardTools;
 import io.aria.conductor.mcp.tools.MemoryTools;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -286,6 +291,11 @@ class ToolCatalogParityTest {
      * is deliberately not "no actor is ever published": a caller that DOES present a valid bearer
      * is resolved in every mode ({@code McpServerConfig.actorTransportContext}), so the refusal
      * is about the credential nobody sent, not about the mode disabling authentication.
+     *
+     * <p>T49 (N-T48-6): the legacy {@code token} mode is the third case and was silent. There
+     * {@code McpTokenFilter} accepts only the static token (an operator bearer is 401) and that
+     * token resolves no actor, so the class is unreachable there as well; the clause says so and
+     * names the mode that works.
      */
     @Test
     void everyOperatorOnlyDescriptionStatesThatTheNoCredentialModeRefusesACredentiallessCall() {
@@ -295,8 +305,14 @@ class ToolCatalogParityTest {
                 .allSatisfy(tool -> assertThat(tool.description())
                         .as("description of '%s'", tool.name())
                         .contains("requires an operator-authenticated MCP session")
+                        .contains("the caller is identified only from a valid operator bearer credential")
                         .contains("auth-mode=none")
                         .contains("a call that presents none is refused")
+                        // T49 N-T48-6: the legacy token mode identifies no actor either, so
+                        // the same class is unreachable there; the wording must not be silent.
+                        .contains("the legacy token mode accepts only its static token")
+                        .contains("which identifies no actor")
+                        .contains("use aria.mcp.auth-mode=actor")
                         .endsWith(ToolCatalog.OPERATOR_SESSION_CLAUSE));
     }
 
@@ -458,32 +474,62 @@ class ToolCatalogParityTest {
     /**
      * The registered tool description comes from the {@code @Tool} annotation and the catalog is a
      * hand-written second copy, so the two can drift. {@code McpEndpointIntegrationTest} catches a
-     * drift at the failsafe tier; this pins the same byte equality for the tool classes whose
-     * descriptions moved in this change, inside the unit tier.
+     * drift at the failsafe tier; this pins the same byte equality for the WHOLE catalog inside the
+     * unit tier (T49, N-T48-5). The class set is discovered from the package, not listed, so a
+     * tool class added later is covered without editing this test; the scan's own coverage is
+     * asserted before any equality (an empty scan cannot pass).
      */
     @Test
-    void theChangedToolDescriptionsAreByteEqualToTheirToolAnnotation() {
-        assertAnnotationMatchesCatalog(DashboardTools.class);
-        assertAnnotationMatchesCatalog(MemoryTools.class);
+    void everyRegisteredToolDescriptionIsByteEqualToItsToolAnnotation() {
+        Map<String, String> annotated = new TreeMap<>();
+        for (Class<?> toolClass : toolClasses()) {
+            for (Method method : toolClass.getDeclaredMethods()) {
+                Tool annotation = method.getAnnotation(Tool.class);
+                if (annotation != null) {
+                    annotated.put(annotation.name(), annotation.description());
+                }
+            }
+        }
+
+        // Coverage controls: the scan found the whole tool package, and there is exactly one
+        // annotation per registered name -- no catalog entry without an annotation copy, and no
+        // orphan annotation the catalog does not serve.
+        assertThat(toolClasses()).as("tool classes found in io.aria.conductor.mcp.tools")
+                .hasSizeGreaterThanOrEqualTo(10);
+        assertThat(annotated).as("annotated @Tool methods")
+                .hasSize(McpToolInventory.EXPECTED_TOOL_NAMES.size());
+        assertThat(annotated.keySet()).containsExactlyInAnyOrderElementsOf(catalog.names());
+
+        annotated.forEach((name, description) -> assertThat(catalog.find(name).orElseThrow(
+                        () -> new AssertionError("@Tool '" + name + "' is not in the catalog"))
+                .description())
+                .as("catalog description of '%s' equals its @Tool annotation", name)
+                .isEqualTo(description));
     }
 
-    private void assertAnnotationMatchesCatalog(Class<?> toolClass) {
-        int annotated = 0;
-        for (Method method : toolClass.getDeclaredMethods()) {
-            Tool annotation = method.getAnnotation(Tool.class);
-            if (annotation == null) {
-                continue;
+    /** Every concrete class in the tool package (nested classes and non-tools included; they
+     * simply carry no {@code @Tool}). */
+    private static List<Class<?>> toolClasses() {
+        Set<String> names = new TreeSet<>();
+        try {
+            Resource[] resources = new PathMatchingResourcePatternResolver()
+                    .getResources("classpath*:io/aria/conductor/mcp/tools/*.class");
+            for (Resource resource : resources) {
+                String filename = resource.getFilename();
+                if (filename == null || filename.contains("$")) {
+                    continue;
+                }
+                names.add("io.aria.conductor.mcp.tools."
+                        + filename.substring(0, filename.length() - ".class".length()));
             }
-            annotated++;
-            ToolDescriptor descriptor = catalog.find(annotation.name()).orElseThrow(
-                    () -> new AssertionError("@Tool '" + annotation.name() + "' is not in the catalog"));
-            assertThat(descriptor.description())
-                    .as("catalog description of '%s' equals its @Tool annotation", annotation.name())
-                    .isEqualTo(annotation.description());
+            List<Class<?>> classes = new ArrayList<>();
+            for (String name : names) {
+                classes.add(Class.forName(name));
+            }
+            return classes;
+        } catch (ClassNotFoundException | java.io.IOException e) {
+            throw new AssertionError("tool class scan failed", e);
         }
-        assertThat(annotated)
-                .as("annotated methods found on '%s'", toolClass.getSimpleName())
-                .isGreaterThan(0);
     }
 
     /**

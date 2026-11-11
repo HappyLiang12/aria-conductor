@@ -337,11 +337,12 @@ The backend exposes an MCP (Model Context Protocol) server at `http://<host>:808
 
 - **Sandboxed agents**: Aria's opencode sandbox connects automatically (workers do not). Requires a sandbox-reachable host address — auto-resolved, override with `ARIA_MCP_SANDBOX_HOST_ADDRESS`.
 - **External agents**: point any MCP client at `http://<host>:8080/mcp`.
-- **Auth**: `ARIA_MCP_AUTH_MODE=none` (default — endpoint is open, like the REST API; every tool call is audit-logged) or `token` (Bearer required; set `ARIA_MCP_TOKEN`, sandbox token injected automatically).
+- **Auth**: `ARIA_MCP_AUTH_MODE=none` (default — no credential is required or injected; every tool call is audit-logged), `token` (a legacy static bearer is required; set `ARIA_MCP_TOKEN`, sandbox token injected automatically), or `actor` (every request must carry a verifiable credential — the operator bearer credential `aria.operator.bearer-token` or a run-scoped worker token).
+- **Operator-only tools**: the ten `OPERATOR_ONLY` tools (approval decisions, memory-proposal decisions, housekeeping execute, provider credential changes, agent deletion, …) are reachable only with an operator credential — `actor` mode, or `none` mode with that credential presented. In `token` mode the filter accepts only its static token (an operator bearer is answered 401) and that token identifies no actor, so those ten refuse every caller there.
 - **Debug**: `ARIA_MCP_DEBUG=true` logs a tool error's cause with its full stack in the server log (server-side only — a tool error response is always exactly the `ok`/`errorType`/`message` envelope; default true on the h2 dev profile).
 - **Disable**: `ARIA_MCP_ENABLED=false` (the `test` profile disables it by default).
 
-> Exposure note: with the default `none` auth mode, any client that can reach the port has operator-level tool access — the same trust level as the open REST API. Prefer `token` mode for shared networks.
+> Exposure note: with the default `none` auth mode, any client that can reach the port can call the worker and read-only tools — the same trust level as the open REST API — and the ten operator-only tools refuse it when it presents no credential. `actor` mode is the mode in which every tool class is reachable with the right credential; prefer it for shared networks.
 
 ## API Documentation
 

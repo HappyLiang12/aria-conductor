@@ -2320,4 +2320,61 @@ describe('AriaPanel Clear refusal (T48 Item 1)', () => {
     await waitFor(() => expect(conversationIdOf(container)).not.toBe('conv-1'));
     expect(screen.queryByText('the turn the server still holds')).not.toBeInTheDocument();
   });
+
+  // T49 (N-T48-4). Clear now awaits a destructive DELETE that drives the verified
+  // run stop, so it can take seconds. The operator must see that it is working and
+  // must not be able to issue a second DELETE with a second click.
+  it('holds Clear while its DELETE is in flight and issues no second delete', async () => {
+    const { container } = await openConversationWithOneTurn();
+    let answer: (() => void) | undefined;
+    mockDeleteConversation.mockImplementation(() => new Promise<void>((resolve) => {
+      answer = () => resolve();
+    }));
+
+    const clear = screen.getByRole('button', { name: 'Clear and start new conversation' });
+    // Positive control for the held state below: idle Clear is enabled and says Clear.
+    expect(clear).toBeEnabled();
+    expect(clear).toHaveTextContent(/^Clear$/);
+
+    await clickClear();
+
+    // The call is in flight: the same control now reports it and refuses input.
+    expect(clear).toBeDisabled();
+    expect(clear).toHaveAttribute('aria-busy', 'true');
+    expect(clear).toHaveTextContent(/clearing/i);
+    await act(async () => {
+      fireEvent.click(clear);
+    });
+    expect(mockDeleteConversation).toHaveBeenCalledTimes(1);
+    // Nothing was claimed cleared while the server had not answered.
+    expect(conversationIdOf(container)).toBe('conv-1');
+    expect(screen.getByText('the turn the server still holds')).toBeInTheDocument();
+
+    await act(async () => {
+      answer?.();
+    });
+    await waitFor(() => expect(conversationIdOf(container)).not.toBe('conv-1'));
+    expect(clear).toBeEnabled();
+  });
+
+  // A bounded timeout is a third outcome, not a refusal: the request was sent, so
+  // "nothing was cleared" would be a guess. The copy says only what is known.
+  it('says Clear did not answer in time instead of claiming nothing was cleared', async () => {
+    const { container } = await openConversationWithOneTurn();
+    mockDeleteConversation.mockRejectedValue(
+      Object.assign(new Error('timeout of 20000ms exceeded'), { code: 'ECONNABORTED' }),
+    );
+
+    await clickClear();
+
+    expect(screen.getByText('the turn the server still holds')).toBeInTheDocument();
+    expect(conversationIdOf(container)).toBe('conv-1');
+    const bubble = await screen.findByText(/did not answer in time/i);
+    expect(bubble).toHaveTextContent(/may still be clearing/i);
+    expect(bubble).toHaveTextContent(/press Clear again/i);
+    // The "nothing was cleared" branch is exactly the claim a timeout cannot make;
+    // that wording is pinned by the two tests above, which is its positive control.
+    expect(bubble).not.toHaveTextContent(/nothing was cleared/i);
+    expect(screen.getByRole('button', { name: 'Clear and start new conversation' })).toBeEnabled();
+  });
 });

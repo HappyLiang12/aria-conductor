@@ -33,11 +33,13 @@ public final class McpActorContext {
     /**
      * Resolves the authenticated actor of the invoking MCP session.
      *
-     * <p>The refusal speaks the same one voice as the ten operator-only tools
-     * ({@link ToolResponses#operatorOnly}): it names the action and the surface where
+     * <p>The refusal is the credential half of the shared operator-authority voice
+     * ({@link ToolResponses#unauthenticated}): it names the action and the surface where
      * the caller can fix it. This guard runs before an actor exists, so it cannot use
      * {@code requireOperator}, but a call that carried no credential is exactly the
      * caller that most needs a next step — a bare "missing actor" tells it nothing.
+     * {@link #unauthenticated()} carries the reason it is not the operator-authority
+     * wording ({@link ToolResponses#operatorOnly}); do not repeat that rationale here.
      *
      * @throws SecurityException when the call carries no framework exchange or no
      *                           transport-authenticated actor (never falls back to arguments)

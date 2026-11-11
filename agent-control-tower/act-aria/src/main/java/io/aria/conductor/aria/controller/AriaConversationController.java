@@ -4,6 +4,7 @@ import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.ConversationSummary;
 import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.repository.ConversationRunRepository;
 import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.aria.service.RunFailureReason;
 import io.aria.conductor.common.model.Run;
@@ -37,6 +38,7 @@ import java.util.stream.Collectors;
 public class AriaConversationController {
 
     private final RunRepository runRepository;
+    private final ConversationRunRepository conversationRunRepository;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final AuditEventRepository auditEventRepository;
     private final ToolCallRepository toolCallRepository;
@@ -45,6 +47,7 @@ public class AriaConversationController {
     private final OperatorAuthorityResolver operatorAuthority;
 
     public AriaConversationController(RunRepository runRepository,
+                                       ConversationRunRepository conversationRunRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
                                        ToolCallRepository toolCallRepository,
@@ -52,6 +55,7 @@ public class AriaConversationController {
                                        io.aria.conductor.agent.service.RunService runService,
                                        OperatorAuthorityResolver operatorAuthority) {
         this.runRepository = runRepository;
+        this.conversationRunRepository = conversationRunRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
@@ -175,8 +179,18 @@ public class AriaConversationController {
     }
 
     /**
-     * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
-     * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
+     * Clear a conversation: cancel all its live runs, purge its transcript (trajectories,
+     * tool calls, audit log entries), then detach every run of the conversation from it
+     * ({@code conversation_id = null}). Returns 404 if no runs found for the conversationId.
+     * <p>
+     * The detach is what makes "Clear" true on every read surface: {@code /latest} picks
+     * the newest run that still carries a conversation id, and the timeline resolves runs
+     * by that id, so a conversation whose runs kept the id came back as the latest one --
+     * a reload adopted it and drew an empty transcript under the old id. The run rows are
+     * deliberately kept: they are the execution record the runs surface, usage totals and
+     * reports read, and deleting them would have to purge eleven run-keyed tables (four
+     * with a foreign key to {@code runs}) to avoid orphans. Only the conversation link,
+     * which is what a conversation is, is forgotten.
      * <p>
      * T42 Item 4: this route purges history and cancels runs, and it resolved no authority at all,
      * so a run-scoped worker bearer was ignored and an anonymous remote caller was not refused
@@ -204,9 +218,9 @@ public class AriaConversationController {
 
         List<UUID> runIds = runs.stream().map(Run::getId).toList();
 
-        // Soft-delete: cancel active runs through the verified cancel path; completed/failed
-        // runs are hard-deleted along with their child data since trajectories and tool-calls
-        // will be removed.
+        // Cancel active runs through the verified cancel path first; nothing below may
+        // run for a conversation whose stop was refused (the 409 propagates before any
+        // purge). A terminal run is not relabelled here.
         for (Run run : runs) {
             RunStatus status = run.getStatus();
             if (status == RunStatus.RUNNING || status == RunStatus.PENDING
@@ -228,7 +242,11 @@ public class AriaConversationController {
         trajectoryRepository.deleteByRunIdIn(runIds);
         auditEventRepository.deleteByConversationId(conversationId);
 
-        log.info("Conversation {} deleted: {} runs, {} runIds affected",
+        // The conversation itself: a set-based UPDATE (never a load-and-save, which
+        // would flush a status read before the verified cancels committed).
+        conversationRunRepository.detachFromConversation(runIds);
+
+        log.info("Conversation {} cleared: {} runs cancelled as needed, {} runIds detached",
                 conversationId, runs.size(), runIds.size());
 
         return ResponseEntity.noContent().build();

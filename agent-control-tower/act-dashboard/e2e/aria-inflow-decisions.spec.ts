@@ -107,12 +107,21 @@ test.describe('Aria in-flow decisions (live)', () => {
     const firstConversation = await page.locator('.ai-conversation-id').getAttribute('title');
     expect(firstConversation).toBeTruthy();
 
+    // Positive control for the server-side proof of Clear: the parked turn really wrote
+    // trajectories to this conversation. Without this, an empty timeline after Clear
+    // could just be a fixture that never had one (absence is not zero).
+    const parkedTimeline = await page.request.get(
+      `/api/v1/aria/conversations/${encodeURIComponent(firstConversation as string)}`,
+    );
+    expect(parkedTimeline.ok()).toBeTruthy();
+    expect((await parkedTimeline.json()).length).toBeGreaterThan(0);
+
     await page.getByRole('button', { name: 'Clear and start new conversation' }).click();
 
     // The parked transcript is gone for good: Clear's route cancels this
-    // conversation's runs and purges its tool calls, trajectories and audit
-    // events (`AriaConversationController.java:193-235`), so the run does not
-    // survive it. Asserted on the SERVER, not only in the panel: this browser
+    // conversation's runs, purges its tool calls, trajectories and audit events, and
+    // detaches the runs from the conversation (`AriaConversationController`
+    // deleteConversation). Asserted on the SERVER, not only in the panel: this browser
     // holds an operator session, so a Clear that lost its CSRF token was refused
     // 403 and the old panel cleared itself anyway (T48 item 1) — a UI-only
     // assertion passed straight through that. The composer is usable again, and
@@ -123,14 +132,20 @@ test.describe('Aria in-flow decisions (live)', () => {
     const secondConversation = await page.locator('.ai-conversation-id').getAttribute('title');
     expect(secondConversation).not.toBe(firstConversation);
 
-    // Server-side proof of the purge: the cleared conversation has no runs left,
-    // so its timeline is empty, and it is no longer the latest conversation.
+    // Server-side proof of the purge: the cleared conversation's timeline is now empty
+    // and it is no longer the latest conversation. Both halves are needed: the timeline
+    // is the transcript (trajectories, tool calls, audit rows), and `/latest` is what a
+    // reload adopts — a Clear that purged the transcript but kept the conversation id
+    // answered the cleared id here and the old conversation came back empty (T49).
     const clearedTimeline = await page.request.get(
       `/api/v1/aria/conversations/${encodeURIComponent(firstConversation as string)}`,
     );
     expect(clearedTimeline.ok()).toBeTruthy();
     expect(await clearedTimeline.json()).toEqual([]);
     const latest = await page.request.get('/api/v1/aria/conversations/latest');
+    // 204 (no conversation has runs) or 200 naming some other conversation; never a
+    // refusal status, and never the cleared id.
+    expect([200, 204]).toContain(latest.status());
     if (latest.status() !== 204) {
       expect((await latest.json()).conversationId).not.toBe(firstConversation);
     }

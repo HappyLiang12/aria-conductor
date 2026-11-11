@@ -49,6 +49,9 @@ export function SettingsPage() {
   // problem, not a failed save, so it renders one actionable notice instead of a
   // toast that repeats whatever the transport said.
   const [refusal, setRefusal] = useState<unknown | null>(null);
+  // The delete refusal belongs to the Confirm Delete dialog, which stays open on
+  // failure: it renders there, not on the page behind the overlay.
+  const [deleteRefusal, setDeleteRefusal] = useState<unknown | null>(null);
 
   const { data: providers, isLoading, error } = useQuery({
     queryKey: ['llm-providers'],
@@ -86,10 +89,20 @@ export function SettingsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
       setRefusal(null);
+      setDeleteRefusal(null);
       setConfirmDelete({ open: false, id: '', name: '' });
       addToast('Provider deleted', 'success');
     },
-    onError: (err: unknown) => reportMutationError(err, 'Failed to delete provider'),
+    // Task 37 / Item 6: only a success closes the Confirm Delete dialog, so a
+    // refusal must land INSIDE it. Page-level copy would sit behind the overlay
+    // — in the document, invisible to the operator who caused it.
+    onError: (err: unknown) => {
+      if (isOperatorRejection(err)) {
+        setDeleteRefusal(err);
+        return;
+      }
+      reportMutationError(err, 'Failed to delete provider');
+    },
   });
 
   const activateMutation = useMutation({
@@ -326,15 +339,28 @@ export function SettingsPage() {
 
       {/* Confirm Delete Dialog */}
       {confirmDelete.open && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete({ open: false, id: '', name: '' })}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Confirm Delete</h3>
+        <div className="modal-overlay" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); }}>
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-confirm-delete-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="settings-confirm-delete-title">Confirm Delete</h3>
             <p>Are you sure you want to delete <strong>{confirmDelete.name}</strong>?</p>
+            {deleteRefusal != null && (
+              <ErrorNotice
+                presented={presentError(deleteRefusal, 'The provider was not deleted.')}
+                operatorSession
+                actionLabel="Deleting the LLM provider"
+              />
+            )}
             <div className="modal-actions">
               <button className="btn btn-danger" onClick={() => deleteMutation.mutate(confirmDelete.id)} disabled={deleteMutation.isPending}>
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
               </button>
-              <button className="btn" onClick={() => setConfirmDelete({ open: false, id: '', name: '' })}>Cancel</button>
+              <button className="btn" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); }}>Cancel</button>
             </div>
           </div>
         </div>

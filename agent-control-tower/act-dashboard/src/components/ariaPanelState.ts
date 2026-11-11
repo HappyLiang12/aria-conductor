@@ -18,7 +18,7 @@ import type { Approval } from '../types';
  * `Date.now()` inside the reducer.
  */
 
-export type ToolActivity = { name: string; status: 'running' | 'ok' | 'error'; startedAt: number; durationMs?: number; args?: string; result?: string };
+export type ToolActivity = { name: string; status: 'running' | 'ok' | 'error'; startedAt: number; durationMs?: number; args?: string; result?: string; toolCallId?: string };
 export type PanelItem =
   | { kind: 'user'; id: string; content: string; timestamp: string }
   | { kind: 'assistant'; id: string; content: string; timestamp: string; error?: boolean; retryText?: string; noRetry?: boolean }
@@ -207,21 +207,28 @@ function activityId(turnId: string): string {
 
 /**
  * A result row whose call row never landed, as its own one-tool strip. The tool is
- * named after the row, not after a call the timeline does not hold, and its `ok`
- * carries the same limit as a restored result below.
+ * named after the row, not after a call the timeline does not hold, and carries the
+ * status the row reports — an orphan is audited output, so a denied one must not be
+ * drawn as a success either.
  *
  * Several orphans can belong to one run, so the strip needs an identity of its own:
  * the bare run id while it is free (a run with no other strip), then
  * `<runId>#orphan-<n>`. Without it two orphans of one run share an `id` (a React key
  * collision) and a `turnId`, and the next restore's turnId dedupe drops the second.
  */
-function orphanStrip(items: PanelItem[], turnId: string, startedAt: number, content: string): ActivityItem {
+function orphanStrip(
+  items: PanelItem[],
+  turnId: string,
+  startedAt: number,
+  content: string,
+  status: ToolActivity['status'],
+): ActivityItem {
   const identity = freeOrphanTurnId(items, turnId);
   return {
     kind: 'activity',
     id: activityId(identity),
     turnId: identity,
-    tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: content }],
+    tools: [{ name: ORPHAN_TOOL_NAME, status, startedAt, result: content }],
     collapsed: true,
   };
 }
@@ -587,6 +594,27 @@ function clarificationFromApproval(approval: Approval): ClarificationItem {
 }
 
 /**
+ * The status a restored tool row reports, from the raw `ToolCallStatus` name the
+ * timeline carries. The name, not a boolean: a tool that was still EXECUTING when
+ * the snapshot was read is not a success, and a PENDING one has not run at all. A
+ * name this panel does not recognise is not evidence of success either, so the tool
+ * stays unsettled. A row with no status at all keeps the reading this panel has
+ * always had — `ok`, meaning the timeline does not say otherwise (an older backend).
+ */
+const RESTORED_TOOL_STATUS: Record<string, ToolActivity['status']> = {
+  COMPLETED: 'ok',
+  FAILED: 'error',
+  DENIED: 'error',
+  PENDING: 'running',
+  EXECUTING: 'running',
+};
+
+function restoredToolStatus(toolStatus: string | null | undefined): ToolActivity['status'] {
+  if (!toolStatus) return 'ok';
+  return RESTORED_TOOL_STATUS[toolStatus] ?? 'running';
+}
+
+/**
  * The timeline half of a restore. A failed-turn entry is a synthetic assistant
  * bubble carrying its retry prompt; user and assistant rows are messages; every
  * other role is a tool row, which must become activity rather than a JSON bubble.
@@ -621,6 +649,8 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
     const startedAt = parseTime(timestamp);
     const call = parseToolCall(entry.content);
     const at = activityIndex(items, turnId);
+    // The row's own identity, when it has one: an older row carries no id.
+    const identity = typeof entry.toolCallId === 'string' && entry.toolCallId !== '' ? entry.toolCallId : null;
 
     if (call) {
       const tool: ToolActivity = {
@@ -628,6 +658,7 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
         status: 'running',
         startedAt,
         ...(call.args !== undefined ? { args: call.args } : {}),
+        ...(identity !== null ? { toolCallId: identity } : {}),
       };
       if (at < 0) {
         items.push({ kind: 'activity', id: activityId(turnId), turnId, tools: [tool], collapsed: true });
@@ -638,39 +669,44 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
       return;
     }
 
-    // Any other tool row is the result of the tool still running in this run.
+    // Any other tool row is the result of a tool of this run.
     // A result whose call row never landed is still audited output: render it
     // as its own one-tool strip instead of dropping it — even when the run
     // already has a strip, because it is the call row of this result that is
-    // missing. Its `ok` carries the same limit as the restored status below.
+    // missing. It carries the status the row reports, so a denied orphan is not
+    // drawn as a success.
+    const status = restoredToolStatus(entry.toolStatus);
     if (at < 0) {
-      items.push(orphanStrip(items, turnId, startedAt, entry.content));
+      items.push(orphanStrip(items, turnId, startedAt, entry.content, status));
       return;
     }
     const strip = items[at] as ActivityItem;
-    // Attribution is positional: TimelineEntry exposes no toolCallId. The core rows
-    // do persist `tool_call_id`, so identity matching arrives with that upstream field.
-    let target = -1;
-    for (let i = strip.tools.length - 1; i >= 0; i -= 1) {
-      if (strip.tools[i].status === 'running') {
-        target = i;
-        break;
+    // Attribution is by identity first: the row's tool-call id names its own call,
+    // which is what keeps two overlapping calls from crossing their results. Rows
+    // written before the id was exposed carry none, so the historical rule stays as
+    // the fallback: the last tool of this run still running.
+    let target = identity !== null ? strip.tools.findIndex((tool) => tool.toolCallId === identity) : -1;
+    if (target < 0) {
+      for (let i = strip.tools.length - 1; i >= 0; i -= 1) {
+        if (strip.tools[i].status === 'running') {
+          target = i;
+          break;
+        }
       }
     }
     if (target < 0) {
-      items.push(orphanStrip(items, turnId, startedAt, entry.content));
+      items.push(orphanStrip(items, turnId, startedAt, entry.content, status));
       return;
     }
     const tool = strip.tools[target];
     const durationMs = tool.startedAt > 0 && startedAt >= tool.startedAt ? startedAt - tool.startedAt : undefined;
     const tools = strip.tools.slice();
-    // `ok` means "the timeline does not say otherwise": TimelineEntry carries no
-    // failure flag, so a failed or denied tool is indistinguishable from a success
-    // after a reload. The honest status needs a field end-to-end (scheduled
-    // follow-up); do not invent a member for it here.
+    // The status the timeline reports, mapped: FAILED and DENIED are errors, PENDING and
+    // EXECUTING are still running, and only an absent field falls back to `ok` — the
+    // timeline does not say otherwise.
     tools[target] = {
       ...tool,
-      status: 'ok',
+      status,
       result: entry.content,
       ...(durationMs !== undefined ? { durationMs } : {}),
     };

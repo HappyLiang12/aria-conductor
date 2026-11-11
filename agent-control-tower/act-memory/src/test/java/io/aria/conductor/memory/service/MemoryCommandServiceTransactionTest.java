@@ -1,11 +1,16 @@
 package io.aria.conductor.memory.service;
 
+import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.MemoryJpaSliceConfig;
 import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.CreateEntityCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
+import io.aria.conductor.memory.dto.MemoryEntityView;
+import io.aria.conductor.memory.dto.MemoryFactView;
 import io.aria.conductor.memory.dto.ProposalDecision;
+import io.aria.conductor.memory.dto.RecallQuery;
+import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.dto.SupersedeFactCommand;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
@@ -30,8 +35,11 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+
+import org.springframework.context.ApplicationEvent;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -119,6 +127,34 @@ class MemoryCommandServiceTransactionTest {
 
         assertThat(entities.count()).isEqualTo(1);
         verify(assertions).save(any(MemoryAssertion.class));
+    }
+
+    /**
+     * Task 14 atomicity: the unknown-key producer creates the entity and its first fact in ONE
+     * transaction. A fact the value guard rejects (a credential-like value) must therefore leave
+     * no PENDING entity behind — a proposal card the operator can never decide is worse than no
+     * card, and the entity row would be exactly that.
+     */
+    @Test
+    void aRejectedFirstFactLeavesNoPendingEntityBehind() {
+        ownTransaction.executeWithoutResult(status -> {
+            facts.deleteAll();
+            entities.deleteAll();
+        });
+        assertThat(entities.count()).as("baseline").isZero();
+        assertThat(facts.count()).as("baseline").isZero();
+
+        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> command.addFactByKey(
+                "PERSON", "person:careful",
+                new AddFactCommand("preferred_editor", "sk-live-0123456789abcdef", "STRING",
+                        Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.EXTRACTION, UUID.randomUUID().toString()))))
+                .isInstanceOf(MemoryValidationException.class);
+
+        assertThat(entities.count())
+                .as("a rejected first fact must not leave the PENDING entity behind")
+                .isZero();
+        assertThat(facts.count()).as("nor its fact").isZero();
     }
 
     /**
@@ -347,6 +383,59 @@ class MemoryCommandServiceTransactionTest {
                     .as("a partially retired batch is never committed")
                     .hasSize(2);
         });
+    }
+
+    /**
+     * Task 14's acceptance shape, at service level over real persistence: ONE worker
+     * {@code remember_fact} naming an unknown canonical key produces a PENDING entity, a
+     * PENDING fact under it and one ENTITY proposal event; the entity decision (not a single
+     * fact decision — the fact is refused while its parent is PENDING) promotes both; and
+     * recall then returns the entity and its fact. This is the test that proves the Wave C
+     * proposal surface is not a dead feature.
+     */
+    @Test
+    void theUnknownKeyPathProducesAProposalThatOneEntityDecisionPromotesIntoRecall() {
+        List<ApplicationEvent> published = new ArrayList<>();
+        MemoryCommandService producer = new MemoryCommandService(entities, facts, relations, links, assertions,
+                new MemoryValueGuard(), new MemoryProposalWriter(facts, assertions),
+                new MemoryCurrentValueSlot(entities), event -> published.add((ApplicationEvent) event));
+        MemoryProposalService reviewer = new MemoryProposalService(facts, relations, entities, assertions,
+                new MemoryCurrentValueSlot(entities));
+        MemoryRecallService recall = new MemoryRecallService(entities, facts, relations,
+                new MemoryMentionExtractor());
+        when(assertions.save(any(MemoryAssertion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        UUID runId = UUID.randomUUID();
+        MemoryActor worker = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+
+        MemoryFact proposal = producer.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, null),
+                worker);
+
+        MemoryEntity pendingEntity = entities.findById(proposal.getEntityId()).orElseThrow();
+        assertThat(pendingEntity.getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(pendingEntity.getCanonicalKey()).isEqualTo("person:happy");
+        assertThat(proposal.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(published).as("one event for the entity proposal, none for the fact").singleElement()
+                .satisfies(event -> {
+                    MemoryProposalCreatedEvent created = (MemoryProposalCreatedEvent) event;
+                    assertThat(created.getSubjectType()).isEqualTo("ENTITY");
+                    assertThat(created.getProposalId()).isEqualTo(pendingEntity.getId());
+                    assertThat(created.getFactKey()).isEqualTo("person:happy");
+                    assertThat(created.getRunId()).isEqualTo(runId);
+                });
+        assertThat(recall.recall(new RecallQuery("person:happy", Sensitivity.INTERNAL, null)).entities())
+                .as("an unapproved proposal is never recall material")
+                .isEmpty();
+
+        reviewer.decideProposal(pendingEntity.getId(), ProposalDecision.APPROVE,
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session"));
+
+        assertThat(entities.findById(pendingEntity.getId()).orElseThrow().getStatus())
+                .isEqualTo(EntityStatus.ACTIVE);
+        assertThat(facts.findById(proposal.getId()).orElseThrow().getStatus()).isEqualTo(FactStatus.ACTIVE);
+        RecallResult recalled = recall.recall(new RecallQuery("person:happy", Sensitivity.INTERNAL, null));
+        assertThat(recalled.entities()).extracting(MemoryEntityView::canonicalKey).contains("person:happy");
+        assertThat(recalled.facts()).extracting(MemoryFactView::factKey).contains("preferred_editor");
     }
 
     private static boolean await(CountDownLatch latch) {

@@ -97,20 +97,31 @@ public class MemoryTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "remember_fact",
-            description = "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
+            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
     public String rememberFact(
-            @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
+            @ToolParam(description = "Existing memory entity id (UUID); supply this or kind + canonicalKey, not both",
+                    required = false)
+            UUID entityId,
             @ToolParam(description = "Fact key, e.g. timezone or preferred_editor") String factKey,
             @ToolParam(description = "Fact value; credential-like values are rejected") String valueText,
             @ToolParam(description = "Provenance pointer (tool call, message, extraction job)", required = false)
             String sourceRef,
+            @ToolParam(description = "Kind of the new entity, e.g. person or repo; requires canonicalKey",
+                    required = false)
+            String kind,
+            @ToolParam(description = "Canonical key of the new entity, e.g. person:happy; requires kind",
+                    required = false)
+            String canonicalKey,
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
             toolPolicies.requireAuthority(REMEMBER_FACT, actor);
+            requireExactlyOneShape(entityId, kind, canonicalKey);
             AddFactCommand command = new AddFactCommand(factKey, valueText, null, null,
                     sourceRef == null || sourceRef.isBlank() ? DEFAULT_SOURCE_REF : sourceRef);
-            MemoryFact fact = commands.addFact(entityId, command, memoryActor(actor));
+            MemoryFact fact = entityId == null
+                    ? commands.addFactByKey(kind, canonicalKey, command, memoryActor(actor))
+                    : commands.addFact(entityId, command, memoryActor(actor));
             return ToolResponses.ok(MemoryFactView.from(fact));
         } catch (SecurityException e) {
             return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
@@ -153,7 +164,8 @@ public class MemoryTools implements McpTool {
             description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.")
     public String listMemoryEntities(
             @ToolParam(description = "Entity kind or blank", required = false) String kind,
-            @ToolParam(description = "ACTIVE, MERGED or RETIRED; default ACTIVE", required = false) String status,
+            @ToolParam(description = "ACTIVE, MERGED, RETIRED or PENDING (PENDING is operator authority only); "
+                    + "default ACTIVE", required = false) String status,
             @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit,
             ToolContext toolContext) {
         try {
@@ -182,7 +194,7 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "get_memory_entity",
-            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material and is not readable through this detail read.")
+            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page.")
     public String getMemoryEntity(
             @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
             ToolContext toolContext) {
@@ -505,11 +517,39 @@ public class MemoryTools implements McpTool {
         }
     }
 
+    /**
+     * The two shapes of {@code remember_fact}: an existing entity id, or the {@code (kind,
+     * canonicalKey)} pair that creates the entity with its first fact. Exactly one must be
+     * supplied; anything else names both shapes rather than guessing which one was meant.
+     */
+    private static void requireExactlyOneShape(UUID entityId, String kind, String canonicalKey) {
+        boolean hasEntity = entityId != null;
+        boolean hasKind = !isBlank(kind);
+        boolean hasKey = !isBlank(canonicalKey);
+        if (hasEntity && (hasKind || hasKey)) {
+            throw new MemoryValidationException("remember_fact accepts exactly one shape: entityId (an existing "
+                    + "entity) or kind + canonicalKey (a new entity); both were supplied");
+        }
+        if (!hasEntity && !hasKind && !hasKey) {
+            throw new MemoryValidationException("remember_fact accepts exactly one shape: entityId (an existing "
+                    + "entity) or kind + canonicalKey (a new entity); neither was supplied");
+        }
+        if (!hasEntity && !(hasKind && hasKey)) {
+            throw new MemoryValidationException("remember_fact needs both kind and canonicalKey to target a new "
+                    + "entity; " + (hasKind ? "canonicalKey" : "kind") + " is missing");
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
     private static EntityStatus parseEntityStatus(String raw) {
         try {
             return EntityStatus.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid status '" + raw + "'. Valid: ACTIVE, MERGED, RETIRED");
+            throw new IllegalArgumentException(
+                    "Invalid status '" + raw + "'. Valid: ACTIVE, PENDING, MERGED, RETIRED");
         }
     }
 

@@ -55,6 +55,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -184,7 +186,7 @@ class MemoryControllerTest {
         UUID linkId = UUID.randomUUID();
         UUID knowledgeId = UUID.randomUUID();
         UUID assertionId = UUID.randomUUID();
-        when(query.getEntity(id)).thenReturn(MemoryEntityView.from(entity(id, "Operator")));
+        when(query.getEntity(id, false)).thenReturn(MemoryEntityView.from(entity(id, "Operator")));
         when(query.factHistory(id)).thenReturn(List.of(MemoryFactView.from(fact(id))));
         when(relations.findByFromEntityIdAndStatus(id, FactStatus.ACTIVE)).thenReturn(List.of(
                 MemoryRelation.builder()
@@ -225,6 +227,60 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.relations[0].predicate").value("WORKS_ON"))
                 .andExpect(jsonPath("$.links[0].knowledgeItemId").value(knowledgeId.toString()))
                 .andExpect(jsonPath("$.assertions[0].action").value("CREATE"));
+    }
+
+    /**
+     * Spec :309-313 — the operator cannot approve what they cannot see. The detail read keeps
+     * its fail-closed default and honours an explicit status=PENDING only after operator
+     * authority is resolved, so the reviewer can open the proposal they are deciding.
+     */
+    @Test
+    void anOperatorCanOpenAPendingEntityWithAnExplicitStatusFilter() throws Exception {
+        UUID id = UUID.randomUUID();
+        MemoryEntity pending = entity(id, "Candidate");
+        pending.setStatus(EntityStatus.PENDING);
+        when(query.getEntity(id, true)).thenReturn(MemoryEntityView.from(pending));
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", "PENDING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.entity.id").value(id.toString()))
+                .andExpect(jsonPath("$.entity.status").value("PENDING"));
+        verify(query).getEntity(id, true);
+    }
+
+    @Test
+    void theDefaultDetailReadStillHidesAPendingEntity() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(query.getEntity(id, false))
+                .thenThrow(new MemoryNotFoundException("memory entity " + id + " not found"));
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("NOT_FOUND"));
+        verify(query).getEntity(id, false);
+    }
+
+    /**
+     * Review material is not silently downgraded for a worker: a request that asks for
+     * status=PENDING is refused (403) before the read, exactly like the MCP surface's refusal.
+     */
+    @Test
+    void aWorkerCannotRequestThePendingDetail() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(operatorAuthority.resolveOperator(any(), eq(false)))
+                .thenThrow(new OperatorSessionService.ForbiddenMutationException(
+                        "Operator authority required: reading a pending memory entity is an operator decision. "
+                                + "Review it on the Memory page or in the Review Queue."));
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", "PENDING"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(
+                        "Operator authority required: reading a pending memory entity is an operator decision. "
+                                + "Review it on the Memory page or in the Review Queue."));
+        verify(query, never()).getEntity(any(), eq(true));
     }
 
     @Test
@@ -445,7 +501,7 @@ class MemoryControllerTest {
     @Test
     void mapsNotFoundTo404() throws Exception {
         UUID id = UUID.randomUUID();
-        when(query.getEntity(id)).thenThrow(new MemoryNotFoundException("memory entity " + id + " not found"));
+        when(query.getEntity(id, false)).thenThrow(new MemoryNotFoundException("memory entity " + id + " not found"));
 
         mvc.perform(get("/api/v1/memory/entities/{id}", id))
                 .andExpect(status().isNotFound())

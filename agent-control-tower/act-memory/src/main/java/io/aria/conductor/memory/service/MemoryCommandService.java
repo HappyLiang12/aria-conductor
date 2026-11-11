@@ -228,6 +228,29 @@ public class MemoryCommandService {
     }
 
     /**
+     * The unknown-key write of the memory surface (spec §5.5, C3/F10): a fact that names its
+     * entity only by {@code (kind, canonicalKey)}. The entity and its first fact are written in
+     * ONE transaction, because the caller asked for one decision: if the fact is rejected — a
+     * credential-like value, an invalid key — the entity insert rolls back with it and no
+     * undecidable PENDING proposal survives.
+     * <p>
+     * Status follows the same actor matrix as the two halves used separately: an EXTRACTION
+     * actor produces a PENDING entity with a PENDING fact (one operator decision promotes the
+     * batch), an OPERATOR actor produces ACTIVE memory. {@link #createEntity} publishes the
+     * entity proposal event exactly once; adding the fact publishes nothing, so the card is
+     * never duplicated.
+     */
+    @Transactional
+    public MemoryFact addFactByKey(String kind, String canonicalKey, AddFactCommand command, MemoryActor actor) {
+        if (command == null) {
+            throw new MemoryValidationException("fact is required");
+        }
+        MemoryEntity entity = createEntity(new CreateEntityCommand(kind, canonicalKey, null,
+                command.sensitivity()), actor);
+        return addFact(entity.getId(), command, actor);
+    }
+
+    /**
      * The unique index on {@code proposal_hash} is the atomic guard: a concurrent extraction
      * of the same proposal can pass the probe too. The loser does not fail — it returns the
      * row that won, which is exactly what "a repeated extraction is a no-op" means

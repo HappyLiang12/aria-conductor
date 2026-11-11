@@ -205,11 +205,14 @@ class AriaStreamServiceFailureTest {
     }
 
     @Test
-    void errorPayloadJson_missingReasonFallsBackToUnknownError() {
+    void errorPayloadJson_missingReasonFallsBackToTheReasonTheRestorePathUses() {
         Run failedRun = Run.builder().id(RUN_ID).build();
 
+        // Not "unknown error": a blank errorMessage is worded once, for both tellings,
+        // so the panel's dedupe matches the live notice with the restored entry.
         assertThat(AriaStreamService.errorPayloadJson("m", failedRun, null))
-                .contains("\"reason\":\"unknown error\"");
+                .contains("\"reason\":\"" + RunFailureReason.UNKNOWN + "\"");
+        assertThat(RunFailureReason.UNKNOWN).isEqualTo("原因不明");
     }
 
     @Test

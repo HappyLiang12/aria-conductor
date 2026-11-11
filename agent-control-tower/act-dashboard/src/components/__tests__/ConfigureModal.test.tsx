@@ -66,7 +66,10 @@ async function renderOpenedModal() {
   // The rail nav opens the modal through this window event.
   window.dispatchEvent(new Event('act:open-configure'));
   // findBy waits through the state flush the raw event dispatch leaves pending.
-  await screen.findByRole('dialog', { hidden: true });
+  // No `hidden: true` (Task 37, Item 5): a dialog the accessibility tree hides is
+  // not a dialog the operator is looking at, so the probe must not accept one.
+  const dialog = await screen.findByRole('dialog', { name: /configure/i });
+  expect(dialog).toBeVisible();
 }
 
 beforeEach(() => {
@@ -202,8 +205,14 @@ describe('ConfigureModal runtime apply refusal visibility (Task 33)', () => {
   }
 
   /** The dialog the operator is left in once the confirmation closes. */
-  const configureDialog = () =>
-    screen.getByRole('dialog', { name: /configure/i, hidden: true });
+  const configureDialog = () => {
+    // Task 37, Item 5: this used `hidden: true`, which can resolve to a dialog
+    // the operator cannot see — and then a notice inside it proves nothing.
+    // Query the accessible dialog and assert it is really on screen.
+    const dialog = screen.getByRole('dialog', { name: /configure/i });
+    expect(dialog).toBeVisible();
+    return dialog;
+  };
   /** The confirmation that used to stay open, empty, over the refusal. */
   const applyConfirmDialog = () =>
     screen.queryByRole('dialog', { name: /apply runtime/i, hidden: true });
@@ -218,6 +227,8 @@ describe('ConfigureModal runtime apply refusal visibility (Task 33)', () => {
       await confirmApply();
 
       const notice = await within(configureDialog()).findByTestId('operator-session-notice');
+      // In the pane the operator is left in, and really visible there.
+      expect(notice).toBeVisible();
       expect(notice).toHaveTextContent(/applying the fleet runtime is operator-only/i);
       expect(applyConfirmDialog()).not.toBeInTheDocument();
     },
@@ -262,7 +273,8 @@ async function renderTab(tab: string) {
     </QueryClientProvider>,
   );
   window.dispatchEvent(new CustomEvent('act:open-configure', { detail: { tab } }));
-  await screen.findByRole('dialog', { hidden: true });
+  const dialog = await screen.findByRole('dialog', { name: /configure/i });
+  expect(dialog).toBeVisible();
 }
 
 describe('ConfigureModal honesty (Task 12)', () => {

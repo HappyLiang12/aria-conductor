@@ -105,6 +105,14 @@ export interface Approval {
   toolName?: string;
   arguments?: string;
   riskTier?: string;
+  /**
+   * The reviewed tool policy resolved from the one tool catalog at read time
+   * (WORKER_READ / WORKER_WRITE / OPERATOR_ONLY / GATED). Authority is a second
+   * axis beside `riskTier`, so the approval card can label an operator-only
+   * action as such. Absent when the catalog does not classify the tool, and
+   * absent on responses from an older backend.
+   */
+  toolPolicy?: string;
   // HITL ask fields (Kanban redesign): an Approval can be attached to a kanban
   // card as APPROVAL / QUESTION / REVIEW_REQUEST with rich context + answer.
   kanbanItemId?: string | null;

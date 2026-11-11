@@ -3,6 +3,7 @@ package io.aria.conductor.execution.approval;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.controller.ApprovalController;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -74,6 +75,10 @@ public class ApprovalQueryService {
         String riskTier = toolName != null
                 ? toolRiskResolver.resolve(toolName).name()
                 : a.getRiskTier();
+        // B1 (spec §5.3): authority alongside blast radius, from the one catalog. Null for an
+        // unclassified tool name rather than a guessed policy.
+        ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
+        String toolPolicy = policy != null ? policy.name() : null;
         return new ApprovalController.ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -85,6 +90,6 @@ public class ApprovalQueryService {
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
                 a.getSource() == null ? null : a.getSource().name(),
-                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer(), toolPolicy);
     }
 }

@@ -3,6 +3,9 @@ package io.aria.conductor.execution.pipeline;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
+import io.aria.conductor.common.tool.ToolCatalogProvider;
+import io.aria.conductor.common.tool.ToolDescriptor;
+import io.aria.conductor.common.tool.ToolPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,7 +28,8 @@ class ToolRiskResolverTest {
 
     @BeforeEach
     void setUp() {
-        resolver = new ToolRiskResolver(toolRepo);
+        // No catalog wired: every pre-B1 expectation is about the configured row or the native map.
+        resolver = new ToolRiskResolver(toolRepo, List::of);
     }
 
     @Test
@@ -153,5 +157,51 @@ class ToolRiskResolverTest {
 
         assertThat(resolver.requiresApproval("Bash")).isTrue();
         assertThat(resolver.requiresApproval("Write")).isTrue();
+    }
+
+    // ------------------------------------------- platform MCP catalog (B1, spec §5.3)
+
+    /**
+     * B1: the platform MCP tools are stamped READ today because the resolver only knows native
+     * names, so {@code remember_fact} (a worker write) and {@code decide_memory_proposal} (an
+     * operator-only action) both show as read-only on the approval card. The reviewed catalog is
+     * the authority: the {@code mcp__aria-conductor__} prefix is stripped and the bare name is
+     * looked up in act-common's one catalog.
+     */
+    @Test
+    void platformMcpNamesResolveThroughTheCatalog() {
+        ToolCatalogProvider catalog = () -> List.of(
+                new ToolDescriptor("remember_fact", "d", ToolPolicy.WORKER_WRITE, false),
+                new ToolDescriptor("decide_memory_proposal", "d", ToolPolicy.OPERATOR_ONLY, false),
+                new ToolDescriptor("list_agents", "d", ToolPolicy.WORKER_READ, true));
+        ToolRiskResolver resolver = new ToolRiskResolver(toolRepo, catalog);
+
+        assertThat(resolver.resolve("mcp__aria-conductor__remember_fact")).isEqualTo(RiskTier.WRITE_LOCAL);
+        assertThat(resolver.resolve("mcp__aria-conductor__decide_memory_proposal")).isEqualTo(RiskTier.PUSH);
+        assertThat(resolver.resolve("mcp__aria-conductor__list_agents")).isEqualTo(RiskTier.READ);
+        assertThat(resolver.policyOf("mcp__aria-conductor__remember_fact")).isEqualTo(ToolPolicy.WORKER_WRITE);
+        assertThat(resolver.policyOf("mcp__aria-conductor__decide_memory_proposal")).isEqualTo(ToolPolicy.OPERATOR_ONLY);
+    }
+
+    /** A configured row is the operator's explicit override, so it still outranks the catalog. */
+    @Test
+    void aConfiguredRowStillWinsOverTheCatalog() {
+        ToolDefinition row = new ToolDefinition();
+        row.setName("mcp__aria-conductor__remember_fact");
+        row.setRiskTier(RiskTier.DESTRUCTIVE);
+        when(toolRepo.findByName("mcp__aria-conductor__remember_fact")).thenReturn(Optional.of(row));
+        ToolCatalogProvider catalog = () -> List.of(
+                new ToolDescriptor("remember_fact", "d", ToolPolicy.WORKER_WRITE, false));
+        ToolRiskResolver resolver = new ToolRiskResolver(toolRepo, catalog);
+
+        assertThat(resolver.resolve("mcp__aria-conductor__remember_fact")).isEqualTo(RiskTier.DESTRUCTIVE);
+    }
+
+    /** Fail closed: an unknown name keeps the READ default and is never given an invented policy. */
+    @Test
+    void anUnclassifiedNameStaysReadAndHasNoPolicy() {
+        ToolRiskResolver resolver = new ToolRiskResolver(toolRepo, List::of);
+        assertThat(resolver.resolve("mcp__aria-conductor__unknown_tool")).isEqualTo(RiskTier.READ);
+        assertThat(resolver.policyOf("mcp__aria-conductor__unknown_tool")).isNull();
     }
 }

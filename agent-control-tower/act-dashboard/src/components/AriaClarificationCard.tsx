@@ -4,7 +4,8 @@ import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../a
 import type { PanelItem } from './ariaPanelState';
 
 export type AriaClarificationItem = Extract<PanelItem, { kind: 'clarification' }>;
-export type ClarificationOutcome = AriaClarificationItem['state'];
+/** The states an answer can produce; `pending` is the absence of one. */
+export type ClarificationOutcome = Exclude<AriaClarificationItem['state'], 'pending'>;
 
 /**
  * A parked question rendered in the conversation (spec A3, F1). The question

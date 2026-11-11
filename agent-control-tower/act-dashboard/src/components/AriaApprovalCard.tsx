@@ -4,7 +4,8 @@ import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../a
 import type { PanelItem } from './ariaPanelState';
 
 export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
-export type ApprovalOutcome = AriaApprovalItem['state'];
+/** The states a decision can produce; `pending` is the absence of one. */
+export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
 
 /**
  * A governed tool ask rendered in the conversation (spec A3, F1): the operator

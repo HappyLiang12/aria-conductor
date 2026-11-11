@@ -29,23 +29,20 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
 }
 
 /**
- * The review inbox page size (`MemoryProposalService.INBOX_LIMIT`): one
- * newest-first page across ALL entities, so a full page cannot prove that an
- * entity's own facts are on it.
+ * The batch read's outcome: the facts (and whether the whole batch is on
+ * screen), or that the batch could not be read.
  */
-const INBOX_LIMIT = 50;
-
-/** The batch read's outcome: the facts (and whether the page was capped), or that the inbox could not be read. */
 type BatchRead =
-  | { facts: MemoryProposalView[]; truncated: boolean }
+  | { facts: MemoryProposalView[]; complete: boolean }
   | { unreadable: true };
 
 /**
- * The PENDING facts an ENTITY decision decides with the entity, read from the
- * proposals inbox the operator decides from (there is no per-entity PENDING
- * read: a pending entity 404s the detail route). Null while the read is in
- * flight, and undefined for any subject type that is not an entity — only the
- * entity proposal is a batch decision.
+ * The PENDING facts an ENTITY decision decides with the entity, read as that
+ * entity's OWN batch (`GET /proposals?status=PENDING&entityId=`): the route
+ * answers it complete and uncapped, so the card never has to guess from a
+ * shared page whether the list it shows is the whole decision. Null while the
+ * read is in flight, and undefined for any subject type that is not an entity —
+ * only the entity proposal is a batch decision.
  */
 function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
   const entityId = item.entityId;
@@ -63,14 +60,14 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
     }
     let cancelled = false;
     setBatch(null);
-    listMemoryProposals('PENDING')
+    listMemoryProposals('PENDING', entityId)
       .then((rows) => {
         if (cancelled) return;
         setBatch({
           facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
-          // A page at the cap may have been cut; only a shorter page is provably
-          // the whole inbox.
-          truncated: rows.length >= INBOX_LIMIT,
+          // The per-entity read is not the global inbox page: it is this
+          // entity's whole batch, so the list needs no truncation hedge.
+          complete: true,
         });
       })
       .catch(() => {
@@ -162,26 +159,13 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           )}
           {batch !== null && batch !== undefined && 'facts' in batch && (
             batch.facts.length === 0 ? (
-              batch.truncated ? (
-                // A page at the cap cannot prove the batch is empty. Naming the
-                // cap and the count is honest; "adds the entity alone" is not.
-                <div className="ask-ctx" data-testid="proposal-batch-truncated">
-                  The proposal inbox page is capped at {INBOX_LIMIT}, so this entity&apos;s
-                  pending facts may not be on it. Showing 0 pending facts of this entity here —
-                  approving still promotes its whole batch.
-                </div>
-              ) : (
-                <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
-              )
+              <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
             ) : (
               <>
-                {batch.truncated && (
-                  <div className="ask-ctx" data-testid="proposal-batch-truncated">
-                    The proposal inbox page is capped at {INBOX_LIMIT}, so this list may be
-                    truncated. Showing {batch.facts.length} pending facts of this entity here —
-                    approving promotes its whole batch.
-                  </div>
-                )}
+                <div className="ask-ctx" data-testid="proposal-batch-complete">
+                  This is the entity&apos;s complete pending batch: {batch.facts.length}{' '}
+                  fact{batch.facts.length === 1 ? '' : 's'} — one decision decides all of it.
+                </div>
                 <ul className="ask-facts-list">
                   {batch.facts.map((fact) => (
                     <li key={fact.id}>

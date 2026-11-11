@@ -184,7 +184,9 @@ describe('AriaProposalCard', () => {
     render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
 
     const batch = await screen.findByTestId('proposal-batch');
-    expect(listMemoryProposals).toHaveBeenCalledWith('PENDING');
+    // The entity's OWN batch, asked for by id: the route answers it uncapped, so
+    // the card no longer has to guess from a shared page.
+    expect(listMemoryProposals).toHaveBeenCalledWith('PENDING', 'ent-7');
     // Exactly this entity's facts: not the entity's own row (already the title),
     // not another entity's fact.
     expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
@@ -198,31 +200,52 @@ describe('AriaProposalCard', () => {
   });
 
   /**
-   * `GET /proposals` serves one page capped at `MemoryProposalService.INBOX_LIMIT`
-   * (50) newest-first across ALL entities. These rows are what a 60-fact inbox
-   * returns: the page is full, and this entity's own facts are below it.
+   * `GET /proposals?status=&entityId=` answers ONE entity's whole PENDING batch —
+   * its facts, its relations in either direction and its own row — uncapped. The
+   * card may therefore say the list is complete, and must not hedge with the
+   * global inbox's page size.
    */
-  function cappedInboxPage(): MemoryProposalView[] {
-    return Array.from({ length: 50 }, (_, i) =>
-      proposalRow({ id: `other-${i}`, entityId: 'ent-other', factKey: `other_fact_${i}` }),
-    );
-  }
-
-  it('never claims the entity stands alone when the inbox page hit its cap', async () => {
-    vi.mocked(listMemoryProposals).mockResolvedValue(cappedInboxPage());
+  it('states the batch is complete and lists every fact of it', async () => {
+    vi.mocked(listMemoryProposals).mockResolvedValue([
+      proposalRow(),
+      proposalRow({ id: 'ent-7', subjectType: 'ENTITY', factKey: 'person:happy' }),
+      proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      proposalRow({ id: 'rel-1', subjectType: 'RELATION', factKey: 'reports_to', entityId: 'ent-7' }),
+    ]);
     render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
 
     const batch = await screen.findByTestId('proposal-batch');
-    // The capped page cannot prove the batch is empty: the decision still
-    // promotes every PENDING fact of the entity, so name the cap and the count.
-    expect(await within(batch).findByText(/may be truncated|are not on it|capped/i)).toBeInTheDocument();
-    expect(within(batch).getByText(/showing 0 pending fact/i)).toBeInTheDocument();
-    expect(within(batch).queryByText(/adds the entity alone/i)).not.toBeInTheDocument();
+    expect(listMemoryProposals).toHaveBeenCalledWith('PENDING', 'ent-7');
+    expect(await within(batch).findByTestId('proposal-batch-complete')).toHaveTextContent(
+      /complete/i,
+    );
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
+    // No hedge survives: this read cannot have been cut by the inbox page.
+    expect(within(batch).queryByText(/truncated|capped|may not be on it/i)).not.toBeInTheDocument();
   });
 
-  it('says the entity stands alone only when the page is provably complete', async () => {
+  it('claims completeness from the uncapped read, not from the page size', async () => {
+    // A full inbox page is not proof of anything for the global inbox, but this
+    // read is the per-entity one: an entity with this many facts gets all of them.
+    const wholeBatch = Array.from({ length: 50 }, (_, i) =>
+      proposalRow({ id: `f-${i}`, factKey: `fact_${i}`, valueText: `value_${i}` }),
+    );
+    vi.mocked(listMemoryProposals).mockResolvedValue(wholeBatch);
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(50);
+    expect(await within(batch).findByTestId('proposal-batch-complete')).toHaveTextContent(
+      /complete/i,
+    );
+    expect(within(batch).queryByText(/truncated|capped/i)).not.toBeInTheDocument();
+  });
+
+  it('says the entity stands alone when its own batch carries no facts', async () => {
+    // The per-entity read answers with the entity's own row and nothing else: a
+    // provable empty batch, not a guess from one shared page.
     vi.mocked(listMemoryProposals).mockResolvedValue([
-      proposalRow({ id: 'other-1', entityId: 'ent-other', factKey: 'timezone' }),
+      proposalRow({ id: 'ent-7', subjectType: 'ENTITY', factKey: 'person:happy', valueText: 'Happy' }),
     ]);
     render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
 
@@ -231,21 +254,6 @@ describe('AriaProposalCard', () => {
       await within(batch).findByText(/no pending facts are attached/i),
     ).toBeInTheDocument();
     expect(within(batch).queryByText(/truncated|capped/i)).not.toBeInTheDocument();
-  });
-
-  it('reports how many of the batch it can show when a capped page carries some', async () => {
-    const page = cappedInboxPage();
-    page[0] = proposalRow({ id: 'f1', entityId: 'ent-7', factKey: 'preferred_editor', valueText: 'vim' });
-    page[1] = proposalRow({ id: 'f2', entityId: 'ent-7', factKey: 'release_channel', valueText: 'email' });
-    vi.mocked(listMemoryProposals).mockResolvedValue(page);
-    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
-
-    const batch = await screen.findByTestId('proposal-batch');
-    expect(await within(batch).findByText(/may be truncated|capped/i)).toBeInTheDocument();
-    expect(within(batch).getByText(/showing 2 pending fact/i)).toBeInTheDocument();
-    expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
-    // Still no completeness claim in either direction.
-    expect(within(batch).queryByText(/adds the entity alone/i)).not.toBeInTheDocument();
   });
 
   // Task 16 settled a proposal the PENDING inbox no longer lists, but the reducer

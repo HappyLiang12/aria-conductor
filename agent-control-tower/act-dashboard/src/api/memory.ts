@@ -285,12 +285,23 @@ export async function retireMemoryFact(
   return data;
 }
 
-/** `GET /proposals?status=` — PENDING is the inbox the operator decides. */
+/**
+ * `GET /proposals?status=` — PENDING is the inbox the operator decides.
+ *
+ * With `entityId` the route answers that ONE entity's batch instead: its facts,
+ * its relations in either direction (deduped) and its own row when its
+ * lifecycle status matches — complete and uncapped, newest first, exactly the
+ * set `decide` promotes. WITHOUT it the behaviour is unchanged: the global
+ * inbox, capped at `MemoryProposalService.INBOX_LIMIT`.
+ */
 export async function listMemoryProposals(
   status: MemoryFactStatus = 'PENDING',
+  entityId?: string,
 ): Promise<MemoryProposalView[]> {
   const { data } = await client.get<MemoryProposalView[]>('/api/v1/memory/proposals', {
-    params: { status },
+    // An absent entity id must not become an empty param: the global inbox
+    // request stays exactly what it was.
+    params: entityId === undefined ? { status } : { status, entityId },
   });
   return data;
 }

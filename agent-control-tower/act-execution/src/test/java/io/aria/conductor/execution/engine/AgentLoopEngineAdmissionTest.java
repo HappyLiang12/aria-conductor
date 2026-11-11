@@ -43,6 +43,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
@@ -99,7 +102,7 @@ class AgentLoopEngineAdmissionTest {
      * engine's decisions are under test.
      */
     static class RecordingQueue extends RunAdmissionQueue {
-        record AcquireCall(UUID runId, UUID agentId, Instant createdAt) {}
+        record AcquireCall(UUID runId, UUID agentId, Instant createdAt, String conversationId) {}
 
         final List<UUID> acquired = new ArrayList<>();
         final List<AcquireCall> acquireCalls = new ArrayList<>();
@@ -110,9 +113,9 @@ class AgentLoopEngineAdmissionTest {
         }
 
         @Override
-        public void acquire(UUID runId, UUID agentId, Instant createdAt) {
+        public void acquire(UUID runId, UUID agentId, Instant createdAt, String conversationId) {
             acquired.add(runId);
-            acquireCalls.add(new AcquireCall(runId, agentId, createdAt));
+            acquireCalls.add(new AcquireCall(runId, agentId, createdAt, conversationId));
         }
 
         @Override
@@ -137,19 +140,21 @@ class AgentLoopEngineAdmissionTest {
 
         agent = org.mockito.Mockito.mock(Agent.class);
         // Conditional: the cancel-while-queued abort happens before the session
-        // load that reads the id.
+        // load that reads the id, and the per-conversation tests run their own
+        // Aria agent and runs instead of this fixture.
         lenient().when(agent.getId()).thenReturn(agentId);
-        when(agent.getConfig()).thenReturn(
+        lenient().when(agent.getConfig()).thenReturn(
                 "{\"maxToolCallRounds\":7,\"systemPrompt\":\"You are a tester agent.\"}");
 
         run = Run.builder()
                 .id(runId).agentId(agentId).status(RunStatus.PENDING)
                 .promptSeed("do the work").maxIterations(0)
                 .totalTokensUsed(0).iterationCount(0).createdAt(Instant.now())
+                .conversationId("conv-admission")
                 .build();
 
-        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
-        when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
+        lenient().when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        lenient().when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
 
         engine = new AgentLoopEngine(
                 runRepository, agentRepository, sessionStateManager, approvalGate,
@@ -244,10 +249,12 @@ class AgentLoopEngineAdmissionTest {
 
         // The gate runs synchronously while the run is still PENDING — before the
         // INITIALIZING write that leaves the queued state; exactly one acquire,
-        // carrying the run's exact identity.
+        // carrying the run's exact identity AND its conversation, which is what
+        // keeps two turns of one Aria conversation from running at once.
         assertThat(recordingQueue.acquired).containsExactly(runId);
         assertThat(recordingQueue.acquireCalls)
-                .containsExactly(new RecordingQueue.AcquireCall(runId, agentId, run.getCreatedAt()));
+                .containsExactly(new RecordingQueue.AcquireCall(runId, agentId, run.getCreatedAt(),
+                        "conv-admission"));
 
         await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.COMPLETED);
 
@@ -324,5 +331,170 @@ class AgentLoopEngineAdmissionTest {
         verify(sessionStateManager, never()).loadOrCreateSession(any(), any());
         verify(eventPublisher, never()).publishEvent(any(RunIterationEvent.class));
         assertThat(run.getStatus()).isEqualTo(RunStatus.PENDING);
+    }
+
+    // ---- (d) per-conversation serialization: the engine passes the conversation ----
+
+    /**
+     * The per-conversation guarantee (spec §5.2, decision A1) only holds if the
+     * engine hands the run's conversation to admission: the Aria pool admits three
+     * turns at once, so a dropped conversation id lets two turns of one
+     * conversation run concurrently while the queue believes they are unrelated.
+     * This test drives the real queue with a launcher that blocks, so the second
+     * turn must park until the first releases the conversation.
+     */
+    @Test
+    void twoAriaTurnsOfOneConversationNeverRunAtTheSameTime() throws Exception {
+        RunAdmissionQueue queue = new RunAdmissionQueue(new RunAdmissionProperties());
+        engine = engineWith(queue, queueDispatcher(queue));
+        Agent aria = ariaAgent();
+        Run first = ariaRun("conv-shared", Instant.now());
+        Run second = ariaRun("conv-shared", Instant.now().plusSeconds(1));
+        stubAriaRuns(aria, first, second);
+        stubRunLoopPlumbingForAnyRun();
+
+        CountDownLatch firstRunning = new CountDownLatch(1);
+        CountDownLatch secondRunning = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreLauncher);
+        when(coreLauncher.owns(aria)).thenReturn(true);
+        when(coreLauncher.execute(any(), any(), any())).thenAnswer(invocation -> {
+            Run started = invocation.getArgument(0);
+            if (started.getId().equals(first.getId())) {
+                firstRunning.countDown();
+                releaseFirst.await(15, TimeUnit.SECONDS);
+            } else {
+                secondRunning.countDown();
+            }
+            return new CoreResult("session-1", "done", null, false);
+        });
+
+        engine.startRun(first.getId());
+        assertThat(firstRunning.await(15, TimeUnit.SECONDS)).as("the first turn started").isTrue();
+
+        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+        Thread secondThread = new Thread(() -> {
+            try {
+                engine.startRun(second.getId());
+            } catch (Throwable e) {
+                secondFailure.set(e);
+            }
+        }, "aria-second-turn");
+        secondThread.start();
+        try {
+            assertThat(secondRunning.await(1, TimeUnit.SECONDS))
+                    .as("a second turn of the SAME conversation must not run beside the first")
+                    .isFalse();
+            releaseFirst.countDown();
+            assertThat(secondRunning.await(15, TimeUnit.SECONDS))
+                    .as("and it runs as soon as the first turn releases the conversation")
+                    .isTrue();
+        } finally {
+            releaseFirst.countDown();
+            secondThread.join(15_000);
+        }
+        assertThat(secondFailure.get()).isNull();
+        assertThat(secondThread.isAlive()).isFalse();
+    }
+
+    /**
+     * Positive control for (d): the serialization must come from the shared
+     * conversation, not from a global cap — another conversation is admitted while
+     * the first turn is still running.
+     */
+    @Test
+    void aSecondConversationIsNotBlockedByTheFirstTurnsConversation() throws Exception {
+        RunAdmissionQueue queue = new RunAdmissionQueue(new RunAdmissionProperties());
+        engine = engineWith(queue, queueDispatcher(queue));
+        Agent aria = ariaAgent();
+        Run first = ariaRun("conv-one", Instant.now());
+        Run other = ariaRun("conv-two", Instant.now().plusSeconds(1));
+        stubAriaRuns(aria, first, other);
+        stubRunLoopPlumbingForAnyRun();
+
+        CountDownLatch firstRunning = new CountDownLatch(1);
+        CountDownLatch otherRunning = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreLauncher);
+        when(coreLauncher.owns(aria)).thenReturn(true);
+        when(coreLauncher.execute(any(), any(), any())).thenAnswer(invocation -> {
+            Run started = invocation.getArgument(0);
+            if (started.getId().equals(first.getId())) {
+                firstRunning.countDown();
+                releaseFirst.await(15, TimeUnit.SECONDS);
+            } else {
+                otherRunning.countDown();
+            }
+            return new CoreResult("session-2", "done", null, false);
+        });
+
+        engine.startRun(first.getId());
+        assertThat(firstRunning.await(15, TimeUnit.SECONDS)).isTrue();
+        Thread otherThread = new Thread(() -> engine.startRun(other.getId()), "aria-other-conversation");
+        otherThread.start();
+        try {
+            assertThat(otherRunning.await(5, TimeUnit.SECONDS))
+                    .as("a different conversation is admitted while the first turn runs")
+                    .isTrue();
+        } finally {
+            releaseFirst.countDown();
+            otherThread.join(15_000);
+        }
+        assertThat(otherThread.isAlive()).isFalse();
+    }
+
+    private AgentLoopEngine engineWith(RunAdmissionQueue queue, ApplicationEventPublisher publisher) {
+        return new AgentLoopEngine(
+                runRepository, agentRepository, sessionStateManager, approvalGate,
+                permissionCoordinator, trajectoryRepository, publisher, workflowService,
+                workflowChainRepository,
+                new ContextAssembler(List.of(new AgentPolicyContextContributor(agentRepository)),
+                        ceilings, new ContextProperties()),
+                new ConversationHistoryLoader(runRepository, trajectoryRepository),
+                manifestService, new ContextProperties(), workspaceManager,
+                approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
+                coreRunLauncherProvider, queue, null /* KanbanRepository */,
+                inputCoordinator);
+    }
+
+    /** The production wiring of the queue's terminal listener, which the suite must not mock away. */
+    private static ApplicationEventPublisher queueDispatcher(RunAdmissionQueue queue) {
+        return event -> {
+            if (event instanceof io.aria.conductor.common.event.RunCompletedEvent completed) {
+                queue.settle(completed.getRunId());
+            }
+        };
+    }
+
+    private Agent ariaAgent() {
+        Agent aria = org.mockito.Mockito.mock(Agent.class);
+        lenient().when(aria.getId()).thenReturn(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID);
+        when(aria.getConfig()).thenReturn("{\"maxToolCallRounds\":7}");
+        return aria;
+    }
+
+    private static Run ariaRun(String conversationId, Instant createdAt) {
+        return Run.builder()
+                .id(UUID.randomUUID()).agentId(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.PENDING).promptSeed("plan my day").maxIterations(0)
+                .totalTokensUsed(0).iterationCount(0).createdAt(createdAt)
+                .conversationId(conversationId)
+                .build();
+    }
+
+    private void stubAriaRuns(Agent aria, Run... runs) {
+        when(agentRepository.findById(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID))
+                .thenReturn(Optional.of(aria));
+        when(runRepository.findById(any())).thenAnswer(invocation -> {
+            UUID id = invocation.getArgument(0);
+            return java.util.Arrays.stream(runs).filter(run -> run.getId().equals(id)).findFirst();
+        });
+    }
+
+    private void stubRunLoopPlumbingForAnyRun() {
+        lenient().when(sessionStateManager.loadOrCreateSession(any(), any()))
+                .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
+        lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(any())).thenReturn(List.of());
+        lenient().when(workspaceManager.getOrProvision(any())).thenReturn("/tmp/ws");
     }
 }

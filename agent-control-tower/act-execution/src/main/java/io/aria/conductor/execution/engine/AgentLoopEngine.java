@@ -251,9 +251,12 @@ public class AgentLoopEngine {
         // Run-owned cores pass the admission gate while the run is still PENDING:
         // over-limit runs park here (card in TODO) until a slot frees; the slot
         // then starts the run and only now does the mirror card move IN_PROGRESS.
+        // The conversation travels with the identity: the Aria pool admits three
+        // turns at once, and only the conversation id serializes two turns of the
+        // same conversation (a worker run's id is simply not grouped).
         CoreRunLauncher coreLauncher = runCoreLauncher();
         if (coreLauncher != null && coreLauncher.owns(agent)) {
-            admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt());
+            admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt(), run.getConversationId());
             // The cancel can land before this waiter was even parked: settle()
             // no-ops, then admission grants the slot. Re-read after admission —
             // a run that left PENDING while queued must give its slot back and

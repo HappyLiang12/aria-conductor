@@ -75,7 +75,7 @@ export async function deleteConversation(conversationId: string): Promise<void> 
  *
  * Through the shared `client` like the DELETE above (T48 Item 1): it was the last mutation
  * outside the one transport, so it carried no `X-CSRF-Token` and no `X-Correlation-ID`. The
- * route answers a worker or anonymous caller today (`AriaConversationController.java:249-265`
+ * route answers a worker or anonymous caller today (`AriaConversationController.java:245-261`
  * resolves no authority), so this cannot change an outcome — it removes the class of call that
  * breaks the day the route is gated, instead of re-deriving the header at that point.
  */

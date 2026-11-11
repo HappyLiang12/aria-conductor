@@ -1028,7 +1028,7 @@ describe('AriaPanel in-flow decisions', () => {
   // `DELETE /api/v1/aria/conversations/{id}`, whose route cancels every
   // RUNNING / PENDING / WAITING_INPUT run of that conversation and then purges
   // its tool calls, trajectories and audit events
-  // (`AriaConversationController.java:193-238`). The copy used to say the run
+  // (`AriaConversationController.java:193-235`). The copy used to say the run
   // "keeps living server-side", which is false, and it is the only wording the
   // operator gets at the moment they escape a parked turn.
   //

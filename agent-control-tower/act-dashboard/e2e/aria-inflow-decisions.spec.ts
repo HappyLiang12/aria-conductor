@@ -111,7 +111,7 @@ test.describe('Aria in-flow decisions (live)', () => {
 
     // The parked transcript is gone for good: Clear's route cancels this
     // conversation's runs and purges its tool calls, trajectories and audit
-    // events (`AriaConversationController.java:193-238`), so the run does not
+    // events (`AriaConversationController.java:193-235`), so the run does not
     // survive it. Asserted on the SERVER, not only in the panel: this browser
     // holds an operator session, so a Clear that lost its CSRF token was refused
     // 403 and the old panel cleared itself anyway (T48 item 1) — a UI-only

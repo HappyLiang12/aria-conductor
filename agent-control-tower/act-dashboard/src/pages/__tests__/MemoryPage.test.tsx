@@ -672,11 +672,11 @@ describe('MemoryPage — mutation refusals (Task 30)', () => {
   });
 
   // T48 Item 9 (T47 follow-up #1 — adjudicated P3, real). A taken kind+key
-  // answered through `POST /entities` (the operator route, `MemoryController:159-173`)
+  // answered through `POST /entities` (the operator route, `MemoryController:154-173`)
   // is the memory CONFLICT envelope — `{ok:false,errorType:'CONFLICT',message}`
   // served as a 409 by `MemoryExceptionHandler.handleConflict` — and the dialog
   // renders that `message` through `apiErrorMessage`'s ordinary path
-  // (`MemoryPage.tsx:187`). The behaviour was correct and the wording was
+  // (`MemoryPage.tsx:189`). The behaviour was correct and the wording was
   // actionable, but nothing pinned it: a rewrite of that copy, or a new error
   // branch, could have regressed it to an unactionable "retry" with a green suite.
   it('renders the governed 409 wording from POST /entities inside the open dialog', async () => {

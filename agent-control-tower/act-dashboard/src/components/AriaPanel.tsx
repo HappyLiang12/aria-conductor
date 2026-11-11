@@ -1028,7 +1028,7 @@ export function AriaPanel() {
       // into the transcript on screen. Leaving one only stops drawing its frames
       // here; Clear also ends the turn at the server, because its route cancels
       // this conversation's runs and purges the transcript it belonged to
-      // (`AriaConversationController.java:193-238`). Neither case keeps the turn
+      // (`AriaConversationController.java:193-235`). Neither case keeps the turn
       // writing into this panel, and Clear does not keep the run alive at all.
       const turnConversationId = conversationId;
       const staleTurn = (): boolean => conversationIdRef.current !== turnConversationId;
@@ -1260,7 +1260,7 @@ export function AriaPanel() {
     const newConversationId = crypto.randomUUID();
     // Clear is destructive: the route it calls cancels every RUNNING / PENDING /
     // WAITING_INPUT run of this conversation and then purges its tool calls,
-    // trajectories and audit events (`AriaConversationController.java:193-238`).
+    // trajectories and audit events (`AriaConversationController.java:193-235`).
     // So this also stops reading the cleared conversation's turn: without it a
     // parked turn's frames would be drawn into the new transcript. Nothing here
     // keeps the run alive — the earlier "the run stays alive server-side" claim

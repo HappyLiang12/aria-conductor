@@ -80,6 +80,43 @@ class KanbanReviewAskCreatorTest {
     }
 
     @Test
+    void neverReportedUsageIsNotPrintedAsAMeasuredZero() {
+        // Task 7 fix round 1 (m5): a run that reported nothing must not render a
+        // fabricated zero cost on the operator-facing review ask.
+        Run run = Run.builder().id(runId).status(RunStatus.COMPLETED)
+                .totalTokensUsed(0).iterationCount(1).build();
+        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
+                .thenReturn(List.of());
+
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+
+        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(captor.capture());
+        assertThat(captor.getValue().getContextMd())
+                .contains("**Tokens:** not reported")
+                .doesNotContain("**Tokens:** 0");
+    }
+
+    @Test
+    void aPartsOnlyReportPrintsTheObservedTotal() {
+        // Task 7 fix round 1 (M1/m5): a zero total with a positive input part is a
+        // report, so the ask prints the part-derived total, not a zero.
+        Run run = Run.builder().id(runId).status(RunStatus.COMPLETED)
+                .totalTokensUsed(0).iterationCount(2).build();
+        run.setInputTokens(100L);
+        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
+                .thenReturn(List.of());
+
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+
+        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(captor.capture());
+        assertThat(captor.getValue().getContextMd()).contains("**Tokens:** 100");
+    }
+
+    @Test
     void skipsNonReviewTransitions() {
         creator.onKanbanItemTransitioned(event("TODO", "IN_PROGRESS"));
         creator.onKanbanItemTransitioned(event("REVIEW", "DONE"));

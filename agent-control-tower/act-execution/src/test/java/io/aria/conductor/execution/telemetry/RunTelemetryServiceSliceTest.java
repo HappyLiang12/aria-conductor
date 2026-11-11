@@ -159,6 +159,39 @@ class RunTelemetryServiceSliceTest extends DataJpaTestBase {
     }
 
     /**
+     * Task 7 / spec 5.4: the pinned CLI can report an entire all-zero usage block. A real
+     * LLM call cannot consume zero input tokens, so that report is a placeholder, not a
+     * measurement: it must not be written (a stored zero turns "not reported" into a
+     * fabricated zero) and it must never overwrite a real measurement.
+     */
+    @Test
+    void anAllZeroUsageReportIsIgnoredAndNeverOverwritesARealMeasurement() {
+        // Positive control: a real report is stored.
+        telemetry.recordUsage(runId, new RunTelemetryService.UsageEvent(120L, 30L, null));
+        flushAndClear();
+
+        telemetry.recordUsage(runId, new RunTelemetryService.UsageEvent(0L, 0L, 0L));
+        flushAndClear();
+        Run reported = runs.findById(runId).orElseThrow();
+        assertThat(reported.getInputTokens()).isEqualTo(120L);
+        assertThat(reported.getOutputTokens()).isEqualTo(30L);
+        assertThat(reported.getTotalTokensUsed()).isEqualTo(150L);
+
+        // A run whose only report is the placeholder keeps its columns null, so the run
+        // response classifies it NOT_REPORTED instead of showing a zero cost.
+        Run fresh = runs.save(Run.builder()
+                .agentId(UUID.randomUUID())
+                .status(RunStatus.RUNNING)
+                .build());
+        telemetry.recordUsage(fresh.getId(), new RunTelemetryService.UsageEvent(0L, 0L, 0L));
+        flushAndClear();
+        Run untouched = runs.findById(fresh.getId()).orElseThrow();
+        assertThat(untouched.getInputTokens()).isNull();
+        assertThat(untouched.getOutputTokens()).isNull();
+        assertThat(untouched.getTotalTokensUsed()).isZero();
+    }
+
+    /**
      * F9 race: a usage event that arrives after the run finalized must not rewrite
      * lifecycle state (the old load-and-save flushed status/completedAt too).
      */

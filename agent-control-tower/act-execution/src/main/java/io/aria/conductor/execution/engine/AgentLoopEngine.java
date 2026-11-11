@@ -725,17 +725,23 @@ public class AgentLoopEngine {
                 inputCoordinator.recordTerminationIntent(event.getRunId());
             }
             if (askRaised) {
+                // The park is one conditional write and it can fail in two ways, both of which
+                // mean "there is no park": a throw, and a REFUSAL — updateRunStatusDirect returns
+                // false when the UPDATE matched no row (the run is terminal, or missing). Both
+                // leave the loop blocked on the coordinator while the row never says WAITING_INPUT,
+                // so a sync waiter burns its whole window against a question the operator is never
+                // shown as a park. Fail closed on both: wake the run so it finalizes instead.
+                boolean parked = false;
                 try {
-                    updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
+                    parked = updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
                 } catch (Exception e) {
-                    // The ask exists but the park does not: the loop is blocked on the
-                    // coordinator while the row still reads RUNNING, so a sync waiter spends
-                    // its whole window against a question the operator is never shown as a
-                    // park. Fail closed exactly like a failed ask write — wake the run so it
-                    // finalizes instead of parking on an unreachable ask.
-                    log.error("Failed to persist WAITING_INPUT for run {} - waking it so it does"
-                            + " not park on an ask the operator cannot see: {}",
+                    log.error("Failed to persist WAITING_INPUT for run {}: {}",
                             event.getRunId(), e.getMessage(), e);
+                }
+                if (!parked) {
+                    log.error("Run {} is not parked as WAITING_INPUT (the write was refused or"
+                            + " failed) - waking it so it does not park on an ask the operator"
+                            + " cannot see", event.getRunId());
                     inputCoordinator.recordTerminationIntent(event.getRunId());
                 }
             }

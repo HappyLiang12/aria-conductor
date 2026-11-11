@@ -807,10 +807,22 @@ public class MemoryCommandService {
     private MemoryEntity requireEntityForFact(UUID entityId, FactStatus factStatus) {
         MemoryEntity entity = requireEntity(entityId);
         if (factStatus == FactStatus.ACTIVE && entity.getStatus() != EntityStatus.ACTIVE) {
-            String reason = entity.getStatus() == EntityStatus.PENDING
-                    ? "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved"
-                    : "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
-                    + "no read path can see, and a MERGED source is not reachable from its survivor";
+            // T34 Item 2 (P3): one "else" branch told a RETIRED parent about a merge that never
+            // happened. A refusal names the case it found and the action that resolves it.
+            String reason;
+            if (entity.getStatus() == EntityStatus.PENDING) {
+                reason = "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved";
+            } else if (entity.getStatus() == EntityStatus.RETIRED) {
+                reason = "is RETIRED; an ACTIVE fact cannot be attached to a retired parent that no read "
+                        + "path can see; re-propose the entity and approve it before writing the fact";
+            } else if (entity.getStatus() == EntityStatus.MERGED) {
+                reason = "is MERGED; an ACTIVE fact cannot be attached to a merged source that no read "
+                        + "path can see; write the fact on the surviving entity"
+                        + (entity.getMergedInto() == null ? "" : " " + entity.getMergedInto());
+            } else {
+                reason = "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
+                        + "no read path can see";
+            }
             throw new MemoryConflictException("entity " + entityId + " " + reason);
         }
         return entity;

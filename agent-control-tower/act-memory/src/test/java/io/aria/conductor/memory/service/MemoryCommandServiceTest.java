@@ -255,6 +255,55 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
     }
 
+    /**
+     * T34 Item 2 (P3). The refusal appended "and a MERGED source is not reachable from its survivor"
+     * to every non-ACTIVE, non-PENDING parent, so a RETIRED parent was told about a merge that never
+     * happened. The program's error-copy rule is that a refusal names the case it found and the
+     * operator action that resolves it. The guard itself (and therefore this copy) is the positive
+     * control of {@link #anActiveFactCannotBeAttachedToANonActiveParent}.
+     */
+    @Test
+    void aRetiredParentRefusalNamesThatCaseOnly() {
+        UUID entityId = id("person:retired-copy");
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.RETIRED);
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("RETIRED")
+                .hasMessageContaining("re-propose")
+                .hasMessageNotContaining("merged")
+                .hasMessageNotContaining("MERGED")
+                .hasMessageNotContaining("surviving");
+    }
+
+    /**
+     * The MERGED half: the refusal names the merge, points at the surviving entity by id, and does
+     * not borrow the retire case's wording. The mirrored control of
+     * {@link #aRetiredParentRefusalNamesThatCaseOnly}.
+     */
+    @Test
+    void aMergedParentRefusalNamesTheMergeAndTheSurvivor() {
+        UUID entityId = id("person:merged-copy");
+        UUID survivor = id("survivor");
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.MERGED);
+        parent.setMergedInto(survivor);
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("MERGED")
+                .hasMessageContaining("surviving entity " + survivor)
+                .hasMessageNotContaining("retired")
+                .hasMessageNotContaining("RETIRED");
+    }
+
     /** The positive control: an ACTIVE parent still takes the same operator write. */
     @Test
     void anActiveFactMayStillBeAttachedToAnActiveParent() {

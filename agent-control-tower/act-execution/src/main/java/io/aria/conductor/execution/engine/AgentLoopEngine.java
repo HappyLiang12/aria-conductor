@@ -230,7 +230,16 @@ public class AgentLoopEngine {
         // Every terminal path unbinds it again (completeRun, abandonContext and the run
         // loop's finally), so a finished turn never receives another signal.
         streamRegistry.register(runId, emitter);
-        startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        try {
+            startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        } catch (RuntimeException e) {
+            // A refused start is the one path with no run loop to unbind in its finally:
+            // the caller catches this and completes the emitter, but Spring has not
+            // installed the handler yet, so complete() fires no callback. Unbind here or
+            // the registry keeps a dead entry that hasStream reports as live forever.
+            streamRegistry.unregister(runId);
+            throw e;
+        }
     }
 
     private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
@@ -719,7 +728,15 @@ public class AgentLoopEngine {
                 try {
                     updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
                 } catch (Exception e) {
-                    log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
+                    // The ask exists but the park does not: the loop is blocked on the
+                    // coordinator while the row still reads RUNNING, so a sync waiter spends
+                    // its whole window against a question the operator is never shown as a
+                    // park. Fail closed exactly like a failed ask write — wake the run so it
+                    // finalizes instead of parking on an unreachable ask.
+                    log.error("Failed to persist WAITING_INPUT for run {} - waking it so it does"
+                            + " not park on an ask the operator cannot see: {}",
+                            event.getRunId(), e.getMessage(), e);
+                    inputCoordinator.recordTerminationIntent(event.getRunId());
                 }
             }
             log.info("Run {} waiting for operator input", event.getRunId());

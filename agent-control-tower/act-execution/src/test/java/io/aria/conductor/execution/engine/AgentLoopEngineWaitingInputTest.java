@@ -41,6 +41,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -306,6 +307,37 @@ class AgentLoopEngineWaitingInputTest {
                 .isEqualTo(RunStatus.RUNNING);
         verify(runRepository, never()).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
                 any(), anyList());
+    }
+
+    @Test
+    void whenTheWaitingInputStatusCannotBeWrittenTheRunIsWokenInsteadOfParked() {
+        // The other direction of "WAITING_INPUT means there is a question": the ask was
+        // persisted but the status write failed. The loop is blocked on the coordinator, so
+        // leaving the run RUNNING means the sync waiter burns its whole window against a row
+        // that never says "parked", while an ask the operator has no parked card for sits
+        // PENDING. Fail closed like a failed ask write: wake the run so it finalizes.
+        UUID runId = UUID.randomUUID();
+        Run run = runIn(runId, UUID.randomUUID(), RunStatus.RUNNING);
+        engine.addToActiveContextsForTest(runId, run.getAgentId());
+        // Positive control: the ask itself did persist, so the failure is the status write.
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(invocation -> {
+            Approval ask = invocation.getArgument(0);
+            if (ask.getId() == null) {
+                ask.setId(UUID.randomUUID());
+            }
+            return ask;
+        });
+        doThrow(new IllegalStateException("runs table is gone"))
+                .when(runRepository).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
+                        any(), anyList());
+
+        engine.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which DB?"));
+
+        verify(approvalRepository).save(any(Approval.class));
+        verify(inputCoordinator).recordTerminationIntent(runId);
+        assertThat(run.getStatus())
+                .as("a run whose park could not be persisted is never left parked")
+                .isEqualTo(RunStatus.RUNNING);
     }
 
     @Test

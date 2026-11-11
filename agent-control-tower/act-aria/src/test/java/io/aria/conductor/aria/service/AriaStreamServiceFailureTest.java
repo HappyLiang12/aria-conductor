@@ -56,7 +56,6 @@ class AriaStreamServiceFailureTest {
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
     @Mock IntentClassifier intentClassifier;
-    @Mock AriaService ariaService;
     @Mock SkillContextProvider skillContextProvider;
 
     @InjectMocks
@@ -77,7 +76,6 @@ class AriaStreamServiceFailureTest {
         lenient().when(intentClassifier.classify(anyString())).thenReturn("general");
         lenient().when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
                 .thenReturn(Optional.of(ariaAgent));
-        lenient().when(ariaService.buildSystemPrompt()).thenReturn("You are Aria.");
         lenient().when(runRepository.save(any(Run.class))).thenAnswer(inv -> {
             Run r = inv.getArgument(0);
             r.setId(RUN_ID);

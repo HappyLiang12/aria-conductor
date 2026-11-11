@@ -50,7 +50,6 @@ class AriaStreamServiceTest {
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
     @Mock IntentClassifier intentClassifier;
-    @Mock AriaService ariaService;
     @Mock SkillContextProvider skillContextProvider;
 
     @InjectMocks
@@ -71,7 +70,6 @@ class AriaStreamServiceTest {
         lenient().when(intentClassifier.classify(anyString())).thenReturn("general");
         lenient().when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
                 .thenReturn(Optional.of(ariaAgent));
-        lenient().when(ariaService.buildSystemPrompt()).thenReturn("You are Aria.");
         lenient().when(runRepository.save(any(Run.class))).thenAnswer(inv -> {
             Run r = inv.getArgument(0);
             r.setId(RUN_ID);
@@ -101,7 +99,7 @@ class AriaStreamServiceTest {
     }
 
     @Test
-    void streamChat_contextCarriesTheSystemPromptAndPriorTurnsOnly() {
+    void streamChat_contextCarriesTheClientHistoryOnly() {
         AriaChatRequest req = AriaChatRequest.builder()
                 .conversationId("conv-9")
                 .message("hello there")
@@ -113,26 +111,21 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(3);
-        assertThat(context.get(0).role()).isEqualTo("system");
-        assertThat(context.get(0).content()).isEqualTo("You are Aria.");
-        assertThat(context.get(1).role()).isEqualTo("user");
-        assertThat(context.get(1).content()).isEqualTo("earlier question");
-        assertThat(context.get(2).role()).isEqualTo("assistant");
-        assertThat(context.get(2).content()).isEqualTo("earlier answer");
+        assertThat(context).hasSize(2);
+        assertThat(context.get(0).role()).isEqualTo("user");
+        assertThat(context.get(0).content()).isEqualTo("earlier question");
+        assertThat(context.get(1).role()).isEqualTo("assistant");
+        assertThat(context.get(1).content()).isEqualTo("earlier answer");
         // The current request is the run's prompt seed: the engine persists it and
         // passes it to the model, so it must not also ride in the prior context.
         assertThat(context).noneMatch(m -> "hello there".equals(m.content()));
     }
 
     @Test
-    void streamChat_omitsSystemMessageAndKeepsNoUserMessageWhenPromptBlank() {
-        when(ariaService.buildSystemPrompt()).thenReturn("  ");
-
+    void streamChat_sendsNothingWhenThereIsNoSkillAndNoHistory() {
         streamService.streamChat(request("hi"), emitter);
 
-        List<LlmMessage> context = capturedContext();
-        assertThat(context).isEmpty();
+        assertThat(capturedContext()).isEmpty();
     }
 
     @Test
@@ -151,12 +144,12 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        // system + the 2 valid history turns (the current message is the run's prompt seed)
-        assertThat(context).hasSize(3);
-        assertThat(context.get(1).role()).isEqualTo("user");
-        assertThat(context.get(1).content()).isEqualTo("earlier question");
-        assertThat(context.get(2).role()).isEqualTo("assistant");
-        assertThat(context.get(2).content()).isEqualTo("earlier answer");
+        // the 2 valid history turns (the current message is the run's prompt seed)
+        assertThat(context).hasSize(2);
+        assertThat(context.get(0).role()).isEqualTo("user");
+        assertThat(context.get(0).content()).isEqualTo("earlier question");
+        assertThat(context.get(1).role()).isEqualTo("assistant");
+        assertThat(context.get(1).content()).isEqualTo("earlier answer");
         assertThat(context).noneMatch(m -> "next question".equals(m.content()));
     }
 
@@ -226,19 +219,55 @@ class AriaStreamServiceTest {
 
     // ==================== Skill injection tests ====================
 
+    /**
+     * P1/P2: the stream adapter owns no prompt. An active slash-command skill travels
+     * as a client-policy system message that the engine lifts into
+     * {@code ContextRequest.clientPolicy}; the managed Aria prompt comes from the
+     * context contributor, never from here.
+     */
     @Test
-    void streamChat_withoutSkillId_keepsSingleUnchangedSystemMessage() {
-        // No skillId set — system prompt should remain exactly as built
-        streamService.streamChat(request("hello"), emitter);
+    void streamChat_sendsTheActiveSkillAsAClientPolicySystemMessage() {
+        when(skillContextProvider.getEnabledSkillsByIds(List.of("skill-123")))
+                .thenReturn(List.of(new SkillContext("skill-123", "workflow", "desc",
+                        "Use instantiate_template.", "SKILL")));
+
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9").message("start SDD on #42").skillId("skill-123").build();
+        streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
         assertThat(context).hasSize(1);
         assertThat(context.get(0).role()).isEqualTo("system");
-        assertThat(context.get(0).content()).isEqualTo("You are Aria.");
+        assertThat(context.get(0).content()).startsWith("## Active Skill: workflow");
+        assertThat(context.get(0).content()).contains("Use instantiate_template.");
     }
 
     @Test
-    void streamChat_withSkillId_appendsTemplateToSystemPrompt() {
+    void streamChat_carriesOnlyTheClientHistoryWhenNoSkillIsActive() {
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9")
+                .message("hello there")
+                .history(List.of(
+                        new AriaChatRequest.ChatMessage("user", "earlier question"),
+                        new AriaChatRequest.ChatMessage("assistant", "earlier answer")))
+                .build();
+
+        streamService.streamChat(req, emitter);
+
+        List<LlmMessage> context = capturedContext();
+        assertThat(context).hasSize(2);
+        assertThat(context).noneMatch(message -> "system".equals(message.role()));
+    }
+
+    @Test
+    void streamChat_withoutSkillId_sendsNoSystemMessage() {
+        streamService.streamChat(request("hello"), emitter);
+
+        assertThat(capturedContext()).isEmpty();
+    }
+
+    @Test
+    void streamChat_withSkillId_sendsOnlyTheSkillDirective() {
         when(skillContextProvider.getEnabledSkillsByIds(List.of("skill-123")))
                 .thenReturn(List.of(new SkillContext("skill-123", "workflow", "desc", "Use instantiate_template.", "SKILL")));
 
@@ -247,10 +276,9 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(1); // still a single system message
+        assertThat(context).hasSize(1);
         assertThat(context.get(0).role()).isEqualTo("system");
-        assertThat(context.get(0).content()).startsWith("You are Aria.");
-        assertThat(context.get(0).content()).contains("## Active Skill: workflow");
+        assertThat(context.get(0).content()).startsWith("## Active Skill: workflow");
         assertThat(context.get(0).content()).contains("Use instantiate_template.");
     }
 
@@ -263,9 +291,7 @@ class AriaStreamServiceTest {
                 .conversationId("conv-9").message("hi").skillId("nonexistent").build();
         streamService.streamChat(req, emitter);
 
-        List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(1);
-        assertThat(context.get(0).content()).isEqualTo("You are Aria."); // unchanged
+        assertThat(capturedContext()).isEmpty();
     }
 
     @Test
@@ -277,10 +303,8 @@ class AriaStreamServiceTest {
                 .conversationId("conv-9").message("hi").skillId("skill-bad").build();
         streamService.streamChat(req, emitter);
 
-        // Should still work — run saved, engine called, system prompt unchanged
-        List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(1);
-        assertThat(context.get(0).content()).isEqualTo("You are Aria.");
+        // Should still work — run saved, engine called, no directive injected
+        assertThat(capturedContext()).isEmpty();
         verify(runRepository).save(any(Run.class));
     }
 }

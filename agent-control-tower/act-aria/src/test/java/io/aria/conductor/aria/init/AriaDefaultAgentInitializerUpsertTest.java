@@ -69,8 +69,9 @@ class AriaDefaultAgentInitializerUpsertTest {
         verify(legacySetupService).initializeMissingAria(config.capture());
         assertThat(config.getValue())
                 .contains("\"maxToolCallRounds\":15")
-                .contains("systemPrompt")
-                .contains("You are Aria");
+                .contains("\"managedPromptVersion\":1")
+                .doesNotContain("systemPrompt")
+                .doesNotContain("You are Aria");
     }
 
     @Test

@@ -7,9 +7,7 @@ import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,8 +39,6 @@ class AriaSynthesisPromptTest {
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
     @Mock IntentClassifier intentClassifier;
-    @Mock KnowledgeService knowledgeService;
-    @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
 
     private AriaService ariaService;
@@ -50,8 +46,7 @@ class AriaSynthesisPromptTest {
     @BeforeEach
     void setUp() {
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                intentClassifier,
-                knowledgeService, trajectoryRepository, toolCallRepository,
+                intentClassifier, toolCallRepository,
                 new AriaSyncRunWaiter(
                         org.mockito.Mockito.mock(io.aria.conductor.aria.repository.AriaRunStateRepository.class),
                         AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L));

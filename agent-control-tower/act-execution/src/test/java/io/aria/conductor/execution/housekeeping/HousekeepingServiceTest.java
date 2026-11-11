@@ -58,6 +58,7 @@ class HousekeepingServiceTest {
     @Mock ToolCallRepository toolCallRepository;
     @Mock PromptCallRepository promptCallRepository;
     @Mock AgentSessionRepository agentSessionRepository;
+    @Mock io.aria.conductor.execution.context.ContextManifestRepository contextManifestRepository;
     @Mock KanbanService kanbanService;
     @Mock AgentService agentService;
     @Mock RunService runService;
@@ -74,6 +75,7 @@ class HousekeepingServiceTest {
         service = new HousekeepingService(runRepository, kanbanRepository, agentRepository,
                 approvalRepository, trajectoryRepository, toolCallRepository, promptCallRepository,
                 acpPermissionRequestRepository, runExecutionBindingRepository, agentSessionRepository,
+                contextManifestRepository,
                 kanbanService, agentService, runService, approvalGate, eventPublisher, transactionTemplate);
         lenient().when(runRepository.findByStatusIn(anyList())).thenReturn(List.of());
         lenient().when(runRepository.findByStatus(any())).thenReturn(List.of());

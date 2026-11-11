@@ -17,6 +17,10 @@ import java.util.UUID;
 @Repository
 public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     List<Approval> findByStatus(ApprovalStatus status);
+
+    /** P6: the state section's pending-approval count, without loading the rows. */
+    long countByStatus(ApprovalStatus status);
+
     List<Approval> findByRunId(UUID runId);
     List<Approval> findByStatusAndExpiresAtBefore(ApprovalStatus status, Instant expiresAtBefore);
     List<Approval> findByStatusAndApprovalType(ApprovalStatus status, Approval.ApprovalType type);

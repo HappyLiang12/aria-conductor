@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.test.context.jdbc.Sql;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -41,6 +42,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * error-contract columns that V72 adds and the usage/tool-payload columns that
  * V76 adds after the pinned target; {@link SchemaCompatConfig} applies those
  * scripts right after the pinned migration so the old-schema context can boot.
+ *
+ * <p>The class-level {@code @Sql} overrides {@link BaseH2IntegrationTest}'s
+ * cleanup: the inherited script also purges {@code context_manifests}, a V81
+ * table this V65-pinned schema does not have. The full-schema base class runs
+ * that purge from {@code cleanup-context-manifests.sql}; here it is left out
+ * rather than weakening the full-schema cleanup.
  */
 @SpringBootTest(
         classes = {ActApplication.class, NoopLlmTestConfig.class, ReviewAskRepairMigrationIntegrationTest.SchemaCompatConfig.class},
@@ -49,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "spring.datasource.url=jdbc:h2:mem:review_ask_repair;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE",
                 "spring.flyway.target=65"
         })
+@Sql(scripts = "classpath:db/cleanup-all.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_CLASS)
 class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
 
     @TestConfiguration

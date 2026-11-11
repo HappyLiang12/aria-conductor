@@ -4,6 +4,7 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -43,6 +44,13 @@ class McpEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository skillDefinitionRepository;
     @MockitoBean io.aria.conductor.aria.service.NotificationService notificationService;
     @MockitoBean io.aria.conductor.aria.service.ScheduledJobService scheduledJobService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryCommandService memoryCommandService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryProposalService memoryProposalService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryQueryService memoryQueryService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryRecallService memoryRecallService;
+    @MockitoBean io.aria.conductor.execution.context.ContextManifestRepository contextManifestRepository;
+    @MockitoBean io.aria.conductor.memory.repository.MemoryFactRepository memoryFactRepository;
+    @MockitoBean io.aria.conductor.memory.repository.MemoryAssertionRepository memoryAssertionRepository;
 
     @Test
     void handshake_listsCuratedTools() {
@@ -52,10 +60,19 @@ class McpEndpointIntegrationTest {
                 .build()) {
             client.initialize();
             McpSchema.ListToolsResult tools = client.listTools();
+            ToolCatalog catalog = new ToolCatalog();
 
             assertThat(tools.tools())
                     .extracting(McpSchema.Tool::name)
-                    .containsExactlyInAnyOrderElementsOf(McpToolInventory.EXPECTED_TOOL_NAMES);
+                    .containsExactlyInAnyOrderElementsOf(McpToolInventory.EXPECTED_TOOL_NAMES)
+                    .containsExactlyInAnyOrderElementsOf(catalog.names());
+            // The registered description is the catalog's one-line @Tool description.
+            assertThat(tools.tools()).allSatisfy(tool ->
+                    assertThat(tool.description())
+                            .isEqualTo(catalog.find(tool.name())
+                                    .orElseThrow(() -> new AssertionError(
+                                            "registered tool '" + tool.name() + "' is not in the catalog"))
+                                    .description()));
         }
     }
 

@@ -14,9 +14,15 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceMode;
-import io.aria.conductor.common.service.KnowledgeContextProvider;
+import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
+import io.aria.conductor.execution.context.ContextAssembler;
+import io.aria.conductor.execution.context.ContextManifestService;
+import io.aria.conductor.execution.context.ContextProperties;
+import io.aria.conductor.execution.context.ConversationHistoryLoader;
+import io.aria.conductor.execution.context.ProviderCeilingResolver;
+import io.aria.conductor.execution.context.contributor.AgentPolicyContextContributor;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
@@ -41,7 +47,6 @@ import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
-import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -95,8 +100,8 @@ class AgentLoopEngineCoreDispatchTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock WorkflowService workflowService;
     @Mock WorkflowChainRepository workflowChainRepository;
-    @Mock AgentSkillResolver agentSkillResolver;
-    @Mock KnowledgeContextProvider knowledgeProvider;
+    @Mock ProviderCeilingResolver ceilings;
+    @Mock ContextManifestService manifestService;
     @Mock WorkspaceManager workspaceManager;
     @Mock ApprovalRepository approvalRepository;
     @Mock(name = "coreExecutionServiceProvider")
@@ -143,7 +148,7 @@ class AgentLoopEngineCoreDispatchTest {
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
         lenient().when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
-        lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
+        lenient().when(ceilings.ceilingFor(null)).thenReturn(Sensitivity.INTERNAL);
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreRunLauncher());
         stubStatusWrites();
         stubCompletionWrites();
@@ -244,7 +249,11 @@ class AgentLoopEngineCoreDispatchTest {
         return new AgentLoopEngine(
                 runRepository, agentRepository, sessionStateManager, approvalGate,
                 permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
-                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                workflowChainRepository,
+                new ContextAssembler(List.of(new AgentPolicyContextContributor(agentRepository)),
+                        ceilings, new ContextProperties()),
+                new ConversationHistoryLoader(runRepository, trajectoryRepository),
+                manifestService, new ContextProperties(), workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, unlimitedAdmission(), null /* KanbanRepository */,
                 inputCoordinator);

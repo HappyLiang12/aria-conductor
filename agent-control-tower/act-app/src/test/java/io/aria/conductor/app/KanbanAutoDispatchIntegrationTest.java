@@ -51,7 +51,9 @@ import static org.awaitility.Awaitility.await;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "aria.kanban.auto-dispatch-on-create=true")
 @ActiveProfiles({"test", "noop-llm"})
-@Sql(scripts = "classpath:db/cleanup-all.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_CLASS)
+@Sql(scripts = {
+        "classpath:db/cleanup-all.sql",
+        "classpath:db/cleanup-context-manifests.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_CLASS)
 class KanbanAutoDispatchIntegrationTest {
 
     @Autowired

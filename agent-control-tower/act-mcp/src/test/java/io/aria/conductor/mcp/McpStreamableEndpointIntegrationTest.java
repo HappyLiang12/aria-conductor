@@ -50,6 +50,13 @@ class McpStreamableEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository skillDefinitionRepository;
     @MockitoBean io.aria.conductor.aria.service.NotificationService notificationService;
     @MockitoBean io.aria.conductor.aria.service.ScheduledJobService scheduledJobService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryCommandService memoryCommandService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryProposalService memoryProposalService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryQueryService memoryQueryService;
+    @MockitoBean io.aria.conductor.memory.service.MemoryRecallService memoryRecallService;
+    @MockitoBean io.aria.conductor.execution.context.ContextManifestRepository contextManifestRepository;
+    @MockitoBean io.aria.conductor.memory.repository.MemoryFactRepository memoryFactRepository;
+    @MockitoBean io.aria.conductor.memory.repository.MemoryAssertionRepository memoryAssertionRepository;
 
     private McpSyncClient streamableClient() {
         return McpClient.sync(HttpClientStreamableHttpTransport.builder("http://localhost:" + port)

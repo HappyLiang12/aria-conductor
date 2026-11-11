@@ -78,6 +78,7 @@ class HousekeepingServiceExecuteTest {
     @Mock io.aria.conductor.common.repository.AcpPermissionRequestRepository acpPermissionRequestRepository;
     @Mock io.aria.conductor.execution.repository.RunExecutionBindingRepository runExecutionBindingRepository;
     @Mock AgentSessionRepository agentSessionRepository;
+    @Mock io.aria.conductor.execution.context.ContextManifestRepository contextManifestRepository;
     @Mock KanbanService kanbanService;
     @Mock AgentService agentService;
     @Mock RunService runService;
@@ -94,6 +95,7 @@ class HousekeepingServiceExecuteTest {
         service = new HousekeepingService(runRepository, kanbanRepository, agentRepository,
                 approvalRepository, trajectoryRepository, toolCallRepository, promptCallRepository,
                 acpPermissionRequestRepository, runExecutionBindingRepository, agentSessionRepository,
+                contextManifestRepository,
                 kanbanService, agentService, runService, approvalGate, eventPublisher, tx);
         lenient().when(runRepository.findByStatusIn(anyList())).thenReturn(List.of());
         lenient().when(runRepository.findByStatus(any())).thenReturn(List.of());
@@ -158,7 +160,7 @@ class HousekeepingServiceExecuteTest {
         // children deleted before the parent runs within each chunk
         InOrder order = Mockito.inOrder(trajectoryRepository, toolCallRepository,
                 promptCallRepository, acpPermissionRequestRepository, runExecutionBindingRepository,
-                approvalRepository, agentSessionRepository, runRepository);
+                approvalRepository, agentSessionRepository, contextManifestRepository, runRepository);
         order.verify(trajectoryRepository).deleteByRunIdInBulk(anyList());
         order.verify(toolCallRepository).deleteByRunIdInBulk(anyList());
         order.verify(promptCallRepository).deleteByRunIdInBulk(anyList());
@@ -166,6 +168,7 @@ class HousekeepingServiceExecuteTest {
         order.verify(runExecutionBindingRepository).deleteByRunIdInBulk(anyList());
         order.verify(approvalRepository).deleteByRunIdInBulk(anyList());
         order.verify(agentSessionRepository).deleteByRunIdInBulk(anyList());
+        order.verify(contextManifestRepository).deleteByRunIdIn(anyList());
         order.verify(runRepository).deleteByIdInBulk(anyList());
     }
 
@@ -218,6 +221,32 @@ class HousekeepingServiceExecuteTest {
         verify(acpPermissionRequestRepository).deleteByRunIdInBulk(List.of(purged));
         InOrder order = Mockito.inOrder(acpPermissionRequestRepository, runRepository);
         order.verify(acpPermissionRequestRepository).deleteByRunIdInBulk(List.of(purged));
+        order.verify(runRepository).deleteByIdInBulk(List.of(purged));
+    }
+
+    /**
+     * The V81 context manifest is a run child with no database cascade: one row per
+     * assembled turn. The run purge deletes them with the exact run ids, in the same
+     * chunk and before the run row, so a purged run leaves no orphan provenance.
+     */
+    @Test
+    void runsPurge_deletesTheRunOwnedContextManifestsWithTheExactRunIds() {
+        Instant old = Instant.now().minus(30, ChronoUnit.HOURS);
+        UUID purged = UUID.fromString("00000000-0000-0000-0000-000000000701");
+        Run run = new Run();
+        run.setId(purged);
+        run.setStatus(RunStatus.COMPLETED);
+        run.setCreatedAt(old);
+        run.setUpdatedAt(old);
+        when(runRepository.findByStatusIn(anyList())).thenReturn(List.of(run));
+
+        HousekeepingReceipt r = service.execute(
+                new HousekeepingRequest(List.of("runs"), false, Exclusions.empty(), true));
+
+        assertThat(receipt(r, "runs").cleared()).isEqualTo(1);
+        verify(contextManifestRepository).deleteByRunIdIn(List.of(purged));
+        InOrder order = Mockito.inOrder(contextManifestRepository, runRepository);
+        order.verify(contextManifestRepository).deleteByRunIdIn(List.of(purged));
         order.verify(runRepository).deleteByIdInBulk(List.of(purged));
     }
 

@@ -397,12 +397,22 @@ function settleApproval(
 
 // === clarification cards ===
 
+type ClarificationPatch = {
+  approvalId: string;
+  /** A new card needs the run it belongs to; the render path slices it. */
+  runId?: string;
+  question: string;
+};
+
 function upsertClarification(
   state: PanelState,
-  patch: { approvalId: string; runId: string; question: string },
+  patch: ClarificationPatch,
 ): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'clarification' && item.approvalId === patch.approvalId);
   if (index < 0) {
+    // No run id, nothing to draw: the card's run id is what the render path slices,
+    // and a frame is untyped at runtime. Mirrors the guard in upsertApproval.
+    if (patch.runId === undefined) return state;
     const card: ClarificationItem = {
       kind: 'clarification',
       id: `clarification:${patch.approvalId}`,

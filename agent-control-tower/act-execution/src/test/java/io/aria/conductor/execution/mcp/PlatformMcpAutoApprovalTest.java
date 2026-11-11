@@ -21,7 +21,12 @@ class PlatformMcpAutoApprovalTest {
             "list_kanban_items", "list_knowledge", "query_knowledge", "list_llm_providers",
             "get_llm_provider", "list_reports", "list_runs", "list_running_runs", "get_run",
             "list_skills", "get_skill", "list_agent_skills", "list_workflow_templates",
-            "get_workflow", "WebSearch", "WebFetch");
+            "get_workflow",
+            // 2026-11-11 operator amendment: the five read-only memory tools the Aria
+            // assistant uses, so a read-only memory turn stops interrupting the operator.
+            "recall_memory", "list_memory_entities", "get_memory_entity",
+            "list_memory_proposals", "get_context_manifest",
+            "WebSearch", "WebFetch");
 
     /**
      * Every mutating / operator-only / gated tool the operator's decision lists

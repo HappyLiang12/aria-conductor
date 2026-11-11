@@ -48,7 +48,8 @@ public class McpProperties {
      * Read-only tools the Aria assistant's own coordinated runs may call
      * without a per-call operator ask (operator decision 2026-09-29, spec
      * amendment; extended 2026-10-04 with the cores' own read-only web tools,
-     * D5). The list names the platform's own read-only MCP tools — the
+     * D5; extended 2026-11-11 with the five read-only memory tools, operator
+     * amendment B4). The list names the platform's own read-only MCP tools — the
      * {@code PLATFORM_MCP} delivery and the live native shape a core reports
      * for a platform MCP call ({@code mcp__aria-conductor__<tool>}) — and the
      * cores' own read-only tools (e.g. the CLI's {@code WebSearch} and
@@ -67,7 +68,10 @@ public class McpProperties {
             "list_kanban_items", "list_knowledge", "query_knowledge", "list_llm_providers",
             "get_llm_provider", "list_reports", "list_runs", "list_running_runs", "get_run",
             "list_skills", "get_skill", "list_agent_skills", "list_workflow_templates",
-            "get_workflow", "WebSearch", "WebFetch"));
+            "get_workflow",
+            "recall_memory", "list_memory_entities", "get_memory_entity",
+            "list_memory_proposals", "get_context_manifest",
+            "WebSearch", "WebFetch"));
 
     /**
      * Sandbox execd-readiness wait budget in ms (probed every 500ms). createSandbox

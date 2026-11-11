@@ -1822,3 +1822,76 @@ describe('AriaPanel cleared-conversation guard on the REST plane', () => {
     expect(conversationIdText(container)).toBe(clearedId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 37 review fold-in: both REST reconciles swallowed an operator refusal —
+// the only effect was a suppressed console line, so the operator saw a panel
+// that simply had no approvals and no proposals. The panel keeps its own error
+// surface: a refusal there reads as the shared notice, a fault as its text.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
+  const timelineWithRun = [
+    { role: 'user', content: 'brief me', timestamp: '2026-09-30T10:00:00Z', runId: 'run-1' },
+  ];
+
+  async function reconcileOnce() {
+    renderPanel();
+    await act(async () => {}); // the mount reconcile
+    await openPanel();
+  }
+
+  it('shows the operator notice when the pending-approval read is refused', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({
+      response: { status: 403, data: { message: 'RECONCILE_RAW_SERVER_TEXT' } },
+    });
+
+    await reconcileOnce();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/reading the approval queue is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText(/RECONCILE_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+  });
+
+  it('shows the operator notice when the pending-proposal read is refused', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListMemoryProposals.mockRejectedValue({ response: { status: 401, data: {} } });
+
+    await reconcileOnce();
+
+    expect(await screen.findByTestId('operator-session-notice'))
+      .toHaveTextContent(/reading the memory proposal inbox is operator-only/i);
+  });
+
+  // Positive controls: a fault is not a refusal. It keeps the server's text and
+  // must not fabricate a session notice.
+  it('shows the server text and no notice when the approval read fails', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({
+      response: { status: 500, data: { message: 'approval store unavailable' } },
+    });
+
+    await reconcileOnce();
+
+    expect(await screen.findByText(/approval store unavailable/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+
+  it('shows the server text and no notice when the proposal read fails', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListMemoryProposals.mockRejectedValue({
+      response: { status: 500, data: { message: 'proposal inbox unavailable' } },
+    });
+
+    await reconcileOnce();
+
+    expect(await screen.findByText(/proposal inbox unavailable/)).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});

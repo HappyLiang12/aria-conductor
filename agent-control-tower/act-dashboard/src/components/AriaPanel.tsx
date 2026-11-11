@@ -18,7 +18,7 @@ import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
-import AriaProposalCard, { PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
+import AriaProposalCard, { OperatorSessionNotice, PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
 import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
@@ -306,6 +306,12 @@ export function AriaPanel() {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // Task 37 review fold-in: a reconcile read that was refused used to leave its
+  // only trace in the console. Its outcomes are reported on the panel's own
+  // error surface instead: a refusal as the shared notice, a fault as its text.
+  const [reconcileFailure, setReconcileFailure] = useState<
+    { text: string; operatorRejected: boolean; action: string }[]
+  >([]);
 
   const stackRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -502,6 +508,9 @@ export function AriaPanel() {
    * settles none of them, and neither does a page that hit the inbox cap.
    */
   const reconcile = useCallback(async (targetConversationId: string) => {
+    // Each read's outcome, reported on the panel's error surface once the
+    // snapshot is known to belong to the conversation on screen.
+    const failures: { text: string; operatorRejected: boolean; action: string }[] = [];
     const timeline = await getConversationTimeline(targetConversationId);
     const runIds = new Set(timeline.map((entry) => entry.runId).filter((runId) => !!runId));
     let approvals: Approval[] = [];
@@ -514,6 +523,11 @@ export function AriaPanel() {
       } catch (err) {
         if (!isOperatorRejection(err)) console.warn('[Aria] pending-approval reconcile failed:', err);
         approvals = [];
+        failures.push({
+          text: apiErrorMessage(err, 'The pending approvals could not be refreshed.'),
+          operatorRejected: isOperatorRejection(err),
+          action: 'Reading the approval queue',
+        });
       }
     }
     let proposals: MemoryProposalSummary[] = [];
@@ -527,10 +541,16 @@ export function AriaPanel() {
     } catch (err) {
       if (!isOperatorRejection(err)) console.warn('[Aria] pending-proposal reconcile failed:', err);
       proposals = [];
+      failures.push({
+        text: apiErrorMessage(err, 'The memory proposal inbox could not be refreshed.'),
+        operatorRejected: isOperatorRejection(err),
+        action: 'Reading the memory proposal inbox',
+      });
     }
     // A snapshot that resolves after the operator cleared this conversation must
     // not write the cleared transcript back, nor revert the reducer's id.
     if (conversationIdRef.current !== targetConversationId) return;
+    setReconcileFailure(failures);
     conversationRunIdsRef.current = runIds;
     dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals });
     const queued = await queuedRunIds(timeline, activeRunIdRef.current);
@@ -1250,6 +1270,29 @@ export function AriaPanel() {
             {historyError && (
               <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
                 {historyError}
+              </div>
+            )}
+
+            {/* A reconcile read that failed. A refusal is an authority problem
+                with a remedy, so it reads as the shared notice (naming the read
+                that was refused); a fault keeps the server's own text. Before
+                this, both were swallowed and the panel looked merely empty. */}
+            {reconcileFailure.some((failure) => !failure.operatorRejected) && (
+              <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
+                {reconcileFailure
+                  .filter((failure) => !failure.operatorRejected)
+                  .map((failure) => failure.text)
+                  .join(' ')}
+              </div>
+            )}
+            {reconcileFailure.some((failure) => failure.operatorRejected) && (
+              <div style={{ margin: '8px 12px' }}>
+                <OperatorSessionNotice
+                  actionLabel={reconcileFailure
+                    .filter((failure) => failure.operatorRejected)
+                    .map((failure) => failure.action)
+                    .join(' and ')}
+                />
               </div>
             )}
 

@@ -49,6 +49,13 @@ public interface KnowledgeItemRepository extends JpaRepository<KnowledgeItem, UU
     List<KnowledgeItem> findByStatusOrderByUpdatedAtDesc(KnowledgeStatus status);
 
     /**
+     * Bounded variant of {@link #findByStatusOrderByUpdatedAtDesc(KnowledgeStatus)}
+     * (P6): the context pipeline asks for the newest N approved items and never
+     * materializes the whole approved set.
+     */
+    List<KnowledgeItem> findByStatusOrderByUpdatedAtDesc(KnowledgeStatus status, Pageable pageable);
+
+    /**
      * Keyword search across name, description, and version content (#31).
      * Excludes RETIRED and REJECTED items but INCLUDES PENDING/DRAFT so freshly stored
      * knowledge is discoverable. When {@code status} is non-null, restricts to that exact

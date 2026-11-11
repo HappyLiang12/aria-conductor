@@ -22,6 +22,14 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findByAgentIdAndStatus(UUID agentId, RunStatus status);
     long countByStatus(RunStatus status);
     List<Run> findByConversationIdOrderByCreatedAtAsc(String conversationId);
+
+    /**
+     * P6: the bounded conversation-history load. The last 20 runs of a conversation,
+     * newest first, are selected by the database — no full-table read followed by a
+     * {@code subList}. A conversation with no runs yields an empty list.
+     */
+    List<Run> findTop20ByConversationIdOrderByCreatedAtDesc(String conversationId);
+
     List<Run> findByDispatchedByRunId(UUID dispatchedByRunId);
 
     /**

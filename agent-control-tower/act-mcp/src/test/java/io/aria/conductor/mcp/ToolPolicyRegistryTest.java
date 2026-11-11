@@ -1,8 +1,10 @@
 package io.aria.conductor.mcp;
 
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.common.tool.ToolDescriptor;
+import io.aria.conductor.common.tool.ToolPolicy;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
 import io.aria.conductor.mcp.tools.ToolPolicyRegistry;
-import io.aria.conductor.mcp.tools.ToolPolicyRegistry.ToolPolicy;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -11,14 +13,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The reviewed tool policy (spec §6.1): the classification is explicit — never a
- * naming heuristic — every tool the embedded endpoint registers is covered, an
- * unclassified name stays GATED, and only explicitly classified read-only tools
- * may be allowed automatically.
+ * The reviewed tool policy (spec §6.1): the classification is explicit in
+ * {@link ToolCatalog} — never a naming heuristic — every tool the embedded
+ * endpoint registers is covered, an unclassified name stays GATED, and only
+ * explicitly classified read-only tools may be allowed automatically.
  */
 class ToolPolicyRegistryTest {
 
-    private final ToolPolicyRegistry registry = new ToolPolicyRegistry();
+    private final ToolCatalog catalog = new ToolCatalog();
+    private final ToolPolicyRegistry registry = new ToolPolicyRegistry(catalog);
 
     private static final ActorPrincipal OPERATOR = ActorPrincipal.operator(null);
     private static final ActorPrincipal WORKER =
@@ -39,6 +42,23 @@ class ToolPolicyRegistryTest {
         assertThat(registry.policyOf("listaz_agent")).isEqualTo(ToolPolicy.GATED);
     }
 
+    /** The registry is a view of the catalog: every entry's policy is the catalog's. */
+    @Test
+    void everyCatalogEntryIsClassifiedThroughTheCatalog() {
+        assertThat(catalog.tools()).allSatisfy(tool ->
+                assertThat(registry.policyOf(tool.name()))
+                        .as("policy of '%s'", tool.name())
+                        .isEqualTo(tool.policy()));
+    }
+
+    /** Delegation covers the catalog beyond the registered surface (the native read-only pair). */
+    @Test
+    void policyOfAlsoAnswersTheCataloguedNativeReadOnlyTools() {
+        assertThat(registry.policyOf("WebSearch")).isEqualTo(ToolPolicy.WORKER_READ);
+        assertThat(registry.policyOf("WebFetch")).isEqualTo(ToolPolicy.WORKER_READ);
+        assertThat(catalog.find("WebSearch")).map(ToolDescriptor::autoApproveRead).contains(true);
+    }
+
     @Test
     void onlyExplicitlyClassifiedReadOnlyToolsAreAutomaticallyAllowed() {
         assertThat(registry.isAutomaticallyAllowed("list_runs")).isTrue();
@@ -56,7 +76,8 @@ class ToolPolicyRegistryTest {
                 .filter(name -> registry.policyOf(name) == ToolPolicy.OPERATOR_ONLY))
                 .containsExactlyInAnyOrder("decide_approval", "retire_agent", "housekeeping_execute",
                         "create_llm_provider", "update_llm_provider", "delete_llm_provider",
-                        "activate_llm_provider", "test_llm_provider");
+                        "activate_llm_provider", "test_llm_provider",
+                        "forget_fact", "decide_memory_proposal");
     }
 
     @Test

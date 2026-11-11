@@ -12,6 +12,14 @@ import io.aria.conductor.common.event.RunInputReceivedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
+import io.aria.conductor.common.context.ContextAdapter;
+import io.aria.conductor.common.context.ContextMessage;
+import io.aria.conductor.common.context.ContextRequest;
+import io.aria.conductor.execution.context.AssembledContext;
+import io.aria.conductor.execution.context.ContextAssembler;
+import io.aria.conductor.execution.context.ContextManifestService;
+import io.aria.conductor.execution.context.ContextProperties;
+import io.aria.conductor.execution.context.ConversationHistoryLoader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
@@ -37,9 +45,7 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
-import io.aria.conductor.common.service.KnowledgeContextProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -80,8 +86,15 @@ public class AgentLoopEngine {
     private final ApplicationEventPublisher eventPublisher;
     private final WorkflowService workflowService;
     private final WorkflowChainRepository workflowChainRepository;
-    private final AgentSkillResolver agentSkillResolver;
-    private final KnowledgeContextProvider knowledgeProvider;
+    /**
+     * The one prompt pipeline (spec §8.2/§8.5): the engine assembles the
+     * envelope, loads bounded history and records the manifest; it no longer
+     * builds knowledge or skills text itself.
+     */
+    private final ContextAssembler contextAssembler;
+    private final ConversationHistoryLoader historyLoader;
+    private final ContextManifestService manifestService;
+    private final ContextProperties contextProperties;
     private final WorkspaceManager workspaceManager;
     private final ApprovalRepository approvalRepository;
     /**
@@ -122,8 +135,10 @@ public class AgentLoopEngine {
                            ApplicationEventPublisher eventPublisher,
                            WorkflowService workflowService,
                            WorkflowChainRepository workflowChainRepository,
-                           AgentSkillResolver agentSkillResolver,
-                           KnowledgeContextProvider knowledgeProvider,
+                           ContextAssembler contextAssembler,
+                           ConversationHistoryLoader historyLoader,
+                           ContextManifestService manifestService,
+                           ContextProperties contextProperties,
                            WorkspaceManager workspaceManager,
                            ApprovalRepository approvalRepository,
                            ObjectProvider<CoreExecutionService> coreExecutionServiceProvider,
@@ -141,8 +156,10 @@ public class AgentLoopEngine {
         this.eventPublisher = eventPublisher;
         this.workflowService = workflowService;
         this.workflowChainRepository = workflowChainRepository;
-        this.agentSkillResolver = agentSkillResolver;
-        this.knowledgeProvider = knowledgeProvider;
+        this.contextAssembler = contextAssembler;
+        this.historyLoader = historyLoader;
+        this.manifestService = manifestService;
+        this.contextProperties = contextProperties;
         this.workspaceManager = workspaceManager;
         this.approvalRepository = approvalRepository;
         this.coreExecutionServiceProvider = coreExecutionServiceProvider;
@@ -387,7 +404,8 @@ public class AgentLoopEngine {
                 abandonContext(ctx, committed);
                 return;
             }
-            CoreResult result = launcher.execute(run, agent, coreTask(ctx));
+            CoreResult result = launcher.execute(run, agent,
+                    coreTask(ctx, emitter == null ? ContextAdapter.SYNC : ContextAdapter.STREAM));
             // A finalized (or cancelled-while-waiting) question turn is returned as
             // the result AND was already accounted when its TurnCompletedEvent was
             // published; recording it again would double-count usage, iteration and
@@ -455,14 +473,20 @@ public class AgentLoopEngine {
         return TERMINAL_STATUSES.contains(status);
     }
 
-    /** The accepted conversation as the core task: system material, history, current request. */
-    private CoreTask coreTask(RunContext ctx) {
+    /**
+     * The accepted conversation as the core task: system material, history, current request.
+     *
+     * <p>Spec §8.3: the current request enters as the run's prompt seed, never as
+     * the last user turn of a transcript. A stale prior user row (an approval
+     * answer, an earlier instruction) sits in the history where it belongs and can
+     * never be mistaken for this turn's request.
+     */
+    private CoreTask coreTask(RunContext ctx, ContextAdapter adapter) {
+        Run run = runRepository.findById(ctx.getRunId()).orElse(null);
+        String userPrompt = run == null || run.getPromptSeed() == null ? "" : run.getPromptSeed();
         StringBuilder system = new StringBuilder();
         List<LlmMessage> history = new ArrayList<>();
-        String userPrompt = "";
-        List<LlmMessage> messages = buildMessages(ctx);
-        for (int i = 0; i < messages.size(); i++) {
-            LlmMessage message = messages.get(i);
+        for (LlmMessage message : buildMessages(ctx, adapter)) {
             String role = message.role() == null ? "" : message.role();
             if ("system".equals(role)) {
                 if (message.content() != null && !message.content().isBlank()) {
@@ -471,22 +495,11 @@ public class AgentLoopEngine {
                     }
                     system.append(message.content());
                 }
-            } else if ("user".equals(role) && i == lastUserIndex(messages)) {
-                userPrompt = message.content() == null ? "" : message.content();
             } else {
                 history.add(message);
             }
         }
         return new CoreTask(system.toString(), List.copyOf(history), userPrompt);
-    }
-
-    private static int lastUserIndex(List<LlmMessage> messages) {
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            if ("user".equals(messages.get(i).role())) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     /** Waits (bounded) for a control acknowledgement; a missing one is a refused control, never a success. */
@@ -1012,73 +1025,72 @@ public class AgentLoopEngine {
 
     // ---- Helper methods ----
 
-    private List<LlmMessage> buildMessages(RunContext ctx) {
-        List<LlmMessage> messages = new ArrayList<>();
+    /**
+     * Assembles this turn's messages through the one context pipeline (spec
+     * §8.2/§8.5): the system block and history come from the assembler, then
+     * this run's own trajectory rows and prompt seed are appended exactly as
+     * before. The envelope is assembled once per run/turn and recorded as one
+     * manifest row.
+     */
+    private List<LlmMessage> buildMessages(RunContext ctx, ContextAdapter adapter) {
+        Run run = runRepository.findById(ctx.getRunId()).orElse(null);
 
-        // System message: prefer agent.config.systemPrompt, fall back to agent.role
-        StringBuilder systemPrompt = new StringBuilder();
-        String systemPromptFromConfig = getSystemPromptFromConfig(ctx.getAgent());
-        if (systemPromptFromConfig != null && !systemPromptFromConfig.isBlank()) {
-            systemPrompt.append(systemPromptFromConfig).append("\n\n");
-        } else if (ctx.getAgent().getRole() != null) {
-            systemPrompt.append(ctx.getAgent().getRole()).append("\n\n");
-        }
-
-        // Inject approved knowledge context (was Aria-only, now all agents).
-        // Format lives in one place: KnowledgeContextProvider.buildKnowledgeContextPrompt.
-        try {
-            String knowledgePrompt = knowledgeProvider.buildKnowledgeContextPrompt(5);
-            if (!knowledgePrompt.isBlank()) {
-                systemPrompt.append(knowledgePrompt).append("\n");
-            }
-        } catch (Exception e) {
-            log.warn("Failed to inject knowledge context: {}", e.getMessage());
-        }
-
-        // Inject enabled SKILL-stage skills assigned to this agent (resolves #56 skills orphan).
-        try {
-            List<SkillContext> skills = agentSkillResolver.resolveForAgent(ctx.getAgent());
-            if (skills != null && !skills.isEmpty()) {
-                systemPrompt.append("## Skills\n");
-                for (SkillContext s : skills) {
-                    systemPrompt.append("- **").append(s.name()).append("**: ")
-                            .append(s.template()).append("\n");
-                }
-                systemPrompt.append("\n");
-            }
-        } catch (Exception e) {
-            log.warn("Failed to inject skills for agent {}: {}", ctx.getAgentId(), e.getMessage());
-        }
-
-        if (!systemPrompt.isEmpty()) {
-            messages.add(LlmMessage.system(systemPrompt.toString()));
-        }
-
-        // The caller's prior turns sit between the system prompt and this run's own
-        // rows: the run's request lands from its prompt seed, never from the caller's
-        // context, so a request repeated verbatim across turns is still two messages.
+        // A caller-supplied system message (the chat adapter's own policy) travels
+        // as the request's client policy, never as an opaque conversation turn.
+        String clientPolicy = ctx.getPriorContext().stream()
+                .filter(message -> message != null && "system".equals(message.role()))
+                .map(LlmMessage::content)
+                .filter(content -> content != null && !content.isBlank())
+                .collect(Collectors.joining("\n\n"));
+        List<ContextMessage> fallback = new ArrayList<>();
         for (LlmMessage prior : ctx.getPriorContext()) {
             if (prior == null || prior.content() == null) continue;
-            String role = prior.role() == null ? "" : prior.role();
-            if ("system".equals(role)) {
-                continue;
-            } else if ("assistant".equals(role)) {
-                messages.add(LlmMessage.assistant(prior.content()));
-            } else if ("tool".equals(role)) {
-                messages.add(LlmMessage.tool(prior.content(), prior.toolCallId()));
-            } else {
-                messages.add(LlmMessage.user(prior.content()));
-            }
+            String role = prior.role() == null || prior.role().isBlank() ? "user" : prior.role();
+            if ("system".equals(role)) continue;
+            fallback.add(new ContextMessage(role, prior.content(), prior.toolCallId()));
+        }
+        dropTrailingEchoOfTheRequest(fallback, run);
+
+        ContextRequest request = new ContextRequest(
+                ctx.getRunId(), ctx.getConversationId(), ctx.getAgentId(), adapter,
+                nextTurnNumber(ctx), run == null ? "" : run.getPromptSeed(), null,
+                Sensitivity.RESTRICTED, contextProperties.getMaxChars(),
+                workspaceRef(ctx.getAgent()), clientPolicy, fallback);
+
+        ConversationHistoryLoader.LoadedHistory loaded =
+                historyLoader.loadBounded(request.conversationId(), request.priorHistory());
+        AssembledContext assembled = contextAssembler.assemble(request, loaded.messages());
+        AssembledContext recorded = loaded.degraded().isEmpty()
+                ? assembled
+                : withDegraded(assembled, loaded.degraded());
+        recordManifest(request, recorded);
+
+        List<LlmMessage> messages = new ArrayList<>();
+        if (!assembled.systemText().isBlank()) {
+            messages.add(LlmMessage.system(assembled.systemText()));
+        }
+        for (ContextMessage message : assembled.history()) {
+            messages.add(toLlmMessage(message));
         }
 
         // Load trajectory history for context
         List<SessionTrajectory> history = trajectoryRepository
                 .findByRunIdOrderByTurnNumberAsc(ctx.getRunId());
 
+        // A run's own seed is persisted as its first user row for the conversation
+        // timeline; the Goal section and the prompt-seed channel already carry it,
+        // so it is never replayed as history (spec §8.2 step 4, §8.3).
+        String seed = run == null ? null : run.getPromptSeed();
+        boolean seedRowPending = seed != null && !seed.isBlank();
+
         for (SessionTrajectory t : history) {
             if ("system".equals(t.getRole())) {
                 messages.add(LlmMessage.system(t.getContent()));
             } else if ("user".equals(t.getRole())) {
+                if (seedRowPending && seed.equals(t.getContent())) {
+                    seedRowPending = false;
+                    continue;
+                }
                 messages.add(LlmMessage.user(t.getContent()));
             } else if ("assistant".equals(t.getRole())) {
                 // Reconstruct tool_calls from stored JSON for multi-iteration DeepSeek compatibility
@@ -1092,15 +1104,72 @@ public class AgentLoopEngine {
             }
         }
 
-        // If no history, add the prompt seed from the run
-        if (history.isEmpty()) {
-            Run run = runRepository.findById(ctx.getRunId()).orElse(null);
-            if (run != null && run.getPromptSeed() != null) {
-                messages.add(LlmMessage.user(run.getPromptSeed()));
-            }
-        }
-
         return messages;
+    }
+
+    /**
+     * A client transcript can echo the current request as its newest turn. The
+     * request already enters through the Goal section and the seed channel, so a
+     * trailing copy is dropped instead of becoming history (spec §8.3).
+     */
+    private static void dropTrailingEchoOfTheRequest(List<ContextMessage> fallback, Run run) {
+        String seed = run == null ? null : run.getPromptSeed();
+        if (seed == null || seed.isBlank() || fallback.isEmpty()) {
+            return;
+        }
+        ContextMessage last = fallback.get(fallback.size() - 1);
+        if (!"tool".equals(last.role()) && seed.equals(last.content())) {
+            fallback.remove(fallback.size() - 1);
+        }
+    }
+
+    /** The turn this assembly belongs to: one past the run's last recorded turn. */
+    private int nextTurnNumber(RunContext ctx) {
+        return trajectoryRepository.findMaxTurnNumberByRunId(ctx.getRunId()) + 1;
+    }
+
+    /**
+     * The workspace reference the run works in (spec §8.1, "Workspace"): mode
+     * and admitted base ref, never a backend-local path.
+     */
+    private static String workspaceRef(Agent agent) {
+        if (agent == null || agent.getWorkspaceMode() == null) {
+            return null;
+        }
+        String baseRef = agent.getWorkspaceBaseRef();
+        if (baseRef == null || baseRef.isBlank()) {
+            return null;
+        }
+        return agent.getWorkspaceMode() + "@" + baseRef;
+    }
+
+    private static LlmMessage toLlmMessage(ContextMessage message) {
+        String role = message.role() == null ? "" : message.role();
+        return switch (role) {
+            case "assistant" -> LlmMessage.assistant(message.content());
+            case "tool" -> LlmMessage.tool(message.content(), message.toolCallId());
+            case "system" -> LlmMessage.system(message.content());
+            default -> LlmMessage.user(message.content());
+        };
+    }
+
+    /** The assembly plus the history loader's own degradation reasons. */
+    private static AssembledContext withDegraded(AssembledContext assembled, List<String> extra) {
+        List<String> degraded = new ArrayList<>(assembled.degraded());
+        extra.stream().filter(reason -> !degraded.contains(reason)).forEach(degraded::add);
+        return new AssembledContext(assembled.systemText(), assembled.history(),
+                assembled.estimatedTokens(), assembled.sections(), assembled.dropped(),
+                List.copyOf(degraded));
+    }
+
+    /** One manifest row per turn; a failed write is logged and never fails the run. */
+    private void recordManifest(ContextRequest request, AssembledContext assembled) {
+        try {
+            manifestService.record(request, assembled);
+        } catch (Exception e) {
+            log.warn("Failed to record context manifest for run {} turn {}: {}",
+                    request.runId(), request.turnNumber(), e.getMessage());
+        }
     }
 
 
@@ -1340,21 +1409,6 @@ public class AgentLoopEngine {
         return runMaxIterations > 0 ? runMaxIterations : 50;
     }
 
-
-    private String getSystemPromptFromConfig(Agent agent) {
-        String config = agent.getConfig();
-        if (config == null || config.isBlank()) return null;
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            Map<String, Object> configMap = mapper.readValue(config,
-                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-            Object sp = configMap.get("systemPrompt");
-            if (sp instanceof String s && !s.isBlank()) return s;
-        } catch (Exception e) {
-            log.debug("No systemPrompt in agent {} config", agent.getId());
-        }
-        return null;
-    }
 
     private boolean updateRunStatusDirect(UUID runId, RunStatus status) {
         // A terminal state is never overwritten, and the database decides atomically:

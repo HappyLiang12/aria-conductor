@@ -27,6 +27,7 @@ import io.aria.conductor.execution.kanban.KanbanItem;
 import io.aria.conductor.execution.kanban.KanbanRepository;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
+import io.aria.conductor.execution.context.ContextManifestRepository;
 import io.aria.conductor.execution.repository.AgentSessionRepository;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.PromptCallRepository;
@@ -92,6 +93,7 @@ public class HousekeepingService {
     private final AcpPermissionRequestRepository acpPermissionRequestRepository;
     private final RunExecutionBindingRepository runExecutionBindingRepository;
     private final AgentSessionRepository agentSessionRepository;
+    private final ContextManifestRepository contextManifestRepository;
     private final KanbanService kanbanService;
     private final AgentService agentService;
     private final RunService runService;
@@ -109,6 +111,7 @@ public class HousekeepingService {
                                AcpPermissionRequestRepository acpPermissionRequestRepository,
                                RunExecutionBindingRepository runExecutionBindingRepository,
                                AgentSessionRepository agentSessionRepository,
+                               ContextManifestRepository contextManifestRepository,
                                KanbanService kanbanService, AgentService agentService,
                                RunService runService, ApprovalGate approvalGate,
                                ApplicationEventPublisher eventPublisher,
@@ -123,6 +126,7 @@ public class HousekeepingService {
         this.acpPermissionRequestRepository = acpPermissionRequestRepository;
         this.runExecutionBindingRepository = runExecutionBindingRepository;
         this.agentSessionRepository = agentSessionRepository;
+        this.contextManifestRepository = contextManifestRepository;
         this.kanbanService = kanbanService;
         this.agentService = agentService;
         this.runService = runService;
@@ -319,6 +323,11 @@ public class HousekeepingService {
                     runExecutionBindingRepository.deleteByRunIdInBulk(chunk);
                     approvalRepository.deleteByRunIdInBulk(chunk);
                     agentSessionRepository.deleteByRunIdInBulk(chunk);
+                    // The context manifest is a run-scoped child too (V81 has no cascade):
+                    // one row per assembled turn, so a purged run must take its provenance
+                    // with it and never leave orphans behind. Governed memory itself
+                    // (entities/facts/assertions) is not a run child and is never purged.
+                    contextManifestRepository.deleteByRunIdIn(chunk);
                     runRepository.deleteByIdInBulk(chunk);
                 });
                 cleared += chunk.size();

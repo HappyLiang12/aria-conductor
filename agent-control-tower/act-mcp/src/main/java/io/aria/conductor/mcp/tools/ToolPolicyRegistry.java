@@ -1,17 +1,21 @@
 package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.common.tool.ToolDescriptor;
+import io.aria.conductor.common.tool.ToolPolicy;
+import io.aria.conductor.mcp.catalog.ToolCatalog;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
  * The reviewed tool policy of the platform MCP surface (spec §6, "explicit
  * policy, not naming heuristics"). Every tool the embedded MCP endpoint
- * registers is classified explicitly here; names starting with {@code list_},
- * {@code get_} or {@code query_} are evidence of nothing, and an unclassified
- * tool is GATED — never automatically allowed.
+ * registers is classified explicitly in {@link ToolCatalog}; names starting
+ * with {@code list_}, {@code get_} or {@code query_} are evidence of nothing,
+ * and an unclassified tool is GATED — never automatically allowed.
  *
  * <ul>
  *   <li>{@code WORKER_READ} — no mutation; the only class an execution boundary
@@ -29,92 +33,21 @@ import java.util.Set;
 @Component
 public class ToolPolicyRegistry {
 
-    /** What authority a tool call requires. */
-    public enum ToolPolicy {
-        WORKER_READ,
-        WORKER_WRITE,
-        OPERATOR_ONLY,
-        GATED
+    private final ToolCatalog catalog;
+
+    /** Test convenience: the catalog is stateless, so a fresh instance is equivalent. */
+    ToolPolicyRegistry() {
+        this(new ToolCatalog());
     }
 
-    private static final Map<String, ToolPolicy> POLICIES = Map.ofEntries(
-            // workflows
-            Map.entry("list_workflow_templates", ToolPolicy.WORKER_READ),
-            Map.entry("instantiate_workflow_template", ToolPolicy.WORKER_WRITE),
-            Map.entry("get_workflow", ToolPolicy.WORKER_READ),
-            // knowledge
-            Map.entry("list_knowledge", ToolPolicy.WORKER_READ),
-            Map.entry("store_knowledge", ToolPolicy.WORKER_WRITE),
-            Map.entry("query_knowledge", ToolPolicy.WORKER_READ),
-            Map.entry("review_knowledge", ToolPolicy.WORKER_WRITE),
-            Map.entry("retire_knowledge", ToolPolicy.WORKER_WRITE),
-            // approvals
-            Map.entry("list_approvals", ToolPolicy.WORKER_READ),
-            Map.entry("decide_approval", ToolPolicy.OPERATOR_ONLY),
-            // agents
-            Map.entry("list_agents", ToolPolicy.WORKER_READ),
-            Map.entry("get_agent", ToolPolicy.WORKER_READ),
-            Map.entry("create_agent", ToolPolicy.WORKER_WRITE),
-            Map.entry("update_agent", ToolPolicy.WORKER_WRITE),
-            Map.entry("retire_agent", ToolPolicy.OPERATOR_ONLY),
-            // runs
-            Map.entry("run_agent", ToolPolicy.WORKER_WRITE),
-            Map.entry("list_runs", ToolPolicy.WORKER_READ),
-            Map.entry("list_running_runs", ToolPolicy.WORKER_READ),
-            Map.entry("get_run", ToolPolicy.WORKER_READ),
-            Map.entry("pause_run", ToolPolicy.WORKER_WRITE),
-            Map.entry("resume_run", ToolPolicy.WORKER_WRITE),
-            Map.entry("cancel_run", ToolPolicy.WORKER_WRITE),
-            // kanban
-            Map.entry("create_kanban_item", ToolPolicy.WORKER_WRITE),
-            Map.entry("list_kanban_items", ToolPolicy.WORKER_READ),
-            Map.entry("update_kanban_item", ToolPolicy.WORKER_WRITE),
-            Map.entry("transition_kanban_item", ToolPolicy.WORKER_WRITE),
-            // dashboard
-            Map.entry("get_dashboard_summary", ToolPolicy.WORKER_READ),
-            // definition of done
-            Map.entry("init_dod", ToolPolicy.WORKER_WRITE),
-            Map.entry("submit_dod_review", ToolPolicy.WORKER_WRITE),
-            Map.entry("get_dod_status", ToolPolicy.WORKER_READ),
-            // reports
-            Map.entry("generate_report", ToolPolicy.WORKER_WRITE),
-            Map.entry("list_reports", ToolPolicy.WORKER_READ),
-            Map.entry("amend_report", ToolPolicy.WORKER_WRITE),
-            // housekeeping / ops
-            Map.entry("housekeeping_scan", ToolPolicy.WORKER_READ),
-            Map.entry("housekeeping_execute", ToolPolicy.OPERATOR_ONLY),
-            // skills
-            Map.entry("list_skills", ToolPolicy.WORKER_READ),
-            Map.entry("get_skill", ToolPolicy.WORKER_READ),
-            Map.entry("toggle_skill", ToolPolicy.WORKER_WRITE),
-            Map.entry("list_agent_skills", ToolPolicy.WORKER_READ),
-            Map.entry("assign_skill", ToolPolicy.WORKER_WRITE),
-            Map.entry("unassign_skill", ToolPolicy.WORKER_WRITE),
-            // llm providers (credential / core-selection management)
-            Map.entry("list_llm_providers", ToolPolicy.WORKER_READ),
-            Map.entry("get_llm_provider", ToolPolicy.WORKER_READ),
-            Map.entry("create_llm_provider", ToolPolicy.OPERATOR_ONLY),
-            Map.entry("update_llm_provider", ToolPolicy.OPERATOR_ONLY),
-            Map.entry("delete_llm_provider", ToolPolicy.OPERATOR_ONLY),
-            Map.entry("activate_llm_provider", ToolPolicy.OPERATOR_ONLY),
-            Map.entry("test_llm_provider", ToolPolicy.OPERATOR_ONLY),
-            // aria assistant surfaces
-            Map.entry("list_notifications", ToolPolicy.WORKER_READ),
-            Map.entry("get_unread_notification_count", ToolPolicy.WORKER_READ),
-            Map.entry("mark_notification_read", ToolPolicy.WORKER_WRITE),
-            Map.entry("mark_all_notifications_read", ToolPolicy.WORKER_WRITE),
-            Map.entry("list_scheduled_jobs", ToolPolicy.WORKER_READ),
-            Map.entry("create_scheduled_job", ToolPolicy.WORKER_WRITE),
-            Map.entry("cancel_scheduled_job", ToolPolicy.WORKER_WRITE),
-            Map.entry("get_latest_conversation", ToolPolicy.WORKER_READ),
-            Map.entry("get_conversation_timeline", ToolPolicy.WORKER_READ));
+    @Autowired
+    public ToolPolicyRegistry(ToolCatalog catalog) {
+        this.catalog = Objects.requireNonNull(catalog, "catalog");
+    }
 
     /** The reviewed classification; an unknown name is GATED, never guessed. */
     public ToolPolicy policyOf(String toolName) {
-        if (toolName == null) {
-            return ToolPolicy.GATED;
-        }
-        return POLICIES.getOrDefault(toolName, ToolPolicy.GATED);
+        return catalog.find(toolName).map(ToolDescriptor::policy).orElse(ToolPolicy.GATED);
     }
 
     /** True only for an explicitly classified read-only tool. */
@@ -149,8 +82,8 @@ public class ToolPolicyRegistry {
         }
     }
 
-    /** The exact set of explicitly classified tool names (coverage guard for tests). */
+    /** The exact set of registered tool names (coverage guard for tests). */
     public Set<String> classifiedToolNames() {
-        return POLICIES.keySet();
+        return catalog.names();
     }
 }

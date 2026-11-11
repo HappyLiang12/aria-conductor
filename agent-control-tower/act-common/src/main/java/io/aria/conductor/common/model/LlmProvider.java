@@ -38,6 +38,11 @@ public class LlmProvider {
     @Builder.Default
     private boolean active = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    @Builder.Default
+    private Sensitivity sensitivityCeiling = Sensitivity.INTERNAL;
+
     @Column(nullable = false)
     private Instant createdAt;
 
@@ -47,6 +52,7 @@ public class LlmProvider {
     protected void onCreate() {
         if (id == null) id = UUID.randomUUID();
         if (createdAt == null) createdAt = Instant.now();
+        if (sensitivityCeiling == null) sensitivityCeiling = Sensitivity.INTERNAL;
     }
 
     @PreUpdate

@@ -99,8 +99,9 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
                 taskCaptor.capture());
         CoreTask task = taskCaptor.getValue();
         assertThat(task.systemPrompt())
-                .as("knowledge must be injected for non-Aria agents")
-                .contains("## Knowledge Context", "deploy-proc");
+                .as("knowledge must be injected for non-Aria agents, one section per item")
+                .contains("## deploy-proc", "Always blue-green deploy")
+                .doesNotContain("## Knowledge Context");
         assertThat(task.systemPrompt())
                 .as("enabled skills must be injected (resolves #56 skills orphan)")
                 .contains("## Skills", "When triaging, check logs first");

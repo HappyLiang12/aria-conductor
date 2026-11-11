@@ -10,12 +10,10 @@ import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.common.service.KnowledgeContextProvider;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,8 +51,6 @@ class OrphanedRunRecoveryTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private WorkflowService workflowService;
     @Mock private WorkflowChainRepository workflowChainRepository;
-    @Mock private AgentSkillResolver agentSkillResolver;
-    @Mock private KnowledgeContextProvider knowledgeProvider;
     @Mock private WorkspaceManager workspaceManager;
     @Mock private ApprovalRepository approvalRepository;
 
@@ -65,7 +61,9 @@ class OrphanedRunRecoveryTest {
         engine = new AgentLoopEngine(
                 runRepository, agentRepository, sessionStateManager, approvalGate,
                 permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
-                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                workflowChainRepository,
+                null /* ContextAssembler */, null /* ConversationHistoryLoader */,
+                null /* ContextManifestService */, null /* ContextProperties */, workspaceManager,
                 approvalRepository, null /* coreExecutionServiceProvider */, null /* DoDService */,
                 null /* coreRunLauncherProvider */, null /* admission */,
                 null /* KanbanRepository */, null /* RunInputCoordinator */);

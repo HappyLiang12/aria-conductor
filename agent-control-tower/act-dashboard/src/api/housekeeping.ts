@@ -1,4 +1,5 @@
 import client from './client';
+import { applyOperatorHeaders } from './operatorSession';
 
 /** One leftover item in a category preview. */
 export interface HousekeepingCategoryItem {
@@ -54,9 +55,11 @@ export async function scanHousekeeping(includeStuck = true): Promise<Housekeepin
   return data;
 }
 
+/** Operator-only: `confirm` is not authority, so the server also needs the session. */
 export async function executeHousekeeping(
   request: HousekeepingExecuteRequest
 ): Promise<HousekeepingReceipt> {
+  applyOperatorHeaders();
   const { data } = await client.post<HousekeepingReceipt>(`${BASE}/execute`, request);
   return data;
 }

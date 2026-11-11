@@ -35,23 +35,28 @@ public class ToolCatalog implements ToolCatalogProvider {
     private static final Set<String> NATIVE_READ_ONLY_TOOL_NAMES = Set.of("WebSearch", "WebFetch");
 
     /**
-     * T48 (re-review rev-mcp m2 / N3). The shipped default is
+     * T48 (re-review rev-mcp m2 / N3) + T49 (N-T48-6). The shipped default is
      * {@code aria.mcp.auth-mode: none} ({@code ARIA_MCP_AUTH_MODE} unset,
      * {@code act-app/src/main/resources/application.yml:85}): the filter requires no
      * credential and nothing is injected, so a caller that presents none publishes no actor,
      * {@code McpActorContext.require} refuses it, and the ten OPERATOR_ONLY tools fail closed
-     * for an operator as well. (Nothing in the default install is broken by this: the mode
-     * simply does not authenticate. A caller that DOES present a valid bearer is still
-     * resolved — {@code McpServerConfig.actorTransportContext} reads the header in every
-     * mode.) Each description said only that a run-scoped worker is refused, which is half
-     * the truth on a default install. The clause is a constant because all ten carry it, in
-     * this catalog AND in the {@code @Tool} annotation — one source, so the two copies cannot
-     * drift.
+     * for an operator as well. A caller that DOES present a valid bearer is still resolved
+     * ({@code McpServerConfig.actorTransportContext} reads the header in every mode). The
+     * legacy {@code token} mode is the third case: {@code McpTokenFilter} accepts only its
+     * static token (any operator bearer is answered 401) and that token resolves no actor,
+     * so these ten tools refuse every caller there too. Each description said only that a
+     * run-scoped worker is refused, which is half the truth on a default install; the clause
+     * now names the one credential that works and every mode that does not. It is a constant
+     * because all ten carry it, in this catalog AND in the {@code @Tool} annotation — one
+     * source, so the two copies cannot drift.
      */
     public static final String OPERATOR_SESSION_CLAUSE =
-            " It requires an operator-authenticated MCP session: with aria.mcp.auth-mode=none "
-                    + "no credential is required or injected, so a call that presents none is "
-                    + "refused.";
+            " It requires an operator-authenticated MCP session: the caller is identified only "
+                    + "from a valid operator bearer credential. The shipped default "
+                    + "aria.mcp.auth-mode=none injects no credential, so a call that presents "
+                    + "none is refused; the legacy token mode accepts only its static token, "
+                    + "which identifies no actor, so use aria.mcp.auth-mode=actor with the "
+                    + "operator bearer credential.";
 
     private static final List<ToolDescriptor> TOOLS = List.of(
             // workflows

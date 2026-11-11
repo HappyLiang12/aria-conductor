@@ -385,6 +385,54 @@ describe('ReviewQueue approval tool details (F7)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// T51: the API list is not guaranteed to carry every field. The release gate's
+// minimal stub ({ id, status }) reached this render path, dereferenced the
+// missing `runId` in `.slice()` inside the row `.map` and blanked the page.
+// A missing run is shown as unknown — never a fabricated id, never a dropped row.
+// ---------------------------------------------------------------------------
+
+/** An approval exactly as a sparse API payload delivered it to the gate: id + status only. */
+function sparseAsk(): Approval {
+  return { id: 'a-sparse', status: 'PENDING' } as unknown as Approval;
+}
+
+describe('ReviewQueue sparse approval payloads (T51)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('renders the row with an unknown run instead of throwing when runId is absent', async () => {
+    serve([sparseAsk()]);
+    ui();
+
+    // The row must still render (counted, not silently dropped) and must name
+    // the absence of the run honestly.
+    expect(await screen.findByText(/Run ·/)).toBeInTheDocument();
+    expect(screen.getByText('unknown')).toBeInTheDocument();
+    expect(screen.getByText('· 1 pending')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+  });
+
+  // Positive control: a fully populated approval renders exactly as before.
+  it('keeps the populated row identity unchanged', async () => {
+    serve([gateAsk()]);
+    ui();
+
+    expect(await screen.findByText(/Run ·/)).toBeInTheDocument();
+    expect(screen.getByText('run-abc')).toBeInTheDocument();
+    expect(screen.queryByText('unknown')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 37 / Item 6 (T35 audit row 13): approve and deny are operator-only, and a
 // refusal used to render the api error message — the server's own text, or the
 // generic "Approve failed." — with no notice and no remedy anywhere on the queue.

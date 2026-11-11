@@ -288,7 +288,7 @@ function pendingAsk(id: string): Approval {
   };
 }
 
-/** Sends one suggestion against a stream that never answers, then fires the panel's timeout. */
+/** Sends one message against a stream that never answers, then fires the panel's timeout. */
 async function sendThenTimeOut() {
   mockStream.mockImplementation(async (...args: StreamArgs) => {
     args[3]?.onThinking?.('run-1');
@@ -297,7 +297,12 @@ async function sendThenTimeOut() {
   renderPanel();
   await act(async () => {}); // flush the conversation load so the id line is bound
   fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+  // Sent through the composer rather than the empty state's suggestion: a
+  // reconciled conversation renders its transcript, so the suggestions are gone
+  // and only the composer sends. A userEvent cannot drive this under the fake
+  // timers the timeout needs.
+  fireEvent.change(textarea(), { target: { value: 'brief me on overnight runs' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(600_000); // CLIENT_TIMEOUT_MS, module-private
   });
@@ -308,15 +313,79 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
   it('a client timeout with pending asks names the count, points at the Review Queue and offers no retry', async () => {
     vi.useFakeTimers();
     try {
-      mockListApprovals.mockResolvedValue([pendingAsk('a1'), pendingAsk('a2')]);
+      // T32 Item 4: the reconcile must really consult the queue before the report
+      // does. With an empty timeline it reads no approvals at all, so "consulted
+      // once" was true by construction and pinned nothing. A completed run's rows
+      // give it run ids to intersect, so this fixture would produce a second read
+      // unless the two surfaces share one.
+      mockGetLatest.mockResolvedValue(summary());
+      mockGetTimeline.mockResolvedValue([
+        { role: 'user', content: 'brief me', timestamp: '2026-09-30T10:00:00Z', runId: 'run-1' },
+        { role: 'assistant', content: 'done', timestamp: '2026-09-30T10:01:00Z', runId: 'run-1' },
+      ]);
+      // The waiting asks belong to another run of the same backend-wide queue
+      // (they are not this conversation's cards, so the composer stays usable).
+      mockListApprovals.mockResolvedValue([
+        { ...pendingAsk('a1'), runId: 'run-9' },
+        { ...pendingAsk('a2'), runId: 'run-9' },
+      ]);
       await sendThenTimeOut();
 
       expect(screen.getByText(/2 pending asks in the Review Queue/)).toBeInTheDocument();
+      // The one read is the reconcile's: it happened before this turn was sent,
+      // and the timeout report consumed it instead of asking a second time.
+      expect(mockGetTimeline).toHaveBeenCalled();
       expect(mockListApprovals).toHaveBeenCalledTimes(1);
       expect(mockListApprovals).toHaveBeenCalledWith('PENDING');
+      expect(mockListApprovals.mock.invocationCallOrder[0]).toBeLessThan(
+        mockStream.mock.invocationCallOrder[0],
+      );
       expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
       expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The control for sharing one read: the snapshot is only reused while nothing
+  // says the queue changed. A live approval event drops it, so the timeout report
+  // re-reads and names the count the queue holds now — never a stale one.
+  it('drops the shared queue snapshot on a live approval event and re-reads for the report', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetLatest.mockResolvedValue(summary());
+      mockGetTimeline.mockResolvedValue([
+        { role: 'user', content: 'brief me', timestamp: '2026-09-30T10:00:00Z', runId: 'run-1' },
+        { role: 'assistant', content: 'done', timestamp: '2026-09-30T10:01:00Z', runId: 'run-1' },
+      ]);
+      mockListApprovals.mockResolvedValue([{ ...pendingAsk('a1'), runId: 'run-9' }]);
+      mockStream.mockImplementation(async (...args: StreamArgs) => {
+        args[3]?.onThinking?.('run-1');
+        return new Promise<void>(() => {});
+      });
+      renderPanel();
+      await act(async () => {}); // the mount reconcile reads the queue once
+      fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+      fireEvent.change(textarea(), { target: { value: 'brief me on overnight runs' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+      // Another ask joined the queue while this turn runs.
+      mockListApprovals.mockResolvedValue([
+        { ...pendingAsk('a1'), runId: 'run-9' },
+        { ...pendingAsk('a2'), runId: 'run-9' },
+      ]);
+      act(() => {
+        wsBridge.emit({ type: 'approval.requested', payload: { approvalId: 'a2', runId: 'run-9' } });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600_000);
+      });
+      await act(async () => {});
+
+      expect(screen.getByText(/2 pending asks in the Review Queue/)).toBeInTheDocument();
+      expect(mockListApprovals).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

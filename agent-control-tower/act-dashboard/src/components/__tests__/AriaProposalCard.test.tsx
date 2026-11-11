@@ -154,9 +154,20 @@ describe('AriaProposalCard', () => {
   // (the Memory page, another operator, a re-proposal superseded). Retrying can
   // never succeed, so the card settles as `decided-elsewhere` — the same honest
   // state the panel's reconcile uses — instead of offering the decision again.
-  it('settles a 409 as decided elsewhere instead of offering a retry', async () => {
+  //
+  // The body is the one `MemoryExceptionHandler` actually serves for that case:
+  // `409 { ok:false, errorType:'CONFLICT', message }` with the fixed
+  // "a decided proposal cannot be reopened" wording.
+  it('settles an already-decided 409 as decided elsewhere instead of offering a retry', async () => {
     vi.mocked(decideMemoryProposal).mockRejectedValue({
-      response: { status: 409, data: { message: 'proposal already decided' } },
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message: 'memory entity ent-7 is already ACTIVE; a decided proposal cannot be reopened',
+        },
+      },
     });
     const onSettled = vi.fn();
     render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
@@ -168,8 +179,84 @@ describe('AriaProposalCard', () => {
     // Nothing is decided by this call, and no control that could only 409 again.
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('proposal already decided')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/a decided proposal cannot be reopened/),
+    ).not.toBeInTheDocument();
     expect(onSettled).toHaveBeenCalledWith('e4d7', 'decided-elsewhere');
+  });
+
+  // Task 32 Item 2: the same handler maps a retryable optimistic-lock conflict to
+  // 409 as well, with the same `errorType`. Reporting that as "decided outside
+  // this panel" is false and throws away a retry that would have worked, so only
+  // the already-decided wording settles the card.
+  it('keeps a retryable lock-conflict 409 as an ordinary error with a retry', async () => {
+    vi.mocked(decideMemoryProposal).mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          ok: false,
+          errorType: 'CONFLICT',
+          message:
+            'memory entity ent-7 changed while its proposal was being decided; re-read before deciding',
+        },
+      },
+    });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    // The server's own reason, the decision still open, and the card not settled.
+    expect(
+      await screen.findByText(/changed while its proposal was being decided/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  // Positive control for the retry above: the queue really does accept the second
+  // attempt, and it flips the card then.
+  it('decides on the retry after a lock-conflict 409', async () => {
+    vi.mocked(decideMemoryProposal)
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            ok: false,
+            errorType: 'CONFLICT',
+            message:
+              'memory fact e4d7 changed while the approval was being written; re-read before deciding',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        id: 'e4d7',
+        subjectType: 'FACT',
+        entityId: 'ent-1',
+        factKey: 'preferred_editor',
+        valueText: 'IntelliJ IDEA',
+        predicate: null,
+        toEntityId: null,
+        status: 'ACTIVE',
+        origin: 'OPERATOR',
+        sensitivity: 'INTERNAL',
+        confidence: null,
+        createdAt: null,
+        validFrom: null,
+      });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await screen.findByText(/changed while the approval was being written/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByText(/now active/i)).toBeInTheDocument();
+    expect(onSettled).toHaveBeenCalledWith('e4d7', 'approved');
   });
 
   // Positive control for the 409 above: any other failure is still an error the
@@ -253,9 +340,10 @@ describe('AriaProposalCard', () => {
 
   /**
    * `GET /proposals?status=&entityId=` answers ONE entity's whole PENDING batch —
-   * its facts, its relations in either direction and its own row — uncapped. The
-   * card may therefore say the list is complete, and must not hedge with the
-   * global inbox's page size.
+   * its FACTS plus its own row — uncapped. (A batch is the entity's pending facts
+   * and nothing else: the relation graph is out of scope, spec :138/:453, so the
+   * RELATION row below must not reach the list.) The card may therefore say the
+   * list is complete, and must not hedge with the global inbox's page size.
    */
   it('states the batch is complete and lists every fact of it', async () => {
     vi.mocked(listMemoryProposals).mockResolvedValue([
@@ -291,6 +379,95 @@ describe('AriaProposalCard', () => {
       /complete/i,
     );
     expect(within(batch).queryByText(/truncated|capped/i)).not.toBeInTheDocument();
+  });
+
+  // Task 32 Item 1: the batch is read when the card mounts and the decision runs
+  // when the operator clicks. A background extraction can add another PENDING
+  // fact to the same entity in between, and `decideEntity` promotes EVERY PENDING
+  // fact of it — so a mount-time list lets the operator approve a value the card
+  // never showed. The card therefore re-reads the batch at click time and posts
+  // only against the set on screen.
+  it('re-reads the batch before deciding and shows a fact added since the card rendered', async () => {
+    vi.mocked(listMemoryProposals)
+      // The mount read: one fact.
+      .mockResolvedValueOnce([proposalRow()])
+      // The click-time read: a second PENDING fact landed in between.
+      .mockResolvedValueOnce([
+        proposalRow(),
+        proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      ])
+      // The confirming click reads the same set the operator now sees.
+      .mockResolvedValueOnce([
+        proposalRow(),
+        proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+      ]);
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={entityItem()} onSettled={onSettled} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    await within(batch).findByTestId('proposal-batch-complete');
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    // Nothing is posted against the set the operator has not seen…
+    await waitFor(() => expect(screen.getByTestId('proposal-batch-changed')).toBeInTheDocument());
+    expect(decideMemoryProposal).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+    // …and the updated batch is now on screen, so the next click confirms it.
+    expect(within(batch).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(batch).getByText('release_channel')).toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('ent-7', 'APPROVE'));
+    expect(decideMemoryProposal).toHaveBeenCalledTimes(1);
+    await screen.findByText(/now active/i);
+    expect(onSettled).toHaveBeenCalledWith('ent-7', 'approved');
+  });
+
+  // Positive control for the re-read above: when the click-time set matches what
+  // the card shows, the decision posts on the first click with no extra friction.
+  it('posts on the first click when the re-read matches the batch on screen', async () => {
+    vi.mocked(listMemoryProposals).mockResolvedValue([proposalRow()]);
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={entityItem()} onSettled={onSettled} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    await within(batch).findByTestId('proposal-batch-complete');
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('ent-7', 'APPROVE'));
+    // One read at mount, one at the decision: the decision was checked, not taken
+    // on faith, and the operator was asked nothing extra.
+    expect(listMemoryProposals).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('proposal-batch-changed')).not.toBeInTheDocument();
+    await screen.findByText(/now active/i);
+    expect(onSettled).toHaveBeenCalledWith('ent-7', 'approved');
+  });
+
+  // A decision whose batch cannot be re-read proves nothing about what it would
+  // promote, so it is not posted — the same posture the mount-time read takes.
+  it('decides nothing when the batch cannot be re-read at decision time', async () => {
+    vi.mocked(listMemoryProposals)
+      .mockResolvedValueOnce([proposalRow()])
+      .mockRejectedValueOnce({ response: { status: 503, data: {} } });
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    const batch = await screen.findByTestId('proposal-batch');
+    await within(batch).findByTestId('proposal-batch-complete');
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be re-read/i);
+    expect(decideMemoryProposal).not.toHaveBeenCalled();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    // The batch it could not verify is no longer presented as a complete list.
+    expect(screen.queryByTestId('proposal-batch-complete')).not.toBeInTheDocument();
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
   });
 
   it('says the entity stands alone when its own batch carries no facts', async () => {

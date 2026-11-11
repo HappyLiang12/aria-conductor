@@ -288,11 +288,15 @@ export async function retireMemoryFact(
 /**
  * `GET /proposals?status=` — PENDING is the inbox the operator decides.
  *
- * With `entityId` the route answers that ONE entity's batch instead: its facts,
- * its relations in either direction (deduped) and its own row when its
- * lifecycle status matches — complete and uncapped, newest first, exactly the
- * set `decide` promotes. WITHOUT it the behaviour is unchanged: the global
- * inbox, capped at `MemoryProposalService.INBOX_LIMIT`.
+ * With `entityId` the route answers that ONE entity's own batch instead: its
+ * PENDING FACTS plus its own row when its lifecycle status matches — complete
+ * and uncapped, newest first. A batch is the entity's PENDING facts and nothing
+ * else (spec :116-117, :323-324): `decide` promotes or retires exactly those
+ * facts with the entity. The relation graph is out of scope for this surface
+ * (spec :138, :453) and is not part of an entity's batch — a relation proposal
+ * is decided through the global inbox, not from an entity's card. WITHOUT
+ * `entityId` the behaviour is unchanged: the global inbox, capped at
+ * `MemoryProposalService.INBOX_LIMIT`.
  */
 export async function listMemoryProposals(
   status: MemoryFactStatus = 'PENDING',

@@ -105,6 +105,7 @@ class WorkflowTemplateServiceTest {
         var out = service.findMatchingTemplates("DEPLOY");
 
         assertThat(out.templates()).containsExactly(deployResponse);
+        assertThat(out.totalApproved()).isEqualTo(2);
         verify(knowledgeService, never()).toResponseWithLatestVersion(report);
     }
 

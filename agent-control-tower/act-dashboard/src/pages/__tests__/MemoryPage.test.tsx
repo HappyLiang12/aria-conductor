@@ -112,15 +112,23 @@ function routeGets(options: {
       return ok(options.proposals ? options.proposals(config?.params?.status) : []);
     }
     if (url.startsWith('/api/v1/memory/entities/')) {
-      return ok(options.detail ?? detail());
+      const configured = options.detail;
+      return ok(
+        typeof configured === 'function'
+          ? configured(config?.params?.status)
+          : configured ?? detail(),
+      );
     }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
 
-function ui() {
+function ui(options: { staleTime?: number } = {}) {
   const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, staleTime: options.staleTime },
+      mutations: { retry: false },
+    },
   });
   return render(
     <QueryClientProvider client={qc}>
@@ -173,6 +181,37 @@ describe('MemoryPage — entity list', () => {
     expect(screen.queryByText(/no memory entities yet/i)).not.toBeInTheDocument();
   });
 
+  it('reports the section counts as unavailable on a refused read, never as zero', async () => {
+    get.mockRejectedValue({ response: { status: 403, data: {} } });
+    ui();
+
+    await screen.findByTestId('operator-session-notice');
+    // A refusal proves nothing about the counts: zero and forbidden are
+    // different claims, and the heading must not make the zero one.
+    expect(screen.queryByText(/\/ 0 active/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/ 0 pending/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/unavailable/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('uses the design-system page class and carries no inline metrics', async () => {
+    routeGets({
+      entities: () => [entity()],
+      proposals: (status) => (status === 'PENDING' ? [proposal()] : []),
+    });
+    const { container } = ui();
+    await screen.findByText('Happy');
+
+    const root = container.querySelector('[data-view="memory"]') as HTMLElement;
+    expect(root).toHaveClass('memory-page');
+    expect(root).not.toHaveAttribute('style');
+    // Metrics come from `.memory-page` in index.css; no node keeps an inline one.
+    expect(container.querySelectorAll('.memory-page [style]')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /new entity/i }));
+    const dialog = screen.getByRole('dialog', { name: /create memory entity/i });
+    expect(dialog.querySelectorAll('[style]')).toHaveLength(0);
+  });
+
   it('renders a non-authority failure as the backend message', async () => {
     get.mockImplementation((url: string) =>
       url === '/api/v1/memory/proposals'
@@ -187,12 +226,35 @@ describe('MemoryPage — entity list', () => {
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 
-  it('lists PENDING entities without a detail control, because the detail read 404s them', async () => {
+  // Spec :309-313 ("the operator cannot approve what they cannot see") and review
+  // finding M2: this test used to pin the ABSENCE of an Open control on a PENDING
+  // row, because the default detail read 404s a pending entity. The requirement
+  // changed — the operator review read (`status=PENDING`) now exists — so the pin
+  // is inverted deliberately: the row must be openable, and the open must ask for
+  // the review read.
+  it('opens a PENDING entity through the operator review read (status=PENDING)', async () => {
     routeGets({
       entities: (status) =>
         status === 'PENDING'
           ? [entity({ id: 'p9', status: 'PENDING', origin: 'EXTRACTION', displayName: 'Newfriend' })]
           : [],
+      detail: detail({
+        entity: entity({
+          id: 'p9',
+          status: 'PENDING',
+          origin: 'EXTRACTION',
+          displayName: 'Newfriend',
+        }),
+        facts: [
+          fact({
+            id: 'f9',
+            entityId: 'p9',
+            factKey: 'proposed_nickname',
+            valueText: 'Newf',
+            status: 'PENDING',
+          }),
+        ],
+      }),
     });
     ui();
 
@@ -200,7 +262,24 @@ describe('MemoryPage — entity list', () => {
 
     expect(await screen.findByText('Newfriend')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith('/api/v1/memory/entities', { params: { status: 'PENDING' } });
-    expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    // The operator sees what they are approving: the detail renders the PENDING
+    // entity and its proposed PENDING fact.
+    expect(await screen.findByText('proposed_nickname')).toBeInTheDocument();
+    expect(screen.getByText('Newf')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('/api/v1/memory/entities/p9', {
+      params: { status: 'PENDING' },
+    });
+    // Approving is the only way out of PENDING: the mutation surface stays ACTIVE-only.
+    expect(screen.queryByRole('button', { name: /retire entity/i })).not.toBeInTheDocument();
+    // Same for the fact rows the proposal carries. A PENDING fact is review
+    // material: its decision belongs to the proposal card's approve/reject, and a
+    // fact-level retire would leave the proposal itself dangling.
+    expect(screen.getByText('proposed_nickname')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retire fact/i })).not.toBeInTheDocument();
   });
 });
 
@@ -311,6 +390,63 @@ describe('MemoryPage — proposal inbox', () => {
 });
 
 describe('MemoryPage — entity detail and retirement', () => {
+  it('opens an ACTIVE entity with the fail-closed default read — no status param at all', async () => {
+    routeGets({ entities: () => [entity()] });
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('preferred_editor')).toBeInTheDocument();
+
+    // The default read is fail-closed ACTIVE-only and is a security boundary:
+    // the call must stay byte-identical, with no `params` key to widen it.
+    expect(get.mock.calls.filter(([url]) => url === '/api/v1/memory/entities/e1')).toEqual([
+      ['/api/v1/memory/entities/e1'],
+    ]);
+  });
+
+  it('keys the detail read by status, so a PENDING selection never reuses the ACTIVE shape', async () => {
+    routeGets({
+      entities: (status) =>
+        status === 'PENDING'
+          ? [entity({ id: 'e1', status: 'PENDING', displayName: 'Newfriend' })]
+          : [entity()],
+      detail: (status: string | undefined) =>
+        status === 'PENDING'
+          ? detail({
+              entity: entity({ id: 'e1', status: 'PENDING', displayName: 'Newfriend' }),
+              facts: [
+                fact({
+                  id: 'f9',
+                  entityId: 'e1',
+                  factKey: 'proposed_nickname',
+                  valueText: 'Newf',
+                  status: 'PENDING',
+                }),
+              ],
+            })
+          : detail(),
+    });
+    // Stale-forever cache: if the query key ignored the status, the PENDING
+    // selection of the same id would be served the cached ACTIVE payload and
+    // never hit the wire.
+    ui({ staleTime: Infinity });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('preferred_editor')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pending entities' }));
+    expect(await screen.findByText('Newfriend')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByText('proposed_nickname')).toBeInTheDocument();
+    expect(get.mock.calls.filter(([url]) => url === '/api/v1/memory/entities/e1')).toEqual([
+      ['/api/v1/memory/entities/e1'],
+      ['/api/v1/memory/entities/e1', { params: { status: 'PENDING' } }],
+    ]);
+  });
+
+  // Positive control for the PENDING pin above: an ACTIVE fact row keeps its
+  // Retire control — the mutation is hidden for review material only.
   it('opens the detail, lists its facts, and retires one through the confirmation', async () => {
     routeGets({ entities: () => [entity()] });
     post.mockResolvedValue({ data: fact({ status: 'RETIRED' }) } as never);

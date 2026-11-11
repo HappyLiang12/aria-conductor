@@ -39,6 +39,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -161,6 +162,16 @@ public class MemoryCommandService {
      * The row becomes PENDING review material again — never ACTIVE — the previous terminal status
      * and merge redirect are recorded on the CREATE assertion, and the card event is published so
      * the operator sees the new proposal.
+     * <p>
+     * N1 (T10 fix round 1 re-review): lifecycle retire ({@code MemoryLifecycleService.retireEntity})
+     * writes no fact row, so a RETIRED entity legitimately still owns current
+     * {@code status=ACTIVE, valid_to=null} facts and relations. Re-proposing used to leave them
+     * current, so approving the new proposal silently promoted a value the card never listed and
+     * the operator never decided. The current graph of the retired row is therefore retired with
+     * it — the smaller honest option of the ruling, chosen over carrying the old values into the
+     * new batch (which would ask the operator to re-approve values the extraction did not propose):
+     * after this method no ACTIVE fact or relation survives under the PENDING row except the rows
+     * the new proposal adds. The audit trail is a FACT/RELATION RETIRE assertion per closed row.
      */
     private MemoryEntity rePropose(MemoryEntity row, String kind, String canonicalKey,
                                    CreateEntityCommand command, MemoryOrigin origin,
@@ -169,6 +180,7 @@ public class MemoryCommandService {
         String before = audit(
                 "status", row.getStatus().name(),
                 "mergedInto", row.getMergedInto() == null ? null : row.getMergedInto().toString());
+        int factsRetired = retireLiveGraph(row, actor, now);
         row.setStatus(status);
         row.setOrigin(origin);
         row.setDisplayName(isBlank(command.displayName()) ? canonicalKey : command.displayName());
@@ -179,17 +191,85 @@ public class MemoryCommandService {
         row.setMergedInto(null);
         row.setUpdatedAt(now);
         entities.save(row);
+        flushReproposedEntity(row);
         assertions.save(assertion(MemorySubjectType.ENTITY, row.getId(), MemoryAction.CREATE, actor,
                 null, now, before, audit(
                         "kind", kind,
                         "canonicalKey", canonicalKey,
-                        "status", status.name())));
+                        "status", status.name(),
+                        "factsRetired", factsRetired)));
         publishEntityProposal(row, actor);
         return row;
     }
 
+    /**
+     * Closes the current ACTIVE facts and relations a lifecycle-retired entity left behind (see
+     * {@link #rePropose}). Relations are read in both directions because either endpoint retiring
+     * makes the edge resurrectable; an edge that is both is retired once.
+     *
+     * @return the number of fact rows closed, recorded on the re-proposal's CREATE assertion
+     */
+    private int retireLiveGraph(MemoryEntity row, MemoryActor actor, Instant now) {
+        int factsRetired = 0;
+        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                row.getId(), FactStatus.ACTIVE))) {
+            if (fact == null) {
+                continue;
+            }
+            fact.setStatus(FactStatus.RETIRED);
+            fact.setValidTo(now);
+            facts.save(fact);
+            // The audit payload names the key, never the value: a fact value can be CONFIDENTIAL.
+            assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
+                    null, now,
+                    audit("status", FactStatus.ACTIVE.name(), "factKey", fact.getFactKey()),
+                    audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey(),
+                            "reason", "entity re-proposed", "entityId", row.getId().toString())));
+            factsRetired++;
+        }
+        Set<UUID> seen = new LinkedHashSet<>();
+        for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(row.getId(), FactStatus.ACTIVE))) {
+            retireLiveRelation(row, relation, seen, actor, now);
+        }
+        for (MemoryRelation relation : safe(relations.findByToEntityIdAndStatus(row.getId(), FactStatus.ACTIVE))) {
+            retireLiveRelation(row, relation, seen, actor, now);
+        }
+        return factsRetired;
+    }
+
+    private void retireLiveRelation(MemoryEntity row, MemoryRelation relation, Set<UUID> seen,
+                                    MemoryActor actor, Instant now) {
+        if (relation == null || !seen.add(relation.getId())) {
+            return;
+        }
+        relation.setStatus(FactStatus.RETIRED);
+        relation.setValidTo(now);
+        relations.save(relation);
+        assertions.save(assertion(MemorySubjectType.RELATION, relation.getId(), MemoryAction.RETIRE, actor,
+                null, now,
+                audit("status", FactStatus.ACTIVE.name(), "predicate", relation.getPredicate()),
+                audit("status", FactStatus.RETIRED.name(), "predicate", relation.getPredicate(),
+                        "reason", "entity re-proposed", "entityId", row.getId().toString())));
+    }
+
     private static boolean isTerminal(EntityStatus status) {
         return status == EntityStatus.RETIRED || status == EntityStatus.MERGED;
+    }
+
+    /**
+     * Pushes a re-proposal through the identity row's {@code @Version} inside the method, so two
+     * runs re-proposing the same terminal key surface as the governed conflict here — before the
+     * CREATE assertion and the card event are written — instead of as a raw optimistic-lock
+     * failure at commit, which MCP would report as a failed call with the driver message (N4, T10
+     * fix round 1 re-review). Mirrors the decision paths' flush translation.
+     */
+    private void flushReproposedEntity(MemoryEntity row) {
+        try {
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("memory entity " + row.getId()
+                    + " was re-proposed concurrently; re-read before retrying");
+        }
     }
 
     @Transactional

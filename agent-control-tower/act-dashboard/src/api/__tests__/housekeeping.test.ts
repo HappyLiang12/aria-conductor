@@ -10,11 +10,15 @@ vi.mock('../client', () => ({
   },
 }));
 
+vi.mock('../operatorSession', () => ({ applyOperatorHeaders: vi.fn() }));
+
 import client from '../client';
+import { applyOperatorHeaders } from '../operatorSession';
 import { scanHousekeeping, executeHousekeeping } from '../housekeeping';
 
 const get = client.get as Mock;
 const post = client.post as Mock;
+const applyHeaders = applyOperatorHeaders as Mock;
 
 describe('housekeeping api', () => {
   beforeEach(() => {
@@ -41,5 +45,24 @@ describe('housekeeping api', () => {
 
     await executeHousekeeping(req);
     expect(post).toHaveBeenCalledWith('/api/v1/housekeeping/execute', req);
+  });
+
+  it('executeHousekeeping applies the operator session before the POST', async () => {
+    post.mockResolvedValue({ data: { categories: [], executedAt: 't' } });
+
+    await executeHousekeeping({ categories: ['kanban'], confirm: true });
+
+    expect(applyHeaders).toHaveBeenCalledTimes(1);
+    expect(applyHeaders.mock.invocationCallOrder[0]).toBeLessThan(
+      post.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('scanHousekeeping (read-only) does not touch the operator session', async () => {
+    get.mockResolvedValue({ data: { categories: [], scannedAt: 't' } });
+
+    await scanHousekeeping(false);
+
+    expect(applyHeaders).not.toHaveBeenCalled();
   });
 });

@@ -28,11 +28,13 @@ import { OperatorSessionNotice } from '../components/AriaProposalCard';
  * The memory operator page (spec C1/C2, F11).
  *
  * Two reads carry the whole surface: the entity list (filtered by lifecycle
- * status, so a PENDING entity proposal is visible even though its detail read
- * 404s by design) and the proposal inbox (the same PENDING rows Aria proposes
- * in the conversation). Every mutation goes through the operator-only memory
- * route, so a 401/403 renders the operator-session notice — never an empty list,
- * which would claim there is nothing to decide.
+ * status, so a PENDING entity proposal is visible) and the proposal inbox (the
+ * same PENDING rows Aria proposes in the conversation). A PENDING row opens
+ * through the operator review read (`status=PENDING`, spec :309-313), so the
+ * operator can see the very entity they are being asked to approve. Every
+ * mutation goes through the operator-only memory route, so a 401/403 renders the
+ * operator-session notice — never an empty list, which would claim there is
+ * nothing to decide.
  *
  * Layout uses only classes that already exist in `src/styles/index.css`; this
  * lane does not own that file.
@@ -98,14 +100,25 @@ export function MemoryPage() {
     queryKey: ['memory-proposals', proposalStatus],
     queryFn: () => listMemoryProposals(proposalStatus),
   });
-  const detailQuery = useQuery({
-    queryKey: ['memory-entity', selectedEntityId],
-    queryFn: () => getMemoryEntity(selectedEntityId as string),
-    enabled: selectedEntityId !== null,
-  });
 
   const entities = useMemo(() => entitiesQuery.data ?? [], [entitiesQuery.data]);
   const proposals = useMemo(() => proposalsQuery.data ?? [], [proposalsQuery.data]);
+
+  // A PENDING row is review material: it opens through the operator review read,
+  // which asks for `status=PENDING` explicitly. An ACTIVE row keeps the
+  // fail-closed default read (no params at all). The status is part of the query
+  // key so a cached ACTIVE-shaped read can never answer a PENDING selection of
+  // the same id, or vice versa.
+  const selectedReviewStatus =
+    entities.find((row) => row.id === selectedEntityId)?.status === 'PENDING'
+      ? ('PENDING' as const)
+      : undefined;
+
+  const detailQuery = useQuery({
+    queryKey: ['memory-entity', selectedEntityId, selectedReviewStatus ?? 'DEFAULT'],
+    queryFn: () => getMemoryEntity(selectedEntityId as string, selectedReviewStatus),
+    enabled: selectedEntityId !== null,
+  });
 
   const invalidateEntities = () => {
     queryClient.invalidateQueries({ queryKey: ['memory-entities'] });
@@ -187,13 +200,16 @@ export function MemoryPage() {
   };
 
   // One 403 is the whole page's posture: the refused read is about authority,
-  // not about there being no memory, so the empty states stay hidden.
-  const refused =
-    isOperatorRejection(entitiesQuery.error) || isOperatorRejection(proposalsQuery.error);
+  // not about there being no memory, so the empty states stay hidden. A section
+  // whose own read was refused reports its count as unavailable: zero and
+  // forbidden are different claims.
+  const entitiesRefused = isOperatorRejection(entitiesQuery.error);
+  const proposalsRefused = isOperatorRejection(proposalsQuery.error);
+  const refused = entitiesRefused || proposalsRefused;
   const detail = detailQuery.data;
 
   return (
-    <div className="view-zone" data-view="memory" style={{ display: 'block', padding: 16 }}>
+    <div className="view-zone memory-page" data-view="memory">
       <div className="view-header">
         <div>
           <h1>Memory</h1>
@@ -219,14 +235,14 @@ export function MemoryPage() {
 
       {refused && <OperatorSessionNotice />}
       {!refused && entitiesQuery.error && (
-        <div style={{ marginBottom: 16 }}>
+        <div className="memory-notice">
           <ErrorNotice
             presented={presentError(entitiesQuery.error, 'Failed to load memory entities.')}
           />
         </div>
       )}
       {!refused && proposalsQuery.error && (
-        <div style={{ marginBottom: 16 }}>
+        <div className="memory-notice">
           <ErrorNotice
             presented={presentError(proposalsQuery.error, 'Failed to load memory proposals.')}
           />
@@ -234,9 +250,12 @@ export function MemoryPage() {
       )}
 
       {/* ---------- Entities ---------- */}
-      <section className="panel" style={{ marginBottom: 16 }}>
+      <section className="panel">
         <h2>
-          Entities <span className="accent">/ {entities.length} {entityStatus.toLowerCase()}</span>
+          Entities{' '}
+          <span className="accent">
+            {entitiesRefused ? '/ unavailable' : `/ ${entities.length} ${entityStatus.toLowerCase()}`}
+          </span>
         </h2>
         <div className="filter-tabs">
           {ENTITY_PAGES.map((page) => (
@@ -297,24 +316,27 @@ export function MemoryPage() {
                     </td>
                     <td>{row.sensitivity ?? '—'}</td>
                     <td className="action-cell">
-                      {/* A PENDING entity's detail read 404s by design (it is not
-                          memory yet): its surface is the list row plus the inbox. */}
+                      {/* A PENDING row opens through the operator review read
+                          (`status=PENDING`, spec :309-313, review finding M2):
+                          the operator cannot approve what they cannot see. Retire
+                          stays ACTIVE-only — approving is the only way out of
+                          PENDING. */}
+                      {(row.status === 'ACTIVE' || row.status === 'PENDING') && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setSelectedEntityId(row.id)}
+                        >
+                          Open
+                        </button>
+                      )}
                       {row.status === 'ACTIVE' && (
-                        <>
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => setSelectedEntityId(row.id)}
-                          >
-                            Open
-                          </button>
-                          <button
-                            className="btn btn-sm"
-                            aria-label={`Retire entity ${row.displayName}`}
-                            onClick={() => setRetireTarget(row)}
-                          >
-                            Retire
-                          </button>
-                        </>
+                        <button
+                          className="btn btn-sm"
+                          aria-label={`Retire entity ${row.displayName}`}
+                          onClick={() => setRetireTarget(row)}
+                        >
+                          Retire
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -326,10 +348,12 @@ export function MemoryPage() {
       </section>
 
       {/* ---------- Proposal inbox ---------- */}
-      <section className="panel" style={{ marginBottom: 16 }}>
+      <section className="panel">
         <h2>
           Proposal Inbox{' '}
-          <span className="accent">/ {proposals.length} {proposalStatus.toLowerCase()}</span>
+          <span className="accent">
+            {proposalsRefused ? '/ unavailable' : `/ ${proposals.length} ${proposalStatus.toLowerCase()}`}
+          </span>
         </h2>
         <div className="filter-tabs">
           {PROPOSAL_PAGES.map((page) => (
@@ -401,7 +425,6 @@ export function MemoryPage() {
             Entity Detail <span className="accent">/ {detail?.entity.displayName ?? selectedEntityId}</span>
             <button
               className="btn btn-sm"
-              style={{ marginLeft: 'auto' }}
               onClick={() => setSelectedEntityId(null)}
             >
               Close
@@ -440,7 +463,11 @@ export function MemoryPage() {
                         </td>
                         <td>{row.sensitivity ?? '—'}</td>
                         <td className="action-cell">
-                          {row.status !== 'RETIRED' && (
+                          {/* A fact is mutable only once it is memory. A PENDING
+                              fact is review material: its decision belongs to the
+                              proposal card's approve/reject, and retiring it here
+                              would leave the proposal itself dangling. */}
+                          {row.status === 'ACTIVE' && (
                             <button
                               className="btn btn-sm"
                               aria-label={`Retire fact ${row.factKey}`}
@@ -471,33 +498,37 @@ export function MemoryPage() {
             onClick={(event) => event.stopPropagation()}
           >
             <h3>Create memory entity</h3>
-            <form onSubmit={submitCreate}>
-              <label style={{ display: 'block' }}>
-                <span>Kind</span>
+            <form onSubmit={submitCreate} className="memory-form">
+              <div className="form-field">
+                <label htmlFor="memory-kind">Kind</label>
                 <input
+                  id="memory-kind"
                   value={form.kind}
                   onChange={(event) => setForm({ ...form, kind: event.target.value })}
                 />
-              </label>
-              <label style={{ display: 'block' }}>
-                <span>Canonical key</span>
+              </div>
+              <div className="form-field">
+                <label htmlFor="memory-canonical-key">Canonical key</label>
                 <input
+                  id="memory-canonical-key"
                   value={form.canonicalKey}
                   onChange={(event) => setForm({ ...form, canonicalKey: event.target.value })}
                   placeholder="e.g. person:happy"
                 />
-              </label>
-              <label style={{ display: 'block' }}>
-                <span>Display name</span>
+              </div>
+              <div className="form-field">
+                <label htmlFor="memory-display-name">Display name</label>
                 <input
+                  id="memory-display-name"
                   value={form.displayName}
                   onChange={(event) => setForm({ ...form, displayName: event.target.value })}
                   placeholder="e.g. Happy"
                 />
-              </label>
-              <label style={{ display: 'block' }}>
-                <span>Sensitivity</span>
+              </div>
+              <div className="form-field">
+                <label htmlFor="memory-sensitivity">Sensitivity</label>
                 <select
+                  id="memory-sensitivity"
                   value={form.sensitivity}
                   onChange={(event) =>
                     setForm({ ...form, sensitivity: event.target.value as MemorySensitivity })
@@ -508,7 +539,7 @@ export function MemoryPage() {
                   <option value="CONFIDENTIAL">Confidential</option>
                   <option value="RESTRICTED">Restricted</option>
                 </select>
-              </label>
+              </div>
               {formError && (
                 <div className="error-text" role="alert">
                   {formError}

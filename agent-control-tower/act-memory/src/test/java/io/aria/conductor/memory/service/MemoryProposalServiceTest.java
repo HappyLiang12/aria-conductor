@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -84,7 +85,8 @@ class MemoryProposalServiceTest {
     /**
      * The card test in Task 12 renders an ENTITY item with the canonical key in {@code factKey}
      * and the display name in {@code valueText}, so the view must carry both: the proposal's own
-     * id is what the decision endpoint is addressed to.
+     * id is what the decision endpoint is addressed to. The read is the OPERATOR's, which is the
+     * contract T11 C1 preserves: only a non-operator read omits a PENDING entity's identity.
      */
     @Test
     void listProposalsIncludesPendingEntitiesWithTheirKeyAndDisplayName() {
@@ -92,7 +94,7 @@ class MemoryProposalServiceTest {
         when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
                 .thenReturn(List.of(proposal));
 
-        List<MemoryProposalView> inbox = proposals.listProposals(null);
+        List<MemoryProposalView> inbox = proposals.listProposals(null, OPERATOR);
 
         assertThat(inbox).singleElement().satisfies(view -> {
             assertThat(view.subjectType()).isEqualTo("ENTITY");
@@ -108,6 +110,132 @@ class MemoryProposalServiceTest {
         assertThat(page.getValue().getPageSize())
                 .as("the inbox query itself is bounded")
                 .isEqualTo(MemoryProposalService.INBOX_LIMIT);
+    }
+
+    /**
+     * T11 C1 (moved into this lane). {@code list_memory_proposals} is an auto-approved worker
+     * read, and the inbox returned PENDING ENTITY rows to it — the canonical key and display name
+     * of exactly the rows {@code list_memory_entities(status=PENDING)} refuses. The actor now
+     * travels with the read: a worker still sees the PENDING FACT proposals (it must see its own
+     * work), but the identity of a PENDING entity is review material for the operator only.
+     * The pinned operator contract is
+     * {@link #listProposalsIncludesPendingEntitiesWithTheirKeyAndDisplayName}.
+     */
+    @Test
+    void aWorkerViewOfTheProposalsOmitsAPendingEntityIdentityWhileAnOperatorSeesIt() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entityProposal = pendingEntity(entityId);
+        MemoryFact ownFact = fact(UUID.randomUUID(), "timezone", FactStatus.PENDING, OLD.plusSeconds(10));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(ownFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(entityProposal));
+
+        List<MemoryProposalView> workerView = proposals.listProposals(FactStatus.PENDING, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("a worker still sees its own PENDING fact proposal")
+                .containsExactly("FACT");
+        assertThat(workerView).extracting(MemoryProposalView::factKey)
+                .as("but not the canonical key of a PENDING entity")
+                .containsExactly("timezone");
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .as("the operator card keeps the entity proposal")
+                .containsExactly("FACT", "ENTITY");
+        assertThat(operatorView).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", "person:happy");
+        assertThat(operatorView).extracting(MemoryProposalView::valueText)
+                .containsExactly("value", "Happy");
+    }
+
+    /**
+     * M1 (UI surface review). The ENTITY card filtered ONE 50-row page of the merged global inbox
+     * client-side, so with more than 50 PENDING facts across entities an entity's own batch fell
+     * off the page and the card said "adding the entity alone" while {@code decideEntity} promoted
+     * all of them. The per-entity read is a query filter, never a page of the global inbox, and it
+     * returns the complete batch — the same rows the decision promotes.
+     */
+    @Test
+    void theEntityFilterReturnsOneEntitysWholeBatchInsteadOfAGlobalInboxPage() {
+        UUID happy = UUID.randomUUID();
+        List<MemoryFact> otherEntities = new ArrayList<>();
+        for (int i = 0; i < MemoryProposalService.INBOX_LIMIT; i++) {
+            otherEntities.add(fact(UUID.randomUUID(), "key-" + i, FactStatus.PENDING, OLD.plusSeconds(i)));
+        }
+        MemoryFact timezone = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(3));
+        MemoryFact language = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(2));
+        MemoryFact theme = fact(happy, "theme", FactStatus.PENDING, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(otherEntities);
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language, theme));
+        when(entities.findById(happy)).thenReturn(Optional.of(pendingEntity(happy)));
+
+        List<MemoryProposalView> globalPage = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(globalPage).as("the bug's premise: the bounded inbox page is full")
+                .hasSize(MemoryProposalService.INBOX_LIMIT);
+        assertThat(globalPage).extracting(MemoryProposalView::factKey)
+                .as("and none of the entity's facts are on it")
+                .doesNotContain("timezone", "language", "theme");
+
+        clearInvocations(facts, relations, entities);
+        List<MemoryProposalView> batch = proposals.listProposalsForEntity(FactStatus.PENDING, happy, OPERATOR);
+
+        assertThat(batch).extracting(MemoryProposalView::factKey)
+                .as("the filter read returns every fact of the entity and its own proposal")
+                .containsExactly("timezone", "language", "theme", "person:happy");
+        assertThat(batch).extracting(MemoryProposalView::id).contains(timezone.getId().toString());
+        assertThat(batch).extracting(MemoryProposalView::createdAt).isSortedAccordingTo(Comparator.reverseOrder());
+        verify(facts).findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING);
+        verify(facts, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
+        verify(relations, never()).findByStatusOrderByCreatedAtDesc(any(), any(Pageable.class));
+    }
+
+    /**
+     * The entity filter composes with the status it is asked for and keeps the actor rule of the
+     * inbox: the PENDING entity row is review material, its own PENDING facts are not.
+     */
+    @Test
+    void theEntityFilterComposesWithTheStatusAndTheActor() {
+        UUID happy = UUID.randomUUID();
+        MemoryFact active = fact(happy, "timezone", FactStatus.ACTIVE, OLD);
+        MemoryFact pending = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(5));
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.ACTIVE))
+                .thenReturn(List.of(active));
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(pending));
+        when(entities.findById(happy)).thenReturn(Optional.of(entity(happy)));
+
+        List<MemoryProposalView> activeBatch =
+                proposals.listProposalsForEntity(FactStatus.ACTIVE, happy, OPERATOR);
+
+        assertThat(activeBatch).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "ENTITY");
+        assertThat(activeBatch).extracting(MemoryProposalView::status).containsOnly("ACTIVE");
+
+        when(entities.findById(happy)).thenReturn(Optional.of(pendingEntity(happy)));
+        List<MemoryProposalView> workerView =
+                proposals.listProposalsForEntity(FactStatus.PENDING, happy, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView =
+                proposals.listProposalsForEntity(FactStatus.PENDING, happy, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("the worker sees the batch it proposed, not the PENDING entity's identity")
+                .containsExactly("FACT");
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "ENTITY");
+    }
+
+    @Test
+    void theEntityFilterRequiresAnEntityId() {
+        assertThatThrownBy(() -> proposals.listProposalsForEntity(FactStatus.PENDING, null, OPERATOR))
+                .isInstanceOf(MemoryValidationException.class)
+                .hasMessageContaining("entityId");
+        verifyNoInteractions(facts, relations, entities);
     }
 
     @Test
@@ -359,6 +487,69 @@ class MemoryProposalServiceTest {
         assertThat(proposed.getStatus()).as("a refused approval promotes nothing").isEqualTo(FactStatus.PENDING);
         assertThat(proposed.getValidTo()).isNull();
         verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
+     * N2 (T10 fix round 1 re-review). The M1 guard compared only against PENDING, so a PENDING
+     * fact whose parent was retired between the proposal and the decision could still be approved:
+     * the fact became ACTIVE under a RETIRED parent, invisible to recall, the prompt, the default
+     * list and the detail read — the exact harm M1 refused for a PENDING parent. The refusal must
+     * cover every non-ACTIVE parent and name the case it found. The positive control is
+     * {@link #approvingWithoutAConflictWritesOneAssertion}: an ACTIVE parent still promotes.
+     */
+    @Test
+    void approvingAFactUnderANonActiveEntityIsRefusedNamingTheDeadParent() {
+        for (EntityStatus parentStatus : new EntityStatus[]{EntityStatus.RETIRED, EntityStatus.MERGED}) {
+            UUID entityId = UUID.randomUUID();
+            MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+            MemoryEntity parent = pendingEntity(entityId);
+            parent.setStatus(parentStatus);
+            when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+            when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+            assertThatThrownBy(() -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE,
+                    OPERATOR))
+                    .as("a fact may only become current under an ACTIVE parent")
+                    .isInstanceOf(MemoryConflictException.class)
+                    .hasMessageContaining(entityId.toString())
+                    .hasMessageContaining(parentStatus.name())
+                    .hasMessageContaining("no longer active");
+
+            assertThat(proposed.getStatus()).as("a refused approval promotes nothing")
+                    .isEqualTo(FactStatus.PENDING);
+            assertThat(proposed.getValidTo()).isNull();
+        }
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /**
+     * N3 (T10 fix round 1 re-review). The reject branch saved every batch fact without flushing,
+     * so the first flush was the entity one: a lost FACT version surfaced as "memory entity …
+     * changed", pointing the incident at the wrong row. The fact flush now runs per fact inside
+     * the same translation, so the conflict names the row that actually lost the race.
+     */
+    @Test
+    void aRejectedBatchWhoseFactVersionWasChangedUnderneathNamesTheFactNotTheEntity() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        MemoryFact timezone = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(timezone));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, timezone.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> proposals.decideProposal(entityId, ProposalDecision.REJECT, OPERATOR))
+                .as("the conflict names the row whose version was lost")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(timezone.getId().toString())
+                .hasMessageContaining("timezone")
+                .hasMessageContaining("rejection")
+                .hasMessageNotContaining(entityId.toString());
+
+        assertThat(entity.getStatus()).as("the loser retires nothing").isEqualTo(EntityStatus.PENDING);
         verify(assertions, never()).save(any());
     }
 

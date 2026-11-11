@@ -97,7 +97,7 @@ public class MemoryTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "remember_fact",
-            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
+            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. One operator decision on the entity proposal promotes the new entity and its first fact together. Returns the fact with id, status, origin, sensitivity and validity.")
     public String rememberFact(
             @ToolParam(description = "Existing memory entity id (UUID); supply this or kind + canonicalKey, not both",
                     required = false)
@@ -272,9 +272,15 @@ public class MemoryTools implements McpTool {
             @ToolParam(description = "PENDING, ACTIVE or RETIRED; default PENDING", required = false) String status,
             ToolContext toolContext) {
         try {
-            Sensitivity ceiling = readCeiling(actorOf(toolContext));
+            ActorPrincipal actor = actorOf(toolContext);
+            Sensitivity ceiling = readCeiling(actor);
             FactStatus parsed = status == null || status.isBlank() ? FactStatus.PENDING : parseFactStatus(status);
-            List<MemoryProposalView> inbox = safe(proposals.listProposals(parsed)).stream()
+            // T11 C1: the inbox hides a PENDING entity's canonical key and display name from every
+            // non-operator read. This tool is an AUTO-APPROVED worker read, so it must hand the
+            // service the transport identity (the worker's run id) rather than let the read default
+            // to the operator view: list_memory_entities(status=PENDING) refuses the same rows.
+            MemoryActor reviewer = actor == null ? null : memoryActor(actor);
+            List<MemoryProposalView> inbox = safe(proposals.listProposals(parsed, reviewer)).stream()
                     .filter(proposal -> withinCeiling(proposal.sensitivity(), ceiling))
                     .toList();
             return ToolResponses.ok(inbox);

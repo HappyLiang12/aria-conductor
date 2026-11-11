@@ -9,8 +9,12 @@ import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.context.contributor.ToolCatalogContextContributor;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.mcp.catalog.ToolCatalog;
+import io.aria.conductor.mcp.tools.DashboardTools;
+import io.aria.conductor.mcp.tools.MemoryTools;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.annotation.Tool;
 
+import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -271,7 +275,8 @@ class ToolCatalogParityTest {
     /**
      * The two entity reads refuse a PENDING view to a worker, so their descriptions must say that
      * PENDING is a review status with an operator-only listing/read rather than leaving the reader
-     * with ACTIVE/MERGED/RETIRED as the whole status set.
+     * with ACTIVE/MERGED/RETIRED as the whole status set. The detail read must also name where the
+     * operator does look: the explicit {@code status=PENDING} detail filter.
      */
     @Test
     void theEntityReadDescriptionsStateThePendingOperatorGuard() {
@@ -281,7 +286,98 @@ class ToolCatalogParityTest {
                 .contains("refused with FORBIDDEN");
         assertThat(catalog.find("get_memory_entity").orElseThrow().description())
                 .contains("PENDING entity is review material")
-                .contains("not readable");
+                .contains("this agent-facing detail read reports it as not found")
+                .contains("the operator reviews it with the explicit status=PENDING detail filter on the Memory page");
+    }
+
+    /**
+     * {@code remember_fact} now accepts two call shapes: an existing {@code entityId}, or
+     * {@code kind} + {@code canonicalKey} for an unknown key. A description that omits the second
+     * shape (or implies a worker write) hides the producer Task 14 landed: the call proposes, it does
+     * not write.
+     */
+    @Test
+    void rememberFactDescribesBothShapesAndTheProposalRatherThanWriteRule() {
+        assertThat(catalog.find("remember_fact").orElseThrow().description())
+                .contains("exactly one of two shapes")
+                .contains("(entityId)")
+                .contains("(kind, canonicalKey)")
+                .contains("creates a new entity with this first fact in the same transaction")
+                .contains("PENDING extraction proposal that an operator must approve");
+    }
+
+    /**
+     * The {@code remember_fact} wording debt (T14 review): the description promised the two
+     * shapes and the proposal rule but never said that one operator decision promotes the entity
+     * and its first fact together. The sentence is asserted on BOTH copies — the registered
+     * {@code @Tool} annotation and the catalog mirror — because byte parity alone would let the
+     * sentence be deleted from both sides at once.
+     */
+    @Test
+    void rememberFactStatesThatOneEntityDecisionPromotesTheEntityAndItsFirstFact() {
+        String sentence = "One operator decision on the entity proposal promotes the new entity "
+                + "and its first fact together.";
+
+        assertThat(catalog.find("remember_fact").orElseThrow().description())
+                .as("catalog mirror")
+                .contains(sentence);
+        assertThat(registeredRememberFactDescription())
+                .as("registered @Tool annotation")
+                .contains(sentence);
+    }
+
+    private static String registeredRememberFactDescription() {
+        for (Method method : MemoryTools.class.getDeclaredMethods()) {
+            Tool annotation = method.getAnnotation(Tool.class);
+            if (annotation != null && "remember_fact".equals(annotation.name())) {
+                return annotation.description();
+            }
+        }
+        throw new AssertionError("MemoryTools has no @Tool 'remember_fact'");
+    }
+
+    /**
+     * The REST summary counts a parked (WAITING_INPUT) run as live work; this tool counts RUNNING
+     * only. The descriptions must state that divergence instead of promising the two payloads are
+     * the same.
+     */
+    @Test
+    void theDashboardSummaryDescriptionsNameTheRunningRunsDivergence() {
+        assertThat(catalog.find("get_dashboard_summary").orElseThrow().description())
+                .contains("Same shape as GET /api/v1/dashboard/summary")
+                .contains("runningRuns counts RUNNING only here")
+                .contains("the REST summary also counts WAITING_INPUT");
+    }
+
+    /**
+     * The registered tool description comes from the {@code @Tool} annotation and the catalog is a
+     * hand-written second copy, so the two can drift. {@code McpEndpointIntegrationTest} catches a
+     * drift at the failsafe tier; this pins the same byte equality for the tool classes whose
+     * descriptions moved in this change, inside the unit tier.
+     */
+    @Test
+    void theChangedToolDescriptionsAreByteEqualToTheirToolAnnotation() {
+        assertAnnotationMatchesCatalog(DashboardTools.class);
+        assertAnnotationMatchesCatalog(MemoryTools.class);
+    }
+
+    private void assertAnnotationMatchesCatalog(Class<?> toolClass) {
+        int annotated = 0;
+        for (Method method : toolClass.getDeclaredMethods()) {
+            Tool annotation = method.getAnnotation(Tool.class);
+            if (annotation == null) {
+                continue;
+            }
+            annotated++;
+            ToolDescriptor descriptor = catalog.find(annotation.name()).orElseThrow(
+                    () -> new AssertionError("@Tool '" + annotation.name() + "' is not in the catalog"));
+            assertThat(descriptor.description())
+                    .as("catalog description of '%s' equals its @Tool annotation", annotation.name())
+                    .isEqualTo(annotation.description());
+        }
+        assertThat(annotated)
+                .as("annotated methods found on '%s'", toolClass.getSimpleName())
+                .isGreaterThan(0);
     }
 
     /**

@@ -244,6 +244,34 @@ class MemoryCommandServiceTest {
         verify(facts).save(any(MemoryFact.class));
     }
 
+    /**
+     * The composition of two rules reviewed as verified-correct but untested (T14 review m3):
+     * {@link MemoryCommandService#createEntity} returns an existing PENDING row unchanged, then the
+     * OPERATOR half of the unknown-key shape computes an ACTIVE fact and the dependent-read guard
+     * refuses it. The proposal stays PENDING and no fact or assertion is written.
+     */
+    @Test
+    void anOperatorUnknownKeyOnAnExistingPendingEntityConflictsAndLeavesItPending() {
+        MemoryEntity pending = entity(id("pending-person"));
+        pending.setCanonicalKey("person:happy");
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(pending));
+        when(entities.findById(pending.getId())).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> command.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("ACTIVE fact cannot be");
+
+        assertThat(pending.getStatus())
+                .as("the existing PENDING proposal is returned unchanged, never promoted")
+                .isEqualTo(EntityStatus.PENDING);
+        verify(entities, never()).save(any());
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
     // ---------------------------------------------------------------- conflicts
 
     @Test
@@ -1047,6 +1075,117 @@ class MemoryCommandServiceTest {
         ArgumentCaptor<ApplicationEvent> published = ArgumentCaptor.forClass(ApplicationEvent.class);
         verify(events).publishEvent(published.capture());
         assertThat(((MemoryProposalCreatedEvent) published.getValue()).getProposalId()).isEqualTo(merged.getId());
+    }
+
+    /**
+     * N1 (T10 fix round 1 re-review). Lifecycle retire writes no fact row, so a RETIRED entity
+     * keeps its {@code status=ACTIVE, valid_to=null} facts. A re-proposal turns the identity row
+     * back to PENDING and, before this fix, left them current: approving the new proposal
+     * silently promoted a value the card never listed and the operator never decided. The
+     * re-proposal must retire the current graph the retired entity left behind, so nothing
+     * ACTIVE can survive under the PENDING row unless it is part of the new batch.
+     */
+    @Test
+    void reProposingARetiredKeyRetiresItsSurvivingActiveFacts() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryFact live = currentFact(id("fact:timezone"), retired.getId(), "timezone", "UTC", 3);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of(live));
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+
+        MemoryEntity reproposed = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(reproposed.getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(live.getStatus())
+                .as("no ACTIVE fact may survive under the re-proposed PENDING row")
+                .isEqualTo(FactStatus.RETIRED);
+        assertThat(live.getValidTo()).as("the surviving value is closed, not current").isNotNull();
+        verify(facts).save(live);
+        List<MemoryAssertion> written = captureAssertions(2);
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.FACT)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(live.getId());
+                    assertThat(assertion.getBeforeJson()).contains("ACTIVE").contains("timezone");
+                    assertThat(assertion.getAfterJson()).contains("RETIRED");
+                });
+        assertThat(written).filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> assertThat(assertion.getAction()).isEqualTo(MemoryAction.CREATE));
+    }
+
+    /**
+     * The same resurrection on the graph: approving the re-proposed entity makes its surviving
+     * ACTIVE relations current again (recall expands them from an ACTIVE match), so the edges the
+     * retired entity left behind must be closed with it. One edge that is both incoming and
+     * outgoing (a self relation) is retired once.
+     */
+    @Test
+    void reProposingARetiredKeyRetiresItsSurvivingActiveRelations() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        MemoryRelation live = relation(id("relation:owns"), retired.getId(), "OWNS", id("repo:conductor"));
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of(live));
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of(live));
+
+        command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(live.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(live.getValidTo()).isNotNull();
+        verify(relations, times(1)).save(live);
+        assertThat(captureAssertions(2))
+                .filteredOn(assertion -> assertion.getSubjectType() == MemorySubjectType.RELATION)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getAction()).isEqualTo(MemoryAction.RETIRE);
+                    assertThat(assertion.getSubjectId()).isEqualTo(live.getId());
+                });
+    }
+
+    /**
+     * N4 (T10 fix round 1 re-review). {@code rePropose} saved the identity row without flushing,
+     * so two runs proposing the same terminal key both read version N and the loser threw a raw
+     * optimistic-lock failure at commit — after it had already published a card event inside the
+     * transaction that rolls back. The flush must run inside the method behind the same governed
+     * translation as the decision paths, and before the assertion and the event, so the loser
+     * reports one conflict and publishes nothing.
+     */
+    @Test
+    void aConcurrentReProposalIsAGovernedConflict() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(retired.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(relations.findByFromEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        when(relations.findByToEntityIdAndStatus(retired.getId(), FactStatus.ACTIVE)).thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, retired.getId()))
+                .when(entities).flush();
+
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction))
+                .as("a lost re-proposal is the governed conflict, not a raw exception at commit")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(retired.getId().toString())
+                .hasMessageContaining("re-proposed concurrently");
+
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
     }
 
     @Test

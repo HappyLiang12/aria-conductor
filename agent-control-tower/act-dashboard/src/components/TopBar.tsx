@@ -86,6 +86,13 @@ export function TopBar() {
   const runningRuns = summary?.runningRuns;
   const pendingApprovals = summary?.pendingApprovals;
   const tokensBurned = summary?.totalTokensBurned;
+  // A zero total beside runs that reported nothing is a silence, not a
+  // measurement — render the silence, not a false zero.
+  const runsWithoutUsage = summary?.runsWithoutUsage ?? 0;
+  const tokensUnreported = tokensBurned === 0 && runsWithoutUsage > 0;
+  const tokensDetail = tokensUnreported
+    ? [kpiDetail, `${runsWithoutUsage} runs reported no usage`].filter(Boolean).join(' · ')
+    : kpiDetail;
   const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
   // Honesty rule: the badge may only report a verdict it actually has evidence for.
   // `data` is the only field that carries a verdict — a pending probe has none yet and
@@ -138,8 +145,10 @@ export function TopBar() {
           <div className="v">{kpiValue(summaryPhase, pendingApprovals)}</div>
           <div className="l">Approvals Pending</div>
         </div>
-        <div className="kpi green" data-testid="kpi-tokens" title={kpiDetail}>
-          <div className="v">{kpiValue(summaryPhase, tokensBurned, formatTokens)}</div>
+        <div className="kpi green" data-testid="kpi-tokens" title={tokensDetail}>
+          <div className="v">
+            {tokensUnreported ? 'not reported' : kpiValue(summaryPhase, tokensBurned, formatTokens)}
+          </div>
           <div className="l">Recorded tokens</div>
         </div>
       </div>

@@ -76,7 +76,7 @@ describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
     // Non-zero pendingApprovals proves the second HITL signal is truly gone,
     // not just zero by coincidence.
     vi.mocked(getSummary).mockResolvedValue({
-      totalTokensBurned: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
+      totalTokensBurned: 0, runsWithoutUsage: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
       pendingApprovals: 5, runningRuns: 3,
     });
     kanbanData = [
@@ -112,7 +112,7 @@ describe('MorningBriefing briefing wording (each count names its source)', () =>
     mockCtx = { lastMessage: null, isConnected: false };
     const { getSummary } = await import('../../api/dashboard');
     vi.mocked(getSummary).mockResolvedValue({
-      totalTokensBurned: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
+      totalTokensBurned: 0, runsWithoutUsage: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
       pendingApprovals: 0, runningRuns: 0,
     });
     kanbanData = [

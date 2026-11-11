@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TopBar } from '../TopBar';
 import { getSummary } from '../../api/dashboard';
 import { getAdkProviderHealth, listAdkProviders } from '../../api/adk';
-import type { AdkProviderHealth, AdkProviderInfo } from '../../types';
+import type { AdkProviderHealth, AdkProviderInfo, DashboardSummary } from '../../types';
 
 vi.mock('../../api/dashboard', () => ({
   getSummary: vi.fn(),
@@ -38,6 +38,14 @@ beforeEach(() => {
   mockedGetSummary.mockResolvedValue(SUMMARY as never);
   mockedListAdkProviders.mockResolvedValue([OPENCODE]);
 });
+
+function mockSummary(overrides: Partial<DashboardSummary>) {
+  mockedGetSummary.mockResolvedValue({
+    activeAgents: 3, healthyAgents: 3, degradedAgents: 1,
+    runningRuns: 0, pendingApprovals: 0, totalTokensBurned: 0, runsWithoutUsage: 0,
+    ...overrides,
+  } as never);
+}
 
 function renderTopBar() {
   // A fresh cache per test: the shared query keys would otherwise leak verdicts
@@ -146,5 +154,40 @@ describe('TopBar KPI honesty', () => {
     renderTopBar();
     await waitFor(() => expect(screen.getByText('Recorded tokens')).toBeInTheDocument());
     expect(screen.queryByText('Tokens Today')).not.toBeInTheDocument();
+  });
+});
+
+describe('TopBar usage truth', () => {
+  it('shows not reported instead of a zero token cost', async () => {
+    mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 9 });
+    renderTopBar();
+    await waitFor(() =>
+      expect(screen.getByTestId('kpi-tokens')).toHaveTextContent('not reported'),
+    );
+  });
+
+  it('shows the measured total when at least one run reported usage', async () => {
+    mockSummary({ totalTokensBurned: 120, runsWithoutUsage: 1 });
+    renderTopBar();
+    const kpi = screen.getByTestId('kpi-tokens');
+    await waitFor(() => expect(kpi).toHaveTextContent('120'));
+    expect(kpi).not.toHaveTextContent('not reported');
+  });
+
+  it('keeps a real zero when no run was silent about usage', async () => {
+    mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 0 });
+    renderTopBar();
+    const kpi = screen.getByTestId('kpi-tokens');
+    await waitFor(() => expect(kpi).toHaveTextContent('0'));
+    expect(kpi).not.toHaveTextContent('not reported');
+  });
+
+  it('names how many runs reported nothing in the token title', async () => {
+    mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 9 });
+    renderTopBar();
+    const kpi = screen.getByTestId('kpi-tokens');
+    await waitFor(() =>
+      expect(kpi).toHaveAttribute('title', '9 runs reported no usage'),
+    );
   });
 });

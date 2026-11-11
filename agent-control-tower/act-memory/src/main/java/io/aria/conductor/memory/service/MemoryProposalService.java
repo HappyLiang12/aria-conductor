@@ -176,6 +176,7 @@ public class MemoryProposalService {
             }
             entity.setStatus(EntityStatus.RETIRED);
             entities.save(entity);
+            flushEntity(entity);
             assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", EntityStatus.RETIRED.name(), "kind", entity.getKind(),
                             "canonicalKey", entity.getCanonicalKey(), "factsRetired", batch.size())));
@@ -184,6 +185,7 @@ public class MemoryProposalService {
 
         entity.setStatus(EntityStatus.ACTIVE);
         entities.save(entity);
+        flushEntity(entity);
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.UPDATE, actor, now,
                 before, audit("status", EntityStatus.ACTIVE.name(), "kind", entity.getKind(),
                         "canonicalKey", entity.getCanonicalKey(), "factsPromoted", batch.size())));
@@ -275,6 +277,23 @@ public class MemoryProposalService {
                     + " for key '" + proposal.getFactKey()
                     + "' or its conflicting current value changed while the approval was being "
                     + "written; re-read before deciding");
+        }
+    }
+
+    /**
+     * Pushes the entity write through its row-level {@code @Version} inside the method, so a
+     * second operator click on the same card (or a decision racing a rename or merge) surfaces as
+     * the governed conflict here instead of as a raw optimistic-lock failure at commit — which
+     * MCP would report as {@code PROPOSAL_DECIDE_FAILED} with the driver message. Mirrors
+     * {@link #flushFacts}; the entity decision may have an empty fact batch, so it cannot rely on
+     * the fact flush having run.
+     */
+    private void flushEntity(MemoryEntity entity) {
+        try {
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("memory entity " + entity.getId()
+                    + " changed while its proposal was being decided; re-read before deciding");
         }
     }
 

@@ -363,6 +363,31 @@ class MemoryProposalServiceTest {
     }
 
     /**
+     * Minor 4 (T10 fix round 1). The entity row carries its own {@code @Version}, but
+     * {@code decideEntity} never flushed it: two operator clicks on the same card both pass the
+     * PENDING check and the loser surfaces a raw optimistic-lock failure at commit (MCP answers
+     * {@code PROPOSAL_DECIDE_FAILED} with that message). The flush inside the decision must use
+     * the same governed translation the fact path uses.
+     */
+    @Test
+    void anEntityDecisionWhoseRowVersionWasChangedUnderneathIsAGovernedConflict() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, entityId))
+                .when(entities).flush();
+
+        assertThatThrownBy(() -> proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR))
+                .as("a lost entity version is the governed conflict, not the raw exception")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(entityId.toString());
+
+        verify(assertions, never()).save(any());
+    }
+
+    /**
      * Approval writes a current ACTIVE value, so it must claim the same entity slot an
      * addFact claims. Without the claim an approval and an addFact on the same (entity,
      * factKey) can both commit a current row; the loser's version bump has to surface as the

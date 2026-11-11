@@ -50,6 +50,11 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
     private TransactionTemplate ownTransaction;
     /** Unique per test instance (and 36 chars: the column is {@code varchar(36)}). */
     private final String conversationId = UUID.randomUUID().toString();
+    /**
+     * The id of the row committed outside the rollback, captured at commit time: the statement
+     * under test nulls the conversation id, so the cleanup cannot look the row up by that.
+     */
+    private UUID committedRunId;
 
     @BeforeEach
     void setUp() {
@@ -68,14 +73,25 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
      * from a test so the cleanup itself can be asserted instead of trusted.
      */
     private void removeTheCommittedFixture() {
-        ownTransaction.executeWithoutResult(status ->
-                runs.deleteAll(runs.findByConversationIdOrderByCreatedAtAsc(conversationId)));
+        UUID runId = committedRunId;
+        committedRunId = null;
+        if (runId == null) {
+            return;
+        }
+        ownTransaction.executeWithoutResult(status -> runs.deleteAll(runs.findById(runId).stream().toList()));
+    }
+
+    /** Commits a run outside the slice's transaction and remembers its id for the cleanup. */
+    private UUID commitRun() {
+        UUID runId = ownTransaction.execute(status -> runs.saveAndFlush(run()).getId());
+        committedRunId = runId;
+        return runId;
     }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void theDetachOwnsItsTransactionWhenTheCallerHasNone() {
-        UUID runId = ownTransaction.execute(status -> runs.saveAndFlush(run()).getId());
+        UUID runId = commitRun();
         assertThat(ownTransaction.execute(status -> runs.findById(runId).orElseThrow()).getConversationId())
                 .as("positive control: the fixture really carries the conversation id")
                 .isEqualTo(conversationId);
@@ -104,7 +120,7 @@ class ConversationRunRepositoryTest extends DataJpaTestBase {
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void theCleanupRemovesTheRowTheDetachOrphaned() {
-        UUID runId = ownTransaction.execute(status -> runs.saveAndFlush(run()).getId());
+        UUID runId = commitRun();
         assertThat(conversationRuns.detachByConversationId(conversationId)).isEqualTo(1);
 
         // Positive control for the old key: the lookup the cleanup used is empty because the

@@ -304,6 +304,16 @@ class ToolCatalogParityTest {
      * operator call on a decided key is refused as a conflict. Task 34 had already corrected the
      * Aria prompt to state all three key states, so the description now states them too instead of
      * contradicting the prompt that the model also reads.
+     * <p>
+     * T43 Item 3 (Major): the sentence still said "an existing ACTIVE or PENDING key adds the fact
+     * to that entity", which is false for the credential that reads it: an OPERATOR call on a
+     * PENDING key is refused as a conflict (the row comes back unchanged from {@code createEntity}
+     * and {@code requireEntityForFact} demands an ACTIVE parent for the ACTIVE fact an operator
+     * writes). The decided-key clause showed the omission was not deliberate. The re-proposal clause
+     * also hid that a worker's call retires the key's live ACTIVE and PENDING facts and its ACTIVE
+     * relations before the new proposal is written ({@code rePropose} / {@code retireLiveGraph}), so
+     * a worker's call can close proposals another run left awaiting review. Both clauses are now the
+     * shipped truth, and this pin holds them rather than the old wording.
      */
     @Test
     void rememberFactDescribesBothShapesAndTheProposalRatherThanWriteRule() {
@@ -313,10 +323,15 @@ class ToolCatalogParityTest {
                 .contains("(kind, canonicalKey)")
                 .as("the new-key case, now scoped to a new key")
                 .contains("a new key creates the entity with this first fact in the same transaction")
-                .as("the existing-key case the old wording denied")
-                .contains("an existing ACTIVE or PENDING key adds the fact to that entity")
+                .as("the existing ACTIVE-key case the old wording denied")
+                .contains("an existing ACTIVE key adds the fact to that entity")
+                .as("the existing PENDING-key case: a worker's proposal only, an operator call conflicts")
+                .contains("an existing PENDING key takes only a worker's PENDING proposal")
+                .contains("an operator call on a PENDING key is refused as a conflict")
                 .as("the decided-key case, which only a worker's call re-proposes")
-                .contains("a RETIRED or MERGED key is re-proposed to PENDING by a worker's call")
+                .contains("A RETIRED or MERGED key is re-proposed to PENDING by a worker's call")
+                .as("and the live graph that re-proposal closes, so the operator knows what it retires")
+                .contains("which retires that key's live ACTIVE and PENDING facts and ACTIVE relations")
                 .as("and the operator call on a decided key, which is refused")
                 .contains("an operator call on a decided key is refused as a conflict")
                 .contains("PENDING extraction proposal that an operator must approve");

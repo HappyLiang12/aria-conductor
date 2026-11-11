@@ -309,8 +309,12 @@ follow-up.
 Exclusion is about prompts and agent-facing reads, not about hiding the proposal from the
 operator. An explicit `status=PENDING` filter on the operator-facing list and detail
 surfaces returns PENDING entities, because the operator cannot approve what they cannot
-see. The default (no status filter) stays ACTIVE-only, and no agent-facing read path may
-request PENDING.
+see. The default (no status filter) excludes PENDING — it does not narrow to ACTIVE, so an operator
+can still open a RETIRED or MERGED identity and read its validity history — and no agent-facing read
+path may request PENDING. (Amended for precision after the T36 review: the shipped predicate is
+`status != PENDING`, which is exactly the exclusion this section asks for. "ACTIVE-only" would
+additionally hide decided identities from the operator's detail read, which no criterion here
+requires.)
 
 Three semantics are fixed here so implementation does not invent them:
 

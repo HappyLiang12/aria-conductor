@@ -41,8 +41,10 @@ the operator can actually run from the conversation. Three waves, twelve defects
 - `TemplateListing(templates, totalApproved)` replaces the false "no template is approved" claim.
 
 **Memory operation**
-- `remember_fact` accepts either `entityId` or `kind` + `canonicalKey`; the unknown-key shape proposes
-  a PENDING entity and its first fact in ONE transaction, and one operator decision promotes both.
+- `remember_fact` accepts either `entityId` or `kind` + `canonicalKey`. Only the **new-key** shape
+  creates a PENDING entity together with its first PENDING fact in one transaction, and one operator
+  decision promotes both. An existing ACTIVE or PENDING key adds a fact to that entity; a RETIRED or
+  MERGED key is re-proposed to PENDING by a worker call, with the fact waiting on that proposal.
 - A proposal batch is the entity's PENDING facts (spec `:116-117`, `:323-324`). The `entityId` filter on
   `GET /api/v1/memory/proposals` returns exactly the set the decision promotes, uncapped.
 - The Memory page lists and opens PENDING entities through an operator-authorised review read; the
@@ -89,10 +91,13 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
 - **A PENDING entity is invisible to every agent-facing read** — recall, the context contributor, the
   default list, the default detail, `get_memory_entity`, and the proposals inbox (which withholds ENTITY
   rows from a non-operator). The operator sees it through the explicit review read.
-- **A 409 on a proposal decision is disambiguated** *(in flight, task T32 — not yet merged)*: an
-  already-decided conflict settles the card as decided elsewhere; a retryable optimistic-lock conflict
-  keeps a retry that can succeed. Until T32 lands, every 409 settles the card, which is wrong for a lock
-  conflict.
+- **A 409 on a proposal decision is disambiguated**: an already-decided conflict settles the card as
+  decided elsewhere; a retryable optimistic-lock conflict keeps a retry that can succeed. The
+  discriminator is the stable message marker `changed while`, which is common to every retryable
+  wording, plus server-side mutual-exclusion pins — the REST envelope is closed to four error codes,
+  so no new code or field was added. Two retryable wordings end differently (`re-read before writing`
+  from the current-value slot claim, `re-read before retrying` from the command service); see the
+  residual below.
 - **A re-proposal returns the same identity row to PENDING.** An ACTIVE row is never demoted, and a
   re-proposal retires the retired entity's stale live graph so a new batch cannot inherit old values.
 
@@ -135,5 +140,15 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    is weaker in one known way: OS/Node/browser portability and the Docker image job are untested locally.
 4. **MariaDB execution** is unverified; every local tier runs the H2 profile.
 5. **The qoder usage spike outcome** is to be measured in the live phase and recorded here.
-6. **Coverage ratchets have never been exercised in this program.** A threshold failure at the full gate
-   is a real possibility and must be triaged, not suppressed.
+6. **Coverage ratchets were exercised once, ahead of the full gate.** A non-`~/.m2`-writing coverage
+   preflight at `df93716d` passed with a wide margin (log:
+   `.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`). The full clean-room
+   gate re-runs both threshold-enforcing tiers; a threshold failure there is a real failure to triage,
+   not to suppress.
+7. **The retryable-409 discriminator is a shared substring, not a pinned suffix.** `changed while` is
+   common to every retryable wording, but the tails differ: the current-value slot claim says
+   `another writer won the race — re-read before writing` (`MemoryCurrentValueSlot.java:50-51`,
+   reachable from `decideFact` before the two proposal flushes) and the command service says
+   `re-read before retrying` (`MemoryCommandService.java:781`). A client that matched on
+   `re-read before deciding` alone would mis-settle a slot-loss conflict as decided-elsewhere. The
+   dashboard matches the shared substring; the taxonomy pins are being extended to cover both tails.

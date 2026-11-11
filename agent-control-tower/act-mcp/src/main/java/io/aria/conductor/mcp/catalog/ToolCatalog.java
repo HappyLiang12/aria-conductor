@@ -37,7 +37,7 @@ public class ToolCatalog implements ToolCatalogProvider {
     private static final List<ToolDescriptor> TOOLS = List.of(
             // workflows
             read("list_workflow_templates",
-                    "List APPROVED workflow templates. Optional intent keywords filter by name/description; blank lists all.",
+                    "List APPROVED workflow templates. Returns templates plus totalApproved. Optional intent keywords filter by a literal substring of name or description; an empty templates list with a positive totalApproved means no match, so retry with a blank intent before concluding none exist.",
                     true),
             write("instantiate_workflow_template",
                     "Instantiate an APPROVED workflow template into a runnable chain. Returns the chain JSON including id. Use list_workflow_templates first to obtain templateId."),
@@ -58,32 +58,32 @@ public class ToolCatalog implements ToolCatalogProvider {
             write("retire_knowledge",
                     "Retire an APPROVED knowledge item so agents can no longer use it. Only APPROVED items can be retired."),
             // memory (spec §9): a worker write is a PENDING proposal, an operator write is ACTIVE.
-            // Decision (2026-11 review): every memory READ descriptor below stays
-            // autoApproveRead=false even though its policy is WORKER_READ. Memory carries
-            // learned operator/user facts rather than reference material, so the reviewed
-            // default keeps an operator approval in front of every memory read; the flag is
-            // deliberate, not an omission, and ToolCatalogParityTest pins it.
+            // Decision (2026-11-11 operator amendment, reversing the 2026-11 review): the five
+            // memory READ descriptors below are auto-approved for the Aria assistant's coordinated
+            // runs. Memory reads are clamped at INTERNAL and every prompt still records which facts
+            // entered it, so the operator keeps auditability without a per-read click. Writes and
+            // operator-only tools are unchanged; ToolCatalogParityTest pins this.
             write("remember_fact",
                     "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity."),
             read("recall_memory",
                     "Recall ranked memory for a piece of text: matched entities and their current ACTIVE facts, filtered by the fail-closed INTERNAL sensitivity ceiling, each carrying id, origin, sensitivity and validity. Deterministic for the same state and query; never returns PENDING proposals.",
-                    false),
+                    true),
             read("list_memory_entities",
                     "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200.",
-                    false),
+                    true),
             read("get_memory_entity",
                     "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity.",
-                    false),
+                    true),
             operatorOnly("forget_fact",
                     "Retire one fact (valid_to=now) and record the retire assertion. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the fact stays current."),
             read("list_memory_proposals",
                     "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING.",
-                    false),
+                    true),
             operatorOnly("decide_memory_proposal",
                     "Approve or reject a PENDING memory proposal. Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no proposal changes state. Approval promotes the subject to ACTIVE and retires a conflicting current value."),
             read("get_context_manifest",
                     "Read every context assembly recorded for a run, in turn order: turnNumber, adapter, section ids with source ids and estimates, dropped sections with reasons, and degraded sections with reasons. Metadata only — prompt content is never stored or returned.",
-                    false),
+                    true),
             // approvals
             read("list_approvals",
                     "List approval gates. Optional status (PENDING/APPROVED/DENIED/EXPIRED). SPEC_REVIEW approvals carry markdown content and knowledgeItemId; toolCallId is null for them.",

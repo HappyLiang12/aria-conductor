@@ -5,14 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
+import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryAction;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryAssertion;
+import io.aria.conductor.memory.model.MemoryEntity;
 import io.aria.conductor.memory.model.MemoryFact;
 import io.aria.conductor.memory.model.MemoryRelation;
 import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
+import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -32,8 +35,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * The proposal review path (spec §7, §9): list the PENDING facts and relations, then let an
- * operator approve or reject one.
+ * The proposal review path (spec §7, §9): list the PENDING facts, relations and entities, then let
+ * an operator approve or reject one. An entity proposal is a batch — its id addresses the entity,
+ * and one verdict promotes or retires every PENDING fact that hangs off it (spec §5.5).
  * <p>
  * Decisions are operator-only — an agent run cannot approve its own proposal, so any other
  * actor is refused with a {@link SecurityException} before a row is read. Approval promotes
@@ -42,8 +46,8 @@ import java.util.UUID;
  * subject can never become ACTIVE. Repeating the same verdict is a no-op that writes no
  * second assertion; flipping a decided subject is a conflict.
  * <p>
- * The inbox is a bounded, newest-first page: two status-scoped, page-limited queries (one
- * per subject table) are merged and truncated, so reviewing proposals never enumerates the
+ * The inbox is a bounded, newest-first page: three status-scoped, page-limited queries (facts,
+ * relations and entities) are merged and truncated, so reviewing proposals never enumerates the
  * fact and relation history. A row older than the page is reached by narrowing the status
  * or the limit, not by loading everything.
  */
@@ -54,15 +58,18 @@ public class MemoryProposalService {
 
     private final MemoryFactRepository facts;
     private final MemoryRelationRepository relations;
+    private final MemoryEntityRepository entities;
     private final MemoryAssertionRepository assertions;
     private final MemoryCurrentValueSlot currentValueSlot;
 
     public MemoryProposalService(MemoryFactRepository facts,
                                  MemoryRelationRepository relations,
+                                 MemoryEntityRepository entities,
                                  MemoryAssertionRepository assertions,
                                  MemoryCurrentValueSlot currentValueSlot) {
         this.facts = facts;
         this.relations = relations;
+        this.entities = entities;
         this.assertions = assertions;
         this.currentValueSlot = currentValueSlot;
     }
@@ -97,6 +104,11 @@ public class MemoryProposalService {
                 inbox.add(MemoryProposalView.fromRelation(relation));
             }
         }
+        for (MemoryEntity entity : safe(entities.findByStatusOrderByUpdatedAtDesc(entityStatusOf(target), page))) {
+            if (entity != null) {
+                inbox.add(MemoryProposalView.fromEntity(entity));
+            }
+        }
         inbox.sort(Comparator.comparing(MemoryProposalView::createdAt,
                         Comparator.nullsLast(Comparator.reverseOrder()))
                 .thenComparing(MemoryProposalView::subjectType)
@@ -125,7 +137,62 @@ public class MemoryProposalService {
         if (relation.isPresent()) {
             return decideRelation(relation.get(), decision, actor);
         }
+        Optional<MemoryEntity> entity = entities.findById(subjectId);
+        if (entity.isPresent()) {
+            return decideEntity(entity.get(), decision, actor);
+        }
         throw new MemoryNotFoundException("memory proposal " + subjectId + " not found");
+    }
+
+    /**
+     * An entity proposal is the whole batch: approve promotes every PENDING fact of the entity,
+     * reject retires every one of them, and both write an ENTITY assertion for the decision. The
+     * facts go through {@link #decideFact}, so the supersede and slot-claim rules are shared with a
+     * single-fact decision instead of re-implemented here. The entity itself claims nothing on the
+     * current-value slot — it has no fact key; only the promoted facts do.
+     */
+    private MemoryProposalView decideEntity(MemoryEntity entity, ProposalDecision decision, MemoryActor actor) {
+        EntityStatus outcome = decision == ProposalDecision.APPROVE ? EntityStatus.ACTIVE : EntityStatus.RETIRED;
+        if (entity.getStatus() == outcome) {
+            return MemoryProposalView.fromEntity(entity);
+        }
+        if (entity.getStatus() != EntityStatus.PENDING) {
+            throw new MemoryConflictException("memory entity " + entity.getId() + " is already "
+                    + entity.getStatus() + "; a decided proposal cannot be reopened");
+        }
+        Instant now = Instant.now();
+        String before = audit("status", EntityStatus.PENDING.name(), "kind", entity.getKind(),
+                "canonicalKey", entity.getCanonicalKey());
+        // "The same batch" is every PENDING fact of this PENDING entity: memory_facts has no batch
+        // column and proposal_hash is per fact (spec §5.5).
+        List<MemoryFact> batch = safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                entity.getId(), FactStatus.PENDING));
+
+        if (decision == ProposalDecision.REJECT) {
+            for (MemoryFact fact : batch) {
+                if (fact != null) {
+                    decideFact(fact, ProposalDecision.REJECT, actor);
+                }
+            }
+            entity.setStatus(EntityStatus.RETIRED);
+            entities.save(entity);
+            assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.RETIRE, actor, now,
+                    before, audit("status", EntityStatus.RETIRED.name(), "kind", entity.getKind(),
+                            "canonicalKey", entity.getCanonicalKey(), "factsRetired", batch.size())));
+            return MemoryProposalView.fromEntity(entity);
+        }
+
+        entity.setStatus(EntityStatus.ACTIVE);
+        entities.save(entity);
+        assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.UPDATE, actor, now,
+                before, audit("status", EntityStatus.ACTIVE.name(), "kind", entity.getKind(),
+                        "canonicalKey", entity.getCanonicalKey(), "factsPromoted", batch.size())));
+        for (MemoryFact fact : batch) {
+            if (fact != null) {
+                decideFact(fact, ProposalDecision.APPROVE, actor);
+            }
+        }
+        return MemoryProposalView.fromEntity(entity);
     }
 
     private MemoryProposalView decideFact(MemoryFact proposal, ProposalDecision decision, MemoryActor actor) {
@@ -245,6 +312,15 @@ public class MemoryProposalService {
         if (actor == null || actor.type() != MemoryActorType.OPERATOR) {
             throw new SecurityException("deciding a memory proposal is operator-only");
         }
+    }
+
+    /** The inbox status is shared by facts and relations; entities carry their own lifecycle enum. */
+    private static EntityStatus entityStatusOf(FactStatus status) {
+        return switch (status) {
+            case PENDING -> EntityStatus.PENDING;
+            case ACTIVE -> EntityStatus.ACTIVE;
+            case RETIRED -> EntityStatus.RETIRED;
+        };
     }
 
     private static MemoryAssertion assertion(MemorySubjectType subjectType, UUID subjectId, MemoryAction action,

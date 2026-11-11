@@ -122,6 +122,12 @@ public class AgentLoopEngine {
      * externally cancelled run can never stay parked.
      */
     private final RunInputCoordinator inputCoordinator;
+    /**
+     * The run-owned emitter registry of the ordered signal contract (spec §5.1): a
+     * streaming turn binds its emitter for the whole time it can be asked something,
+     * so an ask raised on the bridge reader thread reaches the turn's own stream.
+     */
+    private final RunStreamRegistry streamRegistry;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -146,7 +152,8 @@ public class AgentLoopEngine {
                            ObjectProvider<CoreRunLauncher> coreRunLauncherProvider,
                            RunAdmissionQueue admission,
                            KanbanRepository kanbanRepository,
-                           RunInputCoordinator inputCoordinator) {
+                           RunInputCoordinator inputCoordinator,
+                           RunStreamRegistry streamRegistry) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.sessionStateManager = sessionStateManager;
@@ -168,6 +175,7 @@ public class AgentLoopEngine {
         this.dodService = dodService;
         this.kanbanRepository = kanbanRepository;
         this.inputCoordinator = inputCoordinator;
+        this.streamRegistry = streamRegistry;
     }
 
     /**
@@ -217,7 +225,21 @@ public class AgentLoopEngine {
      * @param intent          classified intent for SSE done event
      */
     public void startRunStream(UUID runId, SseEmitter emitter, List<LlmMessage> initialContext, String intent) {
-        startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        // Bind the stream before the turn can be asked anything: an ask arrives on the
+        // bridge reader thread and is emitted only while the run has a live stream.
+        // Every terminal path unbinds it again (completeRun, abandonContext and the run
+        // loop's finally), so a finished turn never receives another signal.
+        streamRegistry.register(runId, emitter);
+        try {
+            startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        } catch (RuntimeException e) {
+            // A refused start is the one path with no run loop to unbind in its finally:
+            // the caller catches this and completes the emitter, but Spring has not
+            // installed the handler yet, so complete() fires no callback. Unbind here or
+            // the registry keeps a dead entry that hasStream reports as live forever.
+            streamRegistry.unregister(runId);
+            throw e;
+        }
     }
 
     private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
@@ -251,9 +273,12 @@ public class AgentLoopEngine {
         // Run-owned cores pass the admission gate while the run is still PENDING:
         // over-limit runs park here (card in TODO) until a slot frees; the slot
         // then starts the run and only now does the mirror card move IN_PROGRESS.
+        // The conversation travels with the identity: the Aria pool admits three
+        // turns at once, and only the conversation id serializes two turns of the
+        // same conversation (a worker run's id is simply not grouped).
         CoreRunLauncher coreLauncher = runCoreLauncher();
         if (coreLauncher != null && coreLauncher.owns(agent)) {
-            admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt());
+            admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt(), run.getConversationId());
             // The cancel can land before this waiter was even parked: settle()
             // no-ops, then admission grants the slot. Re-read after admission —
             // a run that left PENDING while queued must give its slot back and
@@ -300,6 +325,7 @@ public class AgentLoopEngine {
                 if (emitter != null) {
                     try { emitter.complete(); } catch (Exception ignored) {}
                 }
+                streamRegistry.unregister(runId);
             }
         });
     }
@@ -649,7 +675,12 @@ public class AgentLoopEngine {
     /**
      * Parked-run bookkeeping (2026-10-05): the coordinator parked the run;
      * persist it as WAITING_INPUT and raise the linked CLARIFICATION ask.
+     *
+     * <p>First in the listener order: this event is published before the ask
+     * exists, and every other listener (the board's broadcast, the panel's
+     * ordered {@code waiting_input} signal) must only observe a persisted ask.
      */
+    @Order(Ordered.HIGHEST_PRECEDENCE)
     @EventListener
     public void onRunWaitingForInput(RunWaitingForInputEvent event) {
         try {
@@ -657,11 +688,14 @@ public class AgentLoopEngine {
             if (ctx == null) {
                 return;
             }
-            try {
-                updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
-            } catch (Exception e) {
-                log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
-            }
+            // The ask is persisted BEFORE the run is committed as WAITING_INPUT, because
+            // that status is the sync waiter's return signal: AriaSyncRunWaiter returns as
+            // soon as it reads WAITING_INPUT and then names the PENDING CLARIFICATION ask,
+            // so a status committed first makes that read find nothing and the turn
+            // returns the old stub (F3, intermittently). Neither write has an ambient
+            // transaction here (the event is published from the run loop), so each
+            // repository call commits on its own and the order below is the commit order.
+            boolean askRaised = false;
             try {
                 String cardId = kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
                         .findFirst().map(KanbanItem::getId).orElse(null);
@@ -675,6 +709,7 @@ public class AgentLoopEngine {
                         .content(event.getQuestion())
                         .build();
                 approvalRepository.save(ask);
+                askRaised = true;
                 eventPublisher.publishEvent(new ApprovalRequestedEvent(this, ask.getId(), event.getRunId(),
                         null, Approval.ApprovalType.TOOL_CALL.name(), ApprovalSource.CLARIFICATION.name()));
             } catch (Exception e) {
@@ -682,10 +717,27 @@ public class AgentLoopEngine {
                 // from, /decide refuses the source, housekeeping skips it) — a
                 // swallowed failure here would park it forever with the operator
                 // seeing nothing. Wake it instead: the finalize path ends the run
-                // honestly and the completion sweep settles any partial state.
+                // honestly and the completion sweep settles any partial state. The
+                // run is deliberately left un-parked, so no reader can observe
+                // WAITING_INPUT without a question to answer.
                 log.error("Failed to create the clarification ask for {} - waking the parked run"
                         + " so it does not strand unreachable: {}", event.getRunId(), e.getMessage(), e);
                 inputCoordinator.recordTerminationIntent(event.getRunId());
+            }
+            if (askRaised) {
+                try {
+                    updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
+                } catch (Exception e) {
+                    // The ask exists but the park does not: the loop is blocked on the
+                    // coordinator while the row still reads RUNNING, so a sync waiter spends
+                    // its whole window against a question the operator is never shown as a
+                    // park. Fail closed exactly like a failed ask write — wake the run so it
+                    // finalizes instead of parking on an unreachable ask.
+                    log.error("Failed to persist WAITING_INPUT for run {} - waking it so it does"
+                            + " not park on an ask the operator cannot see: {}",
+                            event.getRunId(), e.getMessage(), e);
+                    inputCoordinator.recordTerminationIntent(event.getRunId());
+                }
             }
             log.info("Run {} waiting for operator input", event.getRunId());
         } catch (Exception e) {
@@ -1364,6 +1416,9 @@ public class AgentLoopEngine {
         }
 
         activeContexts.remove(ctx.getRunId());
+        // The turn is over: a late ask must not be delivered to a stream whose run can
+        // no longer act on it (a cancelled run is never resurrected by a signal).
+        streamRegistry.unregister(ctx.getRunId());
     }
 
     private void handleRunFailure(UUID runId, String errorMessage) {
@@ -1449,6 +1504,7 @@ public class AgentLoopEngine {
                     ctx.getRunId(), e.getMessage());
         }
         activeContexts.remove(ctx.getRunId());
+        streamRegistry.unregister(ctx.getRunId());
     }
 
     // ---- SSE helpers —

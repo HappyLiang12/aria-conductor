@@ -9,11 +9,14 @@ import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryEntityView;
+import io.aria.conductor.memory.dto.MemoryFactView;
 import io.aria.conductor.memory.dto.RecallResult;
 import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryOrigin;
 import io.aria.conductor.memory.model.MemoryEntity;
+import io.aria.conductor.memory.model.MemoryFact;
+import io.aria.conductor.memory.service.MemoryNotFoundException;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryKnowledgeLinkRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
@@ -37,7 +40,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -48,6 +53,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -71,6 +77,10 @@ class MemoryControllerAuthorityTest {
     private static final Instant NOW = Instant.parse("2026-11-11T10:00:00Z");
     private static final String OPERATOR_AUTHORIZATION = "Bearer operator-bearer-secret";
     private static final String WORKER_AUTHORIZATION = "Bearer worker-token";
+
+    /** Two fact values the detail read must never hand a worker: review material, then a secret. */
+    private static final String PENDING_FACT_VALUE = "timezone: Europe/Berlin (proposed)";
+    private static final String CONFIDENTIAL_FACT_VALUE = "home-address: 12 Example Street";
 
     private final MemoryCommandService command = mock(MemoryCommandService.class);
     private final MemoryQueryService query = mock(MemoryQueryService.class);
@@ -152,6 +162,23 @@ class MemoryControllerAuthorityTest {
                 .version(1)
                 .createdAt(NOW)
                 .updatedAt(NOW)
+                .build();
+    }
+
+    /** One fact row as {@code MemoryQueryService.factHistory} returns it, status and ceiling kept. */
+    private static MemoryFact fact(UUID entityId, String factKey, String valueText,
+                                   FactStatus status, Sensitivity sensitivity) {
+        return MemoryFact.builder()
+                .id(UUID.randomUUID())
+                .entityId(entityId)
+                .factKey(factKey)
+                .valueText(valueText)
+                .valueType("STRING")
+                .status(status)
+                .origin(status == FactStatus.PENDING ? MemoryOrigin.EXTRACTION : MemoryOrigin.OPERATOR)
+                .sensitivity(sensitivity)
+                .validFrom(NOW)
+                .version(1)
                 .build();
     }
 
@@ -246,6 +273,172 @@ class MemoryControllerAuthorityTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(id.toString()))
                 .andExpect(jsonPath("$[0].status").value("PENDING"));
+    }
+
+    // --------------------------------------------------- GET /entities/{id}
+
+    /**
+     * The default detail read is the operator surface too (T36): with no {@code status} parameter it
+     * used to call no resolver at all, so a run-scoped worker credential received the entity and its
+     * whole fact history — every PENDING fact (review material the operator has not approved) and
+     * every fact above the INTERNAL ceiling. Its MCP twin {@code get_memory_entity} is fail-closed and
+     * ceiling-bound, so this was a REST/MCP parity bypass, not merely a missing check.
+     */
+
+    @Test
+    void getEntity_defaultReadRefusesAWorkerBearer_andNeverReadsTheEntity() throws Exception {
+        UUID id = UUID.randomUUID();
+        workerTokenIsLive();
+        when(query.getEntity(id, false)).thenReturn(MemoryEntityView.from(entity(id, "Operator")));
+        when(query.factHistory(id)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id)
+                        .header("Authorization", WORKER_AUTHORIZATION))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(workerRefusal()));
+
+        verifyNoInteractions(query);
+    }
+
+    /**
+     * The leak pin: a negative-only test would pass on an empty body served to everybody, so the
+     * refusal is asserted on seeded review material and a CONFIDENTIAL value, and the operator
+     * control then proves the same two rows are readable by the caller the route serves.
+     */
+    @Test
+    void getEntity_isNotALeakPathForAWorkerCredential() throws Exception {
+        UUID id = UUID.randomUUID();
+        MemoryFact pending = fact(id, "timezone", PENDING_FACT_VALUE, FactStatus.PENDING, Sensitivity.INTERNAL);
+        MemoryFact confidential =
+                fact(id, "home-address", CONFIDENTIAL_FACT_VALUE, FactStatus.ACTIVE, Sensitivity.CONFIDENTIAL);
+        stubDetailRead(id, pending, confidential);
+        workerTokenIsLive();
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id)
+                        .header("Authorization", WORKER_AUTHORIZATION))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(workerRefusal()))
+                .andExpect(content().string(not(containsString(PENDING_FACT_VALUE))))
+                .andExpect(content().string(not(containsString(CONFIDENTIAL_FACT_VALUE))))
+                .andExpect(content().string(not(containsString(pending.getId().toString()))))
+                .andExpect(content().string(not(containsString(confidential.getId().toString()))));
+
+        verifyNoInteractions(query);
+
+        // Positive control: the same seeded rows are exactly what the operator reads.
+        mvc.perform(get("/api/v1/memory/entities/{id}", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.facts", hasSize(2)))
+                .andExpect(jsonPath("$.facts[0].valueText").value(PENDING_FACT_VALUE))
+                .andExpect(jsonPath("$.facts[1].valueText").value(CONFIDENTIAL_FACT_VALUE));
+    }
+
+    @Test
+    void getEntity_anonymousRemoteIsRefused_andNeverReadsTheEntity() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(query.getEntity(id, false)).thenReturn(MemoryEntityView.from(entity(id, "Operator")));
+        when(query.factHistory(id)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).with(remote()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(anonymousRefusal()));
+
+        verifyNoInteractions(query);
+    }
+
+    /** The entity's review read ({@code status=PENDING}) already resolved authority; unchanged. */
+    @Test
+    void getEntity_pendingReviewReadStillRefusesAWorkerBearer() throws Exception {
+        UUID id = UUID.randomUUID();
+        workerTokenIsLive();
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", "PENDING")
+                        .header("Authorization", WORKER_AUTHORIZATION))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(workerRefusal()));
+
+        verifyNoInteractions(query);
+    }
+
+    /**
+     * Positive control for the two refusals above: the operator still reads the whole history,
+     * PENDING fact and over-ceiling value included. Without this the fix could have been "refuse
+     * everybody" and stayed green.
+     */
+    @Test
+    void getEntity_operatorSeesTheWholeHistoryIncludingPendingAndConfidentialFacts() throws Exception {
+        UUID id = UUID.randomUUID();
+        MemoryFact pending = fact(id, "timezone", PENDING_FACT_VALUE, FactStatus.PENDING, Sensitivity.INTERNAL);
+        MemoryFact confidential =
+                fact(id, "home-address", CONFIDENTIAL_FACT_VALUE, FactStatus.ACTIVE, Sensitivity.CONFIDENTIAL);
+        stubDetailRead(id, pending, confidential);
+
+        // Anonymous loopback is the local operator (the dashboard's path).
+        mvc.perform(get("/api/v1/memory/entities/{id}", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.entity.id").value(id.toString()))
+                .andExpect(jsonPath("$.facts", hasSize(2)))
+                .andExpect(jsonPath("$.facts[0].status").value("PENDING"))
+                .andExpect(jsonPath("$.facts[0].valueText").value(PENDING_FACT_VALUE))
+                .andExpect(jsonPath("$.facts[1].sensitivity").value("CONFIDENTIAL"))
+                .andExpect(jsonPath("$.facts[1].valueText").value(CONFIDENTIAL_FACT_VALUE));
+
+        // An operator bearer from a remote peer is the other operator credential.
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).with(remote())
+                        .header("Authorization", OPERATOR_AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.facts", hasSize(2)));
+    }
+
+    /** The fail-closed default is unchanged: a PENDING entity row still answers 404, not 403. */
+    @Test
+    void getEntity_pendingEntityRowStillAnswersNotFoundOnTheDefaultRead() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(query.getEntity(id, false))
+                .thenThrow(new MemoryNotFoundException("memory entity " + id + " not found"));
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("NOT_FOUND"));
+    }
+
+    /**
+     * The authority gate precedes the status validation, for the same reason it precedes the status
+     * narrowing on the list read: if a refused caller reached the 422 first, the shape of the error
+     * would let a worker credential enumerate which status values the route honours. Both are asked
+     * here — the worker sees the one refusal, and the loopback operator still gets the VALIDATION
+     * error for the unsupported value, so the 403 above is the gate and not the status.
+     */
+    @Test
+    void getEntity_refusesAWorkerBeforeTheStatusValidation() throws Exception {
+        UUID id = UUID.randomUUID();
+        workerTokenIsLive();
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", "MERGED")
+                        .header("Authorization", WORKER_AUTHORIZATION))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value(workerRefusal()));
+
+        verifyNoInteractions(query);
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", "MERGED"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorType").value("VALIDATION"));
+    }
+
+    /** The seeded ACTIVE entity with its two fact rows, as the services would return them. */
+    private void stubDetailRead(UUID id, MemoryFact... facts) {
+        when(query.getEntity(id, false)).thenReturn(MemoryEntityView.from(entity(id, "Operator")));
+        when(query.factHistory(id))
+                .thenReturn(List.of(facts).stream().map(MemoryFactView::from).toList());
     }
 
     // ------------------------------------------------------- GET /proposals

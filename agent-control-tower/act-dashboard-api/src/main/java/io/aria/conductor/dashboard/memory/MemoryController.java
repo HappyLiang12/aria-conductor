@@ -171,14 +171,16 @@ public class MemoryController {
     public MemoryEntityDetail getEntity(@PathVariable UUID id,
                                         @RequestParam(required = false) EntityStatus status,
                                         HttpServletRequest request) {
+        // The detail read is the operator surface whether or not a status is asked for. Resolving
+        // authority only on the PENDING branch left the default read open to a worker credential,
+        // which then read the whole fact history — PENDING review material and over-ceiling values
+        // included — and made this route disagree with its fail-closed MCP twin.
+        operatorAuthority.resolveOperator(request, false);
         if (status != null && status != EntityStatus.PENDING) {
             throw new MemoryValidationException("status=" + status
                     + " is not supported by this route: the only supported value is PENDING");
         }
         boolean includePending = status == EntityStatus.PENDING;
-        if (includePending) {
-            operatorAuthority.resolveOperator(request, false);
-        }
         List<MemoryRelationView> entityRelations = new ArrayList<>();
         for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(id, FactStatus.ACTIVE))) {
             entityRelations.add(MemoryMapper.relationView(relation));

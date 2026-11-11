@@ -4,6 +4,7 @@ import { listApprovals } from '../api/approvals';
 import { listKanbanItems } from '../api/kanban';
 import { nativePermissionOf } from '../components/NativePermissionAsk';
 import { mergeStableOrder } from '../utils/stableOrder';
+import { shortRunId } from '../utils/shortRunId';
 import { queryPhase, type QueryPhase } from '../utils/queryState';
 import type { KanbanItem } from '../types';
 
@@ -91,7 +92,7 @@ export function useDecisionQueue(options: { locked: boolean }): {
         approvalId: approval.id,
         runId: approval.runId,
         taskId: card?.id ?? null,
-        title: card?.title ?? `Run ${approval.runId.slice(0, 8)}`,
+        title: card?.title ?? `Run ${shortRunId(approval.runId)}`,
         state: card?.status ?? 'UNKNOWN',
         askType: approval.askType ?? approval.approvalType ?? 'APPROVAL',
         source: approval.source ?? '',

@@ -1017,6 +1017,33 @@ describe('AriaPanel in-flow decisions', () => {
     expect(screen.queryByText('late reply from the parked turn')).not.toBeInTheDocument();
   });
 
+  // T46 Item 2 (final review Minor 5): Clear calls
+  // `DELETE /api/v1/aria/conversations/{id}`, whose route cancels every
+  // RUNNING / PENDING / WAITING_INPUT run of that conversation and then purges
+  // its tool calls, trajectories and audit events
+  // (`AriaConversationController.java:153-180`). The copy used to say the run
+  // "keeps living server-side", which is false, and it is the only wording the
+  // operator gets at the moment they escape a parked turn.
+  it('describes Clear as the cancellation it is, and deletes the conversation it names', async () => {
+    mockGetLatest.mockResolvedValue(summary('conv-1'));
+    renderPanel();
+    await openPanelForTest();
+
+    const clear = screen.getByRole('button', { name: 'Clear and start new conversation' });
+    const title = clear.getAttribute('title') ?? '';
+    expect(title).toMatch(/cancels/i);
+    expect(title).toMatch(/deletes/i);
+    // The false claim in every form it was written in: Clear does not keep a
+    // run alive, so no copy may say it does.
+    expect(title).not.toMatch(/stays? alive|keeps? living|server-side/i);
+
+    fireEvent.click(clear);
+    // The remedy the copy promises is the call the button actually makes on the
+    // conversation it names — a refusal falls back to clearing locally, so only
+    // the call itself is pinned here.
+    await waitFor(() => expect(mockDeleteConversation).toHaveBeenCalledWith('conv-1'));
+  });
+
   it('names the runs the timeline shows as still unanswered', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([

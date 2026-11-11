@@ -102,20 +102,38 @@ test.describe('Aria in-flow decisions (live)', () => {
 
   test('a second conversation can be started while the first one is parked', async ({ page }) => {
     const card = await parkOnAsk(page);
-    const firstConversation = (await page.locator('.ai-conversation-id').textContent())?.trim();
+    // The header truncates its visible text; `title` carries the whole id, which is
+    // what the server-side check below has to name.
+    const firstConversation = await page.locator('.ai-conversation-id').getAttribute('title');
     expect(firstConversation).toBeTruthy();
 
     await page.getByRole('button', { name: 'Clear and start new conversation' }).click();
 
     // The parked transcript is gone for good: Clear's route cancels this
     // conversation's runs and purges its tool calls, trajectories and audit
-    // events (`AriaConversationController.java:153-180`), so the run does not
-    // survive it. The composer is usable again, and this is a new conversation id.
+    // events (`AriaConversationController.java:193-238`), so the run does not
+    // survive it. Asserted on the SERVER, not only in the panel: this browser
+    // holds an operator session, so a Clear that lost its CSRF token was refused
+    // 403 and the old panel cleared itself anyway (T48 item 1) — a UI-only
+    // assertion passed straight through that. The composer is usable again, and
+    // this is a new conversation id.
     await expect(page.locator('.ai-panel .ai-decision-card')).toHaveCount(0);
     await expect(page.locator('.ai-panel .ai-empty')).toBeVisible();
     await expect(page.locator('.ai-panel .ai-compose-input')).toBeEnabled();
-    const secondConversation = (await page.locator('.ai-conversation-id').textContent())?.trim();
+    const secondConversation = await page.locator('.ai-conversation-id').getAttribute('title');
     expect(secondConversation).not.toBe(firstConversation);
+
+    // Server-side proof of the purge: the cleared conversation has no runs left,
+    // so its timeline is empty, and it is no longer the latest conversation.
+    const clearedTimeline = await page.request.get(
+      `/api/v1/aria/conversations/${encodeURIComponent(firstConversation as string)}`,
+    );
+    expect(clearedTimeline.ok()).toBeTruthy();
+    expect(await clearedTimeline.json()).toEqual([]);
+    const latest = await page.request.get('/api/v1/aria/conversations/latest');
+    if (latest.status() !== 204) {
+      expect((await latest.json()).conversationId).not.toBe(firstConversation);
+    }
 
     // The second conversation accepts a turn while the first is still parked.
     await sendPrompt(page, 'What is the current run queue status?');

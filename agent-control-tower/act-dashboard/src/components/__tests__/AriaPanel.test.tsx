@@ -61,12 +61,17 @@ vi.mock('../../api/ariaConversations', () => ({
 }));
 vi.mock('../../api/runs', () => ({ cancelRun: vi.fn(), getRun: vi.fn() }));
 vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
-vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn(), getApproval: vi.fn() }));
+vi.mock('../../api/approvals', () => ({
+  listApprovals: vi.fn(),
+  getApproval: vi.fn(),
+  decideApproval: vi.fn(),
+  answerAsk: vi.fn(),
+}));
 
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
-import { getApproval, listApprovals } from '../../api/approvals';
+import { decideApproval, getApproval, listApprovals } from '../../api/approvals';
 import { cancelRun, getRun } from '../../api/runs';
 
 const mockStream = streamMessage as Mock;
@@ -76,6 +81,7 @@ const mockDeleteConversation = deleteConversation as Mock;
 const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
 const mockGetApproval = getApproval as Mock;
+const mockDecideApproval = decideApproval as Mock;
 const mockCancelRun = cancelRun as Mock;
 const mockGetRun = getRun as Mock;
 
@@ -132,6 +138,7 @@ beforeEach(() => {
   // The by-id read is only consulted for an ask that left the pending list; an
   // unanswered probe (null) must never settle a card on its own.
   mockGetApproval.mockResolvedValue(null);
+  mockDecideApproval.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
   mockCancelRun.mockResolvedValue(undefined);
   // The queued indicator asks the run itself: only an admitted (PENDING) run is
   // queued, so the default fixture is the admitted case.
@@ -697,27 +704,48 @@ describe('AriaPanel in-flow decisions', () => {
     expect(screen.queryByText(/\{"total":3\}/)).not.toBeInTheDocument();
   });
 
-  it('merges a REST-reconciled pending ask with the card already on screen', async () => {
+  it('merges a live SSE ask with the REST pending list that repeats it', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([
       { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
     ]);
-    mockListApprovals.mockResolvedValue([pendingToolAsk()]);
+    // Nothing pending on the REST plane at mount: the card below is the SSE
+    // plane's, the ordering this merge exists for (SSE first, REST second).
+    mockListApprovals.mockResolvedValue([]);
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({
+        runId: 'r1',
+        approvalId: 'a1',
+        toolName: TOOL,
+        riskTier: 'WRITE_LOCAL',
+        toolPolicy: 'WORKER_WRITE',
+      });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
     renderPanel();
     await openPanelForTest();
-
+    // The restored turn is on screen, so the empty-state suggestions are gone:
+    // this turn is typed like any other.
+    fireEvent.change(textarea(), { target: { value: 'remember my channel' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter', shiftKey: false });
     expect(await screen.findByText(TOOL)).toBeInTheDocument();
-    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
-    const reconcilesAfterMount = mockGetTimeline.mock.calls.length;
 
-    // A second reconcile (focus / reconnect) re-delivers the same pending ask.
+    // The next reconcile returns the same ask by id: it must merge into the card
+    // on screen, not draw a second one and not reopen/duplicate it.
+    mockListApprovals.mockResolvedValue([pendingToolAsk('a1', 'r1')]);
+    const reconcilesBefore = mockGetTimeline.mock.calls.length;
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
     await act(async () => {});
 
-    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesBefore);
     expect(screen.getAllByText(TOOL)).toHaveLength(1);
+    expect(screen.getAllByText('WORKER_WRITE')).toHaveLength(1);
+    // A merge, not a flip: the card is still the operator's to decide.
+    expect(screen.getByText(/pending decision first/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
   });
 
   it('re-reconciles the conversation when the socket reconnects', async () => {
@@ -1123,5 +1151,151 @@ describe('AriaPanel WebSocket-requested asks (dead stream)', () => {
     await act(async () => {});
 
     expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The decision is taken in the panel, not only in the Review Queue: clicking
+// Allow once must POST the decision, settle the card, lift the gate, and leave
+// the parked turn's own stream open so the turn resumes on it. The report
+// claimed "approving resumes the same turn" with no executed evidence; this is
+// that evidence at the unit tier (the live path stays the acceptance phase's).
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel deciding an ask in place', () => {
+  it('posts the decision, settles the card, lifts the gate and keeps the stream open', async () => {
+    let emitAfterDecision: ((content: string) => void) | null = null;
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      emitAfterDecision = (content: string) => args[3]?.onMessage?.(content);
+      return new Promise<void>(() => {}); // parked: the turn holds its stream open
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(screen.getByText(/pending decision first/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /allow once/i }));
+
+    await waitFor(() =>
+      expect(mockDecideApproval).toHaveBeenCalledWith('a1', expect.objectContaining({ approved: true })),
+    );
+    expect(await screen.findByText(/allowed once/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pending decision first/i)).not.toBeInTheDocument();
+    // The turn is still running (the stream never ended), so the busy control is
+    // Cancel — that is the honest state, not a locked composer.
+    expect(screen.getByRole('button', { name: 'Cancel request' })).toBeInTheDocument();
+
+    // The decision did not abort the parked turn's stream: a frame sent after it
+    // still lands in this transcript.
+    act(() => { emitAfterDecision?.('resumed reply'); });
+    expect(await screen.findByText('resumed reply')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry transcript shape (m6): a failed turn stays in the transcript as history
+// and the retried turn is appended below it. The old panel silently removed the
+// trailing failure; neither behaviour was pinned. This pins the chosen one.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel retry transcript shape', () => {
+  it('keeps the failed turn as history above the retried prompt', async () => {
+    mockListApprovals.mockResolvedValue([]);
+    mockStream.mockImplementationOnce(async (...args: StreamArgs) => {
+      args[3]?.onError?.('boom');
+    });
+    mockStream.mockImplementation(async () => { /* the retried turn answers */ });
+    renderPanel();
+    await openPanelForTest();
+    await userEvent.type(textarea(), 'do the thing');
+    await userEvent.type(textarea(), '{Enter}');
+
+    expect(
+      await screen.findByText(/no approval is pending/, undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
+
+    // The failure is history, not erased; the retried prompt sits below it.
+    expect(screen.getByText(/no approval is pending/)).toBeInTheDocument();
+    expect(screen.getAllByText('do the thing')).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The cleared-conversation guard covered the SSE plane only. A REST read (the
+// mount load or a reconcile) that resolves after Clear must not write the
+// cleared conversation's transcript into the new one, nor revert its id —
+// the same class of bug the SSE guard closes (fbf0a665).
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel cleared-conversation guard on the REST plane', () => {
+  function conversationIdText(container: HTMLElement): string {
+    return (container.querySelector('.ai-conversation-id') as HTMLElement | null)?.title ?? '';
+  }
+
+  it('drops a mount load that resolves after the operator cleared the conversation', async () => {
+    let resolveLatest: (value: unknown) => void = () => {};
+    mockGetLatest.mockReturnValue(new Promise((resolve) => { resolveLatest = resolve; }));
+    const { container } = renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+
+    // Clear before the load answers: this tab now owns a conversation of its own.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    const clearedId = conversationIdText(container);
+    expect(clearedId).not.toBe('');
+
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'history of the cleared conversation', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    await act(async () => { resolveLatest(summary('conv-old')); });
+    await act(async () => {});
+
+    // Positive control for the guard: a load that resolves normally IS adopted
+    // (the merge/gate cases above), so this absence is the guard working.
+    expect(screen.queryByText('history of the cleared conversation')).not.toBeInTheDocument();
+    expect(mockGetTimeline).not.toHaveBeenCalled();
+    expect(conversationIdText(container)).toBe(clearedId);
+  });
+
+  it('drops a reconcile that resolves after the operator cleared the conversation', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    let resolveReconcile: (value: unknown) => void = () => {};
+    mockGetTimeline
+      .mockResolvedValueOnce([
+        { role: 'user', content: 'first turn', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+      ])
+      .mockReturnValueOnce(new Promise((resolve) => { resolveReconcile = resolve; }));
+    mockListApprovals.mockResolvedValue([]);
+    const { container } = renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText('first turn')).toBeInTheDocument();
+
+    // A focus reconcile starts, the operator clears while it is in flight.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+    // The second read is the in-flight one (the mount read was the first), so the
+    // resolution below is really the stale reconcile and not a no-op.
+    expect(mockGetTimeline).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and start new conversation' }));
+    const clearedId = conversationIdText(container);
+    expect(screen.queryByText('first turn')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveReconcile([
+        { role: 'user', content: 'first turn', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+      ]);
+    });
+    await act(async () => {});
+
+    expect(screen.queryByText('first turn')).not.toBeInTheDocument();
+    expect(conversationIdText(container)).toBe(clearedId);
   });
 });

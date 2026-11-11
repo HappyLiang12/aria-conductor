@@ -5,7 +5,6 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
-import io.aria.conductor.common.model.PromptCall;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -19,6 +18,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,9 +46,8 @@ class DashboardToolsTest {
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(2L);
         when(approvalRepository.findByStatus(ApprovalStatus.PENDING))
                 .thenReturn(List.of(new Approval(), new Approval()));
-        when(promptCallRepository.findAll()).thenReturn(List.of(
-                PromptCall.builder().inputTokens(120).outputTokens(30).build(),
-                PromptCall.builder().inputTokens(50).outputTokens(0).build()));
+        when(runRepository.sumReportedUsage()).thenReturn(200L);
+        when(runRepository.countWithoutReportedUsage()).thenReturn(4L);
 
         String json = tools.getDashboardSummary();
 
@@ -57,7 +57,18 @@ class DashboardToolsTest {
                 .contains("\"degradedAgents\":1")
                 .contains("\"runningRuns\":2")
                 .contains("\"pendingApprovals\":2")
-                .contains("\"totalTokensBurned\":200");
+                .contains("\"totalTokensBurned\":200")
+                .contains("\"runsWithoutUsage\":4");
+    }
+
+    @Test
+    void theSummaryCountsRunsAndSeparatesUnreportedOnes() {
+        // two runs: one reported 100+20, one never reported
+        when(runRepository.sumReportedUsage()).thenReturn(120L);
+        when(runRepository.countWithoutReportedUsage()).thenReturn(1L);
+        String json = tools.getDashboardSummary();
+        assertThat(json).contains("\"totalTokensBurned\":120").contains("\"runsWithoutUsage\":1");
+        verify(promptCallRepository, never()).findAll();
     }
 
     @Test

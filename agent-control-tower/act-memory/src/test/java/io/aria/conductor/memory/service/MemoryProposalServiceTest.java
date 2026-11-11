@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -228,6 +229,72 @@ class MemoryProposalServiceTest {
                 .containsExactly("FACT");
         assertThat(operatorView).extracting(MemoryProposalView::subjectType)
                 .containsExactly("FACT", "ENTITY");
+    }
+
+    /**
+     * T29 Item 1 (P1). The card renders the {@code entityId} filtered read and the operator
+     * decides the entity, so the two sets have to be the SAME set: {@code decideEntity} promotes
+     * and retires the entity's PENDING FACTS only (spec :116-117, :323-324 — "a proposal batch is
+     * the entity's PENDING facts"; the relation graph is out of scope, spec :138, :453). The
+     * filtered read used to add the entity's PENDING relations in both directions, so approving
+     * the entity left a relation PENDING and approving that relation then survived under a RETIRED
+     * entity. Both halves are driven in this one test: the read's fact ids must equal the ids the
+     * decision promotes, a PENDING relation must not be in the batch, and it must stay undecided.
+     */
+    @Test
+    void theEntityBatchIsExactlyTheSetTheEntityDecisionPromotes() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(happy);
+        MemoryFact timezone = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(2));
+        MemoryFact language = fact(happy, "language", FactStatus.PENDING, OLD.plusSeconds(1));
+        MemoryRelation pendingRelation = relation(FactStatus.PENDING);
+        when(facts.findByEntityIdAndStatusOrderByCreatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language));
+        when(entities.findById(happy)).thenReturn(Optional.of(entity));
+        // Stubbed leniently: after the fix the read never looks at relations, and the point of the
+        // stub is that a PENDING relation of the entity exists and still must not appear.
+        lenient().when(relations.findByFromEntityIdAndStatus(happy, FactStatus.PENDING))
+                .thenReturn(List.of(pendingRelation));
+        lenient().when(relations.findByToEntityIdAndStatus(happy, FactStatus.PENDING))
+                .thenReturn(List.of(pendingRelation));
+
+        List<MemoryProposalView> batch = proposals.listProposalsForEntity(FactStatus.PENDING, happy, OPERATOR);
+
+        List<String> shownFactIds = new ArrayList<>();
+        for (MemoryProposalView view : batch) {
+            if ("FACT".equals(view.subjectType())) {
+                shownFactIds.add(view.id());
+            }
+        }
+        assertThat(shownFactIds)
+                .as("the card shows the entity's PENDING facts")
+                .containsExactlyInAnyOrder(timezone.getId().toString(), language.getId().toString());
+        assertThat(batch).extracting(MemoryProposalView::subjectType)
+                .as("facts plus the entity row, never a relation")
+                .containsExactlyInAnyOrder("FACT", "FACT", "ENTITY");
+        assertThat(batch).extracting(MemoryProposalView::id)
+                .doesNotContain(pendingRelation.getId().toString());
+        verify(relations, never()).findByFromEntityIdAndStatus(any(), any());
+        verify(relations, never()).findByToEntityIdAndStatus(any(), any());
+
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.PENDING))
+                .thenReturn(List.of(timezone, language));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        proposals.decideProposal(happy, ProposalDecision.APPROVE, OPERATOR);
+
+        List<String> promotedFactIds = new ArrayList<>();
+        for (MemoryFact fact : List.of(timezone, language)) {
+            if (fact.getStatus() == FactStatus.ACTIVE) {
+                promotedFactIds.add(fact.getId().toString());
+            }
+        }
+        assertThat(promotedFactIds)
+                .as("the batch the card showed is exactly the batch the decision covered")
+                .containsExactlyInAnyOrderElementsOf(shownFactIds);
+        assertThat(pendingRelation.getStatus())
+                .as("a relation is out of scope for the entity decision")
+                .isEqualTo(FactStatus.PENDING);
     }
 
     @Test

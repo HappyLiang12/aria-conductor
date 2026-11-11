@@ -251,6 +251,10 @@ export function AriaPanel() {
   const activeRunIdRef = useRef<string | null>(null); // M1: run id for server-side cancellation
   const turnIdRef = useRef(''); // the id the live turn's activity strip is keyed by (the run id once known)
   const conversationIdRef = useRef('');
+  // The runs this conversation's timeline holds: a WebSocket ask is only this
+  // panel's business when its run is one of them (a single-conversation panel
+  // must not render another conversation's ask).
+  const conversationRunIdsRef = useRef<Set<string>>(new Set());
 
   const items = state.items;
   const gated = hasUnansweredCard(state);
@@ -333,6 +337,7 @@ export function AriaPanel() {
     // A snapshot that resolves after the operator cleared this conversation must
     // not write the cleared transcript back, nor revert the reducer's id.
     if (conversationIdRef.current !== targetConversationId) return;
+    conversationRunIdsRef.current = runIds;
     dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
     dispatch({ type: 'queuedRuns', runIds: queuedRunIds(timeline, activeRunIdRef.current) });
     if (!pendingListed) return;
@@ -419,9 +424,71 @@ export function AriaPanel() {
    * with the banner about whether the feed came back.
    */
   const { subscribe, isConnected } = useWebSocketContext();
+  /**
+   * True when a run is this conversation's own — one the timeline holds, or the
+   * turn this panel is watching right now.
+   */
+  const isThisConversationsRun = useCallback(
+    (runId: string) =>
+      runId !== ''
+      && (runId === activeRunIdRef.current || conversationRunIdsRef.current.has(runId)),
+    [],
+  );
+
+  /**
+   * A WS-announced ask, read by id (spec A2). The `approval.requested` frame
+   * carries no tool name, tier, policy or question, so the panel reads the ask
+   * itself; the frame is the only signal for an ask raised after this panel's
+   * own stream died (client timeout, cancel, a dropped SSE connection), which is
+   * the plane the three-plane design exists for. Only asks of a run this
+   * conversation holds are adopted — the cross-conversation half of the review's
+   * concern is correct: one conversation's panel does not render another's.
+   */
+  const adoptAskById = useCallback(async (approvalId: string) => {
+    const targetConversationId = conversationIdRef.current;
+    let approval: Approval | null;
+    try {
+      approval = await getApproval(approvalId);
+    } catch (err) {
+      console.warn('[Aria] announced ask could not be read:', err);
+      return;
+    }
+    if (!approval || approval.status !== 'PENDING') return;
+    if (conversationIdRef.current !== targetConversationId) return;
+    if (!isThisConversationsRun(approval.runId)) return;
+    if (approval.source === 'CLARIFICATION') {
+      dispatch({
+        type: 'waitingInput',
+        approvalId: approval.id,
+        runId: approval.runId,
+        question: approval.content?.trim() || approval.reason || '',
+      });
+      return;
+    }
+    dispatch({
+      type: 'approvalRequired',
+      approvalId: approval.id,
+      runId: approval.runId,
+      toolName: approval.toolName ?? 'unknown tool',
+      riskTier: approval.riskTier,
+      toolPolicy: approval.toolPolicy,
+      args: approval.arguments,
+    });
+  }, [isThisConversationsRun]);
+
   useEffect(() => {
     const subscription = subscribe((event) => {
       switch (event.type) {
+        case 'approval.requested': {
+          const approvalId = String(event.payload?.approvalId ?? '');
+          if (!approvalId) return;
+          // The frame names the run: a foreign conversation's ask is not read at
+          // all. An absent run id falls through to the by-id read, which decides.
+          const runId = String(event.payload?.runId ?? '');
+          if (runId !== '' && !isThisConversationsRun(runId)) return;
+          void adoptAskById(approvalId);
+          return;
+        }
         case 'approval.decided': {
           const approvalId = String(event.payload?.approvalId ?? '');
           if (!approvalId) return;
@@ -441,6 +508,13 @@ export function AriaPanel() {
           dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
           return;
         }
+        case 'run.waiting_input': {
+          // The frame carries no approvalId, so it cannot key a card itself; it
+          // does mean a run just parked, and the snapshot holds the ask (A2).
+          const id = conversationIdRef.current;
+          if (id) void reconcile(id).catch(() => { /* a background reconcile is best-effort */ });
+          return;
+        }
         case 'run.completed': {
           // Only this conversation's live turn justifies a re-read; another
           // run's completion is not part of this transcript.
@@ -455,7 +529,7 @@ export function AriaPanel() {
       }
     });
     return () => subscription.unsubscribe();
-  }, [subscribe, reconcile]);
+  }, [subscribe, reconcile, adoptAskById, isThisConversationsRun]);
 
   // Reconcile when the socket comes back: frames missed while it was down are
   // recovered from the durable snapshot rather than from a replay.
@@ -639,6 +713,10 @@ export function AriaPanel() {
             if (runId) {
               activeRunIdRef.current = runId; // M1: capture run id for cancel
               turnIdRef.current = runId;
+              // This turn is this conversation's: a WS ask carrying this run id
+              // belongs in this transcript even though its rows may not have
+              // landed yet.
+              conversationRunIdsRef.current.add(runId);
             }
           },
           onToolCall: (name) => {
@@ -810,6 +888,9 @@ export function AriaPanel() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
     activeRunIdRef.current = null;
+    // The cleared conversation's runs are no longer this panel's: a late WS ask
+    // for one of them must not become a card in the new transcript.
+    conversationRunIdsRef.current = new Set();
     adoptConversationId(newConversationId);
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.

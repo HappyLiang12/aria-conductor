@@ -899,3 +899,121 @@ describe('AriaPanel shared WebSocket', () => {
     expect(wsBridge.handlers.size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec A2 (design:353-355): an ask raised while this panel's own stream is dead
+// reaches it over the WebSocket, and the panel reads the approval by id — the
+// frame carries no tool name, tier or policy. This is the dead-stream plane the
+// three-plane design exists for: after a client timeout, a cancel or a dropped
+// SSE connection, a later ask in the open conversation must still become a card
+// instead of pushing the operator to the Review Queue (F1).
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel WebSocket-requested asks (dead stream)', () => {
+  function mountConversationWithRun() {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r9' },
+    ]);
+  }
+
+  it('fetches an ask raised after the stream died by id and renders its card', async () => {
+    mountConversationWithRun();
+    mockGetApproval.mockResolvedValue({
+      id: 'a9',
+      runId: 'r9',
+      status: 'PENDING',
+      toolCallId: null,
+      reason: 'write_file on the workspace',
+      requestedAt: '2026-11-11T09:00:00Z',
+      decidedAt: null,
+      expiresAt: '2026-11-11T09:10:00Z',
+      toolName: TOOL,
+      riskTier: 'WRITE_LOCAL',
+      toolPolicy: 'WORKER_WRITE',
+    });
+    renderPanel();
+    await openPanelForTest();
+
+    act(() => {
+      wsBridge.emit({ type: 'approval.requested', payload: { approvalId: 'a9', runId: 'r9' } });
+    });
+    await act(async () => {});
+
+    expect(mockGetApproval).toHaveBeenCalledWith('a9');
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
+    expect(screen.getByText(/pending decision first/i)).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('ignores an ask raised for another conversation\'s run', async () => {
+    mountConversationWithRun();
+    mockGetApproval.mockResolvedValue({
+      id: 'a-foreign',
+      runId: 'another-conversations-run',
+      status: 'PENDING',
+      reason: 'unrelated',
+      requestedAt: '2026-11-11T09:00:00Z',
+      decidedAt: null,
+      expiresAt: '2026-11-11T09:10:00Z',
+      toolName: 'mcp__aria-conductor__foreign_tool',
+    });
+    renderPanel();
+    await openPanelForTest();
+
+    act(() => {
+      wsBridge.emit({
+        type: 'approval.requested',
+        payload: { approvalId: 'a-foreign', runId: 'another-conversations-run' },
+      });
+    });
+    await act(async () => {});
+
+    // Negative control for the case above: a single-conversation panel must not
+    // render another conversation's ask, and must not gate on it.
+    expect(mockGetApproval).not.toHaveBeenCalled();
+    expect(screen.queryByText('mcp__aria-conductor__foreign_tool')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('renders a fetched clarification ask as a question card', async () => {
+    mountConversationWithRun();
+    mockGetApproval.mockResolvedValue({
+      id: 'a10',
+      runId: 'r9',
+      status: 'PENDING',
+      reason: 'which pull request?',
+      content: 'Which PR should I review?',
+      source: 'CLARIFICATION',
+      requestedAt: '2026-11-11T09:00:00Z',
+      decidedAt: null,
+      expiresAt: '2026-11-11T09:10:00Z',
+    });
+    renderPanel();
+    await openPanelForTest();
+
+    act(() => {
+      wsBridge.emit({ type: 'approval.requested', payload: { approvalId: 'a10', runId: 'r9' } });
+    });
+    await act(async () => {});
+
+    expect(await screen.findByText('Which PR should I review?')).toBeInTheDocument();
+    expect(screen.getByLabelText(/your answer/i)).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('re-reads the conversation when the socket reports a run waiting for input', async () => {
+    mountConversationWithRun();
+    renderPanel();
+    await openPanelForTest();
+    const reconcilesAfterMount = mockGetTimeline.mock.calls.length;
+
+    act(() => {
+      wsBridge.emit({ type: 'run.waiting_input', payload: { runId: 'r9', question: 'Which PR?' } });
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesAfterMount);
+  });
+});

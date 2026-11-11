@@ -98,6 +98,32 @@ class AriaPromptContributorTest {
         assertThat(content).doesNotContain("## Available Tools");
     }
 
+    /**
+     * Task 22 / PA onboarding bar: the tool catalog lists {@code recall_memory} and
+     * {@code remember_fact}, but a name in a list never tells the assistant it has a
+     * memory, to recall before asking, or that an unapproved proposal is not yet a
+     * memory. This pins the guidance that makes onboarding-in-chat reachable: propose
+     * the entity and its first fact together, and never claim a PENDING proposal landed.
+     */
+    @Test
+    void policyTellsAriaToRecallAndProposeDurableFacts() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+        // Whitespace-normalized so the assertion pins the rule, not where the prose wraps.
+        String flat = content.replaceAll("\\s+", " ");
+
+        assertThat(content).contains("IMPORTANT — memory:");
+        assertThat(flat).contains("You have a durable memory of the operator and the workspace");
+        assertThat(flat).contains("recall_memory is how you read it");
+        assertThat(flat).contains("Recall before asking the operator something you may already know.");
+        assertThat(flat).contains("propose it with remember_fact");
+        assertThat(flat).contains("pass kind and canonicalKey (e.g. person / person:happy)");
+        assertThat(flat).contains("one call proposes the new entity and its first fact together");
+        assertThat(flat).contains("Never claim a fact is remembered, saved or known until it is approved");
+        assertThat(flat).contains("say it is waiting for the operator");
+        assertThat(flat).contains("Never decide, promote or approve your own proposals");
+        assertThat(flat).contains("do not call operator-only memory tools");
+    }
+
     private static ContextRequest requestFor(UUID agentId) {
         return new ContextRequest(UUID.randomUUID(), "conv-1", agentId, ContextAdapter.SYNC,
                 1, "list my agents", null, Sensitivity.INTERNAL, 24_000, null, "", List.of());

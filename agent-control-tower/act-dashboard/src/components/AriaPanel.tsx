@@ -17,7 +17,7 @@ import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
-import AriaProposalCard from './AriaProposalCard';
+import AriaProposalCard, { PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
 import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
@@ -47,6 +47,14 @@ function turnFailureReason(errorDetail?: StreamError): string | null {
 
 /** Prefix the backend's synthetic failed-turn timeline entry (A1) carries. */
 const FAILED_TURN_CONTENT_PREFIX = '回合執行失敗：';
+
+/**
+ * `MemoryProposalService.INBOX_LIMIT`: the PENDING proposal inbox is ONE bounded
+ * newest-first page across all entities, so a full page cannot prove that a
+ * proposal is absent from it. The number has ONE client-side source — the
+ * proposal card imports-and-exports it — so the panel and the card can never
+ * disagree about what a full page means.
+ */
 
 /**
  * A failed turn's synthetic timeline entry is appended the moment the run turns
@@ -310,8 +318,18 @@ export function AriaPanel() {
   // panel's business when its run is one of them (a single-conversation panel
   // must not render another conversation's ask).
   const conversationRunIdsRef = useRef<Set<string>>(new Set());
+  // Proposal ids a PENDING inbox read has actually listed: only those may be
+  // settled, the rule the approval settle below applies to a run. A live frame
+  // can precede its rows, so an empty read must not settle what it never saw.
+  // The settled card itself lives in the reducer (`decided-elsewhere`), keyed by
+  // conversation, so Clear reopens nothing stale.
+  const confirmedProposalIdsRef = useRef<{ conversationId: string; ids: Set<string> }>(
+    { conversationId: '', ids: new Set() },
+  );
 
   const items = state.items;
+  // A proposal is settled as `decided-elsewhere` inside the state, so it is no
+  // longer `pending` and cannot lock the composer.
   const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
@@ -369,6 +387,64 @@ export function AriaPanel() {
   );
 
   /**
+   * Settles a local pending proposal a PENDING inbox read no longer lists: it
+   * was decided elsewhere (the Memory page, another operator). Left pending,
+   * the card could only 409 and would keep the composer locked behind a false
+   * "still pending" copy. The inbox has no by-id outcome read and its bounded
+   * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so the
+   * panel does not claim a verdict — the reducer's `decided-elsewhere` state
+   * makes the card say exactly that.
+   *
+   * Only a proposal a PENDING read has actually listed is settle-able ("the
+   * snapshot speaks for it", the rule the approval settle applies to a run): a
+   * live frame can arrive before its row, so an empty read must not settle what
+   * it has never seen. A read that failed or was refused never reaches here.
+   *
+   * And only a read whose page was NOT capped can prove a departure: the inbox
+   * is one bounded page (`PROPOSAL_INBOX_LIMIT`, newest first across all
+   * entities), so a still-pending proposal can be pushed below it and read as
+   * gone. A capped page therefore confirms what it lists and settles nothing —
+   * a false "decided elsewhere" would take the operator's decision away from a
+   * proposal that is still pending.
+   *
+   * Residual, NOT fixable on this side (task 16, disclosed): a live proposal
+   * whose row commits after the last PENDING read and which is then decided
+   * elsewhere before any later read lists it is never "spoken for", so it stays
+   * pending — the same race the approval path has, and a bounded read cannot
+   * distinguish it from a row that has not landed yet.
+   */
+  const settleDepartedProposals = useCallback(
+    (targetConversationId: string, listed: MemoryProposalSummary[], pageProvablyComplete: boolean) => {
+      if (conversationIdRef.current !== targetConversationId) return;
+      const confirmed = confirmedProposalIdsRef.current.conversationId === targetConversationId
+        ? confirmedProposalIdsRef.current.ids
+        : new Set<string>();
+      const listedIds = new Set(listed.map((proposal) => proposal.id));
+      const departed = pageProvablyComplete
+        ? itemsRef.current.flatMap((item) =>
+          item.kind === 'proposal'
+            && item.state === 'pending'
+            && confirmed.has(item.proposalId)
+            && !listedIds.has(item.proposalId)
+            ? [item.proposalId]
+            : [],
+        )
+        : [];
+      confirmedProposalIdsRef.current = {
+        conversationId: targetConversationId,
+        ids: new Set([...confirmed, ...listedIds]),
+      };
+      if (departed.length === 0) return;
+      for (const proposalId of departed) {
+        // The state, not a local set: the card says why it settled and the item
+        // stops gating because it is no longer `pending`.
+        dispatch({ type: 'proposalSettled', proposalId, state: 'decided-elsewhere' });
+      }
+    },
+    [],
+  );
+
+  /**
    * REST reconciliation (spec A3): re-read the durable conversation and merge it
    * into the panel state. Pending asks are intersected client-side with the
    * timeline's run ids — there is no conversation-scoped approvals endpoint —
@@ -377,9 +453,10 @@ export function AriaPanel() {
    *
    * Pending memory proposals come from their own inbox (`GET /proposals?status=PENDING`),
    * which is server-filtered: a proposal the operator already decided is never
-   * re-delivered, and the reducer's merge never reopens a settled card. The read
-   * is additive, so a refusal only means this reconcile learns of no new
-   * proposal — it never settles or invents one.
+   * re-delivered, and the reducer's merge never reopens a settled card. A read
+   * that answers also settles a local pending proposal it no longer lists (a
+   * decision taken elsewhere); a refused or failed read proves nothing and
+   * settles none of them, and neither does a page that hit the inbox cap.
    */
   const reconcile = useCallback(async (targetConversationId: string) => {
     const timeline = await getConversationTimeline(targetConversationId);
@@ -396,8 +473,13 @@ export function AriaPanel() {
       }
     }
     let proposals: MemoryProposalSummary[] = [];
+    let proposalsListed = false; // only a PENDING read that actually answered may settle a proposal
+    let proposalPageComplete = false; // only a page below the cap is the whole inbox
     try {
-      proposals = proposalSummaries(await listMemoryProposals('PENDING'));
+      const rows = await listMemoryProposals('PENDING');
+      proposals = proposalSummaries(rows);
+      proposalsListed = true;
+      proposalPageComplete = rows.length < PROPOSAL_INBOX_LIMIT;
     } catch (err) {
       if (!isOperatorRejection(err)) console.warn('[Aria] pending-proposal reconcile failed:', err);
       proposals = [];
@@ -410,9 +492,10 @@ export function AriaPanel() {
     const queued = await queuedRunIds(timeline, activeRunIdRef.current);
     if (conversationIdRef.current !== targetConversationId) return;
     dispatch({ type: 'queuedRuns', runIds: queued });
+    if (proposalsListed) settleDepartedProposals(targetConversationId, proposals, proposalPageComplete);
     if (!pendingListed) return;
     await settleDepartedAsks(targetConversationId, approvals, runIds);
-  }, [settleDepartedAsks]);
+  }, [settleDepartedAsks, settleDepartedProposals]);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -1153,7 +1236,9 @@ export function AriaPanel() {
                 // it and settles the item, so one decision renders one settlement.
                 // A pending proposal counts toward `hasUnansweredCard`, so it must
                 // be drawn with its own decision controls — gating the composer on
-                // a card the operator cannot act on is an invisible lock.
+                // a card the operator cannot act on is an invisible lock. A
+                // `decided-elsewhere` item renders the same card, which says why it
+                // settled and drops the controls that could only 409.
                 return (
                   <AriaProposalCard
                     key={item.id}

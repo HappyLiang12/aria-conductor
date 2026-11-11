@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, vi, type Mock } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AriaPanel from '../AriaPanel';
@@ -81,6 +81,10 @@ import { decideApproval, getApproval, listApprovals } from '../../api/approvals'
 import { cancelRun, getRun } from '../../api/runs';
 import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
 import type { MemoryProposalView } from '../../api/memory';
+// The inbox page size has ONE client-side source (the card that renders a
+// proposal batch); the panel's reconcile imports it rather than carrying a
+// second copy that could disagree with the card about a full page.
+import { PROPOSAL_INBOX_LIMIT } from '../AriaProposalCard';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
@@ -594,6 +598,22 @@ function proposalRow(over: Partial<MemoryProposalView> = {}): MemoryProposalView
     validFrom: null,
     ...over,
   };
+}
+
+/** One streamed turn that raises a FACT proposal, then finishes. */
+function streamProposal(): void {
+  mockStream.mockImplementation(async (...args: StreamArgs) => {
+    args[3]?.onThinking?.('r1');
+    args[3]?.onMemoryProposal?.({
+      runId: 'r1',
+      id: 'p1',
+      subjectType: 'FACT',
+      factKey: 'release.channel',
+      valueText: 'email',
+      sensitivity: 'INTERNAL',
+    });
+    args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+  });
 }
 
 beforeEach(() => {
@@ -1253,21 +1273,6 @@ describe('AriaPanel deciding an ask in place', () => {
 // ---------------------------------------------------------------------------
 
 describe('AriaPanel memory proposals', () => {
-  /** One streamed turn that raises a FACT proposal, then finishes. */
-  function streamProposal(): void {
-    mockStream.mockImplementation(async (...args: StreamArgs) => {
-      args[3]?.onThinking?.('r1');
-      args[3]?.onMemoryProposal?.({
-        id: 'p1',
-        subjectType: 'FACT',
-        factKey: 'release.channel',
-        valueText: 'email',
-        sensitivity: 'INTERNAL',
-      });
-      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
-    });
-  }
-
   it('renders a live memory proposal as a decidable card instead of gating the composer invisibly', async () => {
     streamProposal();
     renderPanel();
@@ -1292,7 +1297,7 @@ describe('AriaPanel memory proposals', () => {
   it('ignores a proposal frame it cannot classify instead of drawing a blank card', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');
-      args[3]?.onMemoryProposal?.({ id: 'p2', subjectType: 'SOMETHING_NEW' });
+      args[3]?.onMemoryProposal?.({ runId: 'r1', id: 'p2', subjectType: 'SOMETHING_NEW' });
       args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
     });
     renderPanel();
@@ -1383,6 +1388,218 @@ describe('AriaPanel memory proposals', () => {
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
     expect(textarea()).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A proposal decided elsewhere (the Memory page, another operator) kept this
+// panel's card pending forever and its next decide call could only 409. The
+// durable PENDING inbox is authoritative for a proposal it no longer lists, so
+// the card must settle and the composer come back. The inbox has no by-id
+// outcome read — its bounded ACTIVE/RETIRED pages cannot tell an approval from
+// a later retirement — so the card says "decided elsewhere" instead of
+// inventing a verdict. A card the inbox still lists stays the operator's to
+// decide, and only a read that actually answered may settle anything.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel proposals decided elsewhere', () => {
+  function mountWithPendingProposal(): void {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListMemoryProposals.mockResolvedValue([proposalRow()]);
+  }
+
+  it('settles a pending proposal the inbox no longer lists, without inventing a verdict', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    // Decided on the Memory page or by another operator: the inbox no longer
+    // lists it as PENDING and offers no by-id outcome read.
+    mockListMemoryProposals.mockResolvedValue([]);
+    const reconcilesBefore = mockGetTimeline.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(mockGetTimeline.mock.calls.length).toBeGreaterThan(reconcilesBefore);
+    const settled = await screen.findByTestId('aria-proposal-decided-elsewhere');
+    expect(settled).toHaveTextContent(/no longer pending/i);
+    // Honest about what the surface cannot say.
+    expect(settled).toHaveTextContent(/cannot say/i);
+    // The card stays in the transcript to say WHY it settled, in a state of its
+    // own — the reducer's `decided-elsewhere`, never an invented verdict.
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    expect(screen.queryByText(/will never become memory/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/now active/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('leaves a still-listed proposal pending and gated', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // Positive control for the settle above: the same reconcile with the
+    // proposal still PENDING must change nothing.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(screen.getByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('keeps a confirmed pending proposal when the PENDING read fails', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // A refused or failed read proves nothing about the proposal; only a read
+    // that actually answered may settle a card.
+    mockListMemoryProposals.mockRejectedValueOnce(new Error('inbox unavailable'));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(screen.getByTestId('aria-proposal-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('keeps a live proposal that arrives while a restore is in flight', async () => {
+    streamProposal();
+    mockGetLatest.mockResolvedValue(summary());
+    renderPanel();
+    await openPanelForTest();
+
+    // A focus reconcile starts and its timeline read stays in flight…
+    let resolveTimeline!: (rows: unknown[]) => void;
+    mockGetTimeline.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveTimeline = resolve;
+    }));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    // …while the live frame lands.
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // The snapshot resolves without the proposal: the read predates its row, so
+    // the live card survives it and stays the operator's to decide.
+    mockListMemoryProposals.mockResolvedValue([]);
+    await act(async () => {
+      resolveTimeline([]);
+    });
+    await act(async () => {});
+
+    expect(screen.getAllByTestId('aria-proposal-card')).toHaveLength(1);
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+  });
+
+  it('settles a live proposal once a PENDING read has spoken for it', async () => {
+    streamProposal();
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // A PENDING read now lists it: the durable snapshot speaks for it.
+    mockListMemoryProposals.mockResolvedValue([proposalRow()]);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
+
+    // Then it is decided elsewhere: the next read no longer lists it.
+    mockListMemoryProposals.mockResolvedValue([]);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  // Task 16's first disclosed limit: the PENDING inbox is ONE bounded page
+  // (`MemoryProposalService.INBOX_LIMIT`), so a proposal can fall off it while it
+  // is still pending. A capped read therefore cannot prove a departure, and the
+  // panel must not claim "decided elsewhere" for a proposal it can still see.
+  // The page length is the SHARED source, so this stays true if the server cap
+  // is ever lowered: the rule is "below the cap", never a number of its own.
+  it('does not call a proposal decided elsewhere when the PENDING page filled the cap', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    // A full page of OTHER still-pending proposals: this one may simply be below it.
+    mockListMemoryProposals.mockResolvedValue(
+      Array.from({ length: PROPOSAL_INBOX_LIMIT }, (_, i) =>
+        proposalRow({ id: `other-${i}`, entityId: 'ent-other' }),
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    // p1 is the proposal this test cares about (the page also lists a full page —
+    // the restore is not conversation-scoped yet, m3): it is still pending.
+    const card = screen.getAllByTestId('aria-proposal-card')
+      .find((el) => el.getAttribute('data-proposal-id') === 'p1');
+    expect(card).toHaveAttribute('data-state', 'pending');
+    // Still the operator's to decide, and still gating: the panel cannot prove it left.
+    expect(within(card as HTMLElement).getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+  });
+
+  // Positive control for the rule above, at the boundary: one row below the cap
+  // IS a provably complete page, so a departure may be claimed there.
+  it('settles a departure from a page that provably fits below the cap', async () => {
+    mountWithPendingProposal();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
+
+    mockListMemoryProposals.mockResolvedValue(
+      Array.from({ length: PROPOSAL_INBOX_LIMIT - 1 }, (_, i) =>
+        proposalRow({ id: `other-${i}`, entityId: 'ent-other' }),
+      ),
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
+    const card = screen.getAllByTestId('aria-proposal-card')
+      .find((el) => el.getAttribute('data-proposal-id') === 'p1');
+    expect(card).toHaveAttribute('data-state', 'decided-elsewhere');
   });
 });
 

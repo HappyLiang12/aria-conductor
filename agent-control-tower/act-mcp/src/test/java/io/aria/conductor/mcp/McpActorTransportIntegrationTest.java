@@ -396,7 +396,7 @@ class McpActorTransportIntegrationTest {
             String text = ((McpSchema.TextContent) result.content().get(0)).text();
             assertThat(text).contains("\"ok\":false")
                     .contains("\"errorType\":\"FORBIDDEN\"")
-                    .contains("\"message\":\"Operator authority required\"");
+                    .contains("\"message\":\"Operator authority required: deciding an approval is an operator decision. Decide it in the Review Queue.\"");
         }
         org.mockito.Mockito.verify(permissionCoordinator, org.mockito.Mockito.never())
                 .decide(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),

@@ -15,6 +15,7 @@ import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -551,7 +552,7 @@ class AriaConversationControllerTest {
     /** A persisted tool call, keyed by the same derivation the telemetry service writes. */
     private ToolCall toolCall(UUID runId, String rawToolCallId, ToolCallStatus status) {
         return ToolCall.builder()
-                .id(ToolCallRowId.of(runId, rawToolCallId))
+                .id(RunTelemetryService.toolCallRowId(runId, rawToolCallId))
                 .runId(runId)
                 .toolName("bash")
                 .status(status)

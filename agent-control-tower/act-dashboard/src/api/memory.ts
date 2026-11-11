@@ -216,9 +216,23 @@ export async function createMemoryEntity(
   return data;
 }
 
-/** `GET /entities/{id}` — 404s a PENDING entity (pending entities are the list + inbox). */
-export async function getMemoryEntity(id: string): Promise<MemoryEntityDetail> {
-  const { data } = await client.get<MemoryEntityDetail>(`/api/v1/memory/entities/${id}`);
+/**
+ * `GET /entities/{id}` — the fail-closed default read (ACTIVE-only), or, with
+ * `'PENDING'`, the operator-authorised review read of a pending entity
+ * (spec :309-313: the operator cannot approve what they cannot see). The server
+ * honours no other status value here, so the argument is typed to the only one
+ * it does. When it is absent the request carries no params at all: widening the
+ * default read would break a security boundary, not just a test.
+ */
+export async function getMemoryEntity(
+  id: string,
+  reviewStatus?: 'PENDING',
+): Promise<MemoryEntityDetail> {
+  const path = `/api/v1/memory/entities/${id}`;
+  const { data } =
+    reviewStatus === 'PENDING'
+      ? await client.get<MemoryEntityDetail>(path, { params: { status: 'PENDING' } })
+      : await client.get<MemoryEntityDetail>(path);
   return data;
 }
 
@@ -271,12 +285,23 @@ export async function retireMemoryFact(
   return data;
 }
 
-/** `GET /proposals?status=` — PENDING is the inbox the operator decides. */
+/**
+ * `GET /proposals?status=` — PENDING is the inbox the operator decides.
+ *
+ * With `entityId` the route answers that ONE entity's batch instead: its facts,
+ * its relations in either direction (deduped) and its own row when its
+ * lifecycle status matches — complete and uncapped, newest first, exactly the
+ * set `decide` promotes. WITHOUT it the behaviour is unchanged: the global
+ * inbox, capped at `MemoryProposalService.INBOX_LIMIT`.
+ */
 export async function listMemoryProposals(
   status: MemoryFactStatus = 'PENDING',
+  entityId?: string,
 ): Promise<MemoryProposalView[]> {
   const { data } = await client.get<MemoryProposalView[]>('/api/v1/memory/proposals', {
-    params: { status },
+    // An absent entity id must not become an empty param: the global inbox
+    // request stays exactly what it was.
+    params: entityId === undefined ? { status } : { status, entityId },
   });
   return data;
 }

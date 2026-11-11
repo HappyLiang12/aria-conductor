@@ -25,7 +25,14 @@ export type PanelItem =
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
   | { kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string }
   | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired' }
-  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' }
+  /**
+   * `decided-elsewhere` is the proposal's third settled state: a PENDING inbox
+   * read no longer listed it. The inbox is a bounded page with no by-id outcome
+   * read, so it cannot say whether the departure was an approval, a rejection,
+   * or a later retirement — the card says "decided elsewhere" instead of
+   * inventing a verdict. It is settled for gating (see `hasUnansweredCard`).
+   */
+  | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' }
   | { kind: 'queued'; id: string; runIds: string[] };
 export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
@@ -51,7 +58,13 @@ export type PanelEvent =
   | { type: 'waitingInput'; approvalId: string; runId: string; question: string }
   | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired' }
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
-  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' }
+  /**
+   * `decided-elsewhere` settles a proposal the PENDING inbox no longer lists.
+   * It is NOT a verdict: the bounded inbox cannot tell an approval from a
+   * rejection, so a caller that only knows "it left the PENDING page" must use
+   * this state and the card will say so.
+   */
+  | { type: 'proposalSettled'; proposalId: string; state: 'approved' | 'rejected' | 'decided-elsewhere' }
   | { type: 'queuedRuns'; runIds: string[] }
   | { type: 'turnFailed'; id: string; content: string; retryText?: string; noRetry?: boolean; now?: number };
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
@@ -345,15 +358,20 @@ function settleClarification(
 
 type ProposalPatch = MemoryProposalSummary & { state: ProposalItem['state'] };
 
+/** The display fields a summary carries onto its card, when it carries them. */
+function proposalFields(proposal: MemoryProposalSummary): Omit<ProposalItem, 'kind' | 'id' | 'proposalId' | 'state'> {
+  return {
+    subjectType: proposal.subjectType,
+    ...(proposal.entityId !== undefined ? { entityId: proposal.entityId } : {}),
+    ...(proposal.factKey !== undefined ? { factKey: proposal.factKey } : {}),
+    ...(proposal.valueText !== undefined ? { valueText: proposal.valueText } : {}),
+    ...(proposal.sensitivity !== undefined ? { sensitivity: proposal.sensitivity } : {}),
+  };
+}
+
 function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'proposal' && item.proposalId === patch.id);
-  const fields = {
-    subjectType: patch.subjectType,
-    ...(patch.entityId !== undefined ? { entityId: patch.entityId } : {}),
-    ...(patch.factKey !== undefined ? { factKey: patch.factKey } : {}),
-    ...(patch.valueText !== undefined ? { valueText: patch.valueText } : {}),
-    ...(patch.sensitivity !== undefined ? { sensitivity: patch.sensitivity } : {}),
-  };
+  const fields = proposalFields(patch);
   if (index < 0) {
     const card: ProposalItem = {
       kind: 'proposal',
@@ -365,9 +383,13 @@ function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
     return { items: [...state.items, card], conversationId: state.conversationId };
   }
   const existing = state.items[index] as ProposalItem;
-  // A decided proposal is never reopened by a re-delivered creation signal.
-  if (existing.state !== 'pending') return state;
-  return replaceItem(state, index, { ...existing, ...fields });
+  // The operator's own verdict is closed for good. `decided-elsewhere` is not a
+  // verdict — it only reported that the inbox had dropped the row — and a
+  // re-proposal returns the same id to PENDING (the server flips the same
+  // entity row back to review), so that card becomes the operator's to decide
+  // again instead of staying dead next to a live proposal.
+  if (existing.state !== 'pending' && existing.state !== 'decided-elsewhere') return state;
+  return replaceItem(state, index, { ...existing, ...fields, state: patch.state });
 }
 
 function settleProposal(state: PanelState, proposalId: string, nextState: ProposalItem['state']): PanelState {
@@ -405,9 +427,6 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
   const askIds = new Set(
     items.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),
   );
-  const proposalIds = new Set(
-    items.flatMap((item) => (item.kind === 'proposal' ? [item.proposalId] : [])),
-  );
 
   for (const approval of event.approvals) {
     if (approval.status !== 'PENDING' || !runIds.has(approval.runId)) continue;
@@ -417,17 +436,35 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
   }
 
   for (const proposal of event.proposals) {
-    if (proposalIds.has(proposal.id)) continue;
-    proposalIds.add(proposal.id);
+    // CONVERSATION SCOPE — KNOWN GAP (task 20 / ui-surface-review m3). This list
+    // is the GLOBAL PENDING inbox: `GET /api/v1/memory/proposals?status=PENDING`
+    // is not conversation-scoped and `MemoryProposalView` carries no conversation
+    // or run field, so unlike the approvals loop above (`runIds.has(...)`) there
+    // is nothing to guard on here: a proposal raised in another conversation is
+    // restored into this transcript. The key must come from the server, in this
+    // order: persist the raising run on the proposal row (`MemoryTools.java:117-124`
+    // already holds `ActorPrincipal.runId()` at the write, `MemoryCommandService`
+    // `addFact` is the write path), expose it on
+    // `act-memory/.../dto/MemoryProposalView.java`, mirror it in
+    // `src/api/memory.ts` (`MemoryProposalView`) and in `MemoryProposalSummary`
+    // below, and this loop becomes `if (!runIds.has(proposal.runId)) continue;`.
+    const at = items.findIndex((item) => item.kind === 'proposal' && item.proposalId === proposal.id);
+    if (at >= 0) {
+      const existing = items[at] as ProposalItem;
+      // The operator's own verdict stands, whatever the listing says. A
+      // `decided-elsewhere` card only ever reported that the inbox had dropped
+      // the row, and the server re-proposes a decided id back to PENDING — so a
+      // listing that carries the same id again is a live decision, not a
+      // re-delivery, and the card must reopen instead of staying dead.
+      if (existing.state !== 'decided-elsewhere') continue;
+      items[at] = { ...existing, ...proposalFields(proposal), state: 'pending' };
+      continue;
+    }
     items.push({
       kind: 'proposal',
       id: `proposal:${proposal.id}`,
       proposalId: proposal.id,
-      subjectType: proposal.subjectType,
-      ...(proposal.entityId !== undefined ? { entityId: proposal.entityId } : {}),
-      ...(proposal.factKey !== undefined ? { factKey: proposal.factKey } : {}),
-      ...(proposal.valueText !== undefined ? { valueText: proposal.valueText } : {}),
-      ...(proposal.sensitivity !== undefined ? { sensitivity: proposal.sensitivity } : {}),
+      ...proposalFields(proposal),
       state: 'pending',
     });
   }

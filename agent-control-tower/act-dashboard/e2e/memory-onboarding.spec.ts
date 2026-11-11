@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { establishOperatorSession, uniqueName } from './fixtures';
+import { establishOperatorSession, operatorApiCall, uniqueName } from './fixtures';
 
 /**
  * Task 12 memory onboarding — two tracks (the controller's ruling, mirroring
@@ -70,23 +70,48 @@ test.describe('Memory surface — deterministic track', () => {
 
   test('an entity created through the form is read back from the operator route', async ({
     page,
+    request,
   }) => {
     // The create mutation is operator-only: establish the browser operator
     // session first (the harness exchanges the synthetic credential).
     await establishOperatorSession(page);
+    // A per-run key, so the assertion cannot be satisfied by an earlier run's row.
     const canonicalKey = `person:${uniqueName('e2e-memory')}`;
+    let createdId: string | null = null;
 
-    await page.goto('/memory');
-    await page.getByRole('button', { name: '+ New Entity' }).click();
-    await page.getByLabel('Kind').fill('PERSON');
-    await page.getByLabel('Canonical key').fill(canonicalKey);
-    await page.getByLabel('Display name').fill('E2E Memory Entity');
-    await page.getByRole('button', { name: 'Create entity' }).click();
+    try {
+      await page.goto('/memory');
+      await page.getByRole('button', { name: '+ New Entity' }).click();
+      await page.getByLabel('Kind').fill('PERSON');
+      await page.getByLabel('Canonical key').fill(canonicalKey);
+      await page.getByLabel('Display name').fill('E2E Memory Entity');
 
-    // The row only appears if the POST was accepted AND the list refetched.
-    await expect(page.locator('table.data-table')).toContainText(canonicalKey, {
-      timeout: 15_000,
-    });
-    await expect(page.getByRole('dialog', { name: 'Create memory entity' })).toHaveCount(0);
+      const created = page.waitForResponse(
+        (response) =>
+          response.url().includes('/api/v1/memory/entities')
+          && response.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: 'Create entity' }).click();
+      const createdBody = (await (await created).json()) as { id?: string };
+      createdId = createdBody.id ?? null;
+
+      // The row only appears if the POST was accepted AND the list refetched.
+      await expect(page.locator('table.data-table')).toContainText(canonicalKey, {
+        timeout: 15_000,
+      });
+      await expect(page.getByRole('dialog', { name: 'Create memory entity' })).toHaveCount(0);
+    } finally {
+      // Self-contained: a degraded run must not leave an ACTIVE entity behind to
+      // accumulate across runs. Retire (not delete) the row this test created.
+      if (createdId !== null) {
+        const retired = await operatorApiCall(
+          request,
+          'PATCH',
+          `/memory/entities/${createdId}`,
+          { retire: true },
+        );
+        expect(retired.status).toBe(200);
+      }
+    }
   });
 });

@@ -255,7 +255,7 @@ class ProviderToolsTest {
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
                 .contains("\"message\":\"Operator authority required: adding an LLM provider is an operator decision. "
-                        + "Add it on the Providers page.\"");
+                        + "Add it on the LLM Providers tab in Configure.\"");
         assertThat(json).doesNotContain(RAW_API_KEY);
         verifyNoInteractions(llmProviderService);
     }
@@ -269,7 +269,7 @@ class ProviderToolsTest {
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
                 .contains("\"message\":\"Operator authority required: changing an LLM provider is an operator decision. "
-                        + "Edit it on the Providers page.\"");
+                        + "Edit it on the LLM Providers tab in Configure.\"");
         assertThat(json).doesNotContain(RAW_API_KEY);
         verifyNoInteractions(llmProviderService);
     }
@@ -283,7 +283,7 @@ class ProviderToolsTest {
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
                 .contains("\"message\":\"Operator authority required: deleting an LLM provider is an operator decision. "
-                        + "Delete it on the Providers page.\"");
+                        + "Delete it on the LLM Providers tab in Configure.\"");
         verifyNoInteractions(llmProviderService);
     }
 
@@ -296,7 +296,7 @@ class ProviderToolsTest {
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
                 .contains("\"message\":\"Operator authority required: activating an LLM provider is an operator decision. "
-                        + "Activate it on the Providers page.\"");
+                        + "Activate it on the LLM Providers tab in Configure.\"");
         verifyNoInteractions(llmProviderService);
     }
 
@@ -309,7 +309,7 @@ class ProviderToolsTest {
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
                 .contains("\"message\":\"Operator authority required: testing an LLM provider is an operator decision. "
-                        + "Test it on the Providers page.\"");
+                        + "Test it on the LLM Providers tab in Configure.\"");
         verifyNoInteractions(llmProviderService);
     }
 

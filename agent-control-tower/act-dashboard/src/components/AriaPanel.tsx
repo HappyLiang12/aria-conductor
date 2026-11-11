@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
 import type { StreamError } from '../api/aria';
-import { listApprovals } from '../api/approvals';
+import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
 import { cancelRun } from '../api/runs';
 import type { Approval } from '../types';
@@ -11,6 +11,7 @@ import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
+import type { PanelItem } from './ariaPanelState';
 import AriaActivityStrip from './AriaActivityStrip';
 import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
@@ -91,6 +92,31 @@ function queuedRunIds(timeline: TimelineEntry[], activeRunId: string | null): st
   if (!last || last.role !== 'user' || !last.runId) return [];
   if (last.runId === activeRunId) return [];
   return [last.runId];
+}
+
+/** What an ask that left the PENDING list turned into, as its card must say it. */
+type AskOutcome = { state: 'approved' | 'denied' | 'expired'; reason?: string };
+
+/**
+ * Reads an ask the PENDING snapshot no longer lists (spec A2's by-id endpoint)
+ * so its card can say what became of it: decided elsewhere, expired, or gone.
+ * A read that fails or that cannot classify the status proves nothing, so it
+ * returns null and the card stays the operator's to decide.
+ */
+async function readAskOutcome(approvalId: string): Promise<AskOutcome | null> {
+  let approval: Approval | null;
+  try {
+    approval = await getApproval(approvalId);
+  } catch {
+    // 404 (the ask no longer exists) or an unreadable read: either way it is not
+    // pending any more — it left the list this reconcile just read.
+    return { state: 'expired', reason: 'this ask no longer exists on the server' };
+  }
+  if (approval === null || typeof approval?.status !== 'string') return null;
+  if (approval.status === 'APPROVED') return { state: 'approved' };
+  if (approval.status === 'DENIED') return { state: 'denied' };
+  if (approval.status === 'PENDING') return null; // the two reads disagree: never decide for the operator
+  return { state: 'expired', reason: approval.reason || 'this ask can no longer be decided' };
 }
 
 function loadOpenState(): boolean {
@@ -230,6 +256,11 @@ export function AriaPanel() {
   const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
+  // The latest transcript for the reconcile's settle step: a reconcile resolves
+  // after awaits, so it reads the cards as they are now, not as they were when
+  // the callback was created.
+  const itemsRef = useRef<PanelItem[]>(items);
+  itemsRef.current = items;
   // Hoisted primitive so sendStreamed's closure can depend on the id itself —
   // the `slash` object is render-scoped and must not be a hook dep (fix 1).
   const pendingSkillId = slash.pendingSkill?.id;
@@ -238,6 +269,45 @@ export function AriaPanel() {
     conversationIdRef.current = id;
     setConversationId(id);
   }, []);
+
+  /**
+   * Settles every carried pending card whose ask the PENDING snapshot no longer
+   * lists — a lost `approval.expired` frame, a Cancel while the turn is parked,
+   * a decision taken in another window. Left pending, such a card can only 409
+   * and keeps the composer locked behind a false "still pending" copy, so it is
+   * settled with what the ask actually became. Only a run the snapshot speaks
+   * for is settled: a live turn's ask may simply predate its timeline rows.
+   */
+  const settleDepartedAsks = useCallback(
+    async (targetConversationId: string, listed: Approval[], runIds: Set<string>) => {
+      const listedIds = new Set(listed.map((approval) => approval.id));
+      const departed = itemsRef.current.filter(
+        (item) =>
+          (item.kind === 'approval' || item.kind === 'clarification')
+          && item.state === 'pending'
+          && runIds.has(item.runId)
+          && !listedIds.has(item.approvalId),
+      );
+      for (const card of departed) {
+        if (card.kind !== 'approval' && card.kind !== 'clarification') continue;
+        const outcome = await readAskOutcome(card.approvalId);
+        if (outcome === null) continue;
+        if (conversationIdRef.current !== targetConversationId) return;
+        dispatch({
+          type: 'approvalSettled',
+          approvalId: card.approvalId,
+          state: outcome.state,
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+        });
+        dispatch({
+          type: 'clarificationSettled',
+          approvalId: card.approvalId,
+          state: outcome.state === 'approved' ? 'answered' : 'expired',
+        });
+      }
+    },
+    [],
+  );
 
   /**
    * REST reconciliation (spec A3): re-read the durable conversation and merge it
@@ -250,17 +320,24 @@ export function AriaPanel() {
     const timeline = await getConversationTimeline(targetConversationId);
     const runIds = new Set(timeline.map((entry) => entry.runId).filter((runId) => !!runId));
     let approvals: Approval[] = [];
+    let pendingListed = false; // only a PENDING read that actually answered may settle a card
     if (runIds.size > 0) {
       try {
         approvals = (await listApprovals('PENDING')).filter((approval) => runIds.has(approval.runId));
+        pendingListed = true;
       } catch (err) {
         if (!isOperatorRejection(err)) console.warn('[Aria] pending-approval reconcile failed:', err);
         approvals = [];
       }
     }
+    // A snapshot that resolves after the operator cleared this conversation must
+    // not write the cleared transcript back, nor revert the reducer's id.
+    if (conversationIdRef.current !== targetConversationId) return;
     dispatch({ type: 'restore', conversationId: targetConversationId, timeline, approvals, proposals: [] });
     dispatch({ type: 'queuedRuns', runIds: queuedRunIds(timeline, activeRunIdRef.current) });
-  }, []);
+    if (!pendingListed) return;
+    await settleDepartedAsks(targetConversationId, approvals, runIds);
+  }, [settleDepartedAsks]);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -269,6 +346,10 @@ export function AriaPanel() {
       try {
         const summary = await getLatestConversation();
         if (cancelled) return;
+        // A Clear while this read was in flight already picked this tab's
+        // conversation: this snapshot is stale, so it must not adopt its id or
+        // its transcript.
+        if (conversationIdRef.current !== '') return;
         if (summary) {
           adoptConversationId(summary.conversationId);
           await reconcile(summary.conversationId);
@@ -659,14 +740,30 @@ export function AriaPanel() {
     sendStreamed(retryText, lastSentSkillIdRef.current);
   }, [busy, gated, tail, lastSentMessage, sendStreamed]);
 
+  /** Settles the asks of a run that can no longer decide them (a cancelled run). */
+  const settleRunAsks = useCallback((runId: string, reason: string) => {
+    for (const item of itemsRef.current) {
+      if (item.kind !== 'approval' && item.kind !== 'clarification') continue;
+      if (item.state !== 'pending' || item.runId !== runId) continue;
+      dispatch({ type: 'approvalSettled', approvalId: item.approvalId, state: 'expired', reason });
+      dispatch({ type: 'clarificationSettled', approvalId: item.approvalId, state: 'expired' });
+    }
+  }, []);
+
   const handleCancel = useCallback(() => {
     cancelledRef.current = true; // M1: suppress the false close-error bubble
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
     // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
     // is known once the first `thinking` event arrives).
-    if (activeRunIdRef.current) {
-      cancelRun(activeRunIdRef.current).catch((err) => {
+    const cancelledRunId = activeRunIdRef.current;
+    if (cancelledRunId) {
+      cancelRun(cancelledRunId).then(() => {
+        // The run is cancelled, so an ask it raised can no longer be decided:
+        // the card says why instead of staying actionable behind a locked
+        // composer (a decision on it would only 409).
+        settleRunAsks(cancelledRunId, 'the run was cancelled before this ask was decided');
+      }).catch((err) => {
         dispatch({
           type: 'turnFailed',
           id: crypto.randomUUID(),
@@ -682,7 +779,7 @@ export function AriaPanel() {
       content: 'Request cancelled.',
       timestamp: new Date().toISOString(),
     });
-  }, []);
+  }, [settleRunAsks]);
 
   const handleCopyConversationId = useCallback(() => {
     navigator.clipboard.writeText(conversationId).then(() => {

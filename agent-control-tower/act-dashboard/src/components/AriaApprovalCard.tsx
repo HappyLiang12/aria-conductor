@@ -8,6 +8,16 @@ export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
 export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
 
 /**
+ * The backend answers 409 when the ask is no longer PENDING (it expired, the
+ * run was cancelled, or the decision was already taken elsewhere). That is not
+ * a transient failure and not something a retry can fix.
+ */
+function isUnsettleableAsk(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+  return status === 409;
+}
+
+/**
  * A governed tool ask rendered in the conversation (spec A3, F1): the operator
  * decides in place and the parked turn resumes on its still-open stream, so
  * there is no timeout to wait out and no page switch to the Review Queue.
@@ -36,6 +46,12 @@ export function AriaApprovalCard({
       await decideApproval(item.approvalId, { approved });
       onSettled(approved ? 'approved' : 'denied');
     } catch (err) {
+      if (isUnsettleableAsk(err)) {
+        // The ask can no longer be decided. Say so with the backend's own
+        // wording via the settled line instead of claiming it is still pending.
+        onSettled('expired', apiErrorMessage(err, 'This ask is no longer pending.'));
+        return;
+      }
       setError(
         isOperatorRejection(err)
           // Same posture as the Review panels: say the refusal, say what the

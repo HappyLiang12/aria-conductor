@@ -57,12 +57,13 @@ vi.mock('../../api/ariaConversations', () => ({
 }));
 vi.mock('../../api/runs', () => ({ cancelRun: vi.fn() }));
 vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
-vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn() }));
+vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn(), getApproval: vi.fn() }));
 
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
-import { listApprovals } from '../../api/approvals';
+import { getApproval, listApprovals } from '../../api/approvals';
+import { cancelRun } from '../../api/runs';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
@@ -70,6 +71,8 @@ const mockGetTimeline = getConversationTimeline as Mock;
 const mockDeleteConversation = deleteConversation as Mock;
 const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
+const mockGetApproval = getApproval as Mock;
+const mockCancelRun = cancelRun as Mock;
 
 type StreamArgs = [
   string, // conversationId
@@ -121,6 +124,10 @@ beforeEach(() => {
   mockDeleteConversation.mockResolvedValue(undefined);
   mockListSkills.mockResolvedValue(SKILLS);
   mockListApprovals.mockResolvedValue([]);
+  // The by-id read is only consulted for an ask that left the pending list; an
+  // unanswered probe (null) must never settle a card on its own.
+  mockGetApproval.mockResolvedValue(null);
+  mockCancelRun.mockResolvedValue(undefined);
   mockStream.mockImplementation(async (...args: StreamArgs) => {
     args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: 'chat' });
   });
@@ -735,5 +742,135 @@ describe('AriaPanel in-flow decisions', () => {
     expect(await screen.findByText(/Queued · run-bbbb/)).toBeInTheDocument();
     // The answered turn is not queued (negative control).
     expect(screen.queryByText(/Queued · run-aaaa/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A pending card is never settled by a reconcile in the shipped panel, so a
+// decision the panel never heard about (a missed `approval.expired` frame, a
+// Cancel while the turn is parked, a decision taken in another window) left the
+// composer gated forever behind a card whose Allow then only 409s. The durable
+// snapshot is authoritative for an ask it no longer lists: the card must say
+// what became of it and the composer must come back. A card the server still
+// lists stays the operator's to decide (the positive control in each case).
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel settle-on-reconcile for asks the snapshot no longer lists', () => {
+  function mountWithPendingAsk() {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'remember my channel', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
+    ]);
+    mockListApprovals.mockResolvedValue([pendingToolAsk('a1', 'r1')]);
+  }
+
+  it('settles a missed expiry as expired with its reason and releases the composer', async () => {
+    mountWithPendingAsk();
+    renderPanel();
+    await openPanelForTest();
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    // The expiry frame was lost while the socket was down; the server no longer
+    // lists the ask and reports it expired with the backend's own reason.
+    mockListApprovals.mockResolvedValue([]);
+    mockGetApproval.mockResolvedValue({
+      ...pendingToolAsk('a1', 'r1'),
+      status: 'EXPIRED',
+      reason: 'Auto-rejected: approval expired',
+    });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    const settled = await screen.findByText(/expired before a decision/i);
+    expect(settled.textContent).toMatch(/auto-rejected: approval expired/i);
+    expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/pending decision first/i)).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('leaves a still-pending ask gated when the snapshot still lists it', async () => {
+    mountWithPendingAsk();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    // Positive control for the settle above: the same reconcile, with the ask
+    // still PENDING, must change nothing.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(screen.getByText(TOOL)).toBeInTheDocument();
+    expect(screen.getByText(/pending decision first/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+    expect(textarea()).toBeDisabled();
+    expect(mockGetApproval).not.toHaveBeenCalled();
+  });
+
+  it('settles a parked ask when the operator cancels its run', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      return new Promise<void>(() => {}); // parked: the turn keeps its stream open
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }));
+    await act(async () => {});
+
+    expect(mockCancelRun).toHaveBeenCalledWith('r1');
+    // The run is cancelled, so the ask can no longer be decided: the card says
+    // so (the cancel is the decision) instead of staying actionable.
+    const settled = await screen.findByText(/expired before a decision/i);
+    expect(settled.textContent).toMatch(/cancel/i);
+    expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/pending decision first/i)).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('reports an ask already decided elsewhere instead of leaving it actionable', async () => {
+    mountWithPendingAsk();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    mockListApprovals.mockResolvedValue([]);
+    mockGetApproval.mockResolvedValue({ ...pendingToolAsk('a1', 'r1'), status: 'APPROVED' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(await screen.findByText(/allowed once/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  it('reports an ask the server no longer has as expired instead of inviting a retry', async () => {
+    mountWithPendingAsk();
+    renderPanel();
+    await openPanelForTest();
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    // The PENDING list dropped it and the by-id read says it is gone (404).
+    mockListApprovals.mockResolvedValue([]);
+    mockGetApproval.mockRejectedValue({ response: { status: 404 } });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => {});
+
+    expect(await screen.findByText(/expired before a decision/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
   });
 });

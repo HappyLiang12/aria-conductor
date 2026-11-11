@@ -77,7 +77,7 @@ vi.mock('../../api/memory', () => ({
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
-import { decideApproval, getApproval, listApprovals } from '../../api/approvals';
+import { decideApproval, answerAsk, getApproval, listApprovals } from '../../api/approvals';
 import { cancelRun, getRun } from '../../api/runs';
 import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
 import type { MemoryProposalView } from '../../api/memory';
@@ -94,6 +94,7 @@ const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
 const mockGetApproval = getApproval as Mock;
 const mockDecideApproval = decideApproval as Mock;
+const mockAnswer = answerAsk as Mock;
 const mockCancelRun = cancelRun as Mock;
 const mockGetRun = getRun as Mock;
 const mockDecideMemoryProposal = decideMemoryProposal as Mock;
@@ -735,6 +736,51 @@ describe('AriaPanel in-flow decisions', () => {
     expect(textarea()).toBeDisabled();
   });
 
+  // T45 Item 3 (spec A3): the operator must see what they are approving. The SSE
+  // frame carries no arguments (RunSignalSseListener.java:84-92), so the card
+  // reads the ask's own record — GET /api/v1/approvals/{id} serves
+  // ApprovalDetail.arguments, the read the panel already has.
+  it('shows the argument summary the ask\'s own record carries, not a blind approve', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockGetApproval.mockResolvedValue({
+      ...pendingToolAsk('a1', 'r1'),
+      arguments: JSON.stringify({ command: 'rm -rf build', cwd: '/repo' }),
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    // The summary is compact, but it is the real payload: both keys, in order.
+    const summary = await screen.findByText(/command: rm -rf build/);
+    expect(summary.textContent).toMatch(/cwd: \/repo/);
+    expect(mockGetApproval).toHaveBeenCalledWith('a1');
+    // Nothing was decided by the read.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /deny/i })).toBeEnabled();
+  });
+
+  it('says the arguments could not be read instead of drawing an empty summary', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockGetApproval.mockRejectedValue(new Error('Network Error'));
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    expect(await screen.findByText(/arguments could not be read/i)).toBeInTheDocument();
+    // Still the operator's to decide — with the tool name it does know.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+  });
+
   it('settles the card from the WebSocket plane, releasing the composer without a duplicate', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');
@@ -827,6 +873,36 @@ describe('AriaPanel in-flow decisions', () => {
       wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'a2', decision: 'APPROVED' } });
     });
     expect(screen.getByText(/answered/i)).toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  // T45 Item 2: `/answer` 409s when the ask expired, the run was finalized or a
+  // concurrent answer won (ApprovalController.java:239-262). The card used to say
+  // "the question is still waiting; retry", leaving it pending and the composer
+  // locked behind a refusal a retry can never fix.
+  it('settles a refused clarification answer and releases the composer', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onWaitingInput?.({ runId: 'r1', approvalId: 'a2', question: 'Which PR should I review?' });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockAnswer.mockRejectedValueOnce({
+      response: { status: 409, data: { error: 'run is not waiting for operator input' } },
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText('Which PR should I review?')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/your answer/i), { target: { value: 'PR #42' } });
+    fireEvent.click(screen.getByRole('button', { name: /answer/i }));
+
+    const settled = await screen.findByText(/expired before an answer/i);
+    expect(settled.textContent).toMatch(/run is not waiting for operator input/i);
+    expect(screen.queryByText(/still waiting; retry/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
   });
 
@@ -1347,16 +1423,18 @@ describe('AriaPanel deciding an ask in place', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Memory proposals (m5, Task 12b): a PENDING proposal counts as an unanswered
-// card in `hasUnansweredCard`, so it gates the composer. Rendering nothing for
-// it would lock the conversation behind an invisible control — and gating on a
-// card that cannot be decided is the same defect one step later. The panel
-// mounts the real `AriaProposalCard` (it owns the decide call) and reconciles
-// PENDING proposals from the memory inbox on mount / focus / reconnect.
+// Memory proposals (m5, Task 12b): a PENDING proposal is a card the operator
+// decides in place, and it does NOT gate the composer (T45 Item 1): the gate
+// the spec defines is for a parked turn — an approval or a clarification
+// (spec:229-234) — and the proposal inbox is global, so gating on a proposal
+// let one conversation's undecided proposal disable another conversation. The
+// panel mounts the real `AriaProposalCard` (it owns the decide call) and
+// reconciles PENDING proposals from the memory inbox on mount / focus /
+// reconnect.
 // ---------------------------------------------------------------------------
 
 describe('AriaPanel memory proposals', () => {
-  it('renders a live memory proposal as a decidable card instead of gating the composer invisibly', async () => {
+  it('renders a live memory proposal as a decidable card, leaving the composer usable', async () => {
     streamProposal();
     renderPanel();
     await openPanelForTest();
@@ -1372,9 +1450,10 @@ describe('AriaPanel memory proposals', () => {
     // ...it carries the decision controls the gate refers to...
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
-    // ...and it is the reason the composer is gated, not an invisible lock.
-    expect(screen.getByText('Answer the pending decision first.')).toBeInTheDocument();
-    expect(textarea()).toBeDisabled();
+    // ...and it does not lock the conversation: a proposal parks no turn, so it
+    // is not a decision the composer must wait for.
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
   });
 
   it('ignores a proposal frame it cannot classify instead of drawing a blank card', async () => {
@@ -1399,7 +1478,8 @@ describe('AriaPanel memory proposals', () => {
     await openPanelForTest();
     fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
     expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
-    expect(textarea()).toBeDisabled();
+    // A proposal parks no turn, so the composer is already usable (T45 Item 1).
+    expect(textarea()).toBeEnabled();
 
     // The panel must not decide anything itself: the card's click is the only
     // decide call, or one decision would render two settlements.
@@ -1447,7 +1527,7 @@ describe('AriaPanel memory proposals', () => {
     await openPanelForTest();
     fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
     expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
@@ -1458,7 +1538,12 @@ describe('AriaPanel memory proposals', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
   });
 
-  it('restores the PENDING proposals the memory inbox lists, after the transcript they belong to', async () => {
+  // T45 Item 1, the measured failure: the PENDING proposal inbox is GLOBAL, so
+  // a proposal raised in another conversation is restored into this transcript.
+  // It used to disable this composer, so conversation A's undecided proposal
+  // blocked conversation B. The card is still drawn (it is the operator's to
+  // decide) but it must not park this conversation's turn.
+  it('restores the PENDING proposals the global inbox lists without disabling this conversation', async () => {
     mockGetLatest.mockResolvedValue(summary());
     mockGetTimeline.mockResolvedValue([
       { role: 'user', content: 'remember my editor', timestamp: '2026-11-11T09:00:00Z', runId: 'r1' },
@@ -1476,9 +1561,18 @@ describe('AriaPanel memory proposals', () => {
     // Arrival order: the restored turn stays above the card it raised.
     const prompt = screen.getByText('remember my editor');
     expect(prompt.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // A restored pending proposal gates the composer only because it is visible.
+    // The card does not park a turn: the composer stays usable and a turn can
+    // be sent while the proposal is still pending.
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
-    expect(textarea()).toBeDisabled();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+
+    await userEvent.type(textarea(), 'carry on with the report');
+    await userEvent.type(textarea(), '{Enter}');
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('carry on with the report');
+    // The proposal is still pending: sending a turn decides nothing for it.
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
   });
 
   it('keeps a live proposal through a reconcile that does not list it yet', async () => {
@@ -1502,7 +1596,7 @@ describe('AriaPanel memory proposals', () => {
     // Still the operator's to decide — carried, not settled by an empty read.
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
   });
 });
 
@@ -1532,7 +1626,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
     await openPanelForTest();
 
     expect(await screen.findByTestId('aria-proposal-card')).toBeInTheDocument();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
 
     // Decided on the Memory page or by another operator: the inbox no longer
     // lists it as PENDING and offers no by-id outcome read.
@@ -1575,7 +1669,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
     expect(screen.getByTestId('aria-proposal-card')).toBeInTheDocument();
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
   });
 
   it('keeps a confirmed pending proposal when the PENDING read fails', async () => {
@@ -1595,7 +1689,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
     expect(screen.getByTestId('aria-proposal-card')).toBeInTheDocument();
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
   });
 
   it('keeps a live proposal that arrives while a restore is in flight', async () => {
@@ -1628,7 +1722,7 @@ describe('AriaPanel proposals decided elsewhere', () => {
     expect(screen.getAllByTestId('aria-proposal-card')).toHaveLength(1);
     expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
   });
 
   it('settles a live proposal once a PENDING read has spoken for it', async () => {
@@ -1688,9 +1782,9 @@ describe('AriaPanel proposals decided elsewhere', () => {
     const card = screen.getAllByTestId('aria-proposal-card')
       .find((el) => el.getAttribute('data-proposal-id') === 'p1');
     expect(card).toHaveAttribute('data-state', 'pending');
-    // Still the operator's to decide, and still gating: the panel cannot prove it left.
+    // Still the operator's to decide; the composer is not its hostage.
     expect(within(card as HTMLElement).getByRole('button', { name: /approve/i })).toBeEnabled();
-    expect(textarea()).toBeDisabled();
+    expect(textarea()).toBeEnabled();
   });
 
   // Positive control for the rule above, at the boundary: one row below the cap

@@ -69,6 +69,46 @@ describe('AriaClarificationCard', () => {
     expect(screen.getByLabelText(/your answer/i)).toBeEnabled();
   });
 
+  // T45 Item 2: `/answer` serves 409 when the ask can no longer be answered — it
+  // expired, the run was finalized, or a concurrent answer won
+  // (ApprovalController.java:239-262). Not a transient failure: every retry
+  // repeats the 409 and leaves the card pending with the composer locked.
+  it('settles an unanswerable ask on 409 instead of offering a retry that cannot work', async () => {
+    const onSettled = vi.fn();
+    mockAnswer.mockRejectedValueOnce({
+      response: { status: 409, data: { error: 'run is not waiting for operator input' } },
+    });
+    render(<AriaClarificationCard item={question} onSettled={onSettled} />);
+
+    fireEvent.change(screen.getByLabelText(/your answer/i), { target: { value: 'PR #42' } });
+    fireEvent.click(screen.getByRole('button', { name: /answer/i }));
+
+    // Settled, with the backend's own wording — never "answered".
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith('expired', 'run is not waiting for operator input'));
+    expect(onSettled).not.toHaveBeenCalledWith('answered', expect.anything());
+    expect(onSettled).not.toHaveBeenCalledWith('answered');
+    // No retry copy for a refusal a retry cannot fix, and nothing claims the
+    // answer landed.
+    expect(screen.queryByText(/still waiting; retry/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/answered/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps a genuine fault actionable: it is not a settlement and offers the retry', async () => {
+    const onSettled = vi.fn();
+    mockAnswer.mockRejectedValueOnce(new Error('Network Error'));
+    render(<AriaClarificationCard item={question} onSettled={onSettled} />);
+
+    fireEvent.change(screen.getByLabelText(/your answer/i), { target: { value: 'PR #42' } });
+    fireEvent.click(screen.getByRole('button', { name: /answer/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/still waiting; retry/i);
+    expect(onSettled).not.toHaveBeenCalled();
+    // The question is still the operator's to answer.
+    expect(screen.getByLabelText(/your answer/i)).toBeEnabled();
+    expect(screen.getByRole('button', { name: /answer/i })).toBeEnabled();
+  });
+
   it('renders a settled question without an answer field', () => {
     render(<AriaClarificationCard item={{ ...question, state: 'expired' }} onSettled={vi.fn()} />);
 

@@ -23,21 +23,35 @@ export type PanelItem =
   | { kind: 'user'; id: string; content: string; timestamp: string }
   | { kind: 'assistant'; id: string; content: string; timestamp: string; error?: boolean; retryText?: string; noRetry?: boolean }
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
-  | { kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string }
-  | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired' }
+  | {
+    kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string;
+    riskTier?: string; toolPolicy?: string; args?: string;
+    /**
+     * The argument summary's own state, because "no summary" has two meanings
+     * and only one of them is safe: `reading` is a live ask whose record is
+     * still being read (the SSE frame carries no arguments), `unavailable` is a
+     * read that failed. Neither may be drawn as "this tool takes no arguments".
+     */
+    argsStatus?: 'reading' | 'unavailable';
+    state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string;
+  }
+  | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired'; reason?: string }
   /**
    * `decided-elsewhere` is the proposal's third settled state: a PENDING inbox
    * read no longer listed it. The inbox is a bounded page with no by-id outcome
    * read, so it cannot say whether the departure was an approval, a rejection,
    * or a later retirement — the card says "decided elsewhere" instead of
-   * inventing a verdict. It is settled for gating (see `hasUnansweredCard`).
+   * inventing a verdict. It drops the card's controls.
    *
    * `blocked-on-entity` is the fourth, and it is neither a verdict nor a
    * departure: the server refused this proposal's decision because its parent
    * entity is still PENDING, so the decision that owns it is the ENTITY
-   * proposal's. It is settled for gating — the card's only remaining control
-   * could 409 forever — and it never reopens, because a listing that still
-   * carries the row would re-gate the composer on the same undecidable ask.
+   * proposal's. The card's only remaining control could 409 forever, so it is
+   * settled, and it never reopens, because a listing that still carries the row
+   * would hand the operator the same undecidable ask again.
+   *
+   * Neither state gates the composer: a proposal never does (see
+   * `hasUnansweredCard`).
    */
   | { kind: 'proposal'; id: string; proposalId: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string; state: 'pending' | 'approved' | 'rejected' | 'decided-elsewhere' | 'blocked-on-entity' }
   | { kind: 'queued'; id: string; runIds: string[] };
@@ -60,10 +74,27 @@ export type PanelEvent =
    * carries.
    */
   | { type: 'assistantMessage'; id: string; content: string; timestamp: string }
-  | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
+  /**
+   * A live in-flow ask. The SSE frame carries no arguments
+   * (`RunSignalSseListener`), so the panel draws the card with `argsStatus:
+   * 'reading'` and re-dispatches it with the summary once it has read the ask's
+   * own record (spec A3: the operator must see what they are approving).
+   */
+  | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; argsStatus?: 'reading' }
+  /**
+   * The argument read failed. The card says the arguments could not be read
+   * instead of drawing an empty summary the operator would take for "no args".
+   */
+  | { type: 'approvalArgsUnreadable'; approvalId: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
   | { type: 'waitingInput'; approvalId: string; runId: string; question: string }
-  | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired' }
+  /**
+   * `reason` is the backend's own wording for a settle the operator did not
+   * cause (T45 Item 2): `/answer` answers 409 when the ask expired, the run was
+   * finalized, or a concurrent answer won, and that refusal is what the card
+   * reports instead of a retry that cannot work.
+   */
+  | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired'; reason?: string }
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
   /**
    * `decided-elsewhere` settles a proposal the PENDING inbox no longer lists.
@@ -101,12 +132,19 @@ export function emptyState(conversationId: string): PanelState {
   return { items: [], conversationId };
 }
 
-/** True while the conversation holds a decision the operator has not made yet. */
+/**
+ * True while the conversation holds a card the composer must wait for: an
+ * approval or a clarification, the two asks that PARK their turn (spec:229-234).
+ *
+ * A memory proposal is deliberately NOT here. It is decided on its own card and
+ * parks nothing, and the PENDING proposal inbox is global (see the scope note in
+ * `restore`), so counting a proposal gated this conversation's composer on an
+ * ask another conversation raised — one conversation's undecided proposal
+ * disabled another's composer (spec decision 2, T45 Item 1).
+ */
 export function hasUnansweredCard(state: PanelState): boolean {
   return state.items.some(
-    (item) =>
-      (item.kind === 'approval' || item.kind === 'clarification' || item.kind === 'proposal')
-      && item.state === 'pending',
+    (item) => (item.kind === 'approval' || item.kind === 'clarification') && item.state === 'pending',
   );
 }
 
@@ -140,6 +178,12 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         riskTier: event.riskTier,
         toolPolicy: event.toolPolicy,
         args: event.args,
+        argsStatus: event.argsStatus,
+      });
+    case 'approvalArgsUnreadable':
+      return upsertApproval(state, {
+        approvalId: event.approvalId,
+        argsStatus: 'unavailable',
       });
     case 'approvalSettled':
       return settleApproval(state, event.approvalId, event.state, event.reason);
@@ -150,7 +194,7 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         question: event.question,
       });
     case 'clarificationSettled':
-      return settleClarification(state, event.approvalId, event.state);
+      return settleClarification(state, event.approvalId, event.state, event.reason);
     case 'proposalCreated':
       return upsertProposal(state, { ...event.proposal, state: 'pending' });
     case 'proposalSettled':
@@ -273,18 +317,32 @@ function freeOrphanTurnId(items: PanelItem[], turnId: string): string {
 
 type ApprovalPatch = {
   approvalId: string;
-  runId: string;
-  toolName: string;
+  /** A patch may address a drawn card by id alone (the unreadable-arguments report). */
+  runId?: string;
+  toolName?: string;
   riskTier?: string;
   toolPolicy?: string;
   args?: string;
+  argsStatus?: ApprovalItem['argsStatus'];
   reason?: string;
   state?: ApprovalItem['state'];
 };
 
+/** The card with its argument-summary state replaced, or dropped when undefined. */
+function withArgsStatus(card: ApprovalItem, status: ApprovalItem['argsStatus']): ApprovalItem {
+  const copy = { ...card };
+  if (status === undefined) {
+    delete copy.argsStatus;
+  } else {
+    copy.argsStatus = status;
+  }
+  return copy;
+}
+
 function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'approval' && item.approvalId === patch.approvalId);
   if (index < 0) {
+    if (patch.runId === undefined || patch.toolName === undefined) return state; // nothing to draw
     const card: ApprovalItem = {
       kind: 'approval',
       id: `approval:${patch.approvalId}`,
@@ -294,6 +352,7 @@ function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
       ...(patch.riskTier !== undefined ? { riskTier: patch.riskTier } : {}),
       ...(patch.toolPolicy !== undefined ? { toolPolicy: patch.toolPolicy } : {}),
       ...(patch.args !== undefined ? { args: patch.args } : {}),
+      ...(patch.argsStatus !== undefined ? { argsStatus: patch.argsStatus } : {}),
       ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
       state: patch.state ?? 'pending',
     };
@@ -304,13 +363,17 @@ function upsertApproval(state: PanelState, patch: ApprovalPatch): PanelState {
   if (existing.state !== 'pending') return state;
   const merged: ApprovalItem = {
     ...existing,
-    toolName: patch.toolName,
+    ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
     ...(patch.riskTier !== undefined ? { riskTier: patch.riskTier } : {}),
     ...(patch.toolPolicy !== undefined ? { toolPolicy: patch.toolPolicy } : {}),
     ...(patch.args !== undefined ? { args: patch.args } : {}),
     ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
   };
-  return replaceItem(state, index, merged);
+  // A summary that arrived is no longer "being read"; an explicit status wins.
+  const argsStatus = patch.argsStatus !== undefined
+    ? patch.argsStatus
+    : patch.args !== undefined ? undefined : existing.argsStatus;
+  return replaceItem(state, index, withArgsStatus(merged, argsStatus));
 }
 
 function settleApproval(
@@ -359,10 +422,20 @@ function settleClarification(
   state: PanelState,
   approvalId: string,
   nextState: ClarificationItem['state'],
+  reason?: string,
 ): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'clarification' && item.approvalId === approvalId);
   if (index < 0) return state;
-  return replaceItem(state, index, { ...(state.items[index] as ClarificationItem), state: nextState });
+  const existing = state.items[index] as ClarificationItem;
+  // A settled question is the operator's (or the server's) last word about it: a
+  // late or racing settle must not reopen it — the same guard `settleApproval`
+  // keeps, which this one lacked (T45 Minor).
+  if (existing.state !== 'pending') return state;
+  return replaceItem(state, index, {
+    ...existing,
+    state: nextState,
+    ...(reason !== undefined ? { reason } : {}),
+  });
 }
 
 // === proposal cards ===
@@ -401,7 +474,7 @@ function upsertProposal(state: PanelState, patch: ProposalPatch): PanelState {
   // again instead of staying dead next to a live proposal.
   //
   // `blocked-on-entity` DOES stay closed: its parent is still PENDING, so every
-  // re-delivery would only re-gate the composer on an ask the server refuses.
+  // re-delivery would only hand the operator an ask the server refuses.
   if (existing.state !== 'pending' && existing.state !== 'decided-elsewhere') return state;
   return replaceItem(state, index, { ...existing, ...fields, state: patch.state });
 }
@@ -444,7 +517,18 @@ function restore(state: PanelState, event: RestoreEvent): PanelState {
 
   for (const approval of event.approvals) {
     if (approval.status !== 'PENDING' || !runIds.has(approval.runId)) continue;
-    if (askIds.has(approval.id)) continue; // already drawn, live or restored: a card is keyed by its ask id
+    if (askIds.has(approval.id)) {
+      // Already drawn — by a live frame or an earlier restore. It is NOT skipped
+      // outright (T45 Item 3): the snapshot is the only read that carries the
+      // ask's arguments, so a drawn-but-blind card takes its argument summary
+      // from here. Only a still-pending card is refreshed: a settled one is the
+      // operator's decision and no snapshot may rewrite it.
+      const at = items.findIndex(
+        (item) => item.kind === 'approval' && item.approvalId === approval.id && item.state === 'pending',
+      );
+      if (at >= 0) items[at] = refreshedApproval(items[at] as ApprovalItem, approval);
+      continue;
+    }
     askIds.add(approval.id);
     items.push(isClarificationAsk(approval) ? clarificationFromApproval(approval) : approvalFromApproval(approval));
   }
@@ -610,6 +694,24 @@ function mergeTools(restored: ToolActivity[], carried: ToolActivity[]): ToolActi
     if (!used[index]) merged.push(tool);
   });
   return merged;
+}
+
+/**
+ * A drawn pending card merged with what the snapshot knows about the same ask.
+ * Only the fields the snapshot carries are taken, so a summary already drawn is
+ * never blanked by a snapshot that omits the field, and the reading marker is
+ * dropped once a summary arrives.
+ */
+function refreshedApproval(card: ApprovalItem, approval: Approval): ApprovalItem {
+  const toolPolicy = (approval as { toolPolicy?: string }).toolPolicy;
+  const merged: ApprovalItem = {
+    ...card,
+    ...(approval.toolName !== undefined && approval.toolName !== '' ? { toolName: approval.toolName } : {}),
+    ...(approval.riskTier !== undefined ? { riskTier: approval.riskTier } : {}),
+    ...(toolPolicy !== undefined ? { toolPolicy } : {}),
+    ...(approval.arguments !== undefined ? { args: approval.arguments } : {}),
+  };
+  return approval.arguments !== undefined ? withArgsStatus(merged, undefined) : merged;
 }
 
 function isClarificationAsk(approval: Approval): boolean {

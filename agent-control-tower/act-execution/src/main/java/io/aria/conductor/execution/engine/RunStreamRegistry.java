@@ -16,11 +16,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * thread and therefore unreachable from the ask's call stack.
  *
  * <p>Concurrent by construction. A stream can complete, error, time out or be
- * replaced while a signal is in flight, so an entry is only removed by the
- * callback of the emitter it still holds ({@code remove(key, value)}), a failed
- * write drops the entry, and no call here ever throws into the engine loop or
- * the bridge reader thread. A completed stream is never resurrected: once its
- * entry is gone nothing re-registers it, and a new turn registers a new emitter.
+ * replaced while a signal is in flight, so removal is always conditional on the
+ * emitter the registry still holds -- the emitter's own callbacks and a failed
+ * write both use {@code remove(key, value)} -- except {@link #unregister}, which
+ * is the run-scoped unbind of the engine's terminal paths and is deliberately
+ * authoritative for the run: it unbinds whatever stream the run currently holds.
+ * That is unambiguous only because a run binds one emitter
+ * ({@code AgentLoopEngine#startRunStream} is the sole {@link #register} site), so
+ * no newer emitter can be evicted by an older turn's unbind. An emitter-scoped
+ * {@code unregister} would need the emitter at the four call sites, which hold a
+ * run id only. No call here ever throws into the engine loop or the bridge
+ * reader thread. A completed stream is never resurrected: once its entry is gone
+ * nothing re-registers it, and a new turn registers a new emitter.
  */
 @Slf4j
 @Component
@@ -43,12 +50,30 @@ public class RunStreamRegistry {
         emitter.onError(error -> emitters.remove(runId, emitter));
     }
 
-    /** Unbinds a run's stream on the engine's terminal paths. Idempotent. */
+    /**
+     * Unbinds the run's stream on the engine's terminal paths. Idempotent.
+     *
+     * <p>Run-scoped, not emitter-scoped: it releases whatever emitter the run holds, because
+     * these call sites hold a run id and no emitter. The emitter-scoped
+     * {@link #unregister(UUID, SseEmitter)} overload is the conditional form for a caller that
+     * still owns its emitter; until a terminal path has one, this is the authoritative unbind.
+     */
     public void unregister(UUID runId) {
         if (runId == null) {
             return;
         }
         emitters.remove(runId);
+    }
+
+    /**
+     * Unbinds the run's stream only while it is still this emitter (the conditional form): a
+     * superseded stream's owner cannot evict the stream that replaced it.
+     */
+    public void unregister(UUID runId, SseEmitter emitter) {
+        if (runId == null || emitter == null) {
+            return;
+        }
+        emitters.remove(runId, emitter);
     }
 
     /** True while the run has a stream that has not completed, errored or timed out. */

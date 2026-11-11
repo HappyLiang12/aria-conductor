@@ -1,6 +1,6 @@
 # 2026-10-03 Run admission limit: bounded concurrent runs with Aria's reserved slot
 
-Status: design approved by the operator (2026-10-03); implemented 2026-11-11 (`RunAdmissionQueue`, see the amendment below); the engine call site that supplies the conversation id is pending Task 5.
+Status: design approved by the operator (2026-10-03); implemented 2026-11-11 (`RunAdmissionQueue`, see the amendment below); the engine call site that supplies the conversation id SHIPPED on 2026-11-11 (`AgentLoopEngine.java:281` passes `run.getConversationId()` to the four-argument `acquire`), so the per-conversation guarantee is exhibitible and is exercised by the live PA bar.
 
 Amended 2026-11-11 (operator decision, Aria PA experience design, section 2 item 2):
 the Aria reservation's default rises from 1 to 3 and Aria runs serialize per
@@ -49,7 +49,7 @@ Under a large fan-out (the operator's hotel-research batch), the podman/OpenSand
 - Unit (admission queue): cap enforcement, FIFO order, Aria reservation, release on each terminal status, cancel-while-queued, boot re-enqueue, `0`-unlimited.
 - Integration: engine launch respects the cap; binding deadline freezes at admission (not queue entry).
 - Card: run-born-TODO + start-signal moves to IN_PROGRESS; queued run keeps TODO; end states unchanged.
-- Live: with defaults (6 workers + 3 Aria slots) dispatch 8 worker runs → 6 execute, 2 queue as PENDING with TODO cards; completing one starts the next; verify no daemon 500s under the capped fan-out. For the Aria pool, park one conversation's run on an approval and confirm a second conversation's turn is admitted while the first waits — this check lands with the Task 5 engine call site that supplies `Run.conversationId`; until then every run arrives with a null conversation, so the guarantee cannot yet be exhibited.
+- Live: with defaults (6 workers + 3 Aria slots) dispatch 8 worker runs → 6 execute, 2 queue as PENDING with TODO cards; completing one starts the next; verify no daemon 500s under the capped fan-out. For the Aria pool, park one conversation's run on an approval and confirm a second conversation's turn is admitted while the first waits — the engine call site that supplies `Run.conversationId` shipped on 2026-11-11 (`AgentLoopEngine.java:281`), so this check is now exhibitible and belongs to the live PA bar rather than to a future task.
 
 ## Out of scope
 

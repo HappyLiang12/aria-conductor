@@ -121,9 +121,8 @@ function isProposalSubjectType(value: string): value is MemoryProposalSummary['s
 
 /**
  * A live `memory_proposal` signal as the reducer's summary, or null for a frame
- * the panel cannot classify. A proposal gates the composer (`hasUnansweredCard`
- * counts a pending one), so an unclassifiable subject is dropped rather than
- * drawn as a blank card nobody can act on.
+ * the panel cannot classify. An unclassifiable subject would render a card no
+ * decision endpoint owns, so it is dropped rather than drawn blank.
  */
 function proposalSummary(signal: MemoryProposalSignal): MemoryProposalSummary | null {
   const { id, subjectType } = signal;
@@ -189,6 +188,29 @@ function loadOpenState(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The action label of the shared refusal notice for one or more refused
+ * reconcile reads. One read is named alone; several are composed into ONE noun
+ * phrase ("Reading the approval queue or the memory proposal inbox") so the
+ * sentence `operatorSessionMessage` builds keeps a single verb and no stray
+ * capital — the previous `A and B` join read "Reading the approval queue and
+ * Reading the memory proposal inbox is operator-only".
+ */
+function refusedReadsLabel(actions: string[]): string {
+  const labels = [...new Set(actions)];
+  if (labels.length === 0) return 'Reading the Aria panel';
+  if (labels.length === 1) return labels[0];
+  const [first, ...rest] = labels;
+  const [verb, ...firstWords] = first.split(' ');
+  const tails = rest.map((label) => {
+    const words = label.split(' ');
+    const shared = words[0].toLowerCase() === verb.toLowerCase() ? words.slice(1) : words;
+    const tail = shared.join(' ');
+    return tail.charAt(0).toLowerCase() + tail.slice(1);
+  });
+  return `${verb} ${[firstWords.join(' '), ...tails].join(' or ')}`;
 }
 
 /** Compact, allocation-light markdown renderer for assistant bubbles (m2: + tables & horizontal rules). */
@@ -335,8 +357,10 @@ export function AriaPanel() {
   );
 
   const items = state.items;
-  // A proposal is settled as `decided-elsewhere` inside the state, so it is no
-  // longer `pending` and cannot lock the composer.
+  // The composer waits for a PARKED turn only — a pending approval or
+  // clarification card (spec:229-234). A memory proposal is decided on its own
+  // card and parks nothing, so it must not gate: the proposal inbox is global,
+  // and gating on it let one conversation's proposal disable another's composer.
   const gated = hasUnansweredCard(state);
   const isEmpty = items.length === 0;
   const slash = useSlashCommands(open);
@@ -429,6 +453,7 @@ export function AriaPanel() {
           type: 'clarificationSettled',
           approvalId: card.approvalId,
           state: outcome.state === 'approved' ? 'answered' : 'expired',
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
         });
       }
     },
@@ -436,9 +461,9 @@ export function AriaPanel() {
   );
 
   /**
-   * Settles a local pending proposal a PENDING inbox read no longer lists: it
-   * was decided elsewhere (the Memory page, another operator). Left pending,
-   * the card could only 409 and would keep the composer locked behind a false
+   * Settles a local proposal a PENDING inbox read no longer lists: it was
+   * decided elsewhere (the Memory page, another operator). Left pending, the
+   * card could only 409 and would keep the composer locked behind a false
    * "still pending" copy. The inbox has no by-id outcome read and its bounded
    * ACTIVE/RETIRED pages cannot tell an approval from a later retirement, so the
    * panel does not claim a verdict — the reducer's `decided-elsewhere` state
@@ -448,6 +473,10 @@ export function AriaPanel() {
    * snapshot speaks for it", the rule the approval settle applies to a run): a
    * live frame can arrive before its row, so an empty read must not settle what
    * it has never seen. A read that failed or was refused never reaches here.
+   * `blocked-on-entity` is the exception: the 409 that produced it already said
+   * the row is PENDING, so the server itself spoke for it — and its copy is a
+   * present-tense claim ("its entity is still pending") that would otherwise
+   * contradict the entity card the operator just approved, forever.
    *
    * And only a read whose page was NOT capped can prove a departure: the inbox
    * is one bounded page (`PROPOSAL_INBOX_LIMIT`, newest first across all
@@ -472,9 +501,9 @@ export function AriaPanel() {
       const departed = pageProvablyComplete
         ? itemsRef.current.flatMap((item) =>
           item.kind === 'proposal'
-            && item.state === 'pending'
-            && confirmed.has(item.proposalId)
             && !listedIds.has(item.proposalId)
+            && (item.state === 'blocked-on-entity'
+              || (item.state === 'pending' && confirmed.has(item.proposalId)))
             ? [item.proposalId]
             : [],
         )
@@ -653,6 +682,62 @@ export function AriaPanel() {
   );
 
   /**
+   * Fills a live in-flow ask's argument summary from the ask's own record
+   * (spec A3, T45 Item 3). The `approval_required` SSE frame names the tool but
+   * carries no arguments (`RunSignalSseListener.java:84-92`), so the card is
+   * drawn first and the summary arrives from `GET /api/v1/approvals/{id}` —
+   * the read `adoptAskById` already uses. A refused/failed read is NOT an empty
+   * argument list: the card says the arguments could not be read, and the
+   * reconcile refreshes an already-drawn card from its PENDING snapshot.
+   */
+  const hydrateApprovalArgs = useCallback(async (approvalId: string) => {
+    const targetConversationId = conversationIdRef.current;
+    let approval: Approval | null;
+    try {
+      approval = await getApproval(approvalId);
+    } catch (err) {
+      console.warn('[Aria] approval arguments could not be read:', err);
+      if (conversationIdRef.current !== targetConversationId) return;
+      dispatch({ type: 'approvalArgsUnreadable', approvalId });
+      return;
+    }
+    if (conversationIdRef.current !== targetConversationId) return;
+    if (!approval || typeof approval.status !== 'string') {
+      dispatch({ type: 'approvalArgsUnreadable', approvalId });
+      return;
+    }
+    if (approval.status === 'APPROVED' || approval.status === 'DENIED') {
+      // The read proved the ask already left PENDING: the card must not offer a
+      // decision that can only 409.
+      dispatch({
+        type: 'approvalSettled',
+        approvalId,
+        state: approval.status === 'APPROVED' ? 'approved' : 'denied',
+      });
+      return;
+    }
+    if (approval.status !== 'PENDING') {
+      dispatch({
+        type: 'approvalSettled',
+        approvalId,
+        state: 'expired',
+        ...(approval.reason ? { reason: approval.reason } : {}),
+      });
+      return;
+    }
+    if (approval.source === 'CLARIFICATION') return; // the ask is a question, not a tool call
+    dispatch({
+      type: 'approvalRequired',
+      approvalId,
+      runId: approval.runId,
+      toolName: approval.toolName ?? 'unknown tool',
+      riskTier: approval.riskTier,
+      toolPolicy: approval.toolPolicy,
+      args: approval.arguments,
+    });
+  }, []);
+
+  /**
    * A WS-announced ask, read by id (spec A2). The `approval.requested` frame
    * carries no tool name, tier, policy or question, so the panel reads the ask
    * itself; the frame is the only signal for an ask raised after this panel's
@@ -734,7 +819,12 @@ export function AriaPanel() {
             state: 'expired',
             ...(reason !== '' ? { reason } : {}),
           });
-          dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
+          dispatch({
+            type: 'clarificationSettled',
+            approvalId,
+            state: 'expired',
+            ...(reason !== '' ? { reason } : {}),
+          });
           return;
         }
         case 'run.waiting_input': {
@@ -988,7 +1078,11 @@ export function AriaPanel() {
               toolName: ask.toolName,
               riskTier: ask.riskTier,
               toolPolicy: ask.toolPolicy,
+              // The frame carries no arguments (spec A3, T45 Item 3): the card
+              // is drawn at once and filled by the read below.
+              argsStatus: 'reading',
             });
+            void hydrateApprovalArgs(ask.approvalId);
           },
           onWaitingInput: (ask) => {
             if (staleTurn()) return;
@@ -1034,7 +1128,7 @@ export function AriaPanel() {
         void reportRunUncertain(conversationId, 'timeout');
       }, CLIENT_TIMEOUT_MS);
     },
-    [busy, gated, items, conversationId, pendingSkillId, reportRunUncertain],
+    [busy, gated, items, conversationId, pendingSkillId, reportRunUncertain, hydrateApprovalArgs],
   );
 
   // One-click synthesis (Feature B2): the batch-completion notification composes
@@ -1132,9 +1226,13 @@ export function AriaPanel() {
       });
     }
     const newConversationId = crypto.randomUUID();
-    // Stop reading the cleared conversation's turn here; the run itself stays
-    // alive on the server and is reconcilable later. Without this, a parked
-    // turn's frames would be drawn into the new transcript.
+    // Clear is destructive: the route it calls cancels every RUNNING / PENDING /
+    // WAITING_INPUT run of this conversation and then purges its tool calls,
+    // trajectories and audit events (`AriaConversationController.java:153-180`).
+    // So this also stops reading the cleared conversation's turn: without it a
+    // parked turn's frames would be drawn into the new transcript. Nothing here
+    // keeps the run alive — the earlier "the run stays alive server-side" claim
+    // was false (T45 Minor).
     cancelledRef.current = true;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
@@ -1146,6 +1244,10 @@ export function AriaPanel() {
     // A new conversation is a new transcript: the reducer drops the prior items
     // because the conversation id changed.
     dispatch({ type: 'restore', conversationId: newConversationId, timeline: [], approvals: [], proposals: [] });
+    // A refusal belongs to the reads of the conversation on screen; the cleared
+    // conversation's failure must not greet the operator in the empty transcript
+    // (a fresh conversation reconciles only after the next turn is sent).
+    setReconcileFailure([]);
     console.log(`[Aria] New conversation: ${newConversationId}`);
     setInput('');
     setBusy(false);
@@ -1238,7 +1340,7 @@ export function AriaPanel() {
                 className="ai-clear-btn"
                 onClick={handleNewConversation}
                 aria-label="Clear and start new conversation"
-                title="Clear and start new conversation"
+                title="Clear and start new conversation — this cancels this conversation's runs and deletes its transcript"
               >
                 Clear
               </button>
@@ -1288,10 +1390,9 @@ export function AriaPanel() {
             {reconcileFailure.some((failure) => failure.operatorRejected) && (
               <div style={{ margin: '8px 12px' }}>
                 <OperatorSessionNotice
-                  actionLabel={reconcileFailure
+                  actionLabel={refusedReadsLabel(reconcileFailure
                     .filter((failure) => failure.operatorRejected)
-                    .map((failure) => failure.action)
-                    .join(' and ')}
+                    .map((failure) => failure.action))}
                 />
               </div>
             )}
@@ -1323,12 +1424,13 @@ export function AriaPanel() {
                   <AriaClarificationCard
                     key={item.id}
                     item={item}
-                    onSettled={(settled) => {
+                    onSettled={(settled, reason) => {
                       invalidatePendingApprovals();
                       dispatch({
                         type: 'clarificationSettled',
                         approvalId: item.approvalId,
                         state: settled,
+                        ...(reason !== undefined ? { reason } : {}),
                       });
                     }}
                   />
@@ -1346,11 +1448,10 @@ export function AriaPanel() {
               if (item.kind === 'proposal') {
                 // The card owns the decide call (Task 12a): the panel only mounts
                 // it and settles the item, so one decision renders one settlement.
-                // A pending proposal counts toward `hasUnansweredCard`, so it must
-                // be drawn with its own decision controls — gating the composer on
-                // a card the operator cannot act on is an invisible lock. A
-                // `decided-elsewhere` item renders the same card, which says why it
-                // settled and drops the controls that could only 409.
+                // A proposal does not gate the composer (T45 Item 1: it parks no
+                // turn), so an undecided one is a card to act on, never a lock.
+                // A `decided-elsewhere` item renders the same card, which says why
+                // it settled and drops the controls that could only 409.
                 return (
                   <AriaProposalCard
                     key={item.id}

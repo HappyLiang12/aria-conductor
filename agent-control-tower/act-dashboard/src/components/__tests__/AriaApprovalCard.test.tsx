@@ -87,10 +87,12 @@ describe('AriaApprovalCard', () => {
   // Task 37 / Item 2: the same 403 also serves the cross-site rejection, and its
   // remedy is not "grant access" — the request came from a page the backend does
   // not trust. Positive control for the test above: that copy must be untouched.
+  // Task 41: the body is the one ApprovalController.decideApproval actually
+  // serves — `{ error }`, not `{ message }`.
   it('gives the cross-site remedy, not the operator-grant one, for a cross-origin 403', async () => {
     const onSettled = vi.fn();
     mockDecide.mockRejectedValueOnce({
-      response: { status: 403, data: { message: 'Cross-origin operator mutation rejected' } },
+      response: { status: 403, data: { error: 'Cross-origin operator mutation rejected' } },
     });
     render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
 
@@ -104,7 +106,8 @@ describe('AriaApprovalCard', () => {
     expect(onSettled).not.toHaveBeenCalled();
   });
 
-  it('denies with an explicit refusal and reports it', async () => {    const onSettled = vi.fn();
+  it('denies with an explicit refusal and reports it', async () => {
+    const onSettled = vi.fn();
     render(<AriaApprovalCard item={pendingAsk} onSettled={onSettled} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^deny$/i }));
@@ -126,6 +129,62 @@ describe('AriaApprovalCard', () => {
     expect(mockDecide).toHaveBeenCalledTimes(1);
     resolve({ approvalId: 'a1', approved: true, status: 'processed' });
     await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+  });
+
+  // T45 Item 3 (spec A3): the operator approves a payload, so the card shows a
+  // compact summary of it — one line per JSON key, verbatim for raw text. The
+  // summary is derived from the arguments themselves, never paraphrased.
+  it('summarises the arguments it is asking the operator to approve', () => {
+    render(
+      <AriaApprovalCard
+        item={{ ...pendingAsk, args: '{"command":"npm test","cwd":"/w/repo"}' }}
+        onSettled={vi.fn()}
+      />,
+    );
+
+    const summary = screen.getByText(/command: npm test/);
+    expect(summary.textContent).toBe('command: npm test\ncwd: /w/repo');
+    // The full payload stays reachable on the element, punctuation included.
+    expect(summary).toHaveAttribute('title', '{"command":"npm test","cwd":"/w/repo"}');
+  });
+
+  it('shows a non-JSON argument verbatim instead of guessing its structure', () => {
+    render(<AriaApprovalCard item={{ ...pendingAsk, args: 'git push --force origin main' }} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('git push --force origin main')).toBeInTheDocument();
+  });
+
+  it('says the arguments are being read, then that they could not be read — never "no arguments"', () => {
+    const { rerender } = render(
+      <AriaApprovalCard item={{ ...pendingAsk, args: undefined, argsStatus: 'reading' }} onSettled={vi.fn()} />,
+    );
+    expect(screen.getByText(/reading the arguments/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+    // The decision controls never wait for the summary: the ask is decidable.
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+
+    rerender(
+      <AriaApprovalCard item={{ ...pendingAsk, args: undefined, argsStatus: 'unavailable' }} onSettled={vi.fn()} />,
+    );
+    expect(screen.getByText(/arguments could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reading the arguments/i)).not.toBeInTheDocument();
+  });
+
+  // Spec :504-505: an unclassified tool still resolves to READ for backward
+  // compatibility, but a bare tier must not imply the tool was reviewed. The
+  // backend serves `toolPolicy: null` for it (ApprovalDetail), not an absent key.
+  it('labels a tool the catalog does not classify as unclassified', () => {
+    render(<AriaApprovalCard item={{ ...pendingAsk, toolPolicy: null as unknown as undefined }} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('unclassified')).toBeInTheDocument();
+    expect(screen.queryByText('WORKER_WRITE')).not.toBeInTheDocument();
+  });
+
+  it('does not label a classified tool unclassified, and keeps its policy name', () => {
+    render(<AriaApprovalCard item={pendingAsk} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
+    expect(screen.queryByText('unclassified')).not.toBeInTheDocument();
   });
 
   it('renders a settled card without decision controls', () => {

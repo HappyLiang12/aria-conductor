@@ -206,18 +206,35 @@ describe('the cross-site remedy is its own copy (Task 37)', () => {
 });
 
 describe('presentError classifies a cross-origin refusal apart from an authority one', () => {
-  function denied(status: number, message: string) {
+  /** The memory advice's spec-closed envelope (Task 41 measured shape). */
+  function envelope(status: number, message: string) {
     return { response: { status, data: { ok: false, errorType: 'FORBIDDEN', message } } };
   }
 
-  it('marks a cross-origin 403 as both refused and cross-origin', () => {
-    const presented = presentError(denied(403, 'Cross-origin operator mutation rejected'), 'x');
+  /** The `{ error }` body the approvals/execution controllers serve. */
+  function refusal(status: number, data: Record<string, unknown>) {
+    return { response: { status, data } };
+  }
+
+  it('marks the {error} body /decide serves for a cross-site mutation as refused and cross-origin', () => {
+    // ApprovalController.decideApproval answers 403 `{error: <marker>}`.
+    const presented = presentError(
+      refusal(403, { error: 'Cross-origin operator mutation rejected' }),
+      'x',
+    );
 
     expect(presented).toMatchObject({ operatorRejected: true, crossOriginRejected: true });
   });
 
-  it.each([401, 403])('marks a plain %i as an authority refusal only', (status) => {
-    const presented = presentError(denied(status, 'operator session required'), 'x');
+  it('marks the memory envelope that carries the marker under message', () => {
+    const presented = presentError(envelope(403, 'Cross-origin operator mutation rejected'), 'x');
+
+    expect(presented).toMatchObject({ operatorRejected: true, crossOriginRejected: true });
+  });
+
+  it.each([401, 403])('marks a plain %i on the same {error} route as an authority refusal only', (status) => {
+    // The same controller serves 401 and the CSRF 403 as `{error}` without the marker.
+    const presented = presentError(refusal(status, { error: 'Operator authority required' }), 'x');
 
     expect(presented.operatorRejected).toBe(true);
     // Absent rather than false, so no consumer ever reads a new key by accident.
@@ -225,14 +242,15 @@ describe('presentError classifies a cross-origin refusal apart from an authority
   });
 
   it('leaves a 500 with neither marker', () => {
-    const presented = presentError(denied(500, 'store unavailable'), 'x');
+    const presented = presentError(envelope(500, 'store unavailable'), 'x');
 
     expect('operatorRejected' in presented).toBe(false);
     expect('crossOriginRejected' in presented).toBe(false);
   });
 });
 
-describe('openConfigure', () => {  it('dispatches the tab-aware configure event the modal listens for', () => {
+describe('openConfigure', () => {
+  it('dispatches the tab-aware configure event the modal listens for', () => {
     const listener = vi.fn();
     window.addEventListener('act:open-configure', listener);
 

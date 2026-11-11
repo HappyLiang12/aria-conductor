@@ -25,7 +25,7 @@ import static org.mockito.Mockito.*;
 /**
  * R-F4: the SDD-kind governance guard must live in {@link WorkflowService#createAndStart}
  * so the REST path (and any other caller) cannot bypass the SPEC_REVIEW gate by creating
- * BA/DEV/QA steps directly. Only the governed {@code instantiate_template} path may create
+ * BA/DEV/QA steps directly. Only the governed {@code instantiate_workflow_template} path may create
  * SDD chains.
  */
 @ExtendWith(MockitoExtension.class)
@@ -59,7 +59,7 @@ class WorkflowServiceSddGuardTest {
 
         assertThatThrownBy(() -> workflowService.createAndStart(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("instantiate_template");
+                .hasMessageContaining("instantiate_workflow_template");
 
         verifyNoInteractions(workflowChainRepository, runService);
     }

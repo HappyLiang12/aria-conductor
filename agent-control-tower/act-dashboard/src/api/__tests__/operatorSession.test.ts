@@ -128,19 +128,32 @@ describe('operator session storage move (local-authority Task 3)', () => {
 // means the caller is not the operator. The status alone cannot tell them apart,
 // so the served marker does — and it is the marker the Java lane freezes
 // server-side.
+//
+// Task 41: the bodies below are the ones the controllers actually serve, not a
+// shape invented by the test. Two shapes carry the marker:
+//   1. `{ error }` — ApprovalController.decideApproval (the route
+//      `decideApproval` posts to), MaintenanceController.initializeBuiltins,
+//      OperatorSessionController.revoke, and RunController.finalizeRun
+//      (act-agent, hardcoded literal).
+//   2. `{ ok: false, errorType: 'FORBIDDEN', message }` — MemoryExceptionHandler,
+//      which maps ForbiddenMutationException (a SecurityException) on the
+//      memory routes.
 // ---------------------------------------------------------------------------
-describe('operator rejection classification (Task 37)', () => {
-  function denied(status: number, message?: string) {
-    return {
-      response: {
-        status,
-        data: message === undefined ? {} : { ok: false, errorType: 'FORBIDDEN', message },
-      },
-    };
+describe('operator rejection classification (Task 37 / Task 41 producer bodies)', () => {
+  function refusal(status: number, data: Record<string, unknown>) {
+    return { response: { status, data } };
   }
 
-  it('classifies the cross-origin marker as a cross-site rejection, not an authority refusal', () => {
-    const error = denied(403, 'Cross-origin operator mutation rejected');
+  /** The memory envelope MemoryExceptionHandler serves (Task 37's original pin, real there). */
+  function envelope(status: number, message?: string) {
+    return refusal(status, message === undefined ? {} : { ok: false, errorType: 'FORBIDDEN', message });
+  }
+
+  it('classifies the {error} body the execution controllers serve for a cross-site mutation', () => {
+    // ApprovalController.decideApproval, MaintenanceController.initializeBuiltins,
+    // OperatorSessionController.revoke and RunController.finalizeRun all answer
+    // 403 with the marker under `error` — not under `message`.
+    const error = refusal(403, { error: 'Cross-origin operator mutation rejected' });
 
     expect(operatorRefusalKind(error)).toBe('cross-origin');
     expect(isCrossOriginRejection(error)).toBe(true);
@@ -148,9 +161,58 @@ describe('operator rejection classification (Task 37)', () => {
     expect(isOperatorRejection(error)).toBe(true);
   });
 
+  it('classifies the memory envelope that carries the marker under message', () => {
+    const error = envelope(403, 'Cross-origin operator mutation rejected');
+
+    expect(operatorRefusalKind(error)).toBe('cross-origin');
+    expect(isCrossOriginRejection(error)).toBe(true);
+    expect(isOperatorRejection(error)).toBe(true);
+  });
+
+  it('keeps a genuine authority refusal on the same {error} route classified operator', () => {
+    // Positive control on `/api/v1/approvals/{id}/decide`: the 401 branch and the
+    // CSRF branch of the SAME controller serve `{error}` without the marker.
+    const unauthorized = refusal(401, { error: 'Operator authority required' });
+    const csrf = refusal(403, { error: 'CSRF validation failed' });
+
+    for (const error of [unauthorized, csrf]) {
+      expect(operatorRefusalKind(error)).toBe('operator');
+      expect(isCrossOriginRejection(error)).toBe(false);
+      expect(isOperatorRejection(error)).toBe(true);
+    }
+  });
+
+  it('keeps the other {error} authority refusals classified operator', () => {
+    // CoreCredentialController (`Operator authority required`),
+    // HousekeepingController (`Operator authority required: executing`),
+    // Agent/LlmProvider/Report controllers (`Operator authority required: …`).
+    const error = refusal(403, { error: 'Operator authority required: executing' });
+
+    expect(operatorRefusalKind(error)).toBe('operator');
+    expect(isCrossOriginRejection(error)).toBe(false);
+  });
+
+  it('keeps a bodyless 403 an authority refusal', () => {
+    // ActorAuthenticationFilter answers the session-cookie cross-origin refusal
+    // with no body, so no marker exists to read; the remedy stays the operator
+    // one rather than guessing.
+    const error = refusal(403, {});
+
+    expect(operatorRefusalKind(error)).toBe('operator');
+    expect(isCrossOriginRejection(error)).toBe(false);
+  });
+
+  it('keeps a 401 an authority refusal even when its text carries the marker', () => {
+    // 401 is always authority (spec §6.2); only 403 can be the origin refusal.
+    const error = refusal(401, { error: 'Cross-origin operator mutation rejected' });
+
+    expect(operatorRefusalKind(error)).toBe('operator');
+    expect(isCrossOriginRejection(error)).toBe(false);
+  });
+
   it('keeps a plain 403 and a 401 as genuine authority refusals', () => {
     for (const status of [401, 403]) {
-      const error = denied(status, 'operator session required');
+      const error = envelope(status, 'operator session required');
 
       expect(operatorRefusalKind(error)).toBe('operator');
       expect(isCrossOriginRejection(error)).toBe(false);
@@ -159,11 +221,14 @@ describe('operator rejection classification (Task 37)', () => {
   });
 
   it('never classifies anything else as a rejection', () => {
-    // Positive controls: a fault, a bare error and an absent value.
-    expect(operatorRefusalKind(denied(500, 'store unavailable'))).toBeNull();
+    // Positive controls: a fault, a bare error, an absent value and the 409
+    // RunController serves for a run that is not waiting on input.
+    expect(operatorRefusalKind(envelope(500, 'store unavailable'))).toBeNull();
     expect(operatorRefusalKind(new Error('network down'))).toBeNull();
     expect(operatorRefusalKind(undefined)).toBeNull();
-    expect(isOperatorRejection(denied(500, 'store unavailable'))).toBe(false);
+    expect(operatorRefusalKind(refusal(409, { error: 'Run r-1 is not waiting for operator input' })))
+      .toBeNull();
+    expect(isOperatorRejection(envelope(500, 'store unavailable'))).toBe(false);
   });
 
   it('pins the marker to the wording the backend serves', () => {

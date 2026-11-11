@@ -3,7 +3,8 @@ import { establishOperatorSession, operatorApiCall, uniqueName } from './fixture
 
 /**
  * Task 12 memory onboarding — two tracks (the controller's ruling, mirroring
- * tool-event-contract.md's sibling ruling recorded in progress.md).
+ * the sibling ruling recorded in the plan's ledger,
+ * `.superpowers/sdd/2026-11-11-aria-pa-experience/progress.md`).
  *
  * Track A (this file) asserts only what the deterministic core harness can
  * genuinely drive: the `/memory` route renders and the rail owns the

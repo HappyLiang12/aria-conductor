@@ -37,7 +37,7 @@ public class ToolCatalog implements ToolCatalogProvider {
     private static final List<ToolDescriptor> TOOLS = List.of(
             // workflows
             read("list_workflow_templates",
-                    "List APPROVED workflow templates. Optional intent keywords filter by name/description; blank lists all.",
+                    "List APPROVED workflow templates. Returns templates plus totalApproved. Optional intent keywords filter by a literal substring of name or description; an empty templates list with a positive totalApproved means no match, so retry with a blank intent before concluding none exist.",
                     true),
             write("instantiate_workflow_template",
                     "Instantiate an APPROVED workflow template into a runnable chain. Returns the chain JSON including id. Use list_workflow_templates first to obtain templateId."),

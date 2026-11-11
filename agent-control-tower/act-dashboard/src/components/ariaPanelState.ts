@@ -64,8 +64,12 @@ type ProposalItem = Extract<PanelItem, { kind: 'proposal' }>;
 
 /** The backend's trajectory rows prefix a tool invocation with this literal. */
 const TOOL_CALL_PREFIX = 'tool_call:';
+/** A failure is labelled with this separator; the reason follows the last one. */
+const FAILURE_REASON_SEPARATOR = '：';
 /** A tool result row whose call row is missing still names itself in the strip. */
 const ORPHAN_TOOL_NAME = '(tool output)';
+/** An orphan strip's turn id when the run already has one: `<runId>#orphan-<n>`. */
+const ORPHAN_SUFFIX = '#orphan-';
 /** The single queued indicator is keyed by its kind, not by a run. */
 const QUEUED_ID = 'queued';
 
@@ -199,6 +203,39 @@ function activityIndex(items: PanelItem[], turnId: string): number {
 
 function activityId(turnId: string): string {
   return `activity:${turnId}`;
+}
+
+/**
+ * A result row whose call row never landed, as its own one-tool strip. The tool is
+ * named after the row, not after a call the timeline does not hold, and its `ok`
+ * carries the same limit as a restored result below.
+ *
+ * Several orphans can belong to one run, so the strip needs an identity of its own:
+ * the bare run id while it is free (a run with no other strip), then
+ * `<runId>#orphan-<n>`. Without it two orphans of one run share an `id` (a React key
+ * collision) and a `turnId`, and the next restore's turnId dedupe drops the second.
+ */
+function orphanStrip(items: PanelItem[], turnId: string, startedAt: number, content: string): ActivityItem {
+  const identity = freeOrphanTurnId(items, turnId);
+  return {
+    kind: 'activity',
+    id: activityId(identity),
+    turnId: identity,
+    tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: content }],
+    collapsed: true,
+  };
+}
+
+/** The run id when no activity strip holds it yet, else the first free `#orphan-n`. */
+function freeOrphanTurnId(items: PanelItem[], turnId: string): string {
+  const taken = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'activity') taken.add(item.turnId);
+  }
+  if (!taken.has(turnId)) return turnId;
+  let suffix = 0;
+  while (taken.has(`${turnId}${ORPHAN_SUFFIX}${suffix}`)) suffix += 1;
+  return `${turnId}${ORPHAN_SUFFIX}${suffix}`;
 }
 
 // === approval cards ===
@@ -411,7 +448,12 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
     }
   }
   const carriedTurnIds = new Set<string>();
-  const baseHasError = base.some((item) => item.kind === 'assistant' && item.error === true);
+  const restoredFailureReasons = new Set<string>();
+  for (const item of base) {
+    if (item.kind !== 'assistant' || item.error !== true) continue;
+    const reason = failureReasonText(item.content);
+    if (reason !== null) restoredFailureReasons.add(reason);
+  }
   let queuedDrawn = base.some((item) => item.kind === 'queued');
 
   const carried: PanelItem[] = [];
@@ -438,10 +480,14 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
         continue;
       }
       // A failed turn is re-told in different words by the snapshot, so the budget
-      // cannot consume the live notice; once the snapshot shows a failure, the live
-      // duplicate is dropped. A run-uncertain notice (noRetry) is not in the
-      // snapshot and still carries.
-      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true && baseHasError) continue;
+      // cannot consume the live notice. Drop it only when the snapshot tells the
+      // same failure — a notice whose reason matches a restored one. A different
+      // reason (a newer failed turn) or no reason at all (a run-uncertain notice,
+      // which the snapshot never holds) still carries: a duplicate is noisy, a
+      // deletion claims nothing failed.
+      const carriedReason = item.kind === 'assistant' && item.error === true ? failureReasonText(item.content) : null;
+      if (item.kind === 'assistant' && item.error === true && item.noRetry !== true
+        && carriedReason !== null && restoredFailureReasons.has(carriedReason)) continue;
     }
     carried.push(item);
   }
@@ -451,6 +497,20 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
 function messageKey(item: Extract<PanelItem, { kind: 'user' | 'assistant' }>): string {
   if (item.kind === 'assistant') return `assistant\u0000${item.error === true ? 'error' : 'ok'}\u0000${item.content}`;
   return `user\u0000${item.content}`;
+}
+
+/**
+ * The reason a failure notice reports. The live plane labels it `⚠ 上一回合失敗：<reason>`
+ * and the snapshot's synthetic failed-turn entry `回合執行失敗：<reason>`, so the text
+ * after the last separator is what the two tellings share. A notice with no reason
+ * (the run-uncertain copy) yields null and matches nothing: it is not a re-telling
+ * of a persisted failure, and the snapshot never re-delivers it.
+ */
+function failureReasonText(content: string): string | null {
+  const at = content.lastIndexOf(FAILURE_REASON_SEPARATOR);
+  if (at < 0) return null;
+  const reason = content.slice(at + FAILURE_REASON_SEPARATOR.length).trim();
+  return reason ? reason : null;
 }
 
 /**
@@ -580,16 +640,11 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
 
     // Any other tool row is the result of the tool still running in this run.
     // A result whose call row never landed is still audited output: render it
-    // as its own one-tool strip instead of dropping it. Its `ok` carries the
-    // same limit as the restored status below.
+    // as its own one-tool strip instead of dropping it — even when the run
+    // already has a strip, because it is the call row of this result that is
+    // missing. Its `ok` carries the same limit as the restored status below.
     if (at < 0) {
-      items.push({
-        kind: 'activity',
-        id: activityId(turnId),
-        turnId,
-        tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: entry.content }],
-        collapsed: true,
-      });
+      items.push(orphanStrip(items, turnId, startedAt, entry.content));
       return;
     }
     const strip = items[at] as ActivityItem;
@@ -602,7 +657,10 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
         break;
       }
     }
-    if (target < 0) return;
+    if (target < 0) {
+      items.push(orphanStrip(items, turnId, startedAt, entry.content));
+      return;
+    }
     const tool = strip.tools[target];
     const durationMs = tool.startedAt > 0 && startedAt >= tool.startedAt ? startedAt - tool.startedAt : undefined;
     const tools = strip.tools.slice();

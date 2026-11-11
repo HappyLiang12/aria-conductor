@@ -783,6 +783,17 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(hasUnansweredCard(s)).toBe(false);
   });
 
+  // T45 Minor: `settleClarification` lacked the guard `settleApproval` keeps, so
+  // a late settle (an expiry racing the operator's answer) could rewrite a
+  // settled question and reopen it.
+  it('never reopens a settled clarification with a later settle', () => {
+    let s = panelReducer(base, { type: 'waitingInput', approvalId: 'c1', runId: 'r1', question: 'Which repo?' });
+    s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'answered' });
+    s = panelReducer(s, { type: 'clarificationSettled', approvalId: 'c1', state: 'expired', reason: 'Auto-rejected: approval expired' });
+    expect(s.items.find((i) => i.kind === 'clarification')).toMatchObject({ state: 'answered' });
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
   it('replaces the single queued item and removes it on an empty list', () => {
     let s = panelReducer(base, { type: 'queuedRuns', runIds: ['r1', 'r2'] });
     expect(s.items.filter((i) => i.kind === 'queued')).toHaveLength(1);

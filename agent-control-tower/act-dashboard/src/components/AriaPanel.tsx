@@ -1226,9 +1226,13 @@ export function AriaPanel() {
       });
     }
     const newConversationId = crypto.randomUUID();
-    // Stop reading the cleared conversation's turn here; the run itself stays
-    // alive on the server and is reconcilable later. Without this, a parked
-    // turn's frames would be drawn into the new transcript.
+    // Clear is destructive: the route it calls cancels every RUNNING / PENDING /
+    // WAITING_INPUT run of this conversation and then purges its tool calls,
+    // trajectories and audit events (`AriaConversationController.java:153-180`).
+    // So this also stops reading the cleared conversation's turn: without it a
+    // parked turn's frames would be drawn into the new transcript. Nothing here
+    // keeps the run alive — the earlier "the run stays alive server-side" claim
+    // was false (T45 Minor).
     cancelledRef.current = true;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
@@ -1336,7 +1340,7 @@ export function AriaPanel() {
                 className="ai-clear-btn"
                 onClick={handleNewConversation}
                 aria-label="Clear and start new conversation"
-                title="Clear and start new conversation"
+                title="Clear and start new conversation — this cancels this conversation's runs and deletes its transcript"
               >
                 Clear
               </button>

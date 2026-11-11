@@ -69,6 +69,10 @@ export function AriaApprovalCard({
   const [error, setError] = useState<string | null>(null);
   const settled = item.state !== 'pending';
   const summary = item.args !== undefined ? argumentSummary(item.args) : '';
+  // The backend serves `toolPolicy: null` for a tool the catalog does not
+  // classify (ApprovalDetail), so the type's optionality is not enough: only a
+  // real policy name may be rendered as a reviewed authority.
+  const toolPolicy = typeof item.toolPolicy === 'string' && item.toolPolicy !== '' ? item.toolPolicy : null;
 
   async function decide(approved: boolean): Promise<void> {
     if (submitting !== null || settled) return;
@@ -111,7 +115,12 @@ export function AriaApprovalCard({
         <span className="ask-q ai-decision-tool"><code>{item.toolName}</code></span>
         <span className="ai-decision-tags">
           {item.riskTier !== undefined && <span className="pill risk">{item.riskTier}</span>}
-          {item.toolPolicy !== undefined && <span className="pill dim">{item.toolPolicy}</span>}
+          {/* Spec :504-505: a tool the catalog does not classify still resolves to
+              READ for backward compatibility, but the card must say it is
+              unclassified rather than let a bare tier imply it was reviewed. */}
+          {toolPolicy !== null
+            ? <span className="pill dim">{toolPolicy}</span>
+            : <span className="pill dim ai-decision-unclassified">unclassified</span>}
         </span>
       </div>
       <div className="ask-meta ai-decision-meta">

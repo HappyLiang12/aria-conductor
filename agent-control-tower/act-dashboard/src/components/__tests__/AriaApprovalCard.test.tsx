@@ -170,6 +170,23 @@ describe('AriaApprovalCard', () => {
     expect(screen.queryByText(/reading the arguments/i)).not.toBeInTheDocument();
   });
 
+  // Spec :504-505: an unclassified tool still resolves to READ for backward
+  // compatibility, but a bare tier must not imply the tool was reviewed. The
+  // backend serves `toolPolicy: null` for it (ApprovalDetail), not an absent key.
+  it('labels a tool the catalog does not classify as unclassified', () => {
+    render(<AriaApprovalCard item={{ ...pendingAsk, toolPolicy: null as unknown as undefined }} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('unclassified')).toBeInTheDocument();
+    expect(screen.queryByText('WORKER_WRITE')).not.toBeInTheDocument();
+  });
+
+  it('does not label a classified tool unclassified, and keeps its policy name', () => {
+    render(<AriaApprovalCard item={pendingAsk} onSettled={vi.fn()} />);
+
+    expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
+    expect(screen.queryByText('unclassified')).not.toBeInTheDocument();
+  });
+
   it('renders a settled card without decision controls', () => {
     render(<AriaApprovalCard item={{ ...pendingAsk, state: 'denied', reason: 'wrong tenant' }} onSettled={vi.fn()} />);
 

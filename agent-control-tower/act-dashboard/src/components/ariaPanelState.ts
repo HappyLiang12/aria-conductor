@@ -426,8 +426,13 @@ function settleClarification(
 ): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'clarification' && item.approvalId === approvalId);
   if (index < 0) return state;
+  const existing = state.items[index] as ClarificationItem;
+  // A settled question is the operator's (or the server's) last word about it: a
+  // late or racing settle must not reopen it — the same guard `settleApproval`
+  // keeps, which this one lacked (T45 Minor).
+  if (existing.state !== 'pending') return state;
   return replaceItem(state, index, {
-    ...(state.items[index] as ClarificationItem),
+    ...existing,
     state: nextState,
     ...(reason !== undefined ? { reason } : {}),
   });

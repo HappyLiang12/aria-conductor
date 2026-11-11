@@ -2,10 +2,17 @@ package io.aria.conductor.memory.service;
 
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.MemoryJpaSliceConfig;
+import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.CreateEntityCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
+import io.aria.conductor.memory.dto.MemoryProposalView;
+import io.aria.conductor.memory.dto.ProposalDecision;
+import io.aria.conductor.memory.model.EntityStatus;
+import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryEntity;
+import io.aria.conductor.memory.model.MemoryFact;
+import io.aria.conductor.memory.model.MemorySubjectType;
 import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
@@ -21,6 +28,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.InvocationTargetException;
@@ -140,6 +149,76 @@ class MemoryCreateRaceSliceTest {
                 .as("the retry reads the winner back through the ordinary probe")
                 .isEqualTo(winnerId[0]);
         assertThat(entities.findAll()).as("and writes no second row").hasSize(1);
+    }
+
+    /**
+     * The re-proposal rule of the fact probe, end to end: an OPEN proposal is a no-op, a DECIDED one
+     * is not. With the whole-history probe the second half silently returned the RETIRED row, wrote
+     * no PENDING fact, and the entity card's batch was empty — the operator was asked to decide a
+     * card with nothing in it while the worker's value was dropped and `remember_fact` answered ok.
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void aRejectedProposalCanBeProposedAgainWhileAnOpenOneCannot() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryActor operator = new MemoryActor(MemoryActorType.OPERATOR, "local");
+        MemoryCommandService command = command(entities);
+        MemoryProposalService proposals = new MemoryProposalService(facts, relations, entities, assertions,
+                new MemoryCurrentValueSlot(entities));
+        AddFactCommand value = new AddFactCommand("preferred_editor", "vim", "STRING", Sensitivity.INTERNAL,
+                "mcp:memory");
+
+        MemoryFact first = ownTransaction.execute(status -> command.addFactByKey(
+                "PERSON", "person:happy", value, extraction));
+        MemoryFact repeat = ownTransaction.execute(status -> command.addFactByKey(
+                "PERSON", "person:happy", value, extraction));
+        assertThat(repeat.getId())
+                .as("a repeat while the proposal is still OPEN is the same proposal, not a second row")
+                .isEqualTo(first.getId());
+        assertThat(openFactCount(first.getEntityId()))
+                .as("still exactly one open PENDING fact").isEqualTo(1);
+
+        ownTransaction.executeWithoutResult(status ->
+                proposals.decideProposal(first.getEntityId(), ProposalDecision.REJECT, operator));
+        MemoryEntity retiredEntity = entities.findById(first.getEntityId()).orElseThrow();
+        assertThat(retiredEntity.getStatus()).as("the rejection retired the entity").isEqualTo(EntityStatus.RETIRED);
+        MemoryFact rejected = facts.findById(first.getId()).orElseThrow();
+        assertThat(rejected.getStatus()).isEqualTo(FactStatus.RETIRED);
+        assertThat(rejected.getValidTo()).as("the rejected row is closed but keeps its hash").isNotNull();
+
+        // The same value, the same source, the same key: the identical command.
+        MemoryFact reproposed = ownTransaction.execute(status -> command.addFactByKey(
+                "PERSON", "person:happy", value, extraction));
+
+        assertThat(reproposed.getId())
+                .as("a decided value re-proposed is a NEW proposal, not the retired row")
+                .isNotEqualTo(first.getId());
+        assertThat(reproposed.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(reproposed.getValidTo()).as("a fresh PENDING fact carries no closed window").isNull();
+
+        List<MemoryProposalView> batch = proposals.listProposalsForEntity(
+                FactStatus.PENDING, first.getEntityId(), operator);
+        List<String> batchFacts = batch.stream()
+                .filter(view -> MemorySubjectType.FACT.name().equals(view.subjectType()))
+                .map(MemoryProposalView::id)
+                .toList();
+        assertThat(batchFacts)
+                .as("the card's batch is exactly the re-proposal, so the decision has something to decide")
+                .containsExactly(reproposed.getId().toString());
+
+        ownTransaction.executeWithoutResult(status ->
+                proposals.decideProposal(first.getEntityId(), ProposalDecision.APPROVE, operator));
+
+        assertThat(facts.findById(reproposed.getId()).orElseThrow().getStatus())
+                .as("approving the entity promotes the fact the batch read returned")
+                .isEqualTo(FactStatus.ACTIVE);
+        assertThat(facts.findById(first.getId()).orElseThrow().getStatus())
+                .as("and leaves the rejected value decided").isEqualTo(FactStatus.RETIRED);
+    }
+
+    private long openFactCount(UUID entityId) {
+        return facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING).size();
     }
 
     /**

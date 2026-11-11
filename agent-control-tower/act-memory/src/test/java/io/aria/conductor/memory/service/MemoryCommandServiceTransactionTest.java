@@ -122,6 +122,34 @@ class MemoryCommandServiceTransactionTest {
     }
 
     /**
+     * Task 14 atomicity: the unknown-key producer creates the entity and its first fact in ONE
+     * transaction. A fact the value guard rejects (a credential-like value) must therefore leave
+     * no PENDING entity behind — a proposal card the operator can never decide is worse than no
+     * card, and the entity row would be exactly that.
+     */
+    @Test
+    void aRejectedFirstFactLeavesNoPendingEntityBehind() {
+        ownTransaction.executeWithoutResult(status -> {
+            facts.deleteAll();
+            entities.deleteAll();
+        });
+        assertThat(entities.count()).as("baseline").isZero();
+        assertThat(facts.count()).as("baseline").isZero();
+
+        assertThatThrownBy(() -> ownTransaction.executeWithoutResult(status -> command.addFactByKey(
+                "PERSON", "person:careful",
+                new AddFactCommand("preferred_editor", "sk-live-0123456789abcdef", "STRING",
+                        Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.EXTRACTION, UUID.randomUUID().toString()))))
+                .isInstanceOf(MemoryValidationException.class);
+
+        assertThat(entities.count())
+                .as("a rejected first fact must not leave the PENDING entity behind")
+                .isZero();
+        assertThat(facts.count()).as("nor its fact").isZero();
+    }
+
+    /**
      * The service invariant is one current ACTIVE value per (entity, fact key) — spec §6.3,
      * enforced by the service rather than a partial unique index because H2 and MariaDB
      * differ there. This drives two real transactions at the same key and asserts the

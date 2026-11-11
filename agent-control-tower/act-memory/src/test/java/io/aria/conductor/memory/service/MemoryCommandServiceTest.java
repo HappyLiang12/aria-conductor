@@ -1098,6 +1098,69 @@ class MemoryCommandServiceTest {
         verify(events, never()).publishEvent(any(Object.class));
     }
 
+    /**
+     * Task 14: the unknown-key producer. A worker call that names a canonical key and no entity
+     * creates the PENDING entity and its first PENDING fact as one operation and publishes
+     * exactly one ENTITY proposal event. No agent could reach this path before, which is why the
+     * proposal card had no input.
+     */
+    @Test
+    void anExtractionUnknownKeyWritesAPendingEntityAndItsFirstPendingFactWithOneEvent() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity[] stored = new MemoryEntity[1];
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
+        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+            stored[0] = invocation.getArgument(0);
+            return stored[0];
+        });
+        when(entities.findById(any())).thenAnswer(invocation -> Optional.ofNullable(stored[0]));
+        when(facts.findByEntityIdOrderByValidFromDesc(any(UUID.class))).thenReturn(List.of());
+
+        MemoryFact fact = command.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, "run-ref"),
+                extraction);
+
+        assertThat(stored[0]).as("the unknown key creates its entity row").isNotNull();
+        assertThat(stored[0].getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(stored[0].getCanonicalKey()).isEqualTo("person:happy");
+        assertThat(fact.getEntityId()).isEqualTo(stored[0].getId());
+        assertThat(fact.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(fact.getOrigin()).isEqualTo(MemoryOrigin.EXTRACTION);
+        ArgumentCaptor<ApplicationEvent> published = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(events, times(1)).publishEvent(published.capture());
+        MemoryProposalCreatedEvent event = (MemoryProposalCreatedEvent) published.getValue();
+        assertThat(event.getSubjectType()).isEqualTo("ENTITY");
+        assertThat(event.getFactKey()).isEqualTo("person:happy");
+        assertThat(event.getValueText())
+                .as("no display name is supplied, so the canonical key is the name the card shows")
+                .isEqualTo("person:happy");
+        assertThat(event.getRunId()).isEqualTo(runId);
+    }
+
+    /** The operator half of the actor split: the same unknown-key shape writes ACTIVE memory. */
+    @Test
+    void anOperatorUnknownKeyWritesAnActiveEntityAndItsFirstActiveFact() {
+        MemoryEntity[] stored = new MemoryEntity[1];
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
+        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+            stored[0] = invocation.getArgument(0);
+            return stored[0];
+        });
+        when(entities.findById(any())).thenAnswer(invocation -> Optional.ofNullable(stored[0]));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                any(UUID.class), eq(FactStatus.ACTIVE))).thenReturn(List.of());
+
+        MemoryFact fact = command.addFactByKey("PERSON", "person:happy",
+                new AddFactCommand("preferred_editor", "IntelliJ IDEA", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session"));
+
+        assertThat(stored[0].getStatus()).isEqualTo(EntityStatus.ACTIVE);
+        assertThat(fact.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        assertThat(fact.getOrigin()).isEqualTo(MemoryOrigin.OPERATOR);
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
     @Test
     void creatingAnEntityWritesAnAssertionAndDefaultsSensitivity() {
         MemoryEntity created = command.createEntity(

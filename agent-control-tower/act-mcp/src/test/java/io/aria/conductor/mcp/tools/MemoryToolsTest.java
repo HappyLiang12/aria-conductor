@@ -147,7 +147,7 @@ class MemoryToolsTest {
         when(commands.addFact(eq(ENTITY_ID), any(), any()))
                 .thenReturn(fact(FactStatus.PENDING, MemoryOrigin.EXTRACTION));
 
-        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, workerContext());
+        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, null, null, workerContext());
 
         ArgumentCaptor<MemoryActor> actor = ArgumentCaptor.forClass(MemoryActor.class);
         verify(commands).addFact(eq(ENTITY_ID), any(), actor.capture());
@@ -167,7 +167,8 @@ class MemoryToolsTest {
         when(commands.addFact(eq(ENTITY_ID), any(), any()))
                 .thenReturn(fact(FactStatus.ACTIVE, MemoryOrigin.OPERATOR));
 
-        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", "operator:settings", operatorContext());
+        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", "operator:settings", null, null,
+                operatorContext());
 
         ArgumentCaptor<MemoryActor> actor = ArgumentCaptor.forClass(MemoryActor.class);
         verify(commands).addFact(eq(ENTITY_ID), any(), actor.capture());
@@ -175,6 +176,71 @@ class MemoryToolsTest {
         assertThat(json).contains("\"ok\":true")
                 .contains("\"status\":\"ACTIVE\"")
                 .contains("\"origin\":\"OPERATOR\"");
+    }
+
+    /**
+     * The producer of the proposal surface (Task 14). Before this shape existed, every
+     * {@code remember_fact} needed an entity id, so no agent could ever create a PENDING
+     * entity and the proposal card had no input. The tool resolves the actor from the
+     * transport exactly as the existing shape does and delegates the atomic
+     * entity-plus-first-fact write to the command service.
+     */
+    @Test
+    void aWorkerRememberFactWithAnUnknownKeyProposesAPendingEntityAndItsFirstFact() {
+        when(commands.addFactByKey(eq("person"), eq("person:happy"), any(), any()))
+                .thenReturn(fact(FactStatus.PENDING, MemoryOrigin.EXTRACTION));
+
+        String json = tools.rememberFact(null, "preferred_editor", "IntelliJ IDEA", null,
+                "person", "person:happy", workerContext());
+
+        ArgumentCaptor<MemoryActor> actor = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(commands).addFactByKey(eq("person"), eq("person:happy"), any(), actor.capture());
+        assertThat(actor.getValue().type()).isEqualTo(MemoryActorType.EXTRACTION);
+        assertThat(actor.getValue().ref()).isEqualTo(RUN_ID.toString());
+        verify(commands, never()).addFact(any(), any(), any());
+        assertThat(json).contains("\"ok\":true")
+                .contains("\"status\":\"PENDING\"")
+                .contains("\"origin\":\"EXTRACTION\"")
+                .contains("\"entityId\":\"" + ENTITY_ID + "\"");
+    }
+
+    @Test
+    void anOperatorRememberFactWithAnUnknownKeyWritesActiveMemory() {
+        when(commands.addFactByKey(eq("person"), eq("person:happy"), any(), any()))
+                .thenReturn(fact(FactStatus.ACTIVE, MemoryOrigin.OPERATOR));
+
+        String json = tools.rememberFact(null, "preferred_editor", "IntelliJ IDEA", null,
+                "person", "person:happy", operatorContext());
+
+        ArgumentCaptor<MemoryActor> actor = ArgumentCaptor.forClass(MemoryActor.class);
+        verify(commands).addFactByKey(eq("person"), eq("person:happy"), any(), actor.capture());
+        assertThat(actor.getValue().type()).isEqualTo(MemoryActorType.OPERATOR);
+        assertThat(json).contains("\"ok\":true").contains("\"status\":\"ACTIVE\"");
+    }
+
+    @Test
+    void rememberFactWithNeitherShapeIsAValidationError() {
+        String json = tools.rememberFact(null, "timezone", "UTC", null, null, null, workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"VALIDATION\"")
+                .contains("entityId")
+                .contains("kind + canonicalKey")
+                .contains("neither was supplied");
+        verifyNoInteractions(commands);
+    }
+
+    @Test
+    void rememberFactWithBothShapesIsAValidationError() {
+        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null,
+                "person", "person:happy", workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"VALIDATION\"")
+                .contains("entityId")
+                .contains("kind + canonicalKey")
+                .contains("both were supplied");
+        verifyNoInteractions(commands);
     }
 
     @Test
@@ -536,7 +602,7 @@ class MemoryToolsTest {
                 .thenThrow(new MemoryValidationException(
                         "valueText is rejected: memory does not store authentication material"));
 
-        String json = tools.rememberFact(ENTITY_ID, "api_key", secret, null, workerContext());
+        String json = tools.rememberFact(ENTITY_ID, "api_key", secret, null, null, null, workerContext());
 
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"VALIDATION\"")
@@ -549,7 +615,7 @@ class MemoryToolsTest {
         when(commands.addFact(eq(ENTITY_ID), any(), any()))
                 .thenThrow(new MemoryNotFoundException("memory entity " + ENTITY_ID + " not found"));
 
-        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, operatorContext());
+        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, null, null, operatorContext());
 
         assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"NOT_FOUND\"");
     }
@@ -594,7 +660,8 @@ class MemoryToolsTest {
 
     @Test
     void aWriteWithoutATransportActorIsRefused() {
-        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, new ToolContext(Map.of()));
+        String json = tools.rememberFact(ENTITY_ID, "timezone", "UTC", null, null, null,
+                new ToolContext(Map.of()));
 
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")

@@ -97,20 +97,31 @@ public class MemoryTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "remember_fact",
-            description = "Record one fact about a memory entity. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
+            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) creates a new entity with this first fact in the same transaction. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. Returns the fact with id, status, origin, sensitivity and validity.")
     public String rememberFact(
-            @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
+            @ToolParam(description = "Existing memory entity id (UUID); supply this or kind + canonicalKey, not both",
+                    required = false)
+            UUID entityId,
             @ToolParam(description = "Fact key, e.g. timezone or preferred_editor") String factKey,
             @ToolParam(description = "Fact value; credential-like values are rejected") String valueText,
             @ToolParam(description = "Provenance pointer (tool call, message, extraction job)", required = false)
             String sourceRef,
+            @ToolParam(description = "Kind of the new entity, e.g. person or repo; requires canonicalKey",
+                    required = false)
+            String kind,
+            @ToolParam(description = "Canonical key of the new entity, e.g. person:happy; requires kind",
+                    required = false)
+            String canonicalKey,
             ToolContext toolContext) {
         try {
             ActorPrincipal actor = McpActorContext.require(toolContext);
             toolPolicies.requireAuthority(REMEMBER_FACT, actor);
+            requireExactlyOneShape(entityId, kind, canonicalKey);
             AddFactCommand command = new AddFactCommand(factKey, valueText, null, null,
                     sourceRef == null || sourceRef.isBlank() ? DEFAULT_SOURCE_REF : sourceRef);
-            MemoryFact fact = commands.addFact(entityId, command, memoryActor(actor));
+            MemoryFact fact = entityId == null
+                    ? commands.addFactByKey(kind, canonicalKey, command, memoryActor(actor))
+                    : commands.addFact(entityId, command, memoryActor(actor));
             return ToolResponses.ok(MemoryFactView.from(fact));
         } catch (SecurityException e) {
             return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
@@ -503,6 +514,33 @@ public class MemoryTools implements McpTool {
         } catch (Exception e) {
             throw new IllegalStateException("context manifest JSON is unreadable");
         }
+    }
+
+    /**
+     * The two shapes of {@code remember_fact}: an existing entity id, or the {@code (kind,
+     * canonicalKey)} pair that creates the entity with its first fact. Exactly one must be
+     * supplied; anything else names both shapes rather than guessing which one was meant.
+     */
+    private static void requireExactlyOneShape(UUID entityId, String kind, String canonicalKey) {
+        boolean hasEntity = entityId != null;
+        boolean hasKind = !isBlank(kind);
+        boolean hasKey = !isBlank(canonicalKey);
+        if (hasEntity && (hasKind || hasKey)) {
+            throw new MemoryValidationException("remember_fact accepts exactly one shape: entityId (an existing "
+                    + "entity) or kind + canonicalKey (a new entity); both were supplied");
+        }
+        if (!hasEntity && !hasKind && !hasKey) {
+            throw new MemoryValidationException("remember_fact accepts exactly one shape: entityId (an existing "
+                    + "entity) or kind + canonicalKey (a new entity); neither was supplied");
+        }
+        if (!hasEntity && !(hasKind && hasKey)) {
+            throw new MemoryValidationException("remember_fact needs both kind and canonicalKey to target a new "
+                    + "entity; " + (hasKind ? "canonicalKey" : "kind") + " is missing");
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static EntityStatus parseEntityStatus(String raw) {

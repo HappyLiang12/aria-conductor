@@ -58,10 +58,10 @@ import java.util.UUID;
 
 /**
  * The memory operator surface (spec §9). All reads are deterministic views over the merged
- * act-memory services; every write resolves operator authority first, so a worker
- * credential, a failed origin/CSRF check, or an anonymous remote caller gets 403
- * {@code FORBIDDEN}. Responses carry ids, provenance, sensitivity and validity — never
- * credentials and, on the manifest route, never prompt content.
+ * act-memory services; every route resolves operator authority first — reads as a read, writes
+ * as a mutation — so a worker credential, a failed origin/CSRF check, or an anonymous remote
+ * caller gets 403 {@code FORBIDDEN}. Responses carry ids, provenance, sensitivity and validity —
+ * never credentials and, on the manifest route, never prompt content.
  */
 @RestController
 @RequestMapping("/api/v1/memory")
@@ -73,9 +73,10 @@ public class MemoryController {
     private static final int MAX_RECALL_LIMIT = 40;
 
     /**
-     * The actor of the review-inbox read: this route has always served the operator's dashboard,
-     * and the service only withholds a PENDING entity's identity from a non-operator actor
-     * (T11 C1). It writes nothing, so it carries no audit reference.
+     * The actor of the review-inbox read. The route resolves the caller's authority before it
+     * gets here, and this constant then names the operator the route serves: the service only
+     * withholds a PENDING entity's identity from a non-operator actor (T11 C1). It writes
+     * nothing, so it carries no audit reference.
      */
     private static final MemoryActor INBOX_REVIEWER = new MemoryActor(MemoryActorType.OPERATOR, null);
 
@@ -121,7 +122,11 @@ public class MemoryController {
     public List<MemoryEntityView> listEntities(@RequestParam(required = false) String kind,
                                                @RequestParam(required = false) String q,
                                                @RequestParam(required = false) EntityStatus status,
-                                               @RequestParam(required = false) Integer limit) {
+                                               @RequestParam(required = false) Integer limit,
+                                               HttpServletRequest request) {
+        // A status=PENDING page is review material (spec :309-313): refuse a worker credential
+        // before any row is read rather than serving it the extraction's proposals.
+        operatorAuthority.resolveOperator(request, false);
         int pageSize = pageSize(limit);
         boolean hasQuery = q != null && !q.isBlank();
         // The merged read model has no text predicate: a text query reads the bounded
@@ -243,11 +248,10 @@ public class MemoryController {
     /**
      * The operator's review inbox, and the source of the dashboard proposal card. The read is an
      * actor-scoped service call since T11 C1 (a non-operator read omits a PENDING entity's
-     * canonical key and display name), so this route names the operator it has always served —
-     * its authority resolution is unchanged and separate (a review-inbox auth defect is Task 18's
-     * M2 finding, deliberately not fixed here). Passing the operator keeps the entity card on the
-     * dashboard; a worker's own read of the same rows goes through the MCP tool, which passes the
-     * transport actor instead.
+     * canonical key and display name), so this route first resolves the caller's operator
+     * authority — a worker's own read of the same rows goes through the MCP tool, which passes
+     * the transport actor instead — and then names the operator it serves. Passing the operator
+     * keeps the entity card on the dashboard.
      * <p>
      * {@code entityId} is the ENTITY card's read (UI surface review M1): it narrows the same route
      * to one entity's own batch, applied in the query and never as a slice of the merged inbox
@@ -258,7 +262,9 @@ public class MemoryController {
     @GetMapping("/proposals")
     public List<MemoryProposalView> listProposals(
             @RequestParam(required = false, defaultValue = "PENDING") FactStatus status,
-            @RequestParam(required = false) UUID entityId) {
+            @RequestParam(required = false) UUID entityId,
+            HttpServletRequest request) {
+        operatorAuthority.resolveOperator(request, false);
         return entityId == null
                 ? proposals.listProposals(status, INBOX_REVIEWER)
                 : proposals.listProposalsForEntity(status, entityId, INBOX_REVIEWER);
@@ -280,7 +286,9 @@ public class MemoryController {
      */
     @GetMapping("/recall")
     public MemoryRecallPreview recall(@RequestParam(required = false, defaultValue = "") String q,
-                                      @RequestParam(required = false) Integer limit) {
+                                      @RequestParam(required = false) Integer limit,
+                                      HttpServletRequest request) {
+        operatorAuthority.resolveOperator(request, false);
         RecallResult result = recall.recall(new RecallQuery(q, null, null));
         int cap = limit == null || limit <= 0 ? DEFAULT_RECALL_LIMIT : Math.min(limit, MAX_RECALL_LIMIT);
         List<MemoryEntityView> entities = result.entities().stream().limit(cap).toList();
@@ -293,7 +301,9 @@ public class MemoryController {
     // ---------------------------------------------------------------- manifest
 
     @GetMapping("/runs/{id}/context-manifest")
-    public List<MemoryManifestView> contextManifest(@PathVariable UUID id) {
+    public List<MemoryManifestView> contextManifest(@PathVariable UUID id,
+                                                    HttpServletRequest request) {
+        operatorAuthority.resolveOperator(request, false);
         return manifests.findByRunIdOrderByTurnNumberAsc(id).stream()
                 .map(row -> MemoryMapper.manifestView(row, mapper))
                 .toList();

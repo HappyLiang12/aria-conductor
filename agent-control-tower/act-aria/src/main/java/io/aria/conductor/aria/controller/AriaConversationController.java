@@ -177,10 +177,6 @@ public class AriaConversationController {
     /**
      * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
      * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
-     */
-    /**
-     * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
-     * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
      * <p>
      * T42 Item 4: this route purges history and cancels runs, and it resolved no authority at all,
      * so a run-scoped worker bearer was ignored and an anonymous remote caller was not refused

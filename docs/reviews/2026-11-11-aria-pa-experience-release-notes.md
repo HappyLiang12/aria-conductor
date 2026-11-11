@@ -94,6 +94,20 @@ the operator can actually run from the conversation. Three waves, twelve defects
   a page rather than a total; the operator notice keeps its 6px spacing as a block-level span; and the
   shipped `aria-reserved: 3` is pinned from the real YAML resource, not only from the Java default.
 
+**The final scoped fix round (T48) — what it changed on the shipped surfaces**
+- **Clear now does what its title says for an operator with a session.** The DELETE and the synthesize
+  POST were the last mutations outside the shared axios transport, so they carried neither the operator
+  `X-CSRF-Token` (the cookie branch of `OperatorAuthorityResolver` runs BEFORE the loopback branch, so
+  the gate refuses a tokenless call) nor `X-Correlation-ID`. Both go through `client` now, and a refused
+  or failed Clear **keeps the transcript** and says what refused it, why nothing was cleared, and where
+  the fix is — the old silent fallback cleared the panel while the server still held the conversation.
+- **The client's PENDING-inbox cap is pinned to the server's page size** (`PROPOSAL_INBOX_LIMIT` vs
+  `MemoryProposalService.INBOX_LIMIT`), so the two can no longer drift into settling a live card as
+  decided elsewhere. The panel keeps one source for the number.
+- **A batch read still in flight is no longer reported as a change** in the memory proposal card: the
+  decision controls stay disabled until the read answers, and a failed first read says it failed
+  instead of asking the operator to confirm a change that never happened.
+
 ## Schema and configuration changes
 
 **None.** No Flyway migration is added or required. No new configuration key, no environment variable,
@@ -112,6 +126,14 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
    single-operator localhost deployment.
 2. **`GET /api/v1/memory/entities/{id}?status=`** now rejects any value other than `PENDING` with a 422
    VALIDATION naming the supported value. Previously four of the five values were silently ignored.
+3. **On the shipped default `aria.mcp.auth-mode: none`, a call that presents no MCP credential is
+   refused by all ten OPERATOR_ONLY tools — the operator included.** The mode requires no credential
+   and injects none, so no actor is published and `McpActorContext.require` fails closed before
+   `requireOperator`. The ten descriptions now say that instead of naming only the run-scoped worker.
+   This is about the credential a caller sends, not about a mode disabling authentication: a caller
+   that presents a valid operator bearer is resolved in every mode
+   (`McpServerConfig.actorTransportContext:176-180`; in `actor` mode the filter accepts any actor
+   `McpActorContext.resolveBearer` returns, `McpTokenFilter:124-129`). No configuration key changed.
 
 ## Behaviour changes to watch
 
@@ -176,7 +198,9 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
      network-isolated from it. Mutating routes outside this program's gated set still resolve none; the
      per-route table in `.superpowers/sdd/2026-11-11-aria-pa-experience/final-review-rest.md` is the
      authoritative list. The most destructive of them, `DELETE /api/v1/aria/conversations/{id}` (purges
-     trajectories, tool calls and audit rows, and cancels runs), is being gated in the fix round.
+     trajectories, tool calls and audit rows, and cancels runs), is now gated — and the dashboard's
+     Clear, which drives it, carries the operator CSRF token through the shared transport (T48), so the
+     gate does not lock the operator out of the one route it protects.
    A SANDBOX worker's peer address is the bridge gateway rather than loopback, so it is refused on
    routes that DO resolve authority — that is not a protection on routes that resolve none. Closing the
    whole surface needs the filter registration or bind-address change the operator declined.

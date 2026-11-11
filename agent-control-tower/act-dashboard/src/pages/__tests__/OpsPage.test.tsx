@@ -271,3 +271,38 @@ describe('OpsPage operator refusals (Task 37)', () => {
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T51: the same sparse API payload that blanked the Review Queue reaches this
+// pending panel's run correlation. It must name the run as unknown, not throw.
+// ---------------------------------------------------------------------------
+describe('OpsPage sparse approval payloads (T51)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('renders the pending row with an unknown run instead of throwing when runId is absent', async () => {
+    serve([{ id: 'a-sparse', status: 'PENDING' } as unknown as Approval]);
+    ui();
+
+    const panel = await screen.findByRole('region', { name: /pending approvals/i });
+    expect(await within(panel).findByText(/run unknown/)).toBeInTheDocument();
+  });
+
+  // Positive control: a fully populated approval keeps its exact run correlation.
+  it('keeps the populated run correlation unchanged', async () => {
+    serve([gateAsk()]);
+    ui();
+
+    const panel = await screen.findByRole('region', { name: /pending approvals/i });
+    expect(await within(panel).findByText(/run run-abc/)).toBeInTheDocument();
+  });
+});

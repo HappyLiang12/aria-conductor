@@ -335,9 +335,13 @@ class AgentLoopEngineWaitingInputTest {
 
         verify(approvalRepository).save(any(Approval.class));
         verify(inputCoordinator).recordTerminationIntent(runId);
-        assertThat(run.getStatus())
-                .as("a run whose park could not be persisted is never left parked")
-                .isEqualTo(RunStatus.RUNNING);
+        // Not `run.getStatus() == RUNNING`: the code under test writes status through a
+        // mocked repository, so the entity only reflects a write the test double chose to
+        // mirror — a mutant that skips the write leaves it green. The boundary is what the
+        // claim needs: the write was ATTEMPTED as WAITING_INPUT (so the wake below is a
+        // response to a failed park, not to a park that never happened), and it failed.
+        verify(runRepository).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
+                any(), anyList());
     }
 
     @Test

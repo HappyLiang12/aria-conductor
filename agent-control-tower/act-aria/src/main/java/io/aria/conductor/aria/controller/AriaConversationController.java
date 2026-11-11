@@ -179,9 +179,14 @@ public class AriaConversationController {
     }
 
     /**
-     * Clear a conversation: cancel all its live runs, purge its transcript (trajectories,
-     * tool calls, audit log entries), then detach every run of the conversation from it
-     * ({@code conversation_id = null}). Returns 404 if no runs found for the conversationId.
+     * Clear a conversation: cancel the runs that are running, pending or parked on input,
+     * purge its transcript (trajectories, tool calls, audit log entries), then detach every
+     * run that still carries the conversation id ({@code conversation_id = null}). Returns
+     * 404 if no runs found for the conversationId.
+     * <p>
+     * The cancel set is exactly RUNNING / PENDING / WAITING_INPUT, which is what the loop
+     * below does: a PAUSED run is not cancelled (a pre-existing gap, recorded as a follow-up
+     * rather than widened here) and a terminal run is not relabelled.
      * <p>
      * The detach is what makes "Clear" true on every read surface: {@code /latest} picks
      * the newest run that still carries a conversation id, and the timeline resolves runs

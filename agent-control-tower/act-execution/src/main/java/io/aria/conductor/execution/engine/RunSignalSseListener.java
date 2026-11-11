@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -120,6 +121,42 @@ public class RunSignalSseListener {
                             "question", questionOf(ask))));
         } catch (Exception e) {
             log.warn("Failed to emit the waiting-input signal for run {}: {}",
+                    event.getRunId(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * {@code memory_proposal}: Aria proposed a memory subject the operator has to
+     * decide (spec C1/C2). The frame carries exactly what the in-conversation
+     * card renders and the id the decide route is addressed to, so the operator
+     * never leaves the chat to find the proposal.
+     *
+     * <p>Same two gates as the ask signals: the run must own a live stream, and
+     * a proposal with no decidable id is not emitted (a card the operator cannot
+     * decide is worse than no card). Runs after commit because the PENDING row
+     * is written in the memory service's own transaction.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onMemoryProposalCreated(MemoryProposalCreatedEvent event) {
+        try {
+            UUID runId = event.getRunId();
+            UUID proposalId = event.getProposalId();
+            if (runId == null || proposalId == null || !registry.hasStream(runId)) {
+                return;
+            }
+            // HashMap, not Map.of: factKey/valueText/sensitivity are legitimately null
+            // for some subject types and Map.of rejects null values.
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("runId", runId.toString());
+            payload.put("proposalId", proposalId.toString());
+            payload.put("subjectType", event.getSubjectType());
+            payload.put("entityId", event.getEntityId() != null ? event.getEntityId().toString() : null);
+            payload.put("factKey", event.getFactKey());
+            payload.put("valueText", event.getValueText());
+            payload.put("sensitivity", event.getSensitivity());
+            registry.emit(runId, "memory_proposal", payload);
+        } catch (Exception e) {
+            log.warn("Failed to emit the memory-proposal signal for run {}: {}",
                     event.getRunId(), e.getMessage(), e);
         }
     }

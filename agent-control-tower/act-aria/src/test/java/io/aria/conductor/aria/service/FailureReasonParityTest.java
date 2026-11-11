@@ -67,7 +67,9 @@ class FailureReasonParityTest {
                 .thenReturn(List.of());
 
         AriaConversationController controller = new AriaConversationController(
-                runRepository, trajectoryRepository, mock(AuditEventRepository.class),
+                runRepository,
+                mock(io.aria.conductor.aria.repository.ConversationRunRepository.class),
+                trajectoryRepository, mock(AuditEventRepository.class),
                 toolCallRepository, mock(AriaService.class),
                 mock(io.aria.conductor.agent.service.RunService.class),
                 // T42 item 4 added the authority resolver for the destructive DELETE route. This

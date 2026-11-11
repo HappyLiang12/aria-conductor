@@ -216,6 +216,22 @@ public class MemoryProposalService {
             return MemoryProposalView.fromFact(proposal);
         }
 
+        // The inbox lists a PENDING entity's facts individually, but the entity decision is the
+        // batch that owns them. Promoting one fact here would make it ACTIVE under a parent no
+        // read path can see (recall, the prompt, the default list and the detail read all exclude
+        // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
+        // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
+        // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        MemoryEntity parent = entities.findById(proposal.getEntityId())
+                .orElseThrow(() -> new MemoryNotFoundException(
+                        "memory entity " + proposal.getEntityId() + " not found"));
+        if (parent.getStatus() == EntityStatus.PENDING) {
+            throw new MemoryConflictException("memory fact " + proposal.getId()
+                    + " belongs to entity " + proposal.getEntityId()
+                    + ", which is still PENDING; decide the entity proposal " + proposal.getEntityId()
+                    + " to promote or retire the whole batch instead of approving one fact");
+        }
+
         // An approval opens a current ACTIVE value, so it claims the same entity slot an
         // addFact or a supersede claims: without it an approval racing an addFact on the
         // same (entity, factKey) can commit two rows with valid_to=null.

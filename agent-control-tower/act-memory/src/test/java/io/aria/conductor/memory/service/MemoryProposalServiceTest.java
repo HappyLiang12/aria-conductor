@@ -312,6 +312,11 @@ class MemoryProposalServiceTest {
         });
     }
 
+    /**
+     * Positive control for the PENDING-parent refusal below: a fact proposal whose parent is
+     * ACTIVE is still promoted by one fact decision, so the M1 guard refuses the invisible-parent
+     * case only and does not turn the fact inbox read-only.
+     */
     @Test
     void approvingWithoutAConflictWritesOneAssertion() {
         MemoryFact proposed = fact(UUID.randomUUID(), "timezone", FactStatus.PENDING, OLD);
@@ -328,6 +333,33 @@ class MemoryProposalServiceTest {
         assertThat(written.getValue().getAction()).isEqualTo(MemoryAction.UPDATE);
         assertThat(written.getValue().getBeforeJson()).contains("PENDING");
         assertThat(written.getValue().getAfterJson()).contains("ACTIVE");
+    }
+
+    /**
+     * M1 (T10 fix round 1). The inbox lists a PENDING entity's facts one by one, so an operator
+     * can click a fact card that belongs to the batch the entity card owns. Approving it would
+     * make the fact ACTIVE under an entity no read path can see (and a later entity rejection
+     * retires only PENDING rows, orphaning it under a RETIRED parent). The refusal has to be
+     * actionable: it names the entity decision instead of failing bare.
+     */
+    @Test
+    void approvingAFactUnderAPendingEntityIsRefusedInFavourOfTheEntityDecision() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(pendingEntity(entityId)));
+
+        assertThatThrownBy(() -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR))
+                .as("the entity card is the decision the operator has to make")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(entityId.toString())
+                .hasMessageContaining("PENDING")
+                .hasMessageContaining("entity proposal");
+
+        assertThat(proposed.getStatus()).as("a refused approval promotes nothing").isEqualTo(FactStatus.PENDING);
+        assertThat(proposed.getValidTo()).isNull();
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
     }
 
     /**

@@ -62,6 +62,38 @@ the operator can actually run from the conversation. Three waves, twelve defects
   the fleet-runtime convergence write, report regenerate/archive, and every memory read.
 - Refusals in the dashboard point at the operator session instead of rendering a raw HTTP message.
 
+**Operator safety and refusal honesty (added by the final whole-branch review's fix round)**
+- **The live tool frames carry what the audit row carries.** `CoreEventTelemetry` redacts the
+  `tool_call` `args` and `tool_result` `result` it streams, exactly as the persisted row is redacted, so
+  the activity strip can no longer show a credential the approval card shows as `[REDACTED]`.
+- **A memory proposal parks no turn**, so one conversation's undecided proposal no longer disables
+  another conversation's composer. The parked-approval and parked-clarification gates are unchanged.
+- **A refused clarification answer settles** instead of inviting a retry that can only 409, and the
+  composer unlocks. The in-flow approval card now **shows the arguments it is approving**, read through
+  the existing REST surface, so a governed write is no longer approved blind.
+- **A cross-site refusal is distinguished from an authority refusal on every surface.** The client
+  reads the marker from the field each controller actually sends (`message`, `error`, `reason`,
+  `detail`), and the tests use those measured body shapes rather than an invented one.
+- **A fact blocked on its still-PENDING entity keeps the Reject the server still accepts** (only
+  Approve is removed), and settles honestly once a provably-complete inbox page stops listing it.
+- **`update_llm_provider` keeps its promise**: a null OR blank optional argument leaves the stored
+  value unchanged, so a model sending `""` to mean "keep" can no longer blank a provider's base URL or
+  API key.
+- **Aria's prompt names a tool that exists**: `instantiate_workflow_template(templateId, parameters)`.
+  The governed-template decision is unchanged; the name and every pin were corrected together under an
+  operator-approved amendment to the 2026-08-13 spec. `remember_fact`'s description is now true for an
+  operator call on a PENDING key and states the re-proposal's retire side effect.
+- **Memory kernel atomicity**: the entity INSERT is forced inside the unique-violation catch so a
+  concurrent same-key write re-reads the winner instead of failing raw; a rejected fact can be
+  proposed again (the probe no longer matches a closed row); retiring an entity closes its open facts
+  so no proposal is left decide-less.
+- **`DELETE /api/v1/aria/conversations/{id}` resolves operator authority before any read or side
+  effect.** It purges trajectories, tool calls and audit rows and cancels runs, and it is reachable
+  from a sandbox, so it is now gated like the other destructive routes.
+- Clear's copy no longer claims a run keeps living server-side; the Memory page labels a capped page as
+  a page rather than a total; the operator notice keeps its 6px spacing as a block-level span; and the
+  shipped `aria-reserved: 3` is pinned from the real YAML resource, not only from the Java default.
+
 ## Schema and configuration changes
 
 **None.** No Flyway migration is added or required. No new configuration key, no environment variable,

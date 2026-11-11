@@ -141,6 +141,18 @@ class AriaServiceChatTest {
         return AriaChatRequest.builder().conversationId("conv-1").message(message).build();
     }
 
+    /** A persisted CLARIFICATION ask whose question is its {@code content}. */
+    private static Approval clarificationAsk(UUID id, String question, Instant requestedAt) {
+        return Approval.builder()
+                .id(id)
+                .runId(RUN_ID)
+                .status(ApprovalStatus.PENDING)
+                .source(ApprovalSource.CLARIFICATION)
+                .requestedAt(requestedAt)
+                .content(question)
+                .build();
+    }
+
     @Test
     void chat_returnsFinalOutputOfCompletedRun() {
         when(intentClassifier.classify("hello")).thenReturn("general");
@@ -423,6 +435,35 @@ class AriaServiceChatTest {
                 .isEqualTo("Which PR should I review?")
                 .doesNotContain("Draft answer that is not the question");
         assertThat(response.getErrorCode()).isNull();
+    }
+
+    /**
+     * One park, two readers: this sync response and the panel's {@code waiting_input}
+     * SSE card must name the same ask. The finder is a derived query with no
+     * {@code ORDER BY}, so taking the first row makes the answer depend on the row
+     * order the database happens to return, and a run can own a stale residual ask
+     * beside the live park. The live (newest) ask is the one being asked now; the
+     * fixture returns the STALE row first, exactly like the SSE listener's own test.
+     */
+    @Test
+    void aParkedSyncChatNamesTheNewestPendingAskNotWhicheverRowTheQueryReturnedFirst() {
+        UUID staleId = UUID.randomUUID();
+        UUID liveId = UUID.randomUUID();
+        Approval stale = clarificationAsk(staleId, "superseded question",
+                Instant.parse("2026-11-11T10:00:00Z"));
+        Approval live = clarificationAsk(liveId, "Which PR should I review?",
+                Instant.parse("2026-11-11T10:05:00Z"));
+        when(stateRepository.findSnapshotById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.WAITING_INPUT, null)));
+        when(approvalRepository.findByRunIdAndStatusAndSource(
+                RUN_ID, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of(stale, live));
+
+        AriaChatResponse response = ariaService.chat(request("hi"));
+
+        assertThat(response.getApprovalId()).isEqualTo(liveId.toString());
+        assertThat(response.getQuestion()).isEqualTo("Which PR should I review?");
+        assertThat(response.getMessage()).isEqualTo("Which PR should I review?");
     }
 
     /**

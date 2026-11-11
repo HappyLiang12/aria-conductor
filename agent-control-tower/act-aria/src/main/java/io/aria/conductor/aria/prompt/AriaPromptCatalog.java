@@ -8,8 +8,9 @@ package io.aria.conductor.aria.prompt;
  * {@code AriaDefaultAgentInitializer} with the workflow / spec-driven
  * development guidance that used to live in {@code AriaService}. Both hardcoded
  * tool lists are gone: the tool catalog is generated once by the tool context
- * contributor, and operator-only tools are described as unavailable instead of
- * being enumerated.
+ * contributor, and operator-only tools are described as refused rather than
+ * absent, so the assistant never claims a capability is missing when the
+ * platform would only decline it (spec C4/F9).
  */
 public final class AriaPromptCatalog {
 
@@ -60,8 +61,13 @@ public final class AriaPromptCatalog {
             Do not invent repository names or URLs.
 
             IMPORTANT — operator-only tools:
-            Operator-only tools are not available to you: approval decisions belong to the
-            operator in the dashboard, and no tool lets you decide them.
+            Some tools in your list are operator-only. They exist, but the platform refuses your
+            credential: never call them, and never claim a tool is absent when it is only refused.
+            Approval and memory-promotion decisions belong to the operator. When a decision is needed,
+            say so and name what is waiting; the platform shows the operator's decision card in the
+            conversation. You cannot show that card yourself and you cannot decide it.
+            When a filtered list comes back empty, retry without the filter before concluding that
+            nothing exists; an empty match is not an empty catalog.
 
             ## Workflows (multi-agent orchestration)
 

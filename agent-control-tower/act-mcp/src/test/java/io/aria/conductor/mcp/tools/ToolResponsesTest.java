@@ -2,9 +2,15 @@ package io.aria.conductor.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.security.ActorPrincipal;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ToolResponsesTest {
 
@@ -49,6 +55,42 @@ class ToolResponsesTest {
     void error_escapesQuotesInMessage() throws Exception {
         String json = ToolResponses.error("VALIDATION", "field \"name\" blank", null, false);
         assertThat(mapper.readTree(json).get("message").asText()).isEqualTo("field \"name\" blank");
+    }
+
+    /**
+     * The one refusal shape every operator-only tool speaks (spec C4/F9): a stable code, the
+     * named action and the named surface where the operator can actually do it. A bare
+     * "forbidden" is the defect this contract exists to prevent.
+     */
+    @Test
+    void operatorOnly_namesTheActionAndTheSurface() {
+        assertThat(ToolResponses.operatorOnly("retiring an agent", "Retire it on the Crew page."))
+                .isEqualTo("Operator authority required: retiring an agent is an operator decision. "
+                        + "Retire it on the Crew page.");
+    }
+
+    @Test
+    void requireOperator_refusesAWorkerWithTheActionableRefusal() {
+        ActorPrincipal worker = ActorPrincipal.worker(UUID.randomUUID(), Instant.parse("2026-11-09T12:10:00Z"));
+
+        assertThatThrownBy(() -> ToolResponses.requireOperator(worker, "retiring an agent", "Retire it on the Crew page."))
+                .isInstanceOf(SecurityException.class)
+                .hasMessage("Operator authority required: retiring an agent is an operator decision. "
+                        + "Retire it on the Crew page.");
+    }
+
+    @Test
+    void requireOperator_refusesAnAbsentActor() {
+        assertThatThrownBy(() -> ToolResponses.requireOperator(null, "retiring an agent", "Retire it on the Crew page."))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("Operator authority required: retiring an agent");
+    }
+
+    @Test
+    void requireOperator_acceptsTheOperatorCredential() {
+        assertThatCode(() -> ToolResponses.requireOperator(ActorPrincipal.operator(null),
+                "retiring an agent", "Retire it on the Crew page."))
+                .doesNotThrowAnyException();
     }
 
     @Test

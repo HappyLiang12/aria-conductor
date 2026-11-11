@@ -1,12 +1,15 @@
 package io.aria.conductor.mcp.tools;
 
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.Exclusions;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.HousekeepingReceipt;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.HousekeepingRequest;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.ScanResult;
 import io.aria.conductor.execution.housekeeping.HousekeepingService;
 import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.mcp.McpActorContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -18,10 +21,13 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class OpsTools implements McpTool {
 
+    static final String HOUSEKEEPING_EXECUTE = "housekeeping_execute";
+
     private static final Set<String> VALID_CATEGORIES =
             Set.of("kanban", "agents", "approvals", "stuck", "runs");
 
     private final HousekeepingService housekeepingService;
+    private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
 
     @Tool(name = "housekeeping_scan",
@@ -47,8 +53,12 @@ public class OpsTools implements McpTool {
     // executes directly on confirm=true with no ApprovalGate, matching REST parity
     // (HousekeepingController only requires confirm). The Aria gated path needs a
     // RunContext and can block for up to 30 minutes, neither of which MCP can supply.
+    //
+    // The missing gate is exactly why the actor check below is mandatory: the confirm
+    // flag is caller-supplied, so without an operator credential the "only gate" would
+    // be an argument the worker itself controls.
     @Tool(name = "housekeeping_execute",
-            description = "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate.")
+            description = "DESTRUCTIVE and irreversible: delete leftovers in the given categories (kanban, agents, approvals, stuck, runs). Requires confirm=true and at least one category. No human-approval gate is applied — the explicit confirm flag is the only gate. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and nothing is deleted.")
     public String housekeepingExecute(
             @ToolParam(description = "Category keys to clear: kanban, agents, approvals, stuck, runs") List<String> categories,
             @ToolParam(description = "Include stuck runs; required for the stuck category to act", required = false) boolean includeStuck,
@@ -56,13 +66,20 @@ public class OpsTools implements McpTool {
             @ToolParam(description = "Kanban item ids to keep", required = false) List<String> excludeKanbanItemIds,
             @ToolParam(description = "Agent ids to keep", required = false) List<String> excludeAgentIds,
             @ToolParam(description = "Approval ids to keep", required = false) List<String> excludeApprovalIds,
-            @ToolParam(description = "Explicit confirmation; false is rejected") boolean confirm) {
+            @ToolParam(description = "Explicit confirmation; false is rejected") boolean confirm,
+            ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "executing housekeeping",
+                    "Run it from the Housekeeping panel on the Ops page.");
+            toolPolicies.requireAuthority(HOUSEKEEPING_EXECUTE, actor);
             validateCategories(categories);
             HousekeepingRequest request = new HousekeepingRequest(categories, includeStuck,
                     exclusions(excludeRunIds, excludeKanbanItemIds, excludeAgentIds, excludeApprovalIds), confirm);
             HousekeepingReceipt receipt = housekeepingService.execute(request);
             return ToolResponses.ok(receipt);
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalStateException e) {

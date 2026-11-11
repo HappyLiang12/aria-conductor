@@ -28,8 +28,9 @@ import java.util.UUID;
  * <ul>
  *   <li>a malformed, non-object or non-telemetry payload is logged and skipped --
  *       observability never fails a run;</li>
- *   <li>an absent or malformed counter stays null, a carried zero stays zero
- *       (unknown usage is never invented as zero);</li>
+ *   <li>an absent or malformed counter stays null; an all-zero carried report is the
+ *       CLI's placeholder and is dropped by the telemetry service before any write,
+ *       so nothing is invented as zero;</li>
  *   <li>only the three telemetry types are recorded here. {@code permission.request}
  *       names the same {@code toolCallId}, and the approval path owns that event;
  *       recording it here would duplicate the {@code tool.call} row of the same

@@ -12,6 +12,7 @@ import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
 import io.aria.conductor.memory.dto.RecallQuery;
 import io.aria.conductor.memory.dto.RecallResult;
+import io.aria.conductor.memory.model.EntityStatus;
 import io.aria.conductor.memory.model.FactStatus;
 import io.aria.conductor.memory.model.MemoryActorType;
 import io.aria.conductor.memory.model.MemoryFact;
@@ -135,6 +136,12 @@ class MemoryToolsTest {
                 sensitivity.name(), "ACTIVE", "OPERATOR", null, 0L, VALID_FROM, VALID_FROM);
     }
 
+    /** Review material: the status the detail read refuses and the explicit filter may show. */
+    private static MemoryEntityView pendingEntityView() {
+        return new MemoryEntityView(ENTITY_ID.toString(), "PERSON", "candidate", "Candidate",
+                Sensitivity.INTERNAL.name(), "PENDING", "EXTRACTION", null, 0L, VALID_FROM, VALID_FROM);
+    }
+
     @Test
     void workerRememberFactWritesAPendingExtractionProposal() {
         when(commands.addFact(eq(ENTITY_ID), any(), any()))
@@ -174,7 +181,10 @@ class MemoryToolsTest {
     void workerCannotDecideAProposal() {
         String json = tools.decideMemoryProposal(FACT_ID, true, null, workerContext());
 
-        assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"FORBIDDEN\"");
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"FORBIDDEN\"")
+                .contains("\"message\":\"Operator authority required: approving a memory proposal is an operator "
+                        + "decision. Approve it on the proposal card in the Aria conversation or on the Memory page.\"");
         verifyNoInteractions(proposals);
     }
 
@@ -182,8 +192,51 @@ class MemoryToolsTest {
     void workerCannotForgetAFact() {
         String json = tools.forgetFact(FACT_ID, workerContext());
 
-        assertThat(json).contains("\"ok\":false").contains("\"errorType\":\"FORBIDDEN\"");
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"FORBIDDEN\"")
+                .contains("\"message\":\"Operator authority required: retiring a fact is an operator decision. "
+                        + "Retire it on the Memory page.\"");
         verifyNoInteractions(commands);
+    }
+
+    /**
+     * Review material stays operator-only (Task 10's detail read already answers 404; this
+     * is the tool-level guard). The refusal is actionable: it names where the operator
+     * reviews a pending entity, and it is not a bare "forbidden".
+     */
+    @Test
+    void aWorkerCannotReadAPendingEntityThroughTheDetailRead() {
+        when(queries.getEntity(ENTITY_ID)).thenReturn(pendingEntityView());
+
+        String json = tools.getMemoryEntity(ENTITY_ID, workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"FORBIDDEN\"")
+                .contains("\"message\":\"Operator authority required: reading a pending memory entity is an "
+                        + "operator decision. Review it on the Memory page or in the Review Queue.\"");
+        verify(queries, never()).currentFacts(any());
+    }
+
+    @Test
+    void aWorkerCannotListPendingEntities() {
+        String json = tools.listMemoryEntities(null, "PENDING", 10, workerContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"FORBIDDEN\"")
+                .contains("\"message\":\"Operator authority required: listing pending memory entities is an "
+                        + "operator decision. Review them on the Memory page or in the Review Queue.\"");
+        verifyNoInteractions(queries);
+    }
+
+    /** The positive control: the operator still reviews the pending inbox through the tool. */
+    @Test
+    void anOperatorCanListPendingEntitiesForReview() {
+        when(queries.listEntities(null, EntityStatus.PENDING, 10)).thenReturn(List.of(pendingEntityView()));
+
+        String json = tools.listMemoryEntities(null, "PENDING", 10, operatorContext());
+
+        assertThat(json).contains("\"ok\":true").contains("\"status\":\"PENDING\"");
+        verify(queries).listEntities(null, EntityStatus.PENDING, 10);
     }
 
     @Test

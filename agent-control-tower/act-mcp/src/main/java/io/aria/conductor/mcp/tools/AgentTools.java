@@ -6,8 +6,11 @@ import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.AgentType;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.mcp.McpActorContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -20,12 +23,19 @@ import java.util.UUID;
  * controllers call — REST/dashboard and MCP stay at parity. Error types mirror
  * GlobalExceptionHandler's REST status mapping (409 CONFLICT for
  * InvalidStateTransitionException/IllegalStateException).
+ *
+ * <p>{@code retire_agent} is OPERATOR_ONLY in the reviewed catalog: the tool re-checks
+ * the transport-resolved actor and refuses a run-scoped worker before the service is
+ * reached, with an actionable refusal (spec C4/F9).
  */
 @Component
 @RequiredArgsConstructor
 public class AgentTools implements McpTool {
 
+    static final String RETIRE_AGENT = "retire_agent";
+
     private final AgentService agentService;
+    private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
 
     @Tool(name = "list_agents",
@@ -116,11 +126,23 @@ public class AgentTools implements McpTool {
         }
     }
 
+    /**
+     * Retirement is OPERATOR_ONLY in the reviewed catalog. The actor comes from the
+     * transport context only, and the explicit operator guard runs before the catalog
+     * check so the refusal carries an action and a surface instead of a bare "forbidden"
+     * — the catalog keeps being re-checked, so a future misclassification cannot widen
+     * authority either.
+     */
     @Tool(name = "retire_agent",
-            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs.")
-    public String retireAgent(@ToolParam(description = "Agent id") UUID id) {
+            description = "Retire an agent (soft delete). Retired agents are excluded from list_agents and cannot start new runs. Operator authority only: a run-scoped worker credential is refused with FORBIDDEN and the agent stays active.")
+    public String retireAgent(@ToolParam(description = "Agent id") UUID id, ToolContext toolContext) {
         try {
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            ToolResponses.requireOperator(actor, "retiring an agent", "Retire it on the Crew page.");
+            toolPolicies.requireAuthority(RETIRE_AGENT, actor);
             return ToolResponses.ok(agentService.retireAgent(id));
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (ResourceNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (InvalidStateTransitionException | IllegalStateException e) {

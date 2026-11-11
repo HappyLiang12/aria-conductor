@@ -335,9 +335,45 @@ class AgentLoopEngineWaitingInputTest {
 
         verify(approvalRepository).save(any(Approval.class));
         verify(inputCoordinator).recordTerminationIntent(runId);
-        assertThat(run.getStatus())
-                .as("a run whose park could not be persisted is never left parked")
-                .isEqualTo(RunStatus.RUNNING);
+        // Not `run.getStatus() == RUNNING`: the code under test writes status through a
+        // mocked repository, so the entity only reflects a write the test double chose to
+        // mirror — a mutant that skips the write leaves it green. The boundary is what the
+        // claim needs: the write was ATTEMPTED as WAITING_INPUT (so the wake below is a
+        // response to a failed park, not to a park that never happened), and it failed.
+        verify(runRepository).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
+                any(), anyList());
+    }
+
+    @Test
+    void whenTheWaitingInputWriteIsRefusedTheRunIsWokenInsteadOfParked() {
+        // F3: the same write can also fail WITHOUT throwing. updateRunStatusDirect reports a
+        // refusal with `false` when the conditional UPDATE matched no row — the run is
+        // terminal (a COMPLETED/FAILED transition does not wake the coordinator) or the row
+        // is gone (no event at all). Round 2 honoured only the thrown path, so a refusal left
+        // the loop blocked on the coordinator forever, with a PENDING ask and no park to show.
+        UUID runId = UUID.randomUUID();
+        Run run = runIn(runId, UUID.randomUUID(), RunStatus.RUNNING);
+        engine.addToActiveContextsForTest(runId, run.getAgentId());
+        // Positive control: the ask itself did persist, so the failure is the status write.
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(invocation -> {
+            Approval ask = invocation.getArgument(0);
+            if (ask.getId() == null) {
+                ask.setId(UUID.randomUUID());
+            }
+            return ask;
+        });
+        // doReturn (not when) so the setup's mirroring answer is not executed while stubbing.
+        doReturn(0).when(runRepository).updateStatusUnlessTerminal(eq(runId),
+                eq(RunStatus.WAITING_INPUT), any(), anyList());
+
+        engine.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which DB?"));
+
+        verify(approvalRepository).save(any(Approval.class));
+        // The write was attempted (a mutant that skips it cannot claim the park either)...
+        verify(runRepository).updateStatusUnlessTerminal(eq(runId), eq(RunStatus.WAITING_INPUT),
+                any(), anyList());
+        // ...and its refusal woke the run, exactly like a thrown one.
+        verify(inputCoordinator).recordTerminationIntent(runId);
     }
 
     @Test

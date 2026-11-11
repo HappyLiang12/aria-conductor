@@ -51,6 +51,30 @@ const PROPOSAL_PAGES: Array<{ status: MemoryFactStatus; label: string }> = [
   { status: 'RETIRED', label: 'Retired' },
 ];
 
+/**
+ * The server's page cap for both reads on this page. Neither response carries a
+ * total — `GET /entities` and the global `GET /proposals?status=` both answer a
+ * bare array — and neither read is given a limit here, so the server applies its
+ * own default: `MemoryController.DEFAULT_LIST_LIMIT` (50) for the entity list and
+ * `MemoryProposalService.INBOX_LIMIT` (50) for the proposal inbox.
+ *
+ * A full page is therefore the only evidence this page has that more rows may
+ * exist, and the length of that page is NOT a total (final review Minor 4).
+ */
+const LIST_PAGE_CAP = 50;
+
+/**
+ * A count that never claims more than the read proved: a page shorter than the
+ * cap was the whole set, so its length is the count; a full page may be a slice,
+ * so it is reported as "at least" this many. Nothing here invents a total the
+ * backend does not return.
+ */
+function countLabel(length: number, noun: string): string {
+  return length >= LIST_PAGE_CAP
+    ? `showing ${length} of at least ${length} ${noun}`
+    : `${length} ${noun}`;
+}
+
 function proposalTitle(proposal: MemoryProposalView): string {
   switch (proposal.subjectType) {
     case 'ENTITY':
@@ -322,7 +346,7 @@ export function MemoryPage() {
         <h2>
           Entities{' '}
           <span className="accent">
-            {entitiesRefused ? '/ unavailable' : `/ ${entities.length} ${entityStatus.toLowerCase()}`}
+            {entitiesRefused ? '/ unavailable' : `/ ${countLabel(entities.length, entityStatus.toLowerCase())}`}
           </span>
         </h2>
         <div className="filter-tabs">
@@ -426,7 +450,7 @@ export function MemoryPage() {
         <h2>
           Proposal Inbox{' '}
           <span className="accent">
-            {proposalsRefused ? '/ unavailable' : `/ ${proposals.length} ${proposalStatus.toLowerCase()}`}
+            {proposalsRefused ? '/ unavailable' : `/ ${countLabel(proposals.length, proposalStatus.toLowerCase())}`}
           </span>
         </h2>
         <div className="filter-tabs">

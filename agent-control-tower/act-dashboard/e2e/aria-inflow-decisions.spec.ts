@@ -107,8 +107,10 @@ test.describe('Aria in-flow decisions (live)', () => {
 
     await page.getByRole('button', { name: 'Clear and start new conversation' }).click();
 
-    // The parked transcript is gone (the run keeps living server-side), the
-    // composer is usable again, and this is a new conversation id.
+    // The parked transcript is gone for good: Clear's route cancels this
+    // conversation's runs and purges its tool calls, trajectories and audit
+    // events (`AriaConversationController.java:153-180`), so the run does not
+    // survive it. The composer is usable again, and this is a new conversation id.
     await expect(page.locator('.ai-panel .ai-decision-card')).toHaveCount(0);
     await expect(page.locator('.ai-panel .ai-empty')).toBeVisible();
     await expect(page.locator('.ai-panel .ai-compose-input')).toBeEnabled();

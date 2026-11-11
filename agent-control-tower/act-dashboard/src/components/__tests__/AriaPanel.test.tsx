@@ -2357,6 +2357,49 @@ describe('AriaPanel Clear refusal (T48 Item 1)', () => {
     expect(clear).toBeEnabled();
   });
 
+  // T50 (F-2). Clear's DELETE reads the conversation's runs, drives the verified stop of
+  // each live one (seconds, not microseconds) and only then detaches them. The backend now
+  // detaches by conversation, so a run created in that window cannot resurrect the cleared
+  // conversation; the panel must not create one either. Its send path was guarded by
+  // busy/gated only, so a prompt entered while the bounded DELETE was in flight went out
+  // with the old conversationId still in state. The composer is held for the whole clear.
+  it('holds the composer while Clear is in flight, and sends once it answered', async () => {
+    const { container } = await openConversationWithOneTurn();
+    let answer: (() => void) | undefined;
+    mockDeleteConversation.mockImplementation(() => new Promise<void>((resolve) => {
+      answer = () => resolve();
+    }));
+
+    await userEvent.type(textarea(), 'typed while idle');
+    // Positive control: idle, the typed prompt is sendable.
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+
+    await clickClear();
+
+    // In flight: the composer is held, and neither input route can enter the window.
+    expect(textarea()).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    // The compose event (the 彙整 button lives outside the panel) has no disabled control
+    // in front of it; the send guard itself must hold it too.
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('aria:compose', {
+        detail: { prompt: 'composed while the clear was in flight' },
+      }));
+    });
+    expect(mockStream).not.toHaveBeenCalled();
+
+    await act(async () => { answer?.(); });
+    await waitFor(() => expect(conversationIdOf(container)).not.toBe('conv-1'));
+
+    // The hold is released with the clear, and the same Enter route now sends: this is the
+    // positive control for the two "not called" assertions above.
+    const afterClear = textarea();
+    expect(afterClear).toBeEnabled();
+    await userEvent.type(afterClear, 'after the clear{Enter}');
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+  });
+
   // A bounded timeout is a third outcome, not a refusal: the request was sent, so
   // "nothing was cleared" would be a guess. The copy says only what is known.
   it('says Clear did not answer in time instead of claiming nothing was cleared', async () => {

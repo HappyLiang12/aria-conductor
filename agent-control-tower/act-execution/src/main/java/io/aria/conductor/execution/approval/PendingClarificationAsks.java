@@ -20,6 +20,17 @@ import java.util.Optional;
  * two different questions. Both resolve the pick here instead, from the row's own
  * identity: newest {@code requestedAt} first, ties broken by {@code id}, with both
  * keys nulls-first so the order stays total even for an unset column.
+ *
+ * <p><b>What the order can and cannot promise.</b> {@code approvals.requested_at} is
+ * a plain {@code TIMESTAMP} — second precision, no fractional part
+ * ({@code V1__init_schema.sql:91}) — and the entity ids are random UUIDs. Two asks
+ * created within the SAME second therefore come back with the same stored timestamp
+ * and the {@code id} tie-break decides. That pick is deterministic (both readers, and
+ * both row orders, agree) but it is NOT chronological: inside one second nothing here
+ * can tell which ask was created last, and the tie-break answers "the higher id", not
+ * "the later ask". This program adds no migration, so the column keeps its precision —
+ * do not read the tie-break as a chronology it cannot deliver. The determinism is
+ * pinned by {@code PendingClarificationAsksTest.twoAsksTheColumnStoredInTheSameSecondResolveByIdInEitherOrder}.
  */
 public final class PendingClarificationAsks {
 

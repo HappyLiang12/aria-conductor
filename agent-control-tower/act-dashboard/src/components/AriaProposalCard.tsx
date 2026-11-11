@@ -9,11 +9,19 @@ export type ProposalPanelItem = Extract<PanelItem, { kind: 'proposal' }>;
 export interface AriaProposalCardProps {
   item: ProposalPanelItem;
   /**
-   * Called once a decision committed, so the panel can settle the card through
-   * the same state it merges every other plane into. A refused decision never
-   * calls it — nothing was decided.
+   * Called once the proposal settled locally, so the panel can settle the card
+   * through the same state it merges every other plane into. `decided-elsewhere`
+   * is reported for a 409: the server says the proposal is already settled, and
+   * the card cannot know by which verdict. A refused decision never calls it —
+   * nothing was decided.
    */
-  onSettled?: (proposalId: string, state: 'approved' | 'rejected') => void;
+  onSettled?: (proposalId: string, state: 'approved' | 'rejected' | 'decided-elsewhere') => void;
+}
+
+/** The HTTP status a failed call answered with, or null when it did not answer. */
+function responseStatus(error: unknown): number | null {
+  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+  return typeof status === 'number' ? status : null;
 }
 
 /** Human title per subject type; ENTITY and FACT are the two shipped today. */
@@ -101,7 +109,7 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
 export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // Local settlement, layered over the item's own state: a re-render with a
   // settled item wins, so the panel stays the single owner of restored history.
-  const [local, setLocal] = useState<'approved' | 'rejected' | null>(null);
+  const [local, setLocal] = useState<'approved' | 'rejected' | 'decided-elsewhere' | null>(null);
   const [inFlight, setInFlight] = useState<MemoryProposalDecision | null>(null);
   const [error, setError] = useState<{ text: string; operatorRejected: boolean } | null>(null);
   const batch = useEntityBatch(item);
@@ -121,6 +129,18 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       setLocal(next);
       onSettled?.(item.proposalId, next);
     } catch (err: unknown) {
+      // A 409 is the server saying the proposal is ALREADY settled — decided on
+      // the Memory page, by another operator, or superseded by a re-proposal.
+      // Offering the decision again would retry something that cannot succeed,
+      // and the panel's item is now wrong: settle both as `decided-elsewhere`,
+      // the verdict-free state the reconcile already uses. Every other status is
+      // a real failure (the proposal may well still be pending) and keeps the
+      // error with its retry.
+      if (responseStatus(err) === 409) {
+        setLocal('decided-elsewhere');
+        onSettled?.(item.proposalId, 'decided-elsewhere');
+        return;
+      }
       setError({
         text: apiErrorMessage(err, 'The proposal was not decided — retry.'),
         operatorRejected: isOperatorRejection(err),

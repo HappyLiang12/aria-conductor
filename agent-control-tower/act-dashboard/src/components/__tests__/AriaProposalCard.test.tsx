@@ -150,17 +150,44 @@ describe('AriaProposalCard', () => {
     expect(onSettled).not.toHaveBeenCalled();
   });
 
-  it('shows a non-authority failure as the backend message and keeps the card decidable', async () => {
+  // A 409 from `decide` means the proposal was already decided somewhere else
+  // (the Memory page, another operator, a re-proposal superseded). Retrying can
+  // never succeed, so the card settles as `decided-elsewhere` — the same honest
+  // state the panel's reconcile uses — instead of offering the decision again.
+  it('settles a 409 as decided elsewhere instead of offering a retry', async () => {
     vi.mocked(decideMemoryProposal).mockRejectedValue({
       response: { status: 409, data: { message: 'proposal already decided' } },
     });
-    render(<AriaProposalCard item={proposal()} onSettled={vi.fn()} />);
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
 
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-    expect(await screen.findByText('proposal already decided')).toBeInTheDocument();
-    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(await screen.findByTestId('aria-proposal-decided-elsewhere')).toBeInTheDocument();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'decided-elsewhere');
+    // Nothing is decided by this call, and no control that could only 409 again.
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('proposal already decided')).not.toBeInTheDocument();
+    expect(onSettled).toHaveBeenCalledWith('e4d7', 'decided-elsewhere');
+  });
+
+  // Positive control for the 409 above: any other failure is still an error the
+  // operator can retry, because the proposal may well still be pending.
+  it('keeps a 500 as an error with a retry', async () => {
+    vi.mocked(decideMemoryProposal).mockRejectedValue({
+      response: { status: 500, data: { message: 'memory store unavailable' } },
+    });
+    const onSettled = vi.fn();
+    render(<AriaProposalCard item={proposal()} onSettled={onSettled} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByText('memory store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('aria-proposal-decided-elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(screen.getByTestId('aria-proposal-card')).toHaveAttribute('data-state', 'pending');
   });
 
   it('a restored settled proposal renders its outcome instead of a decision control', () => {

@@ -226,6 +226,73 @@ class MemoryCommandServiceTest {
         verify(assertions, never()).save(any());
     }
 
+    /**
+     * T29 Item 2 (P2). The dependent-read guard refused only a PENDING parent, so an ACTIVE write
+     * against a RETIRED or MERGED entity still landed — invisible current memory, because recall
+     * matches ACTIVE entities only, the context contributor reads through recall and the default
+     * list is ACTIVE-only. Merge moves the source's facts, so a fact added to a MERGED source is
+     * not reachable from the survivor either. The invariant is "current memory has an ACTIVE
+     * parent", not "not PENDING"; the positive control is
+     * {@link #anActiveFactMayStillBeAttachedToAnActiveParent}.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"RETIRED", "MERGED"})
+    void anActiveFactCannotBeAttachedToANonActiveParent(String parentStatus) {
+        UUID entityId = id("person:" + parentStatus);
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.valueOf(parentStatus));
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL,
+                        "operator message"),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .as("a fact may only become current under an ACTIVE parent")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(parentStatus);
+
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /** The positive control: an ACTIVE parent still takes the same operator write. */
+    @Test
+    void anActiveFactMayStillBeAttachedToAnActiveParent() {
+        UUID entityId = id("person:active-parent");
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        MemoryFact fact = command.addFact(entityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, null),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session"));
+
+        assertThat(fact.getStatus()).isEqualTo(FactStatus.ACTIVE);
+        verify(facts).save(fact);
+    }
+
+    /**
+     * The RUN-actor structural-fact path writes ACTIVE facts ({@code statusOf}: RUN yields
+     * ACTIVE), so the same invariant has to refuse it: a run must not park current memory under a
+     * dead parent either.
+     */
+    @Test
+    void aRunStructuralFactCannotBeAttachedToARetiredParent() {
+        UUID entityId = id("repo:retired");
+        MemoryEntity parent = entity(entityId);
+        parent.setStatus(EntityStatus.RETIRED);
+        when(entities.findById(entityId)).thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> command.addFact(entityId,
+                new AddFactCommand("repo", "aria-conductor", "STRING", Sensitivity.INTERNAL, "run-42"),
+                new MemoryActor(MemoryActorType.RUN, "run-42")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("RETIRED");
+
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
     /** The positive control for the guard: a PENDING proposal may still depend on a PENDING entity. */
     @Test
     void aPendingFactMayHangOffAPendingEntity() {

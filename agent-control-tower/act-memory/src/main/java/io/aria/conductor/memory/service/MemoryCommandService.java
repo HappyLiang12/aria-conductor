@@ -754,16 +754,27 @@ public class MemoryCommandService {
     }
 
     /**
-     * The dependent-read guard for facts: a PENDING entity is a proposal, so it may only carry
-     * PENDING facts (the batch the operator decides together). An ACTIVE fact against it would be
-     * current memory whose parent is invisible to recall and to the prompt — exactly the
-     * read-path leak spec §5.5 forbids — so it is a conflict, not an implicit promotion.
+     * The dependent-read guard for facts: current memory has an ACTIVE parent, so an ACTIVE fact
+     * may only hang off an ACTIVE entity. A PENDING parent is a proposal (the batch the operator
+     * decides together), and a RETIRED or MERGED parent is dead — recall matches ACTIVE entities
+     * only, the context contributor reads through recall and the default list is ACTIVE-only, so
+     * an ACTIVE fact under either would be invisible current memory. Merge moves the source's
+     * facts, so a fact added to a MERGED source is unreachable from the survivor too. A PENDING
+     * fact is unaffected: it is review material whatever its parent's lifecycle status.
+     * <p>
+     * T29 Item 2 (P2): this used to refuse only a PENDING parent, so the operator
+     * {@code addFact} path and the RUN structural-fact path (which writes ACTIVE) could both park
+     * current memory under a dead parent. The guard now covers every non-ACTIVE parent and names
+     * the case it found.
      */
     private MemoryEntity requireEntityForFact(UUID entityId, FactStatus factStatus) {
         MemoryEntity entity = requireEntity(entityId);
-        if (factStatus == FactStatus.ACTIVE && entity.getStatus() == EntityStatus.PENDING) {
-            throw new MemoryConflictException("entity " + entityId + " is PENDING; an ACTIVE fact cannot be "
-                    + "attached before the entity proposal is approved");
+        if (factStatus == FactStatus.ACTIVE && entity.getStatus() != EntityStatus.ACTIVE) {
+            String reason = entity.getStatus() == EntityStatus.PENDING
+                    ? "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved"
+                    : "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
+                    + "no read path can see, and a MERGED source is not reachable from its survivor";
+            throw new MemoryConflictException("entity " + entityId + " " + reason);
         }
         return entity;
     }

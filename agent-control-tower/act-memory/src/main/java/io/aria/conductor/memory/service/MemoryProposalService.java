@@ -300,11 +300,13 @@ public class MemoryProposalService {
         // read path can see (recall, the prompt, the default list and the detail read all exclude
         // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
         // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
-        // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        // (T10 fix round 1, M1).
         // N2 (T10 fix round 1 re-review): the invariant is "current memory has an ACTIVE parent",
         // not "not PENDING". A proposal raised under an ACTIVE entity can survive its parent being
         // retired or merged, and approving it then produced the same invisible ACTIVE value under a
         // dead parent. Every non-ACTIVE parent is refused, and the message names which case it is.
+        // T29 Item 2: the command path enforces the same invariant — requireEntityForFact refuses an
+        // ACTIVE write under any non-ACTIVE parent, so parity is now real on both paths.
         MemoryEntity parent = entities.findById(proposal.getEntityId())
                 .orElseThrow(() -> new MemoryNotFoundException(
                         "memory entity " + proposal.getEntityId() + " not found"));

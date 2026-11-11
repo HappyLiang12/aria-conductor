@@ -24,7 +24,7 @@ export type PanelItem =
   | { kind: 'assistant'; id: string; content: string; timestamp: string; error?: boolean; retryText?: string; noRetry?: boolean }
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
   | { kind: 'approval'; id: string; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string; state: 'pending' | 'approved' | 'denied' | 'expired'; reason?: string }
-  | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired' }
+  | { kind: 'clarification'; id: string; approvalId: string; runId: string; question: string; state: 'pending' | 'answered' | 'expired'; reason?: string }
   /**
    * `decided-elsewhere` is the proposal's third settled state: a PENDING inbox
    * read no longer listed it. The inbox is a bounded page with no by-id outcome
@@ -66,7 +66,13 @@ export type PanelEvent =
   | { type: 'approvalRequired'; approvalId: string; runId: string; toolName: string; riskTier?: string; toolPolicy?: string; args?: string }
   | { type: 'approvalSettled'; approvalId: string; state: 'approved' | 'denied' | 'expired'; reason?: string }
   | { type: 'waitingInput'; approvalId: string; runId: string; question: string }
-  | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired' }
+  /**
+   * `reason` is the backend's own wording for a settle the operator did not
+   * cause (T45 Item 2): `/answer` answers 409 when the ask expired, the run was
+   * finalized, or a concurrent answer won, and that refusal is what the card
+   * reports instead of a retry that cannot work.
+   */
+  | { type: 'clarificationSettled'; approvalId: string; state: 'answered' | 'expired'; reason?: string }
   | { type: 'proposalCreated'; proposal: MemoryProposalSummary }
   /**
    * `decided-elsewhere` settles a proposal the PENDING inbox no longer lists.
@@ -160,7 +166,7 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
         question: event.question,
       });
     case 'clarificationSettled':
-      return settleClarification(state, event.approvalId, event.state);
+      return settleClarification(state, event.approvalId, event.state, event.reason);
     case 'proposalCreated':
       return upsertProposal(state, { ...event.proposal, state: 'pending' });
     case 'proposalSettled':
@@ -369,10 +375,15 @@ function settleClarification(
   state: PanelState,
   approvalId: string,
   nextState: ClarificationItem['state'],
+  reason?: string,
 ): PanelState {
   const index = state.items.findIndex((item) => item.kind === 'clarification' && item.approvalId === approvalId);
   if (index < 0) return state;
-  return replaceItem(state, index, { ...(state.items[index] as ClarificationItem), state: nextState });
+  return replaceItem(state, index, {
+    ...(state.items[index] as ClarificationItem),
+    state: nextState,
+    ...(reason !== undefined ? { reason } : {}),
+  });
 }
 
 // === proposal cards ===

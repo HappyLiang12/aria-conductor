@@ -77,7 +77,7 @@ vi.mock('../../api/memory', () => ({
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
-import { decideApproval, getApproval, listApprovals } from '../../api/approvals';
+import { decideApproval, answerAsk, getApproval, listApprovals } from '../../api/approvals';
 import { cancelRun, getRun } from '../../api/runs';
 import { decideMemoryProposal, listMemoryProposals } from '../../api/memory';
 import type { MemoryProposalView } from '../../api/memory';
@@ -94,6 +94,7 @@ const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
 const mockGetApproval = getApproval as Mock;
 const mockDecideApproval = decideApproval as Mock;
+const mockAnswer = answerAsk as Mock;
 const mockCancelRun = cancelRun as Mock;
 const mockGetRun = getRun as Mock;
 const mockDecideMemoryProposal = decideMemoryProposal as Mock;
@@ -827,6 +828,36 @@ describe('AriaPanel in-flow decisions', () => {
       wsBridge.emit({ type: 'approval.decided', payload: { approvalId: 'a2', decision: 'APPROVED' } });
     });
     expect(screen.getByText(/answered/i)).toBeInTheDocument();
+    expect(textarea()).toBeEnabled();
+  });
+
+  // T45 Item 2: `/answer` 409s when the ask expired, the run was finalized or a
+  // concurrent answer won (ApprovalController.java:239-262). The card used to say
+  // "the question is still waiting; retry", leaving it pending and the composer
+  // locked behind a refusal a retry can never fix.
+  it('settles a refused clarification answer and releases the composer', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onWaitingInput?.({ runId: 'r1', approvalId: 'a2', question: 'Which PR should I review?' });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    mockAnswer.mockRejectedValueOnce({
+      response: { status: 409, data: { error: 'run is not waiting for operator input' } },
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText('Which PR should I review?')).toBeInTheDocument();
+    expect(textarea()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/your answer/i), { target: { value: 'PR #42' } });
+    fireEvent.click(screen.getByRole('button', { name: /answer/i }));
+
+    const settled = await screen.findByText(/expired before an answer/i);
+    expect(settled.textContent).toMatch(/run is not waiting for operator input/i);
+    expect(screen.queryByText(/still waiting; retry/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
   });
 

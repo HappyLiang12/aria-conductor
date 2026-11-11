@@ -453,6 +453,7 @@ export function AriaPanel() {
           type: 'clarificationSettled',
           approvalId: card.approvalId,
           state: outcome.state === 'approved' ? 'answered' : 'expired',
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
         });
       }
     },
@@ -762,7 +763,12 @@ export function AriaPanel() {
             state: 'expired',
             ...(reason !== '' ? { reason } : {}),
           });
-          dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
+          dispatch({
+            type: 'clarificationSettled',
+            approvalId,
+            state: 'expired',
+            ...(reason !== '' ? { reason } : {}),
+          });
           return;
         }
         case 'run.waiting_input': {
@@ -1354,12 +1360,13 @@ export function AriaPanel() {
                   <AriaClarificationCard
                     key={item.id}
                     item={item}
-                    onSettled={(settled) => {
+                    onSettled={(settled, reason) => {
                       invalidatePendingApprovals();
                       dispatch({
                         type: 'clarificationSettled',
                         approvalId: item.approvalId,
                         state: settled,
+                        ...(reason !== undefined ? { reason } : {}),
                       });
                     }}
                   />

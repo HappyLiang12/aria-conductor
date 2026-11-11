@@ -514,18 +514,23 @@ public class RunService {
     }
 
     /**
-     * The usage value the API reports (F9), or null when the run never observed any.
+     * The usage value the API reports (F9/Task 7), or null when the run never reported
+     * a real measurement.
      *
      * <p>The stored total is a non-null column defaulting to 0, so it cannot by
-     * itself distinguish "the provider reported zero" from "no usage was ever
+     * itself distinguish "the provider reported usage" from "no usage was ever
      * observed". The provider-reported input/output columns (F9's telemetry) are
-     * that evidence: both null with a 0 total means nothing was reported, while a
-     * carried zero wrote the observed 0 into them and is reported as 0. A total the
-     * engine accounted without the provider columns stays as reported.
+     * that evidence: a zero total with both columns null means nothing was reported,
+     * and a zero total with both columns zero is the pinned CLI's placeholder shape
+     * (a real LLM call cannot consume zero input tokens), so neither is a
+     * measurement. A total the engine accounted without the provider columns stays
+     * as reported.
      */
     private static Long observedTotalTokens(Run run) {
         long total = run.getTotalTokensUsed();
-        if (total == 0 && run.getInputTokens() == null && run.getOutputTokens() == null) {
+        boolean nothingReported = (run.getInputTokens() == null || run.getInputTokens() == 0)
+                && (run.getOutputTokens() == null || run.getOutputTokens() == 0);
+        if (total == 0 && nothingReported) {
             return null;
         }
         return total;

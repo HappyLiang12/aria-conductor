@@ -360,8 +360,11 @@ class RunServiceTest {
     }
 
     @Test
-    void getRun_preservesAGenuineReportedZero() {
-        // The same total (0), but the provider DID report usage: null would hide the report.
+    void getRun_treatsAnAllZeroReportAsUnreported() {
+        // Task 7 / spec 5.4: the same total (0) with explicit zeros in both provider
+        // columns is the pinned CLI's placeholder shape, not a measurement -- a real LLM
+        // call cannot consume zero input tokens. Reporting it as 0 would claim a cost the
+        // provider never stated, so it is unreported (null), exactly like never-observed.
         UUID id = UUID.randomUUID();
         Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
                 .withTotalTokensUsed(0L).build();
@@ -369,7 +372,7 @@ class RunServiceTest {
         run.setOutputTokens(0L);
         when(runRepository.findById(id)).thenReturn(Optional.of(run));
 
-        assertThat(service.getRun(id).getTotalTokensUsed()).isZero();
+        assertThat(service.getRun(id).getTotalTokensUsed()).isNull();
     }
 
     @Test

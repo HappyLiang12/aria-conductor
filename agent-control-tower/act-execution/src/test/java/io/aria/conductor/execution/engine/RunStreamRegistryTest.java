@@ -177,6 +177,37 @@ class RunStreamRegistryTest {
     }
 
     @Test
+    void theConditionalUnregisterOfASupersededStreamDoesNotEvictItsReplacement() {
+        RunStreamRegistry registry = new RunStreamRegistry();
+        UUID runId = UUID.randomUUID();
+        SseEmitter superseded = mock(SseEmitter.class);
+        registry.register(runId, superseded);
+        RecordingEmitter current = new RecordingEmitter();
+        registry.register(runId, current);
+
+        // The superseded stream's owner unbinds what it bound, after the run is bound again.
+        registry.unregister(runId, superseded);
+
+        assertThat(registry.hasStream(runId)).as("the newer stream is still bound").isTrue();
+        assertThat(registry.emit(runId, "waiting_input", Map.of())).isTrue();
+        assertThat(current.frames).hasSize(1);
+    }
+
+    @Test
+    void theConditionalUnregisterStillRemovesTheStreamItOwns() {
+        // The positive control for the test above: the conditional form is not a no-op.
+        RunStreamRegistry registry = new RunStreamRegistry();
+        UUID runId = UUID.randomUUID();
+        SseEmitter emitter = new SseEmitter(0L);
+        registry.register(runId, emitter);
+
+        registry.unregister(runId, emitter);
+
+        assertThat(registry.hasStream(runId)).isFalse();
+        assertThat(registry.emit(runId, "approval_required", Map.of())).isFalse();
+    }
+
+    @Test
     void aFailingSendDropsTheStreamAndNeverThrows() throws Exception {
         RunStreamRegistry registry = new RunStreamRegistry();
         UUID runId = UUID.randomUUID();

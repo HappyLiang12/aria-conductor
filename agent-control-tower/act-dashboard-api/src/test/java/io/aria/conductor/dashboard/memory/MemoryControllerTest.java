@@ -186,6 +186,64 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.canonicalKey").value("operator"));
     }
 
+    /**
+     * T47 item 2. The service returns the existing row unchanged for a non-terminal key, so a
+     * POST that names a display name or sensitivity the stored row does not carry created and
+     * changed nothing while answering 201 with the old row — the operator saw "Entity created"
+     * over an edit that never applied. The honest answer is the governed conflict; no new error
+     * code and no new field.
+     */
+    @Test
+    void aCreateThatCannotApplyItsDisplayNameIsAConflictNotACreated() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(id, "Operator"));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\","
+                                + "\"displayName\":\"Ops Lead\",\"sensitivity\":\"INTERNAL\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value(containsString("already exists")))
+                .andExpect(jsonPath("$.message").value(containsString("PATCH")));
+    }
+
+    @Test
+    void aCreateThatCannotApplyItsSensitivityIsAConflictToo() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(id, "Operator"));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\","
+                                + "\"displayName\":\"Operator\",\"sensitivity\":\"CONFIDENTIAL\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"));
+    }
+
+    /**
+     * The boundary of the conflict above: a request whose fields the stored row already carries
+     * (or that names none) ignored nothing, so it stays the same 201 the route always answered.
+     */
+    @Test
+    void aCreateWhoseFieldsTheStoredRowCarriesOrThatNamesNoneStaysCreated() throws Exception {
+        UUID same = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(same, "Operator"));
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\","
+                                + "\"displayName\":\"Operator\",\"sensitivity\":\"INTERNAL\"}"))
+                .andExpect(status().isCreated());
+
+        UUID bare = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(bare, "Operator"));
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\"}"))
+                .andExpect(status().isCreated());
+    }
+
     @Test
     void getsEntityDetailWithFactsRelationsLinksAndTimeline() throws Exception {
         UUID id = UUID.randomUUID();

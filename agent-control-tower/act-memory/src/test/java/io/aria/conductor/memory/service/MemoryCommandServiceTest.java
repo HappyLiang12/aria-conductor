@@ -986,6 +986,69 @@ class MemoryCommandServiceTest {
         verify(assertions, times(1)).save(any(MemoryAssertion.class));
     }
 
+    /**
+     * Minor 1 (T10 fix round 1). {@code UNIQUE (kind, canonical_key)} makes the row the identity
+     * of the key, so a new extraction for a key whose proposal was rejected receives that same
+     * RETIRED row: no PENDING row, no CREATE assertion, no event, and {@code decideEntity} can
+     * never promote it (it refuses a non-PENDING row). A terminal row must not silently swallow
+     * a new proposal. Re-proposing resets the identity row to PENDING — never to ACTIVE, because
+     * the promotion is still the operator's decision — records the suppressed terminal status on
+     * the CREATE assertion and publishes the card event again. The earlier RETIRE/MERGE
+     * assertions keep the decided history.
+     */
+    @Test
+    void aNewExtractionProposalForARetiredKeyReProposesItAsPending() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        MemoryEntity retired = entity(id("person:happy"));
+        retired.setStatus(EntityStatus.RETIRED);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(retired));
+
+        MemoryEntity reproposed = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(reproposed.getId()).as("the canonical key is the identity").isEqualTo(retired.getId());
+        assertThat(reproposed.getStatus())
+                .as("a re-proposal is review material, never a resurrection into ACTIVE")
+                .isEqualTo(EntityStatus.PENDING);
+        MemoryAssertion created = captureAssertions(1).get(0);
+        assertThat(created.getAction()).isEqualTo(MemoryAction.CREATE);
+        assertThat(created.getBeforeJson())
+                .as("the suppressed terminal decision stays auditable")
+                .contains("RETIRED");
+        assertThat(created.getAfterJson()).contains("PENDING").doesNotContain("\"status\":\"ACTIVE\"");
+        ArgumentCaptor<ApplicationEvent> published = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(events).publishEvent(published.capture());
+        assertThat(((MemoryProposalCreatedEvent) published.getValue()).getProposalId()).isEqualTo(retired.getId());
+    }
+
+    @Test
+    void aNewExtractionProposalForAMergedKeyReProposesItAsPending() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+        UUID survivor = id("survivor");
+        MemoryEntity merged = entity(id("person:happy"));
+        merged.setStatus(EntityStatus.MERGED);
+        merged.setMergedInto(survivor);
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(merged));
+
+        MemoryEntity reproposed = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(reproposed.getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(reproposed.getMergedInto())
+                .as("the key is an open proposal again, so the merge redirect no longer applies")
+                .isNull();
+        MemoryAssertion created = captureAssertions(1).get(0);
+        assertThat(created.getBeforeJson())
+                .as("the merge the re-proposal superseded stays auditable")
+                .contains("MERGED")
+                .contains(survivor.toString());
+        ArgumentCaptor<ApplicationEvent> published = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(events).publishEvent(published.capture());
+        assertThat(((MemoryProposalCreatedEvent) published.getValue()).getProposalId()).isEqualTo(merged.getId());
+    }
+
     @Test
     void aLostUniqueRaceReadsTheWinningEntityBack() {
         MemoryEntity winner = entity(id("winner"));

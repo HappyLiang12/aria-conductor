@@ -382,6 +382,37 @@ class MemoryRecallServiceTest {
         assertThat(recall.recall(query("unlabelled")).entities()).isEmpty();
     }
 
+    /**
+     * Minor 6 (T10 fix round 1). {@code addRelation} does not guard the target's lifecycle, so an
+     * OPERATOR can write an ACTIVE relation into a PENDING entity (the relation row below is
+     * exactly what that call writes: ACTIVE, OPERATOR origin, PENDING target — see the decision
+     * comment on {@code MemoryCommandService.addRelation}). A relation is geometry, not read
+     * authority: recall expands only from ACTIVE matches and re-filters every neighbour to
+     * ACTIVE, so the unapproved entity never reaches the prompt — even if the neighbour query
+     * leaked the row.
+     */
+    @Test
+    void anActiveRelationIntoAPendingEntityNeverSurfacesItInRecall() {
+        MemoryEntity operator = operatorEntity();
+        MemoryEntity pending = entity("person:happy", "Happy", "PERSON", MemoryOrigin.EXTRACTION, null);
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(operator));
+        stubUniverse(operator);
+        when(relations.findByFromEntityIdAndStatus(operator.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of(relation(operator.getId(), pending.getId())));
+        when(relations.findByToEntityIdAndStatus(operator.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        when(entities.findByIdInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of(pending));
+
+        RecallResult result = recall.recall(query("operator"));
+
+        assertThat(result.entities()).extracting(view -> view.canonicalKey())
+                .as("a PENDING entity is never memory, not even through a relation")
+                .containsExactly("operator");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private void stubUniverse(MemoryEntity... rows) {

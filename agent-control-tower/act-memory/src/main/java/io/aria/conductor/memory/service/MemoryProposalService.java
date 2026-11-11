@@ -176,6 +176,7 @@ public class MemoryProposalService {
             }
             entity.setStatus(EntityStatus.RETIRED);
             entities.save(entity);
+            flushEntity(entity);
             assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", EntityStatus.RETIRED.name(), "kind", entity.getKind(),
                             "canonicalKey", entity.getCanonicalKey(), "factsRetired", batch.size())));
@@ -184,6 +185,7 @@ public class MemoryProposalService {
 
         entity.setStatus(EntityStatus.ACTIVE);
         entities.save(entity);
+        flushEntity(entity);
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.UPDATE, actor, now,
                 before, audit("status", EntityStatus.ACTIVE.name(), "kind", entity.getKind(),
                         "canonicalKey", entity.getCanonicalKey(), "factsPromoted", batch.size())));
@@ -214,6 +216,22 @@ public class MemoryProposalService {
             assertions.save(assertion(MemorySubjectType.FACT, proposal.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", FactStatus.RETIRED.name(), "factKey", proposal.getFactKey())));
             return MemoryProposalView.fromFact(proposal);
+        }
+
+        // The inbox lists a PENDING entity's facts individually, but the entity decision is the
+        // batch that owns them. Promoting one fact here would make it ACTIVE under a parent no
+        // read path can see (recall, the prompt, the default list and the detail read all exclude
+        // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
+        // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
+        // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        MemoryEntity parent = entities.findById(proposal.getEntityId())
+                .orElseThrow(() -> new MemoryNotFoundException(
+                        "memory entity " + proposal.getEntityId() + " not found"));
+        if (parent.getStatus() == EntityStatus.PENDING) {
+            throw new MemoryConflictException("memory fact " + proposal.getId()
+                    + " belongs to entity " + proposal.getEntityId()
+                    + ", which is still PENDING; decide the entity proposal " + proposal.getEntityId()
+                    + " to promote or retire the whole batch instead of approving one fact");
         }
 
         // An approval opens a current ACTIVE value, so it claims the same entity slot an
@@ -259,6 +277,23 @@ public class MemoryProposalService {
                     + " for key '" + proposal.getFactKey()
                     + "' or its conflicting current value changed while the approval was being "
                     + "written; re-read before deciding");
+        }
+    }
+
+    /**
+     * Pushes the entity write through its row-level {@code @Version} inside the method, so a
+     * second operator click on the same card (or a decision racing a rename or merge) surfaces as
+     * the governed conflict here instead of as a raw optimistic-lock failure at commit — which
+     * MCP would report as {@code PROPOSAL_DECIDE_FAILED} with the driver message. Mirrors
+     * {@link #flushFacts}; the entity decision may have an empty fact batch, so it cannot rely on
+     * the fact flush having run.
+     */
+    private void flushEntity(MemoryEntity entity) {
+        try {
+            entities.flush();
+        } catch (OptimisticLockingFailureException e) {
+            throw new MemoryConflictException("memory entity " + entity.getId()
+                    + " changed while its proposal was being decided; re-read before deciding");
         }
     }
 

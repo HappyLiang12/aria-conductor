@@ -1,5 +1,6 @@
 package io.aria.conductor.memory.service;
 
+import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.dto.AddFactCommand;
 import io.aria.conductor.memory.dto.AddRelationCommand;
@@ -31,6 +32,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.transaction.annotation.Transactional;
@@ -90,6 +93,9 @@ class MemoryCommandServiceTest {
     @Mock
     MemoryProposalWriter proposalWriter;
 
+    @Mock
+    ApplicationEventPublisher events;
+
     MemoryCommandService command;
 
     private final MemoryValueGuard guard = new MemoryValueGuard();
@@ -97,7 +103,7 @@ class MemoryCommandServiceTest {
     @BeforeEach
     void setUp() {
         command = new MemoryCommandService(entities, facts, relations, links, assertions, guard, proposalWriter,
-                new MemoryCurrentValueSlot(entities));
+                new MemoryCurrentValueSlot(entities), events);
         // The real writer persists the proposal in its own transaction; here it is delegated
         // so the tests can still assert exactly how many rows were written.
         lenient().when(proposalWriter.insertProposal(any(MemoryFact.class), any(MemoryAssertion.class)))
@@ -195,6 +201,47 @@ class MemoryCommandServiceTest {
                 .hasMessageContaining(entityId.toString());
         verify(facts, never()).save(any());
         verify(assertions, never()).save(any());
+    }
+
+    // ---------------------------------------------------------------- pending entities
+
+    /**
+     * A PENDING entity is not memory yet, so an ACTIVE fact may not hang off it: the fact would
+     * be current while its parent is invisible to recall, and approving the entity later would
+     * silently publish a value nobody proposed as a proposal.
+     */
+    @Test
+    void anActiveFactCannotBeAttachedToAPendingEntity() {
+        UUID pendingEntityId = id("pending-person");
+        MemoryEntity pending = entity(pendingEntityId);
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findById(pendingEntityId)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> command.addFact(pendingEntityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, "operator message"),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session")))
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("PENDING");
+        verify(facts, never()).save(any());
+        verify(assertions, never()).save(any());
+    }
+
+    /** The positive control for the guard: a PENDING proposal may still depend on a PENDING entity. */
+    @Test
+    void aPendingFactMayHangOffAPendingEntity() {
+        UUID pendingEntityId = id("pending-person");
+        MemoryEntity pending = entity(pendingEntityId);
+        pending.setStatus(EntityStatus.PENDING);
+        when(entities.findById(pendingEntityId)).thenReturn(Optional.of(pending));
+        when(facts.findByEntityIdOrderByValidFromDesc(pendingEntityId)).thenReturn(List.of());
+
+        MemoryFact fact = command.addFact(pendingEntityId,
+                new AddFactCommand("timezone", "Asia/Hong_Kong", "STRING", Sensitivity.INTERNAL, "run-1"),
+                EXTRACTION);
+
+        assertThat(fact.getStatus()).isEqualTo(FactStatus.PENDING);
+        assertThat(fact.getOrigin()).isEqualTo(MemoryOrigin.EXTRACTION);
+        verify(facts).save(any(MemoryFact.class));
     }
 
     // ---------------------------------------------------------------- conflicts
@@ -878,14 +925,114 @@ class MemoryCommandServiceTest {
         verifyNoInteractions(entities, assertions);
     }
 
+    /**
+     * The 2026-11-11 operator decision amends the spec §7 reading that an extraction may never
+     * create an entity: it may, but only as PENDING, so Aria can bootstrap an operator profile
+     * that the operator then approves. The scenario still pins the part that did not change —
+     * an extraction can never mint an ACTIVE entity.
+     */
     @Test
-    void anExtractionCannotCreateAnActiveStructuralEntity() {
-        assertThatThrownBy(() -> command.createEntity(
-                new CreateEntityCommand("PERSON", "operator", "Operator", Sensitivity.INTERNAL), EXTRACTION))
-                .as("spec §7: EXTRACTION may propose facts, relations and links — never an entity")
-                .isInstanceOf(MemoryValidationException.class)
-                .hasMessageContaining("EXTRACTION");
-        verifyNoInteractions(entities, facts, relations, assertions);
+    void anExtractionCreatesAPendingEntityAndNeverAnActiveOne() {
+        MemoryEntity created = command.createEntity(
+                new CreateEntityCommand("PERSON", "operator", "Operator", Sensitivity.INTERNAL), EXTRACTION);
+
+        assertThat(created.getStatus())
+                .as("an unapproved extraction entity is review material, never memory")
+                .isEqualTo(EntityStatus.PENDING)
+                .isNotEqualTo(EntityStatus.ACTIVE);
+        assertThat(created.getOrigin()).isEqualTo(MemoryOrigin.EXTRACTION);
+        assertThat(captureAssertions(1).get(0).getAfterJson())
+                .as("the CREATE assertion records the real lifecycle status")
+                .contains("PENDING")
+                .doesNotContain("\"status\":\"ACTIVE\"");
+    }
+
+    @Test
+    void anExtractionActorProposesAPendingEntityInsteadOfBeingRefused() {
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, "run-1");
+        MemoryEntity entity = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), extraction);
+
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.PENDING);
+        assertThat(entity.getOrigin()).isEqualTo(MemoryOrigin.EXTRACTION);
+    }
+
+    @Test
+    void anOperatorStillCreatesAnActiveEntity() {
+        MemoryEntity entity = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL),
+                new MemoryActor(MemoryActorType.OPERATOR, "operator-session"));
+        assertThat(entity.getStatus()).isEqualTo(EntityStatus.ACTIVE);
+    }
+
+    @Test
+    void aRepeatedKeyAttachesToTheExistingPendingEntity() {
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, "run-1");
+        MemoryEntity[] stored = new MemoryEntity[1];
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
+                .thenAnswer(invocation -> stored[0] == null ? Optional.empty() : Optional.of(stored[0]));
+        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+            stored[0] = invocation.getArgument(0);
+            return stored[0];
+        });
+
+        MemoryEntity first = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", null), extraction);
+        MemoryEntity second = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", null), extraction);
+
+        assertThat(second.getId()).isEqualTo(first.getId());
+        verify(entities, times(1)).save(any(MemoryEntity.class));
+        verify(assertions, times(1)).save(any(MemoryAssertion.class));
+    }
+
+    @Test
+    void aLostUniqueRaceReadsTheWinningEntityBack() {
+        MemoryEntity winner = entity(id("winner"));
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
+                .thenReturn(Optional.empty(), Optional.of(winner));
+        when(entities.save(any(MemoryEntity.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_memory_entity violated"));
+
+        MemoryEntity returned = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), EXTRACTION);
+
+        assertThat(returned.getId())
+                .as("the loser of the unique constraint returns the winner instead of a raw 500")
+                .isEqualTo(winner.getId());
+    }
+
+    @Test
+    void aPendingEntityProposalPublishesAProposalCreatedEvent() {
+        UUID runId = UUID.randomUUID();
+        MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
+
+        MemoryEntity entity = command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.CONFIDENTIAL), extraction);
+
+        ArgumentCaptor<ApplicationEvent> published = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(events).publishEvent(published.capture());
+        assertThat(published.getValue()).isInstanceOf(MemoryProposalCreatedEvent.class);
+        MemoryProposalCreatedEvent event = (MemoryProposalCreatedEvent) published.getValue();
+        assertThat(event.getProposalId()).isEqualTo(entity.getId());
+        assertThat(event.getSubjectType()).isEqualTo("ENTITY");
+        assertThat(event.getEntityId()).isEqualTo(entity.getId());
+        // Task 12's card item carries the canonical key and the display name in the same two
+        // fields a fact proposal uses, so the SSE-fed card renders what the REST inbox renders.
+        assertThat(event.getFactKey()).isEqualTo("person:happy");
+        assertThat(event.getValueText()).isEqualTo("Happy");
+        assertThat(event.getSensitivity()).isEqualTo("CONFIDENTIAL");
+        assertThat(event.getRunId()).isEqualTo(runId);
+    }
+
+    @Test
+    void anActiveEntityAndARunlessExtractionPublishNoProposalEvent() {
+        command.createEntity(new CreateEntityCommand("PERSON", "operator", "Operator", null), OPERATOR);
+        command.createEntity(new CreateEntityCommand("PERSON", "person:happy", "Happy", null),
+                new MemoryActor(MemoryActorType.EXTRACTION, null));
+
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
+        verify(events, never()).publishEvent(any(Object.class));
     }
 
     @Test

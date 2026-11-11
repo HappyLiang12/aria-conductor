@@ -123,6 +123,32 @@ class MemoryQueryServiceTest {
                 .hasMessageContaining("not found");
     }
 
+    /**
+     * The read-path guarantee has two directions: the default/detail read must not expose an
+     * unapproved entity, and the operator's explicit PENDING filter must, or the proposal could
+     * never be approved. Recall and the context contributor query ACTIVE only by construction.
+     */
+    @Test
+    void aPendingEntityIsRefusedByTheDetailReadAndVisibleOnlyOnAnExplicitFilter() {
+        MemoryEntity proposed = entity("proposed-person", EntityStatus.PENDING);
+        MemoryEntity active = entity("operator", EntityStatus.ACTIVE);
+        when(entities.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findAll()).thenReturn(List.of(proposed, active));
+
+        assertThatThrownBy(() -> query.getEntity(proposed.getId()))
+                .as("a worker-facing detail read never returns a proposal")
+                .isInstanceOf(MemoryNotFoundException.class)
+                .hasMessageContaining("not found");
+        assertThat(query.listEntities(null, null, 50))
+                .as("the default list is ACTIVE-only")
+                .extracting(MemoryEntityView::canonicalKey)
+                .containsExactly("operator");
+        assertThat(query.listEntities(null, EntityStatus.PENDING, 50))
+                .as("the operator must be able to see what to approve")
+                .extracting(MemoryEntityView::canonicalKey)
+                .containsExactly("proposed-person");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private static MemoryEntity entity(String canonicalKey, EntityStatus status) {

@@ -185,7 +185,8 @@ describe('aria streamMessage decision signals', () => {
 });
 
 describe('aria streamMessage tool result success flag', () => {
-  // tool-event-contract.md: `tool_result` carries `ok` (= !isError) and the
+  // The frame contract's authority is the producer/consumer pair, not a document:
+  // `CoreEventTelemetry.streamSignal` emits `tool_result` with `ok` (= !isError), and the
   // dispatcher reads it as `p.ok !== false`, so an explicit false is an error
   // while an absent field (an older backend) still renders as success.
   const fetchMock = vi.fn();

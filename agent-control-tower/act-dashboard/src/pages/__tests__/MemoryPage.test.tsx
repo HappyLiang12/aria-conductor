@@ -173,6 +173,37 @@ describe('MemoryPage — entity list', () => {
     expect(screen.queryByText(/no memory entities yet/i)).not.toBeInTheDocument();
   });
 
+  it('reports the section counts as unavailable on a refused read, never as zero', async () => {
+    get.mockRejectedValue({ response: { status: 403, data: {} } });
+    ui();
+
+    await screen.findByTestId('operator-session-notice');
+    // A refusal proves nothing about the counts: zero and forbidden are
+    // different claims, and the heading must not make the zero one.
+    expect(screen.queryByText(/\/ 0 active/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/ 0 pending/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/unavailable/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('uses the design-system page class and carries no inline metrics', async () => {
+    routeGets({
+      entities: () => [entity()],
+      proposals: (status) => (status === 'PENDING' ? [proposal()] : []),
+    });
+    const { container } = ui();
+    await screen.findByText('Happy');
+
+    const root = container.querySelector('[data-view="memory"]') as HTMLElement;
+    expect(root).toHaveClass('memory-page');
+    expect(root).not.toHaveAttribute('style');
+    // Metrics come from `.memory-page` in index.css; no node keeps an inline one.
+    expect(container.querySelectorAll('.memory-page [style]')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /new entity/i }));
+    const dialog = screen.getByRole('dialog', { name: /create memory entity/i });
+    expect(dialog.querySelectorAll('[style]')).toHaveLength(0);
+  });
+
   it('renders a non-authority failure as the backend message', async () => {
     get.mockImplementation((url: string) =>
       url === '/api/v1/memory/proposals'

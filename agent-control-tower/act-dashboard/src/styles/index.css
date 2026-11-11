@@ -1409,8 +1409,15 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
 .view-zone { display: block; }
 /* Task 12a recorded this rule as the one thing the Memory page needed while
    `index.css` was owned by another lane; Task 12b owns the file, so it lands
-   here instead of staying an inline style. Same metrics KnowledgePage uses. */
+   here instead of staying an inline style. Same metrics KnowledgePage uses.
+   The page's own spacing lives here too, so MemoryPage carries no inline
+   metrics; field rows reuse the existing `.form-field` design system. */
 .memory-page { display: block; padding: 16px; }
+.memory-page > .panel { margin-bottom: 16px; }
+.memory-page > .panel:last-of-type { margin-bottom: 0; }
+.memory-page .memory-notice { margin-bottom: 16px; }
+.memory-page .panel h2 .btn { margin-left: auto; }
+.memory-page .memory-form { display: grid; gap: 12px; }
 
 .view-header {
   display: flex; align-items: center; gap: 14px;

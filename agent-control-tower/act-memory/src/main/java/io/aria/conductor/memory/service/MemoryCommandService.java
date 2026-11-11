@@ -625,7 +625,8 @@ public class MemoryCommandService {
             return;
         }
         events.publishEvent(new MemoryProposalCreatedEvent(this, entity.getId(),
-                MemorySubjectType.ENTITY.name(), entity.getId(), null, null,
+                MemorySubjectType.ENTITY.name(), entity.getId(), entity.getCanonicalKey(),
+                entity.getDisplayName(),
                 entity.getSensitivity() == null ? null : entity.getSensitivity().name(), runId));
     }
 

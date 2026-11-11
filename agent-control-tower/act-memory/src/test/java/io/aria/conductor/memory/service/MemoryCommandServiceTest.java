@@ -1017,8 +1017,10 @@ class MemoryCommandServiceTest {
         assertThat(event.getProposalId()).isEqualTo(entity.getId());
         assertThat(event.getSubjectType()).isEqualTo("ENTITY");
         assertThat(event.getEntityId()).isEqualTo(entity.getId());
-        assertThat(event.getFactKey()).isNull();
-        assertThat(event.getValueText()).isNull();
+        // Task 12's card item carries the canonical key and the display name in the same two
+        // fields a fact proposal uses, so the SSE-fed card renders what the REST inbox renders.
+        assertThat(event.getFactKey()).isEqualTo("person:happy");
+        assertThat(event.getValueText()).isEqualTo("Happy");
         assertThat(event.getSensitivity()).isEqualTo("CONFIDENTIAL");
         assertThat(event.getRunId()).isEqualTo(runId);
     }

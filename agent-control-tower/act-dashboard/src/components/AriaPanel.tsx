@@ -723,9 +723,9 @@ export function AriaPanel() {
             if (staleTurn()) return;
             dispatch({ type: 'toolCall', turnId: turnId(), name });
           },
-          onToolResult: (name, result) => {
+          onToolResult: (name, result, ok) => {
             if (staleTurn()) return;
-            dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok: true });
+            dispatch({ type: 'toolResult', turnId: turnId(), name, result, ok });
           },
           onMessage: (content) => {
             if (staleTurn()) return;

@@ -900,6 +900,42 @@ describe('AriaPanel shared WebSocket', () => {
   });
 });
 
+describe('AriaPanel live tool results', () => {
+  // tool-event-contract.md: the panel used to dispatch every live tool result as
+  // `ok: true`, so a denied or failed tool rendered green (✓) in the strip — a
+  // false claim about the one governance-relevant field of the live strip.
+  it('renders a failed live tool result as an error', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onToolCall?.('mcp__aria-conductor__write_file');
+      args[3]?.onToolResult?.('mcp__aria-conductor__write_file', 'denied by policy', false);
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(/1 tool call · 1 failed/i)).toBeInTheDocument();
+  });
+
+  it('renders a successful live tool result as ok', async () => {
+    // Positive control for the case above: ok: true is still a success, so the
+    // failed-count only appears when the frame said so.
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onToolCall?.('mcp__aria-conductor__list_runs');
+      args[3]?.onToolResult?.('mcp__aria-conductor__list_runs', '[]', true);
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(/^1 tool call$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Spec A2 (design:353-355): an ask raised while this panel's own stream is dead
 // reaches it over the WebSocket, and the panel reads the approval by id — the

@@ -191,6 +191,29 @@ function loadOpenState(): boolean {
   }
 }
 
+/**
+ * The action label of the shared refusal notice for one or more refused
+ * reconcile reads. One read is named alone; several are composed into ONE noun
+ * phrase ("Reading the approval queue or the memory proposal inbox") so the
+ * sentence `operatorSessionMessage` builds keeps a single verb and no stray
+ * capital — the previous `A and B` join read "Reading the approval queue and
+ * Reading the memory proposal inbox is operator-only".
+ */
+function refusedReadsLabel(actions: string[]): string {
+  const labels = [...new Set(actions)];
+  if (labels.length === 0) return 'Reading the Aria panel';
+  if (labels.length === 1) return labels[0];
+  const [first, ...rest] = labels;
+  const [verb, ...firstWords] = first.split(' ');
+  const tails = rest.map((label) => {
+    const words = label.split(' ');
+    const shared = words[0].toLowerCase() === verb.toLowerCase() ? words.slice(1) : words;
+    const tail = shared.join(' ');
+    return tail.charAt(0).toLowerCase() + tail.slice(1);
+  });
+  return `${verb} ${[firstWords.join(' '), ...tails].join(' or ')}`;
+}
+
 /** Compact, allocation-light markdown renderer for assistant bubbles (m2: + tables & horizontal rules). */
 function renderMarkdown(text: string): string {
   if (!text) return '<p></p>';
@@ -1292,10 +1315,9 @@ export function AriaPanel() {
             {reconcileFailure.some((failure) => failure.operatorRejected) && (
               <div style={{ margin: '8px 12px' }}>
                 <OperatorSessionNotice
-                  actionLabel={reconcileFailure
+                  actionLabel={refusedReadsLabel(reconcileFailure
                     .filter((failure) => failure.operatorRejected)
-                    .map((failure) => failure.action)
-                    .join(' and ')}
+                    .map((failure) => failure.action))}
                 />
               </div>
             )}

@@ -1982,6 +1982,26 @@ describe('AriaPanel reconcile refusals (Task 37 review fold-in)', () => {
       .toHaveTextContent(/reading the memory proposal inbox is operator-only/i);
   });
 
+  // Task 41 m1: with BOTH reads refused (the ordinary no-session case) the two
+  // labels were joined with "and" and fed to one sentence, producing
+  // "Reading the approval queue and Reading the memory proposal inbox is
+  // operator-only" — a capital mid-sentence and a singular verb for two reads.
+  it('joins both refused reads into one grammatical notice', async () => {
+    mockGetLatest.mockResolvedValue(summary());
+    mockGetTimeline.mockResolvedValue(timelineWithRun);
+    mockListApprovals.mockRejectedValue({ response: { status: 401, data: {} } });
+    mockListMemoryProposals.mockRejectedValue({ response: { status: 401, data: {} } });
+
+    await reconcileOnce();
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(
+      /reading the approval queue or the memory proposal inbox is operator-only/i,
+    );
+    // Positive control: the old joined form (and its stray capital) is gone.
+    expect(notice).not.toHaveTextContent(/and Reading/i);
+  });
+
   // Positive controls: a fault is not a refusal. It keeps the server's text and
   // must not fabricate a session notice.
   it('shows the server text and no notice when the approval read fails', async () => {

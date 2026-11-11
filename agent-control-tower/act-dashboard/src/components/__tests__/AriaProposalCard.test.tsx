@@ -707,9 +707,18 @@ describe('the client proposal-inbox cap equals the server page size', () => {
 describe('a batch read in flight is not reported as a change (T48, seam Minor-2)', () => {
   it('disables the decision while the mount read is answering, and claims no change', async () => {
     let resolveMount: (rows: MemoryProposalView[]) => void = () => {};
-    vi.mocked(listMemoryProposals).mockReturnValueOnce(
-      new Promise<MemoryProposalView[]>((resolve) => { resolveMount = resolve; }),
-    );
+    // The set the mount read finally answers with. The decision-time re-read is a
+    // second call and MUST answer the same set here: otherwise this test would
+    // exercise the "changed" branch instead of the control it is about.
+    const onScreen = () => [
+      proposalRow(),
+      proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
+    ];
+    vi.mocked(listMemoryProposals)
+      .mockReturnValueOnce(
+        new Promise<MemoryProposalView[]>((resolve) => { resolveMount = resolve; }),
+      )
+      .mockResolvedValueOnce(onScreen());
     render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
 
     const batch = await screen.findByTestId('proposal-batch');
@@ -722,10 +731,7 @@ describe('a batch read in flight is not reported as a change (T48, seam Minor-2)
     // Positive control: once the read answers, the same controls work and the
     // first click decides with no "changed" friction.
     await act(async () => {
-      resolveMount([
-        proposalRow(),
-        proposalRow({ id: 'f2', factKey: 'release_channel', valueText: 'email' }),
-      ]);
+      resolveMount(onScreen());
     });
     await within(batch).findByTestId('proposal-batch-complete');
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();

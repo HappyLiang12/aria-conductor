@@ -60,12 +60,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Authority boundary of the memory REST reads (spec :309-313, Wave C "authority honesty").
  *
- * <p>Every route in {@link MemoryController} is part of the operator surface, so a read that
- * resolved nothing handed a sandbox worker the same rows the dashboard sees — including the
- * PENDING review inbox. These tests wire the <em>real</em> {@link OperatorAuthorityResolver}
- * (the same construction the controller tests of the sibling lane use) so the worker bearer,
- * the anonymous remote peer, the anonymous loopback peer and the operator session cookie are
- * decided by the production resolver, not by a mock.
+ * <p>Every route in {@link MemoryController} is part of the operator surface, the entity detail
+ * read included, so a read that resolved nothing handed a sandbox worker the same rows the
+ * dashboard sees — including the PENDING review inbox and, on the detail read, the entity's whole
+ * fact history. These tests wire the <em>real</em> {@link OperatorAuthorityResolver} (the same
+ * construction the controller tests of the sibling lane use) so the worker bearer, the anonymous
+ * remote peer, the anonymous loopback peer and the operator session cookie are decided by the
+ * production resolver, not by a mock.
+ *
+ * <p>For {@code GET /entities/{id}} (T36) the pair below only passes together: the default read
+ * and the {@code status=PENDING} review read refuse a worker credential before any service call,
+ * while the operator controls — anonymous loopback and operator bearer — still read the full
+ * history, PENDING fact and CONFIDENTIAL fact included. A refusal-only suite would go green on a
+ * route that served an empty body to everybody, so the positive control is part of the pin.
  *
  * <p>The memory error contract ({@link MemoryExceptionHandler}) answers {@code 403 FORBIDDEN}
  * for both a worker credential and an anonymous remote caller; it has no {@code UNAUTHORIZED}

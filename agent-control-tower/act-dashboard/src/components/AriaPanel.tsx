@@ -348,6 +348,48 @@ export function AriaPanel() {
   }, []);
 
   /**
+   * The panel's ONE pending-approvals read (T32 Item 4). Two surfaces ask the
+   * same operator-only queue the same question: the reconcile needs the PENDING
+   * list to intersect with this conversation's run ids, and the run-uncertain
+   * report needs the count the operator would find in the Review Queue. Asking
+   * twice for one snapshot made the timeout path re-ask what the reconcile had
+   * just read, so one read is kept and shared:
+   *
+   * - the reconcile always reads fresh — mount, focus, reconnect and the run
+   *   events below are this panel's refresh points — and stores what it read;
+   * - the run-uncertain report consumes that snapshot, and reads only when the
+   *   panel has none (nothing reconciled yet this session).
+   *
+   * Anything that can change the queue without a reconcile drops the snapshot
+   * through `invalidatePendingApprovals`: a live approval frame, an ask settled
+   * inside this panel, or a cancelled run's asks. A read that fails is not a
+   * snapshot either, so it is dropped and the next question asks again.
+   *
+   * Residual (accepted, disclosed): a decision taken on another tab after the
+   * snapshot and before the timeout is not seen here until the next reconcile.
+   * The panel reconciles on focus, reconnect and run events, so that window is
+   * the same one every other count in this panel already has.
+   */
+  const pendingApprovalsRef = useRef<Promise<Approval[]> | null>(null);
+
+  const readPendingApprovals = useCallback((fresh = false): Promise<Approval[]> => {
+    const snapshot = pendingApprovalsRef.current;
+    if (snapshot && !fresh) return snapshot;
+    const read = listApprovals('PENDING');
+    pendingApprovalsRef.current = read;
+    // A refused or failed read proves nothing about the queue: it must not be
+    // handed to the next surface as if it were a snapshot.
+    void read.catch(() => {
+      if (pendingApprovalsRef.current === read) pendingApprovalsRef.current = null;
+    });
+    return read;
+  }, []);
+
+  const invalidatePendingApprovals = useCallback(() => {
+    pendingApprovalsRef.current = null;
+  }, []);
+
+  /**
    * Settles every carried pending card whose ask the PENDING snapshot no longer
    * lists — a lost `approval.expired` frame, a Cancel while the turn is parked,
    * a decision taken in another window. Left pending, such a card can only 409
@@ -465,7 +507,8 @@ export function AriaPanel() {
     let pendingListed = false; // only a PENDING read that actually answered may settle a card
     if (runIds.size > 0) {
       try {
-        approvals = (await listApprovals('PENDING')).filter((approval) => runIds.has(approval.runId));
+        // Fresh by definition: a reconcile is this panel's refresh point.
+        approvals = (await readPendingApprovals(true)).filter((approval) => runIds.has(approval.runId));
         pendingListed = true;
       } catch (err) {
         if (!isOperatorRejection(err)) console.warn('[Aria] pending-approval reconcile failed:', err);
@@ -495,7 +538,7 @@ export function AriaPanel() {
     if (proposalsListed) settleDepartedProposals(targetConversationId, proposals, proposalPageComplete);
     if (!pendingListed) return;
     await settleDepartedAsks(targetConversationId, approvals, runIds);
-  }, [settleDepartedAsks, settleDepartedProposals]);
+  }, [readPendingApprovals, settleDepartedAsks, settleDepartedProposals]);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -631,6 +674,10 @@ export function AriaPanel() {
 
   useEffect(() => {
     const subscription = subscribe((event) => {
+      // Every live event this panel handles is news about a run's asks, so the
+      // shared pending-approvals snapshot may no longer hold: drop it and let the
+      // next question (a reconcile, the timeout report) read the queue again.
+      invalidatePendingApprovals();
       switch (event.type) {
         case 'approval.requested': {
           const approvalId = String(event.payload?.approvalId ?? '');
@@ -690,7 +737,7 @@ export function AriaPanel() {
       }
     });
     return () => subscription.unsubscribe();
-  }, [subscribe, reconcile, adoptAskById, isThisConversationsRun]);
+  }, [subscribe, reconcile, adoptAskById, isThisConversationsRun, invalidatePendingApprovals]);
 
   // Reconcile when the socket comes back: frames missed while it was down are
   // recovered from the durable snapshot rather than from a replay.
@@ -773,7 +820,10 @@ export function AriaPanel() {
       let pendingCount: number | null = null; // null until the queue actually answers
       let checkRefused = false;
       try {
-        pendingCount = (await listApprovals('PENDING')).length;
+        // The snapshot the last reconcile read, when the panel has one: this
+        // report is the same question asked again, and re-asking it would be the
+        // duplicate read T32 removed. A panel with no snapshot reads once here.
+        pendingCount = (await readPendingApprovals()).length;
       } catch (err) {
         // 401/403 = the operator-only route refused this tab (no operator
         // session); anything else is a real failure. Either way the run state
@@ -811,7 +861,7 @@ export function AriaPanel() {
         noRetry: origin === 'timeout' || (pendingCount !== null && pendingCount > 0),
       });
     },
-    [],
+    [readPendingApprovals],
   );
 
   const sendStreamed = useCallback(
@@ -995,13 +1045,15 @@ export function AriaPanel() {
 
   /** Settles the asks of a run that can no longer decide them (a cancelled run). */
   const settleRunAsks = useCallback((runId: string, reason: string) => {
+    // Those asks are no longer pending, so the shared snapshot is stale.
+    invalidatePendingApprovals();
     for (const item of itemsRef.current) {
       if (item.kind !== 'approval' && item.kind !== 'clarification') continue;
       if (item.state !== 'pending' || item.runId !== runId) continue;
       dispatch({ type: 'approvalSettled', approvalId: item.approvalId, state: 'expired', reason });
       dispatch({ type: 'clarificationSettled', approvalId: item.approvalId, state: 'expired' });
     }
-  }, []);
+  }, [invalidatePendingApprovals]);
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true; // M1: suppress the false close-error bubble
@@ -1200,12 +1252,16 @@ export function AriaPanel() {
                   <AriaApprovalCard
                     key={item.id}
                     item={item}
-                    onSettled={(settled, reason) => dispatch({
-                      type: 'approvalSettled',
-                      approvalId: item.approvalId,
-                      state: settled,
-                      reason,
-                    })}
+                    onSettled={(settled, reason) => {
+                      // The operator just settled an ask here: the queue changed.
+                      invalidatePendingApprovals();
+                      dispatch({
+                        type: 'approvalSettled',
+                        approvalId: item.approvalId,
+                        state: settled,
+                        reason,
+                      });
+                    }}
                   />
                 );
               }
@@ -1214,11 +1270,14 @@ export function AriaPanel() {
                   <AriaClarificationCard
                     key={item.id}
                     item={item}
-                    onSettled={(settled) => dispatch({
-                      type: 'clarificationSettled',
-                      approvalId: item.approvalId,
-                      state: settled,
-                    })}
+                    onSettled={(settled) => {
+                      invalidatePendingApprovals();
+                      dispatch({
+                        type: 'clarificationSettled',
+                        approvalId: item.approvalId,
+                        state: settled,
+                      });
+                    }}
                   />
                 );
               }

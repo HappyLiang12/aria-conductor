@@ -383,3 +383,71 @@ describe('ReviewQueue approval tool details (F7)', () => {
     expect(screen.queryByText('Arguments (redacted)')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 37 / Item 6 (T35 audit row 13): approve and deny are operator-only, and a
+// refusal used to render the api error message — the server's own text, or the
+// generic "Approve failed." — with no notice and no remedy anywhere on the queue.
+// ---------------------------------------------------------------------------
+
+/** The shared adapter, with the decide route answering the given failure. */
+function serveDecideFailure(approvals: Approval[], status: number, message: string) {
+  requests.length = 0;
+  client.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
+    requests.push(config);
+    if (config.method === 'get' && config.url === '/api/v1/approvals') {
+      return { data: approvals, status: 200, statusText: 'OK', headers: {}, config };
+    }
+    throw Object.assign(new Error('request failed'), {
+      response: { status, data: { message }, statusText: 'Refused', headers: {}, config },
+    });
+  };
+}
+
+describe('ReviewQueue operator refusals (Task 37)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('renders the operator notice for a refused approve, not the server text', async () => {
+    serveDecideFailure([gateAsk()], 403, 'REVIEW_RAW_SERVER_TEXT');
+    ui();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+
+    const notice = await screen.findByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/approving the ask is operator-only/i);
+    expect(notice).toHaveTextContent(/loopback requests are the operator automatically/i);
+    expect(screen.queryByText(/REVIEW_RAW_SERVER_TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Approve failed.')).not.toBeInTheDocument();
+  });
+
+  it('names denying for a refused deny', async () => {
+    serveDecideFailure([gateAsk()], 401, 'REVIEW_RAW_SERVER_TEXT');
+    ui();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Deny' }));
+
+    expect(await screen.findByTestId('operator-session-notice'))
+      .toHaveTextContent(/denying the ask is operator-only/i);
+  });
+
+  // Positive control: a 500 is a fault, not an authority problem.
+  it('keeps the server text and no notice for a 500 approve', async () => {
+    serveDecideFailure([gateAsk()], 500, 'approval store unavailable');
+    ui();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+
+    expect(await screen.findByText('approval store unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+  });
+});

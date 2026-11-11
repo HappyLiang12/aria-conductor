@@ -28,8 +28,17 @@ function titleOf(subjectType: ProposalPanelItem['subjectType']): string {
   }
 }
 
-/** The batch read's outcome: the facts, or that the inbox could not be read. */
-type BatchRead = { facts: MemoryProposalView[] } | { unreadable: true };
+/**
+ * The review inbox page size (`MemoryProposalService.INBOX_LIMIT`): one
+ * newest-first page across ALL entities, so a full page cannot prove that an
+ * entity's own facts are on it.
+ */
+const INBOX_LIMIT = 50;
+
+/** The batch read's outcome: the facts (and whether the page was capped), or that the inbox could not be read. */
+type BatchRead =
+  | { facts: MemoryProposalView[]; truncated: boolean }
+  | { unreadable: true };
 
 /**
  * The PENDING facts an ENTITY decision decides with the entity, read from the
@@ -57,6 +66,9 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
         if (cancelled) return;
         setBatch({
           facts: rows.filter((row) => row.subjectType === 'FACT' && row.entityId === entityId),
+          // A page at the cap may have been cut; only a shorter page is provably
+          // the whole inbox.
+          truncated: rows.length >= INBOX_LIMIT,
         });
       })
       .catch(() => {
@@ -69,6 +81,7 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
 
   return batch;
 }
+
 
 /**
  * The in-conversation memory proposal card (spec C1/C2): Aria proposes a
@@ -145,17 +158,36 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           )}
           {batch !== null && batch !== undefined && 'facts' in batch && (
             batch.facts.length === 0 ? (
-              <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
+              batch.truncated ? (
+                // A page at the cap cannot prove the batch is empty. Naming the
+                // cap and the count is honest; "adds the entity alone" is not.
+                <div className="ask-ctx" data-testid="proposal-batch-truncated">
+                  The proposal inbox page is capped at {INBOX_LIMIT}, so this entity&apos;s
+                  pending facts may not be on it. Showing 0 pending facts of this entity here —
+                  approving still promotes its whole batch.
+                </div>
+              ) : (
+                <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
+              )
             ) : (
-              <ul className="ask-facts-list">
-                {batch.facts.map((fact) => (
-                  <li key={fact.id}>
-                    <code>{fact.factKey ?? '—'}</code>
-                    {' = '}
-                    <span>{fact.valueText ?? '—'}</span>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {batch.truncated && (
+                  <div className="ask-ctx" data-testid="proposal-batch-truncated">
+                    The proposal inbox page is capped at {INBOX_LIMIT}, so this list may be
+                    truncated. Showing {batch.facts.length} pending facts of this entity here —
+                    approving promotes its whole batch.
+                  </div>
+                )}
+                <ul className="ask-facts-list">
+                  {batch.facts.map((fact) => (
+                    <li key={fact.id}>
+                      <code>{fact.factKey ?? '—'}</code>
+                      {' = '}
+                      <span>{fact.valueText ?? '—'}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )
           )}
         </div>

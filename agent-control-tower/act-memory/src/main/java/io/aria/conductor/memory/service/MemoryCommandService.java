@@ -204,8 +204,15 @@ public class MemoryCommandService {
 
     /**
      * Closes the current ACTIVE facts and relations a lifecycle-retired entity left behind (see
-     * {@link #rePropose}). Relations are read in both directions because either endpoint retiring
-     * makes the edge resurrectable; an edge that is both is retired once.
+     * {@link #rePropose}), together with its still-PENDING facts (T29 Item 3). Relations are read
+     * in both directions because either endpoint retiring makes the edge resurrectable; an edge
+     * that is both is retired once.
+     * <p>
+     * T29 Item 3 (P3): lifecycle retire writes no fact row, so a PENDING proposal that was raised
+     * before the retire stayed PENDING. Re-proposing the same key then re-used the identity row
+     * and the operator's approval of the new proposal promoted that stale row — a value the
+     * current extraction never proposed. The PENDING rows are closed here, so the new batch holds
+     * only what the new proposal writes, and they count on the same tally.
      *
      * @return the number of fact rows closed, recorded on the re-proposal's CREATE assertion
      */
@@ -216,15 +223,15 @@ public class MemoryCommandService {
             if (fact == null) {
                 continue;
             }
-            fact.setStatus(FactStatus.RETIRED);
-            fact.setValidTo(now);
-            facts.save(fact);
-            // The audit payload names the key, never the value: a fact value can be CONFIDENTIAL.
-            assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
-                    null, now,
-                    audit("status", FactStatus.ACTIVE.name(), "factKey", fact.getFactKey()),
-                    audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey(),
-                            "reason", "entity re-proposed", "entityId", row.getId().toString())));
+            retireLiveFact(row, fact, actor, now);
+            factsRetired++;
+        }
+        for (MemoryFact fact : safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                row.getId(), FactStatus.PENDING))) {
+            if (fact == null) {
+                continue;
+            }
+            retireLiveFact(row, fact, actor, now);
             factsRetired++;
         }
         Set<UUID> seen = new LinkedHashSet<>();
@@ -235,6 +242,29 @@ public class MemoryCommandService {
             retireLiveRelation(row, relation, seen, actor, now);
         }
         return factsRetired;
+    }
+
+    /**
+     * Closes one fact row the retired entity left live. The audit payload names the key and the
+     * status it closed, never the value: a fact value can be CONFIDENTIAL.
+     * <p>
+     * T29 Item 4 (bounded): the fact flush runs here, before the entity flush that follows, so a
+     * lost fact version is translated while the fact key is the subject of the conflict.
+     * Hibernate flushes the whole persistence context, so without this call the same loss
+     * surfaced from {@code entities.flush()} as "memory entity … was re-proposed concurrently" —
+     * the right rollback and the right single conflict, attributed to the wrong row.
+     */
+    private void retireLiveFact(MemoryEntity row, MemoryFact fact, MemoryActor actor, Instant now) {
+        FactStatus previous = fact.getStatus();
+        fact.setStatus(FactStatus.RETIRED);
+        fact.setValidTo(now);
+        facts.save(fact);
+        flushFacts(fact.getFactKey(), "closed by the entity re-proposal");
+        assertions.save(assertion(MemorySubjectType.FACT, fact.getId(), MemoryAction.RETIRE, actor,
+                null, now,
+                audit("status", previous.name(), "factKey", fact.getFactKey()),
+                audit("status", FactStatus.RETIRED.name(), "factKey", fact.getFactKey(),
+                        "reason", "entity re-proposed", "entityId", row.getId().toString())));
     }
 
     private void retireLiveRelation(MemoryEntity row, MemoryRelation relation, Set<UUID> seen,
@@ -754,16 +784,27 @@ public class MemoryCommandService {
     }
 
     /**
-     * The dependent-read guard for facts: a PENDING entity is a proposal, so it may only carry
-     * PENDING facts (the batch the operator decides together). An ACTIVE fact against it would be
-     * current memory whose parent is invisible to recall and to the prompt — exactly the
-     * read-path leak spec §5.5 forbids — so it is a conflict, not an implicit promotion.
+     * The dependent-read guard for facts: current memory has an ACTIVE parent, so an ACTIVE fact
+     * may only hang off an ACTIVE entity. A PENDING parent is a proposal (the batch the operator
+     * decides together), and a RETIRED or MERGED parent is dead — recall matches ACTIVE entities
+     * only, the context contributor reads through recall and the default list is ACTIVE-only, so
+     * an ACTIVE fact under either would be invisible current memory. Merge moves the source's
+     * facts, so a fact added to a MERGED source is unreachable from the survivor too. A PENDING
+     * fact is unaffected: it is review material whatever its parent's lifecycle status.
+     * <p>
+     * T29 Item 2 (P2): this used to refuse only a PENDING parent, so the operator
+     * {@code addFact} path and the RUN structural-fact path (which writes ACTIVE) could both park
+     * current memory under a dead parent. The guard now covers every non-ACTIVE parent and names
+     * the case it found.
      */
     private MemoryEntity requireEntityForFact(UUID entityId, FactStatus factStatus) {
         MemoryEntity entity = requireEntity(entityId);
-        if (factStatus == FactStatus.ACTIVE && entity.getStatus() == EntityStatus.PENDING) {
-            throw new MemoryConflictException("entity " + entityId + " is PENDING; an ACTIVE fact cannot be "
-                    + "attached before the entity proposal is approved");
+        if (factStatus == FactStatus.ACTIVE && entity.getStatus() != EntityStatus.ACTIVE) {
+            String reason = entity.getStatus() == EntityStatus.PENDING
+                    ? "is PENDING; an ACTIVE fact cannot be attached before the entity proposal is approved"
+                    : "is " + entity.getStatus() + "; an ACTIVE fact cannot be attached to a parent that "
+                    + "no read path can see, and a MERGED source is not reachable from its survivor";
+            throw new MemoryConflictException("entity " + entityId + " " + reason);
         }
         return entity;
     }

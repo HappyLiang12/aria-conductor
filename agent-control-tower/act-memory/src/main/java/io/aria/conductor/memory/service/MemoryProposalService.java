@@ -28,12 +28,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -138,8 +136,16 @@ public class MemoryProposalService {
     }
 
     /**
-     * One entity's own proposal batch: every fact and relation of {@code entityId} in
-     * {@code status} plus the entity row itself when its lifecycle status matches.
+     * One entity's own proposal batch: every FACT of {@code entityId} in {@code status} plus the
+     * entity row itself when its lifecycle status matches. The batch is the entity's PENDING facts
+     * and nothing else, because that is what {@link #decideEntity} promotes and retires (spec
+     * :116-117, :323-324); the relation graph is out of scope for this program (spec :138, :453).
+     * <p>
+     * T29 Item 1 (P1): the read used to add the entity's PENDING relations in both directions, so
+     * the card showed a batch the decision did not cover — approving the entity left a relation
+     * PENDING, and approving that relation then left it ACTIVE under a RETIRED entity. The
+     * relation branch is gone; a relation decision is still reachable through the global inbox,
+     * it is just not part of an entity's batch.
      * <p>
      * M1 (UI surface review): the ENTITY card used to filter ONE {@link #INBOX_LIMIT}-row page of
      * the merged global inbox client-side, so with more than 50 PENDING facts across entities an
@@ -163,26 +169,12 @@ public class MemoryProposalService {
                 batch.add(MemoryProposalView.fromFact(fact));
             }
         }
-        Set<UUID> seen = new LinkedHashSet<>();
-        for (MemoryRelation relation : safe(relations.findByFromEntityIdAndStatus(entityId, target))) {
-            addRelation(relation, seen, batch);
-        }
-        for (MemoryRelation relation : safe(relations.findByToEntityIdAndStatus(entityId, target))) {
-            addRelation(relation, seen, batch);
-        }
         MemoryEntity entity = entities.findById(entityId).orElse(null);
         if (entity != null && entity.getStatus() == entityStatusOf(target)
                 && (operator || entity.getStatus() != EntityStatus.PENDING)) {
             batch.add(MemoryProposalView.fromEntity(entity));
         }
         return List.copyOf(batch.stream().sorted(NEWEST_FIRST).toList());
-    }
-
-    /** One edge at most once: a self relation is both outgoing and incoming. */
-    private static void addRelation(MemoryRelation relation, Set<UUID> seen, List<MemoryProposalView> batch) {
-        if (relation != null && seen.add(relation.getId())) {
-            batch.add(MemoryProposalView.fromRelation(relation));
-        }
     }
 
     /** Newest first, then subject type and id so the order is deterministic. */
@@ -308,11 +300,13 @@ public class MemoryProposalService {
         // read path can see (recall, the prompt, the default list and the detail read all exclude
         // a PENDING entity), and a later entity rejection would retire only PENDING rows, leaving
         // it orphaned under a RETIRED parent. Refuse, and tell the operator which card decides it
-        // (T10 fix round 1, M1). The command path's requireEntityForFact enforces the same rule.
+        // (T10 fix round 1, M1).
         // N2 (T10 fix round 1 re-review): the invariant is "current memory has an ACTIVE parent",
         // not "not PENDING". A proposal raised under an ACTIVE entity can survive its parent being
         // retired or merged, and approving it then produced the same invisible ACTIVE value under a
         // dead parent. Every non-ACTIVE parent is refused, and the message names which case it is.
+        // T29 Item 2: the command path enforces the same invariant — requireEntityForFact refuses an
+        // ACTIVE write under any non-ACTIVE parent, so parity is now real on both paths.
         MemoryEntity parent = entities.findById(proposal.getEntityId())
                 .orElseThrow(() -> new MemoryNotFoundException(
                         "memory entity " + proposal.getEntityId() + " not found"));

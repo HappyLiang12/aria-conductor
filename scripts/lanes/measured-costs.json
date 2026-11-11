@@ -68,14 +68,11 @@
    }
   },
   "act-agent": {
-   "classes": 20,
-   "tests": 293,
+   "classes": 17,
+   "tests": 262,
    "skipped": 0,
-   "classSumSec": 5.7,
+   "classSumSec": 2.294,
    "byClass": {
-    "io.aria.conductor.agent.controller.AgentControllerCrudTest": 3.066,
-    "io.aria.conductor.agent.controller.AgentControllerTest": 0.104,
-    "io.aria.conductor.agent.controller.LlmProviderControllerTest": 0.236,
     "io.aria.conductor.agent.controller.RunControllerTest": 0.437,
     "io.aria.conductor.agent.controller.RunProgressControllerTest": 0.036,
     "io.aria.conductor.agent.controller.SystemConfigControllerTest": 0.146,
@@ -95,9 +92,6 @@
     "io.aria.conductor.agent.service.WorkflowServiceTest": 0
    },
    "testsByClass": {
-    "io.aria.conductor.agent.controller.AgentControllerCrudTest": 12,
-    "io.aria.conductor.agent.controller.AgentControllerTest": 7,
-    "io.aria.conductor.agent.controller.LlmProviderControllerTest": 12,
     "io.aria.conductor.agent.controller.RunControllerTest": 17,
     "io.aria.conductor.agent.controller.RunProgressControllerTest": 3,
     "io.aria.conductor.agent.controller.SystemConfigControllerTest": 13,
@@ -117,9 +111,6 @@
     "io.aria.conductor.agent.service.WorkflowServiceTest": 1
    },
    "skipByClass": {
-    "io.aria.conductor.agent.controller.AgentControllerCrudTest": 0,
-    "io.aria.conductor.agent.controller.AgentControllerTest": 0,
-    "io.aria.conductor.agent.controller.LlmProviderControllerTest": 0,
     "io.aria.conductor.agent.controller.RunControllerTest": 0,
     "io.aria.conductor.agent.controller.RunProgressControllerTest": 0,
     "io.aria.conductor.agent.controller.SystemConfigControllerTest": 0,
@@ -620,11 +611,14 @@
    }
   },
   "act-dashboard-api": {
-   "classes": 12,
-   "tests": 90,
+   "classes": 15,
+   "tests": 121,
    "skipped": 0,
-   "classSumSec": 4.6,
+   "classSumSec": 8.006,
    "byClass": {
+    "io.aria.conductor.dashboard.agent.AgentControllerCrudTest": 3.066,
+    "io.aria.conductor.dashboard.agent.AgentControllerTest": 0.104,
+    "io.aria.conductor.dashboard.agent.LlmProviderControllerTest": 0.236,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterMdcTest": 0.254,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterTest": 0.911,
     "io.aria.conductor.dashboard.config.LocalOriginCorsConfigTest": 1.649,
@@ -639,6 +633,9 @@
     "io.aria.conductor.dashboard.report.ReportServiceTest": 0.105
    },
    "testsByClass": {
+    "io.aria.conductor.dashboard.agent.AgentControllerCrudTest": 12,
+    "io.aria.conductor.dashboard.agent.AgentControllerTest": 7,
+    "io.aria.conductor.dashboard.agent.LlmProviderControllerTest": 12,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterMdcTest": 3,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterTest": 3,
     "io.aria.conductor.dashboard.config.LocalOriginCorsConfigTest": 2,
@@ -653,6 +650,9 @@
     "io.aria.conductor.dashboard.report.ReportServiceTest": 16
    },
    "skipByClass": {
+    "io.aria.conductor.dashboard.agent.AgentControllerCrudTest": 0,
+    "io.aria.conductor.dashboard.agent.AgentControllerTest": 0,
+    "io.aria.conductor.dashboard.agent.LlmProviderControllerTest": 0,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterMdcTest": 0,
     "io.aria.conductor.dashboard.config.CorrelationIdFilterTest": 0,
     "io.aria.conductor.dashboard.config.LocalOriginCorsConfigTest": 0,

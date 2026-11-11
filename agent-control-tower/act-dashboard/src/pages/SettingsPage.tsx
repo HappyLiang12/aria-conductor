@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listProviders, createProvider, updateProvider, deleteProvider, testProvider, activateProvider } from '../api/llmProviders';
-import { apiErrorMessage } from '../api/operatorSession';
+import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from '../components/ErrorNotice';
 import type { LlmProvider, LlmProviderType, CreateLlmProviderRequest } from '../types';
 
 interface ToastMessage {
@@ -43,6 +45,10 @@ export function SettingsPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [form, setForm] = useState<CreateLlmProviderRequest>(emptyForm);
   const [testingId, setTestingId] = useState<string | null>(null);
+  // Every provider mutation is operator-only server-side. A refusal is a session
+  // problem, not a failed save, so it renders one actionable notice instead of a
+  // toast that repeats whatever the transport said.
+  const [refusal, setRefusal] = useState<unknown | null>(null);
 
   const { data: providers, isLoading, error } = useQuery({
     queryKey: ['llm-providers'],
@@ -53,44 +59,60 @@ export function SettingsPage() {
     mutationFn: createProvider,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
+      setRefusal(null);
       setShowForm(false);
       setForm(emptyForm);
       setFormErrors({});
       addToast('Provider created successfully', 'success');
     },
-    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to create provider'), 'error'),
+    onError: (err: unknown) => reportMutationError(err, 'Failed to create provider'),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, req }: { id: string; req: Partial<CreateLlmProviderRequest> }) => updateProvider(id, req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
+      setRefusal(null);
       setEditState({ open: false, provider: null });
       setForm(emptyForm);
       setFormErrors({});
       addToast('Provider updated successfully', 'success');
     },
-    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to update provider'), 'error'),
+    onError: (err: unknown) => reportMutationError(err, 'Failed to update provider'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteProvider,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
+      setRefusal(null);
       setConfirmDelete({ open: false, id: '', name: '' });
       addToast('Provider deleted', 'success');
     },
-    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to delete provider'), 'error'),
+    onError: (err: unknown) => reportMutationError(err, 'Failed to delete provider'),
   });
 
   const activateMutation = useMutation({
     mutationFn: activateProvider,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
+      setRefusal(null);
       addToast('Provider activated', 'success');
     },
-    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to activate provider'), 'error'),
+    onError: (err: unknown) => reportMutationError(err, 'Failed to activate provider'),
   });
+
+  /**
+   * The one place a provider-mutation failure is classified: a 401/403 means the
+   * operator session, everything else keeps the ordinary error toast.
+   */
+  const reportMutationError = (err: unknown, fallback: string) => {
+    if (isOperatorRejection(err)) {
+      setRefusal(err);
+      return;
+    }
+    addToast(apiErrorMessage(err, fallback), 'error');
+  };
 
   const addToast = (message: string, type: ToastMessage['type']) => {
     const id = ++toastCounter;
@@ -140,7 +162,7 @@ export function SettingsPage() {
       const result = await testProvider(id);
       addToast(result.message, result.success ? 'success' : 'error');
     } catch (err) {
-      addToast(apiErrorMessage(err, 'Connection test failed'), 'error');
+      reportMutationError(err, 'Connection test failed');
     } finally {
       setTestingId(null);
     }
@@ -238,6 +260,16 @@ export function SettingsPage() {
 
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading providers...</span></div>}
       {error && <div className="error-state">Failed to load providers.</div>}
+
+      {refusal != null && (
+        <div style={{ marginBottom: '1rem' }}>
+          <ErrorNotice
+            presented={presentError(refusal, 'The provider change was refused.')}
+            operatorSession
+            actionLabel="Changing LLM providers"
+          />
+        </div>
+      )}
 
       {providers && providers.length === 0 && !isLoading && (
         <div className="empty-state">No LLM providers configured. Click "Add Provider" to get started.</div>

@@ -75,9 +75,10 @@ public final class AriaPromptCatalog {
             learn a durable fact about the operator (name, timezone, preferences, working style),
             propose it with remember_fact instead of only acknowledging it in prose. For a person
             or thing you have no entity id for, pass kind and canonicalKey (e.g. person /
-            person:happy): one call proposes the new entity and its first fact together. A
-            proposal is PENDING until the operator decides it. Never claim a fact is remembered,
-            saved or known until it is approved; say it is waiting for the operator instead.
+            person:happy): one call proposes the entity and its first fact together for a new key,
+            and only the fact when the key already exists. A proposal is PENDING until the operator
+            decides it. Never claim a fact is remembered, saved or known until it is approved;
+            say it is waiting for the operator instead.
             Never decide, promote or approve your own proposals, and do not call operator-only
             memory tools.
 

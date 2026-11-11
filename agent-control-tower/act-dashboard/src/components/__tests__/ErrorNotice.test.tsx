@@ -60,3 +60,52 @@ describe('ErrorNotice', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 });
+
+// Task 30 / Item 1: an operator-only caller opts in, and a 401/403 then reads as
+// the operator-session notice instead of the server's text. The opt-in matters:
+// a caller that has not been audited keeps the plain error path, so this stays one
+// component rather than a second notice invented beside it.
+describe('ErrorNotice operator-session refusal', () => {
+  function renderOperatorNotice(presented: {
+    text: string;
+    action?: { tab: 'llm' | 'runtime' | 'config'; label: string } | { path: string; label: string };
+    operatorRejected?: true;
+  }) {
+    render(
+      <MemoryRouter initialEntries={['/runs']}>
+        <ErrorNotice presented={presented} operatorSession actionLabel="Applying the fleet runtime" />
+      </MemoryRouter>,
+    );
+  }
+
+  it.each([401, 403])('replaces the server text with the actionable notice on %i', () => {
+    renderOperatorNotice({ text: 'OPERATOR_ROUTE_RAW', operatorRejected: true });
+
+    const notice = screen.getByTestId('operator-session-notice');
+    // Says who may do it and what to do about it — the product's voice.
+    expect(notice).toHaveTextContent('Applying the fleet runtime is operator-only');
+    expect(notice).toHaveTextContent('loopback requests are the operator automatically');
+    expect(notice).toHaveTextContent('the operator who runs the backend must grant access');
+    // Never the server's own words, which point at nothing.
+    expect(notice).not.toHaveTextContent('OPERATOR_ROUTE_RAW');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary error path for a 500 even on an operator-only caller', () => {
+    renderOperatorNotice({ text: 'fleet runtime store unavailable' });
+
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('fleet runtime store unavailable');
+  });
+
+  it('leaves an unaudited caller on the plain error path for a refusal', () => {
+    render(
+      <MemoryRouter>
+        <ErrorNotice presented={{ text: 'Operator session required', operatorRejected: true }} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Operator session required');
+  });
+});

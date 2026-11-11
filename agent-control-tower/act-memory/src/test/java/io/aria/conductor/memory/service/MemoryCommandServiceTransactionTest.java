@@ -8,6 +8,7 @@ import io.aria.conductor.memory.dto.CreateEntityCommand;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryEntityView;
 import io.aria.conductor.memory.dto.MemoryFactView;
+import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
 import io.aria.conductor.memory.dto.RecallQuery;
 import io.aria.conductor.memory.dto.RecallResult;
@@ -459,6 +460,78 @@ class MemoryCommandServiceTransactionTest {
         RecallResult recalled = recall.recall(new RecallQuery("person:happy", Sensitivity.INTERNAL, null));
         assertThat(recalled.entities()).extracting(MemoryEntityView::canonicalKey).contains("person:happy");
         assertThat(recalled.facts()).extracting(MemoryFactView::factKey).contains("preferred_editor");
+    }
+
+    /**
+     * T29 Item 3 (P3), the whole sequence over real persistence. An extraction proposes a fact
+     * under an ACTIVE entity; the operator retires the entity (lifecycle retire writes no fact
+     * row, so the PENDING fact stays PENDING); the same key is extracted again; the operator
+     * approves the re-proposed entity. Before the fix the decision promoted the stale PENDING fact
+     * the current extraction never proposed. The re-proposal must retire it, keep it out of the
+     * card's batch, and the approval must promote nothing.
+     */
+    @Test
+    void aReproposalDoesNotInheritAStalePendingFactIntoTheEntityBatch() {
+        when(assertions.save(any(MemoryAssertion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MemoryActor worker = new MemoryActor(MemoryActorType.EXTRACTION, UUID.randomUUID().toString());
+        MemoryActor operator = new MemoryActor(MemoryActorType.OPERATOR, "operator-session");
+        // This test commits for real (the sequence spans several transactions), so it starts and
+        // ends from an empty table: the row count is what a neighbouring test asserts on.
+        ownTransaction.executeWithoutResult(status -> {
+            facts.deleteAll();
+            entities.deleteAll();
+        });
+        try {
+            MemoryEntity active = ownTransaction.execute(status -> entities.saveAndFlush(MemoryEntity.builder()
+                    .id(UUID.randomUUID())
+                    .kind("PERSON")
+                    .canonicalKey("person:happy")
+                    .displayName("Happy")
+                    .status(EntityStatus.ACTIVE)
+                    .origin(MemoryOrigin.OPERATOR)
+                    .build()));
+            MemoryFact stale = ownTransaction.execute(status -> command.addFact(active.getId(),
+                    new AddFactCommand("preferred_editor", "vim", "STRING", Sensitivity.INTERNAL, "run-ref"),
+                    worker));
+            assertThat(stale.getStatus()).isEqualTo(FactStatus.PENDING);
+
+            ownTransaction.executeWithoutResult(status -> {
+                MemoryEntity retiring = entities.findById(active.getId()).orElseThrow();
+                retiring.setStatus(EntityStatus.RETIRED);
+                entities.saveAndFlush(retiring);
+            });
+
+            ownTransaction.executeWithoutResult(status -> command.createEntity(
+                    new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), worker));
+
+            ownTransaction.executeWithoutResult(status -> {
+                List<MemoryProposalView> batch =
+                        proposals.listProposalsForEntity(FactStatus.PENDING, active.getId(), operator);
+                assertThat(batch).extracting(MemoryProposalView::subjectType)
+                        .as("the new batch is the proposal the current extraction created")
+                        .containsExactly("ENTITY");
+                assertThat(batch).extracting(MemoryProposalView::id)
+                        .as("the stale fact the current extraction did not propose is not in the batch")
+                        .doesNotContain(stale.getId().toString());
+                assertThat(facts.findById(stale.getId()).orElseThrow().getStatus())
+                        .as("the stale PENDING row is closed by the re-proposal")
+                        .isEqualTo(FactStatus.RETIRED);
+            });
+
+            ownTransaction.executeWithoutResult(status ->
+                    proposals.decideProposal(active.getId(), ProposalDecision.APPROVE, operator));
+
+            ownTransaction.executeWithoutResult(status -> assertThat(
+                    facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
+                            active.getId(), FactStatus.ACTIVE))
+                    .as("the approval promotes nothing the current extraction did not propose")
+                    .isEmpty());
+        } finally {
+            ownTransaction.executeWithoutResult(status -> {
+                facts.deleteAll();
+                entities.deleteAll();
+            });
+        }
     }
 
     private static boolean await(CountDownLatch latch) {

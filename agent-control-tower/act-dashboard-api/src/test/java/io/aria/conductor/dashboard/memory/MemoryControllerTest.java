@@ -36,6 +36,8 @@ import io.aria.conductor.memory.service.MemoryRecallService;
 import io.aria.conductor.memory.service.MemoryValidationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -55,6 +57,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -284,6 +287,30 @@ class MemoryControllerTest {
                         "Operator authority required: reading a pending memory entity is an operator decision. "
                                 + "Review it on the Memory page or in the Review Queue."));
         verify(query, never()).getEntity(any(), eq(true));
+    }
+
+    /**
+     * The detail read honours exactly one status value. Typing the parameter as
+     * {@link EntityStatus} while silently ignoring four of its five values told the caller that
+     * {@code status=MERGED} selected MERGED rows when it selected nothing at all (and on an
+     * ACTIVE id it returned the ACTIVE row). A non-PENDING value is therefore input the route
+     * cannot honour: 422 VALIDATION naming the only supported value, before anything is read.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"ACTIVE", "MERGED", "RETIRED"})
+    void aDetailStatusOtherThanPendingIsRejectedAsValidation(String status) throws Exception {
+        UUID id = UUID.randomUUID();
+
+        mvc.perform(get("/api/v1/memory/entities/{id}", id).param("status", status))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.errorType").value("VALIDATION"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("status"),
+                        org.hamcrest.Matchers.containsString(status),
+                        org.hamcrest.Matchers.containsString("PENDING"))));
+
+        verify(query, never()).getEntity(any(), anyBoolean());
     }
 
     @Test

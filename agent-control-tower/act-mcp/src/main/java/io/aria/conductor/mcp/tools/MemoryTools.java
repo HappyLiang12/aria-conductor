@@ -194,7 +194,7 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "get_memory_entity",
-            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page.")
+            description = "Get one memory entity with its current ACTIVE facts at or below the INTERNAL sensitivity ceiling: kind, canonical key, status, origin, sensitivity, version, and each fact's id, origin, sensitivity and validity. A PENDING entity is review material: this agent-facing detail read reports it as not found, and the operator reviews it with the explicit status=PENDING detail filter on the Memory page. Should a PENDING row still reach this read, an operator credential may see it and any other credential is refused with FORBIDDEN.")
     public String getMemoryEntity(
             @ToolParam(description = "Memory entity id (UUID)") UUID entityId,
             ToolContext toolContext) {
@@ -267,7 +267,7 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_proposals",
-            description = "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING.")
+            description = "List memory proposals awaiting review at or below the INTERNAL sensitivity ceiling: PENDING facts and relations newest first, each with subjectType, id, origin, sensitivity and creation time. status defaults to PENDING. A PENDING entity row is also listed, with its canonical key in factKey, but only for an operator credential; a worker read receives facts and relations only.")
     public String listMemoryProposals(
             @ToolParam(description = "PENDING, ACTIVE or RETIRED; default PENDING", required = false) String status,
             ToolContext toolContext) {

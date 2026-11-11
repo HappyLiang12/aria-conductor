@@ -230,7 +230,16 @@ public class AgentLoopEngine {
         // Every terminal path unbinds it again (completeRun, abandonContext and the run
         // loop's finally), so a finished turn never receives another signal.
         streamRegistry.register(runId, emitter);
-        startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        try {
+            startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+        } catch (RuntimeException e) {
+            // A refused start is the one path with no run loop to unbind in its finally:
+            // the caller catches this and completes the emitter, but Spring has not
+            // installed the handler yet, so complete() fires no callback. Unbind here or
+            // the registry keeps a dead entry that hasStream reports as live forever.
+            streamRegistry.unregister(runId);
+            throw e;
+        }
     }
 
     private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {

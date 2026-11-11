@@ -47,6 +47,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -225,6 +226,28 @@ class AgentLoopEngineStreamSignalTest {
         verify(runRepository, never()).completeIfNotTerminal(any(), any(), anyInt(), anyLong(),
                 any(), any(), any(), any(), any(), any(), anyList());
         assertThat(registry.emit(runId, "waiting_input", Map.of())).isFalse();
+    }
+
+    @Test
+    void aStartThatThrowsUnbindsTheStreamItRegisteredBeforeTheThrow() {
+        // A start can refuse only after the emitter is bound: a non-PENDING run, a
+        // run that left PENDING while queued, a missing run/agent. AriaStreamService
+        // catches the throw and calls emitter.complete(), but Spring MVC installs the
+        // emitter's handler only once the handler method returns — and a handler-less
+        // ResponseBodyEmitter.complete() fires no completion callback. Without an
+        // explicit unbind the registry keeps a dead entry forever and hasStream keeps
+        // answering true for a stream that can never receive a frame.
+        run.setStatus(RunStatus.COMPLETED);
+        SseEmitter emitter = mock(SseEmitter.class);
+
+        assertThatThrownBy(() -> engine.startRunStream(runId, emitter, List.of(), "chat"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot start run in status");
+
+        assertThat(registry.hasStream(runId))
+                .as("a refused start leaves no stream behind").isFalse();
+        assertThat(registry.emit(runId, "approval_required", Map.of()))
+                .as("and no later signal is retried against the dead stream").isFalse();
     }
 
     private void stubLauncherOwns() {

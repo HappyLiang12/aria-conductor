@@ -52,6 +52,8 @@ type ProposalItem = Extract<PanelItem, { kind: 'proposal' }>;
 
 /** The backend's trajectory rows prefix a tool invocation with this literal. */
 const TOOL_CALL_PREFIX = 'tool_call:';
+/** A tool result row whose call row is missing still names itself in the strip. */
+const ORPHAN_TOOL_NAME = '(tool output)';
 /** The single queued indicator is keyed by its kind, not by a run. */
 const QUEUED_ID = 'queued';
 
@@ -562,7 +564,18 @@ function itemsFromTimeline(timeline: TimelineEntry[]): PanelItem[] {
     }
 
     // Any other tool row is the result of the tool still running in this run.
-    if (at < 0) return;
+    // A result whose call row never landed is still audited output: render it
+    // as its own one-tool strip instead of dropping it.
+    if (at < 0) {
+      items.push({
+        kind: 'activity',
+        id: activityId(turnId),
+        turnId,
+        tools: [{ name: ORPHAN_TOOL_NAME, status: 'ok', startedAt, result: entry.content }],
+        collapsed: true,
+      });
+      return;
+    }
     const strip = items[at] as ActivityItem;
     let target = -1;
     for (let i = strip.tools.length - 1; i >= 0; i -= 1) {

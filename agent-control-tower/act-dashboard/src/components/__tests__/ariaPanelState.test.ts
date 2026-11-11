@@ -137,6 +137,20 @@ describe('panelReducer restore parsing', () => {
     ]);
   });
 
+  it('renders a tool result row with no call row instead of dropping it', () => {
+    const s = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [row({ role: 'tool', content: 'orphaned output', runId: 'r9' })],
+      approvals: [], proposals: [],
+    });
+    expect(s.items).toHaveLength(1);
+    const strip = s.items[0];
+    if (strip.kind !== 'activity') throw new Error('activity strip missing');
+    expect(strip).toMatchObject({ kind: 'activity', turnId: 'r9', collapsed: true });
+    expect(strip.tools).toHaveLength(1);
+    expect(strip.tools[0]).toMatchObject({ name: '(tool output)', status: 'ok', result: 'orphaned output' });
+  });
+
   it('restores a failed turn as an assistant bubble with its retry prompt', () => {
     const s = panelReducer(base, {
       type: 'restore', conversationId: 'conv-1',

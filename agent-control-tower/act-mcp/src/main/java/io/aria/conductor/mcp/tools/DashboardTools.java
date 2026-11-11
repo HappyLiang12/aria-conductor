@@ -18,6 +18,11 @@ import org.springframework.stereotype.Component;
  * repositories directly (there is no dashboard service), so this wrapper injects
  * the same repositories and returns the same DashboardSummary DTO — MCP and REST
  * stay at parity on field names and values.
+ *
+ * <p>The prompt-call repository stays injected for that wiring parity but is
+ * deliberately never read here: Task 7 (spec 5.4) moved the token burn to the runs'
+ * reported counters, and {@code DashboardToolsTest} pins that {@code findAll()} is
+ * never called on this path.
  */
 @Component
 @RequiredArgsConstructor
@@ -37,13 +42,15 @@ public class DashboardTools implements McpTool {
             long degradedAgents = agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
             long runningRuns = runRepository.countByStatus(RunStatus.RUNNING);
             long pendingApprovals = approvalRepository.findByStatus(ApprovalStatus.PENDING).size();
-            long totalTokensBurned = promptCallRepository.findAll()
-                    .stream()
-                    .mapToLong(p -> p.getInputTokens() + p.getOutputTokens())
-                    .sum();
+            // Task 7 (spec 5.4): usage comes from the runs' reported counters through
+            // bounded aggregates. The prompt_calls table is written only by
+            // self-improvement, so summing it here reported a structural zero for every
+            // agent run; it must not be read on this path again.
+            long totalTokensBurned = runRepository.sumReportedUsage();
+            long runsWithoutUsage = runRepository.countWithoutReportedUsage();
 
             return ToolResponses.ok(new DashboardSummary(healthyAgents, healthyAgents, degradedAgents,
-                    runningRuns, pendingApprovals, totalTokensBurned));
+                    runningRuns, pendingApprovals, totalTokensBurned, runsWithoutUsage));
         } catch (Exception e) {
             return ToolResponses.error("DASHBOARD_SUMMARY_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }

@@ -53,13 +53,14 @@ public class DashboardController {
         long runningRuns = runRepository.countByStatus(RunStatus.RUNNING)
                 + runRepository.countByStatus(RunStatus.WAITING_INPUT);
         long pendingApprovals = approvalRepository.findByStatus(ApprovalStatus.PENDING).size();
-        long totalTokensBurned = promptCallRepository.findAll()
-                .stream()
-                .mapToLong(p -> p.getInputTokens() + p.getOutputTokens())
-                .sum();
+        // Task 7 (spec 5.4): usage comes from the runs' reported counters through bounded
+        // aggregates. The prompt_calls table's only production writer is self-improvement,
+        // so summing it here reported a structural zero for every agent run.
+        long totalTokensBurned = runRepository.sumReportedUsage();
+        long runsWithoutUsage = runRepository.countWithoutReportedUsage();
 
         return new DashboardSummary(healthyAgents, healthyAgents, degradedAgents,
-                runningRuns, pendingApprovals, totalTokensBurned);
+                runningRuns, pendingApprovals, totalTokensBurned, runsWithoutUsage);
     }
 
     @GetMapping("/activity")

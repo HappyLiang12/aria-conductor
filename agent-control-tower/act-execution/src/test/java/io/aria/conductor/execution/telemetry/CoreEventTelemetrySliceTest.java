@@ -122,7 +122,7 @@ class CoreEventTelemetrySliceTest extends DataJpaTestBase {
     }
 
     @Test
-    void anUnknownUsagePayloadLeavesTheRunUsageUnknownWhileAGenuineZeroIsKept() {
+    void anUnknownUsagePayloadLeavesTheRunUsageUnknownWhileAnAllZeroBlockIsNotAMeasurement() {
         Run unobserved = runs.save(Run.builder().agentId(UUID.randomUUID()).status(RunStatus.RUNNING).build());
         telemetry.record(unobserved.getId(), new CoreEvent("usage", unobserved.getId(), "session-1", null,
                 "{\"promptId\":5,\"inputTokens\":null,\"outputTokens\":null,\"totalTokens\":null,\"source\":\"usage\"}"));
@@ -137,10 +137,14 @@ class CoreEventTelemetrySliceTest extends DataJpaTestBase {
         assertThat(stillUnknown.getOutputTokens()).isNull();
         assertThat(stillUnknown.getTotalTokensUsed()).isZero();
 
-        Run genuinelyZero = runs.findById(reported.getId()).orElseThrow();
-        assertThat(genuinelyZero.getInputTokens()).isZero();
-        assertThat(genuinelyZero.getOutputTokens()).isZero();
-        assertThat(genuinelyZero.getTotalTokensUsed()).isZero();
+        // Task 7 / spec 5.4 reversed the earlier pin: an all-zero block is the pinned
+        // CLI's placeholder shape (a real LLM call cannot consume zero input tokens), so
+        // it is not a measurement. Nothing is written and the run stays NOT_REPORTED;
+        // storing the zero would present an unmeasured cost.
+        Run allZero = runs.findById(reported.getId()).orElseThrow();
+        assertThat(allZero.getInputTokens()).isNull();
+        assertThat(allZero.getOutputTokens()).isNull();
+        assertThat(allZero.getTotalTokensUsed()).isZero();
     }
 
     @Test

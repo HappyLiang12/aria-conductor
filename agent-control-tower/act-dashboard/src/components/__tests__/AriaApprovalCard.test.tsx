@@ -72,6 +72,13 @@ describe('AriaApprovalCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /allow once/i }));
 
     expect(await screen.findByText(/operator session/i)).toBeInTheDocument();
+    // Task 35: the card keeps its own sentence structure ("nothing was
+    // decided") but composes the one remedy that can work, not a reload.
+    const refusal = screen.getByRole('alert');
+    expect(refusal).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    expect(refusal).toHaveTextContent(/nothing was decided by the refused call/i);
+    expect(refusal).not.toHaveTextContent(/reload the page and retry/i);
+    expect(refusal).not.toHaveTextContent(/reload and try again/i);
     expect(onSettled).not.toHaveBeenCalled();
     // The ask is still the operator's to decide: the control stays available.
     expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();

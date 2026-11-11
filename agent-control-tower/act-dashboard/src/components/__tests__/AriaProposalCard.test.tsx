@@ -144,6 +144,13 @@ describe('AriaProposalCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
     await screen.findByTestId('operator-session-notice');
+    // Task 35: one remedy, and it is one that can work — a reload does not
+    // restore an operator session on a remote machine.
+    const notice = screen.getByTestId('operator-session-notice');
+    expect(notice).toHaveTextContent(/memory decisions are operator-only/i);
+    expect(notice).toHaveTextContent(/open the dashboard on the machine that runs the backend/i);
+    expect(notice).not.toHaveTextContent(/reload the page and retry/i);
+    expect(notice).not.toHaveTextContent(/reload and try again/i);
     // Nothing was decided: the buttons are still there, the card is not flipped.
     expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
     expect(screen.queryByText(/^approved/i)).not.toBeInTheDocument();

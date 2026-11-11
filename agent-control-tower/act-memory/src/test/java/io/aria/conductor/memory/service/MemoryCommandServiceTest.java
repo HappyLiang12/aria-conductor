@@ -1502,10 +1502,18 @@ class MemoryCommandServiceTest {
 
     // ---------------------------------------------------------------- transaction
 
+    /**
+     * Every mutating method runs in one transaction. T29 Item 8: the list omitted
+     * {@code addFactByKey}, the unknown-key producer, so the behavioural pin the previous lane
+     * added for its boundary (the rejected-first-fact rollback in
+     * {@link MemoryCommandServiceTransactionTest}) had no static counterpart — deleting the
+     * annotation kept this test green. The list now covers it, and a probe that removes the
+     * annotation reds a test in this file.
+     */
     @Test
     void everyMutationIsTransactional() {
-        Set<String> mutations = Set.of("createEntity", "addFact", "supersedeFact", "retireFact",
-                "addRelation", "mergeEntities");
+        Set<String> mutations = Set.of("createEntity", "addFact", "addFactByKey", "supersedeFact",
+                "retireFact", "addRelation", "mergeEntities");
         assertThat(MemoryCommandService.class.getDeclaredMethods())
                 .filteredOn(method -> mutations.contains(method.getName()))
                 .hasSize(mutations.size())

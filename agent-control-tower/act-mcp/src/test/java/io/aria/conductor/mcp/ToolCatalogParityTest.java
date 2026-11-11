@@ -326,14 +326,38 @@ class ToolCatalogParityTest {
                 .contains(sentence);
     }
 
+    /**
+     * T29 Item 5 (P3). {@code list_memory_proposals} said "PENDING facts and relations" while an
+     * OPERATOR transport credential also receives PENDING ENTITY rows, with the canonical key in
+     * {@code factKey} — the identity a worker read deliberately withholds. The clause has to be
+     * accurate for both actors, and it is asserted on BOTH copies: byte parity alone would let the
+     * sentence be deleted from both sides at once.
+     */
+    @Test
+    void listMemoryProposalsDescriptionNamesTheOperatorOnlyEntityRow() {
+        String clause = "A PENDING entity row is also listed, with its canonical key in factKey, but only "
+                + "for an operator credential; a worker read receives facts and relations only.";
+
+        assertThat(catalog.find("list_memory_proposals").orElseThrow().description())
+                .as("catalog mirror")
+                .contains(clause);
+        assertThat(registeredDescription("list_memory_proposals"))
+                .as("registered @Tool annotation")
+                .contains(clause);
+    }
+
     private static String registeredRememberFactDescription() {
+        return registeredDescription("remember_fact");
+    }
+
+    private static String registeredDescription(String toolName) {
         for (Method method : MemoryTools.class.getDeclaredMethods()) {
             Tool annotation = method.getAnnotation(Tool.class);
-            if (annotation != null && "remember_fact".equals(annotation.name())) {
+            if (annotation != null && toolName.equals(annotation.name())) {
                 return annotation.description();
             }
         }
-        throw new AssertionError("MemoryTools has no @Tool 'remember_fact'");
+        throw new AssertionError("MemoryTools has no @Tool '" + toolName + "'");
     }
 
     /**

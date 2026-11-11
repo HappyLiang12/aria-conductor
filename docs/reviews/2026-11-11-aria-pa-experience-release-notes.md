@@ -131,11 +131,23 @@ Nothing to run. Two behaviour changes affect clients other than the dashboard:
 
 ## Residual risks
 
-1. **HOST-mode loopback GET.** A HOST core is a child process on the backend host, so its `webfetch` GET
-   arrives from loopback and is still auto-authorised. The governed HOST template denies
-   `bash`/`write`/`edit` and allows `webfetch`/`websearch`, so this residual is **read-only GET**, not
-   mutation. Closing it needs the filter registration or bind-address change the operator explicitly
-   declined. A SANDBOX worker's peer address is the bridge gateway, not loopback, so it is refused.
+1. **Authority is resolved per route, not by a filter — so the surface is only partly closed.** This
+   program added `resolveOperator` to the routes it names above; it did NOT register
+   `ActorAuthenticationFilter`, add Spring Security, or change `server.address` (the operator explicitly
+   chose the narrow fix). Two consequences follow, and both are live:
+   - **HOST-mode loopback GET.** A HOST core is a child process on the backend host, so its `webfetch`
+     GET arrives from loopback and is auto-authorised on routes that resolve authority. The governed
+     HOST template denies `bash`/`write`/`edit` and allows `webfetch`/`websearch`, so this residual is
+     read-only GET, not mutation.
+   - **Routes that resolve no authority are reachable by ANY caller, including a sandbox worker.**
+     `RunMcpWiring.java:76-77` gives the core the same host:port as the REST API, so a sandbox is not
+     network-isolated from it. Mutating routes outside this program's gated set still resolve none; the
+     per-route table in `.superpowers/sdd/2026-11-11-aria-pa-experience/final-review-rest.md` is the
+     authoritative list. The most destructive of them, `DELETE /api/v1/aria/conversations/{id}` (purges
+     trajectories, tool calls and audit rows, and cancels runs), is being gated in the fix round.
+   A SANDBOX worker's peer address is the bridge gateway rather than loopback, so it is refused on
+   routes that DO resolve authority — that is not a protection on routes that resolve none. Closing the
+   whole surface needs the filter registration or bind-address change the operator declined.
 2. **The TS MCP report forwarding payloads do not match the Java DTOs.** `reports.ts:14,36` send fields
    `GenerateReportRequest` / `AmendReportRequest` reject, so the worker path to those two ungated routes
    is not currently exercisable. Pre-existing, outside this program's scope, and NOT fixed here. If the

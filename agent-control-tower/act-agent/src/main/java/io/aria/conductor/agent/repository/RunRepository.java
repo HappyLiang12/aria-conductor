@@ -215,17 +215,28 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
      * nothing (or the pinned CLI's placeholder), so it contributes nothing here and is
      * counted by {@link #countWithoutReportedUsage()} instead. Bounded: an aggregate,
      * never a table scan into the JVM.
+     *
+     * <p>Contract (fix round 1, M1): the value is {@code totalTokensUsed} when it is
+     * positive, else the sum of the reported parts. That is the same rule the run DTO
+     * serves ({@code RunService#observedTotalTokens}); a parts-only report must not be
+     * admitted by the filter and then added as zero.
      */
-    @Query("SELECT COALESCE(SUM(r.totalTokensUsed), 0) FROM Run r "
+    @Query("SELECT COALESCE(SUM(CASE WHEN r.totalTokensUsed > 0 THEN r.totalTokensUsed "
+            + "ELSE COALESCE(r.inputTokens, 0) + COALESCE(r.outputTokens, 0) END), 0) FROM Run r "
             + "WHERE r.totalTokensUsed > 0 OR r.inputTokens > 0 OR r.outputTokens > 0")
     long sumReportedUsage();
 
     /**
      * Task 7: how many runs never reported a usable measurement, so the summary can say
      * "N runs without usage" instead of presenting a bare zero as if it were a cost.
+     *
+     * <p>Fix round 1 (m1): {@code total_tokens_used} is nullable in the shipped schema
+     * while the entity maps it primitive, so a NULL total must be accepted by the
+     * predicate; otherwise the row is in neither bucket and the partition claim breaks.
      */
     @Query("SELECT COUNT(r) FROM Run r "
-            + "WHERE r.totalTokensUsed = 0 AND (r.inputTokens IS NULL OR r.inputTokens = 0) "
+            + "WHERE (r.totalTokensUsed IS NULL OR r.totalTokensUsed = 0) "
+            + "AND (r.inputTokens IS NULL OR r.inputTokens = 0) "
             + "AND (r.outputTokens IS NULL OR r.outputTokens = 0)")
     long countWithoutReportedUsage();
 

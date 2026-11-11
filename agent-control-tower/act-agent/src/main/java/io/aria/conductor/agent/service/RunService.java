@@ -523,7 +523,7 @@ public class RunService {
      * CLI's placeholder shape, not a measurement. Both columns null means nothing was ever
      * observed. Either way the product must say NOT_REPORTED rather than show a zero cost.
      */
-    static String usageStateOf(Run run) {
+    public static String usageStateOf(Run run) {
         Long input = run.getInputTokens();
         Long output = run.getOutputTokens();
         boolean observed = (input != null && input > 0) || (output != null && output > 0)
@@ -543,8 +543,20 @@ public class RunService {
      * tokens), so neither is a measurement. A total the engine accounted without the
      * provider columns stays as reported. Routing both readings through one classifier
      * keeps the DTO's total and its usage state from ever disagreeing.
+     * <p>Fix round 1 (M1): a REPORTED run whose stored total is zero but whose parts
+     * are positive serves the sum of the parts, never the raw zero. This is the same
+     * expression {@code RunRepository#sumReportedUsage} applies in SQL, so the DTO
+     * total, the usage state and the KPI cannot disagree about the same row.
      */
-    private static Long observedTotalTokens(Run run) {
-        return "REPORTED".equals(usageStateOf(run)) ? run.getTotalTokensUsed() : null;
+    public static Long observedTotalTokens(Run run) {
+        if (!"REPORTED".equals(usageStateOf(run))) {
+            return null;
+        }
+        if (run.getTotalTokensUsed() > 0) {
+            return run.getTotalTokensUsed();
+        }
+        long input = run.getInputTokens() != null ? run.getInputTokens() : 0L;
+        long output = run.getOutputTokens() != null ? run.getOutputTokens() : 0L;
+        return input + output;
     }
 }

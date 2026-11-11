@@ -748,6 +748,56 @@ class MemoryToolsTest {
                 .doesNotContain("\"content\"");
     }
 
+    /**
+     * T47 item 4. The projection is a whitelist, so a field the assembler never writes cannot
+     * leak either: a section carrying a value-shaped field (and a display name) reaches the
+     * caller as id/sources/chars/tokens/truncated only.
+     */
+    @Test
+    void theManifestProjectionIsAWhitelistSoAStoredFieldCannotLeak() {
+        ContextManifest row = ContextManifest.builder()
+                .id(UUID.randomUUID())
+                .runId(RUN_ID)
+                .turnNumber(1)
+                .adapter("SYNC")
+                .sectionsJson("[{\"id\":\"memory\",\"sources\":[\"fact:1\"],\"chars\":90,\"tokens\":22,"
+                        + "\"truncated\":true,\"valueText\":\"SECRET VALUE MUST NOT LEAK\","
+                        + "\"displayName\":\"Happy\"}]")
+                .droppedJson("[]")
+                .degradedJson("[]")
+                .maxChars(24_000)
+                .estimatedTokens(1_200)
+                .createdAt(VALID_FROM)
+                .build();
+        when(manifests.findByRunIdOrderByTurnNumberAsc(RUN_ID)).thenReturn(List.of(row));
+
+        String json = tools.getContextManifest(RUN_ID);
+
+        assertThat(json).contains("\"ok\":true")
+                .contains("\"sources\":[\"fact:1\"]")
+                .contains("\"truncated\":true")
+                .doesNotContain("SECRET VALUE")
+                .doesNotContain("Happy")
+                .doesNotContain("\"valueText\"")
+                .doesNotContain("\"displayName\"");
+    }
+
+    /**
+     * T47 item 4, the other direction of the decision recorded on
+     * {@code MemoryTools.getContextManifest}: the manifest is deliberately global metadata, so
+     * the tool resolves no actor and an out-of-run read is not refused. A future change that
+     * quietly requires an actor must fail this test and be decided, not slipped in.
+     */
+    @Test
+    void theManifestReadResolvesNoActorByDesignSoAnOutOfRunCallIsNotRefused() {
+        when(manifests.findByRunIdOrderByTurnNumberAsc(RUN_ID)).thenReturn(List.of());
+
+        // No ToolContext, hence no transport actor: the documented stand-in for any caller.
+        String json = tools.getContextManifest(RUN_ID);
+
+        assertThat(json).contains("\"ok\":true").doesNotContain("FORBIDDEN");
+    }
+
     @Test
     void aRunWithoutManifestsReturnsAnEmptyList() {
         when(manifests.findByRunIdOrderByTurnNumberAsc(RUN_ID)).thenReturn(List.of());

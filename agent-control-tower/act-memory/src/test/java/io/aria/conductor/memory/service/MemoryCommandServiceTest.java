@@ -1224,7 +1224,7 @@ class MemoryCommandServiceTest {
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
                 .thenAnswer(invocation -> stored[0] == null ? Optional.empty() : Optional.of(stored[0]));
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
@@ -1235,7 +1235,7 @@ class MemoryCommandServiceTest {
                 new CreateEntityCommand("PERSON", "person:happy", "Happy", null), extraction);
 
         assertThat(second.getId()).isEqualTo(first.getId());
-        verify(entities, times(1)).save(any(MemoryEntity.class));
+        verify(entities, times(1)).saveAndFlush(any(MemoryEntity.class));
         verify(assertions, times(1)).save(any(MemoryAssertion.class));
     }
 
@@ -1497,19 +1497,26 @@ class MemoryCommandServiceTest {
     }
 
     @Test
-    void aLostUniqueRaceReadsTheWinningEntityBack() {
+    void aLostUniqueRaceNamesTheWinningEntityInAGovernedConflict() {
         MemoryEntity winner = entity(id("winner"));
-        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy"))
-                .thenReturn(Optional.empty(), Optional.of(winner));
-        when(entities.save(any(MemoryEntity.class)))
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
+        // The INSERT has to be flushed inside the try: with `save` only, this stub is never reached
+        // and the raw violation surfaces at commit. The winner is read in its own transaction
+        // (proposalWriter.findExistingEntity), because the failed flush has already marked the
+        // loser's transaction for rollback and it can be neither committed nor read from.
+        when(entities.saveAndFlush(any(MemoryEntity.class)))
                 .thenThrow(new DataIntegrityViolationException("uq_memory_entity violated"));
+        when(proposalWriter.findExistingEntity("PERSON", "person:happy")).thenReturn(Optional.of(winner));
 
-        MemoryEntity returned = command.createEntity(
-                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), EXTRACTION);
-
-        assertThat(returned.getId())
-                .as("the loser of the unique constraint returns the winner instead of a raw 500")
-                .isEqualTo(winner.getId());
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("PERSON", "person:happy", "Happy", Sensitivity.INTERNAL), EXTRACTION))
+                .as("the loser names the winner in a governed conflict instead of a raw 500")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining("created concurrently")
+                .hasMessageContaining(winner.getId().toString());
+        verify(entities, never()).save(any(MemoryEntity.class));
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+        verify(events, never()).publishEvent(any(ApplicationEvent.class));
     }
 
     @Test
@@ -1557,7 +1564,7 @@ class MemoryCommandServiceTest {
         MemoryActor extraction = new MemoryActor(MemoryActorType.EXTRACTION, runId.toString());
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
@@ -1590,7 +1597,7 @@ class MemoryCommandServiceTest {
     void anOperatorUnknownKeyWritesAnActiveEntityAndItsFirstActiveFact() {
         MemoryEntity[] stored = new MemoryEntity[1];
         when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> {
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
             return stored[0];
         });
@@ -1617,7 +1624,7 @@ class MemoryCommandServiceTest {
         assertThat(created.getStatus()).isEqualTo(EntityStatus.ACTIVE);
         assertThat(created.getOrigin()).isEqualTo(MemoryOrigin.OPERATOR);
         assertThat(created.getSensitivity()).isEqualTo(Sensitivity.INTERNAL);
-        verify(entities).save(created);
+        verify(entities).saveAndFlush(created);
         MemoryAssertion assertion = captureAssertions(1).get(0);
         assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.ENTITY);
         assertThat(assertion.getSubjectId()).isEqualTo(created.getId());
@@ -1754,7 +1761,7 @@ class MemoryCommandServiceTest {
     private void assertTheEventPublisherIsReachableFromThisService() {
         UUID runId = UUID.randomUUID();
         when(entities.findByKindAndCanonicalKey("AGENT", "agent:event-control")).thenReturn(Optional.empty());
-        when(entities.save(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         MemoryEntity proposed = command.createEntity(
                 new CreateEntityCommand("AGENT", "agent:event-control", "Event control", null),

@@ -141,12 +141,28 @@ public class MemoryCommandService {
                 .origin(origin)
                 .build();
         try {
-            entities.save(entity);
+            // saveAndFlush, not save: the entity carries an assigned id and a primitive @Version,
+            // so `save` only schedules the INSERT and the unique-index check happens at commit —
+            // outside this try. The flush puts the check inside it, which is the rule
+            // MemoryProposalWriter.insertProposal already states (spec :325-326: the loser of the
+            // concurrent insert "is caught and re-read, never surfaced as a duplicate").
+            entities.saveAndFlush(entity);
         } catch (DataIntegrityViolationException e) {
-            // UNIQUE (kind, canonical_key) is the atomic guard; the loser reads the winner.
-            return entities.findByKindAndCanonicalKey(kind, canonicalKey)
+            // UNIQUE (kind, canonical_key) is the atomic guard and the loser re-reads the winner,
+            // but it cannot *return* it: the failed flush has already marked this transaction for
+            // rollback (the driver and Hibernate do that on any flush failure — the rule
+            // MemoryProposalWriter's class comment states for the proposal_hash race), so the row is
+            // read in a fresh transaction, named, and the caller gets the governed conflict that a
+            // retry resolves through the probe above. Before this, both halves were dead: `save`
+            // deferred the INSERT past this catch, the raw violation was raised at commit, and — on
+            // the worker path — the PENDING fact was already committed against the rolled-back
+            // entity id, i.e. a card the operator could never approve.
+            MemoryEntity winner = proposalWriter.findExistingEntity(kind, canonicalKey)
                     .orElseThrow(() -> new MemoryConflictException("entity " + kind + "/" + canonicalKey
                             + " collided with a concurrent write that cannot be read back; retry"));
+            throw new MemoryConflictException("entity " + kind + "/" + canonicalKey
+                    + " was created concurrently by another caller (entity " + winner.getId()
+                    + "); re-read that row instead of inserting a second one");
         }
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.CREATE, actor,
                 null, now, null, audit(

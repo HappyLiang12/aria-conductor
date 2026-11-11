@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.MemoryProposalCreatedEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -309,6 +310,69 @@ class RunSignalSseListenerTest {
     void bothSignalsRunOnlyAfterCommitSoThePanelCannotReadAnUncommittedAsk() {
         assertAfterCommit(annotatedListener("onApprovalRequested", ApprovalRequestedEvent.class));
         assertAfterCommit(annotatedListener("onRunWaitingForInput", RunWaitingForInputEvent.class));
+    }
+
+    // ------------------------------------------------------------------ memory
+
+    @Test
+    void aMemoryProposalForARegisteredRunEmitsTheProposalCard() {
+        // Task 10's MemoryProposalCreatedEvent is the operator's in-conversation
+        // card: the panel must learn the id it decides and what kind of subject it
+        // is WITHOUT a REST round-trip (spec C1/C2).
+        UUID runId = UUID.randomUUID();
+        UUID proposalId = UUID.randomUUID();
+        UUID entityId = UUID.randomUUID();
+        when(registry.hasStream(runId)).thenReturn(true);
+        when(registry.emit(eq(runId), eq("memory_proposal"), any())).thenReturn(true);
+
+        listener.onMemoryProposalCreated(new MemoryProposalCreatedEvent(this, proposalId,
+                "ENTITY", entityId, "person:happy", "Happy", "INTERNAL", runId));
+
+        ArgumentCaptor<Map<String, Object>> payload = mapCaptor();
+        verify(registry).emit(eq(runId), eq("memory_proposal"), payload.capture());
+        assertThat(payload.getValue())
+                .containsOnlyKeys("runId", "proposalId", "subjectType", "entityId", "factKey",
+                        "valueText", "sensitivity")
+                .containsEntry("runId", runId.toString())
+                .containsEntry("proposalId", proposalId.toString())
+                .containsEntry("subjectType", "ENTITY")
+                .containsEntry("entityId", entityId.toString())
+                .containsEntry("factKey", "person:happy")
+                .containsEntry("valueText", "Happy")
+                .containsEntry("sensitivity", "INTERNAL");
+    }
+
+    @Test
+    void aMemoryProposalForAnUnregisteredRunIsANoOp() {
+        // A sync chat turn has no live stream: the proposal still exists in the
+        // database and the REST inbox carries it, but there is no frame to push.
+        UUID runId = UUID.randomUUID();
+        when(registry.hasStream(runId)).thenReturn(false);
+
+        listener.onMemoryProposalCreated(new MemoryProposalCreatedEvent(this, UUID.randomUUID(),
+                "ENTITY", UUID.randomUUID(), "person:happy", "Happy", "INTERNAL", runId));
+
+        verify(registry, never()).emit(any(), any(), any());
+    }
+
+    @Test
+    void aMemoryProposalWithoutADecidableIdEmitsNothing() {
+        // A card the operator cannot decide is worse than no card: the emitted
+        // proposalId is the decision address, so an absent one is not emitted.
+        UUID runId = UUID.randomUUID();
+
+        listener.onMemoryProposalCreated(new MemoryProposalCreatedEvent(this, null,
+                "ENTITY", null, "person:happy", "Happy", "INTERNAL", runId));
+
+        verify(registry, never()).emit(any(), any(), any());
+    }
+
+    @Test
+    void theMemoryProposalSignalRunsOnlyAfterCommit() {
+        // The proposal row is written in MemoryCommandService's own transaction; a
+        // panel that fetched it on the event would otherwise read nothing.
+        assertAfterCommit(annotatedListener("onMemoryProposalCreated",
+                MemoryProposalCreatedEvent.class));
     }
 
     @Test

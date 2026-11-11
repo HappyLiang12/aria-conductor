@@ -1,18 +1,28 @@
 package io.aria.conductor.execution.telemetry;
 
+import io.aria.conductor.execution.engine.RunStreamRegistry;
 import io.aria.conductor.execution.runtime.CoreEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * F17/F9: the bridge's derived {@code tool.call} / {@code tool.result} /
@@ -181,5 +191,150 @@ class CoreEventTelemetryTest {
         // event loop must never fail a run because observability could not be persisted.
         verify(telemetry).recordUsage(RUN, new RunTelemetryService.UsageEvent(1L, null, null));
         verify(telemetry, never()).recordToolCall(any(), any());
+    }
+
+    // ---------------------------------------------------------------- live tool signals
+
+    /**
+     * A real {@link SseEmitter} that records the frames it was asked to send: the activity
+     * strip's producer is judged on the wire frame, not on an internal call.
+     */
+    static final class RecordingStream extends SseEmitter {
+        final List<SseEventBuilder> frames = new CopyOnWriteArrayList<>();
+
+        RecordingStream() {
+            super(0L);
+        }
+
+        @Override
+        public void send(SseEventBuilder builder) {
+            frames.add(builder);
+        }
+    }
+
+    /** The event name of a frame; SSE writes it as an {@code event:} line. */
+    private static String rendered(SseEmitter.SseEventBuilder frame) {
+        StringBuilder text = new StringBuilder();
+        for (ResponseBodyEmitter.DataWithMediaType part : frame.build()) {
+            if (part.getMediaType() == null || MediaType.TEXT_PLAIN.includes(part.getMediaType())) {
+                text.append(part.getData());
+            }
+        }
+        return text.toString();
+    }
+
+    /** The payload object of a frame, as it was handed over with {@code application/json}. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> payloadOf(SseEmitter.SseEventBuilder frame) {
+        return (Map<String, Object>) frame.build().stream()
+                .filter(part -> part.getMediaType() != null
+                        && MediaType.APPLICATION_JSON.includes(part.getMediaType()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("the frame carries no application/json payload"))
+                .getData();
+    }
+
+    @Test
+    void aToolCallReachesTheRunsStreamAsToolCallWithTheContractsPayload() {
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.call", TOOL_CALL_OBJECT_INPUT))).isTrue();
+
+        assertThat(stream.frames).as("one frame per core tool.call").hasSize(1);
+        assertThat(rendered(stream.frames.get(0)))
+                .as("the exact event name the activity strip dispatches")
+                .startsWith("event:tool_call\n");
+        assertThat(payloadOf(stream.frames.get(0)))
+                .containsOnlyKeys("runId", "name", "args", "toolCallId")
+                .containsEntry("runId", RUN.toString())
+                .containsEntry("name", "Bash")
+                .containsEntry("args", "{\"command\":\"git status\"}")
+                .containsEntry("toolCallId", "call-obj");
+    }
+
+    @Test
+    void aFailedToolResultReachesTheRunsStreamAsOkFalse() {
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.result", TOOL_RESULT_FAILED))).isTrue();
+
+        assertThat(stream.frames).hasSize(1);
+        assertThat(rendered(stream.frames.get(0))).startsWith("event:tool_result\n");
+        assertThat(payloadOf(stream.frames.get(0)))
+                .containsOnlyKeys("runId", "name", "result", "ok", "toolCallId")
+                .containsEntry("runId", RUN.toString())
+                .containsEntry("name", "Bash")
+                .containsEntry("result", "exit code 128")
+                .containsEntry("ok", false)
+                .containsEntry("toolCallId", "call-obj");
+    }
+
+    @Test
+    void aSuccessfulToolResultCarriesOkTrue() {
+        // The positive control for ok: a result with no isError flag has not failed.
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThat(adapter.record(RUN, event("tool.result",
+                "{\"toolCallId\":\"call-x\",\"toolName\":\"Read\",\"result\":\"ok\"}"))).isTrue();
+
+        assertThat(payloadOf(stream.frames.get(0)))
+                .containsEntry("ok", true)
+                .containsEntry("result", "ok")
+                .containsEntry("name", "Read");
+    }
+
+    @Test
+    void aRunWithNoRegisteredStreamProducesNoFrameAndNoException() {
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream otherRunsStream = new RecordingStream();
+        registry.register(UUID.randomUUID(), otherRunsStream);
+        adapter.attachStreamRegistry(registry);
+
+        assertThatCode(() -> {
+            assertThat(adapter.record(RUN, event("tool.call", TOOL_CALL_OBJECT_INPUT))).isTrue();
+            assertThat(adapter.record(RUN, event("tool.result", TOOL_RESULT_FAILED))).isTrue();
+        }).doesNotThrowAnyException();
+
+        // Nothing was invented for a run without a stream, and the other run's stream is untouched.
+        assertThat(registry.hasStream(RUN)).isFalse();
+        assertThat(otherRunsStream.frames).isEmpty();
+    }
+
+    @Test
+    void nothingIsStreamedWhenTheTelemetryWriteDidNotSucceed() {
+        // The stream must never claim a tool result that was not persisted.
+        RunStreamRegistry registry = new RunStreamRegistry();
+        RecordingStream stream = new RecordingStream();
+        registry.register(RUN, stream);
+        adapter.attachStreamRegistry(registry);
+        doThrow(new IllegalStateException("database is down"))
+                .when(telemetry).recordToolResult(any(), any());
+
+        assertThat(adapter.record(RUN, event("tool.result", TOOL_RESULT_OBJECT))).isFalse();
+
+        assertThat(stream.frames).isEmpty();
+    }
+
+    @Test
+    void aStreamThatThrowsNeverEscapesTheCoreEventPath() {
+        // RunStreamRegistry.emit is documented never to throw, and the core event loop must not
+        // depend on that promise to keep a run alive.
+        RunStreamRegistry registry = mock(RunStreamRegistry.class);
+        when(registry.emit(eq(RUN), any(), any())).thenThrow(new IllegalStateException("stream exploded"));
+        adapter.attachStreamRegistry(registry);
+
+        assertThatCode(() -> assertThat(adapter.record(RUN, event("tool.call", TOOL_CALL_OBJECT_INPUT)))
+                .as("the write succeeded, so the event is recorded")
+                .isTrue()).doesNotThrowAnyException();
+        verify(registry).emit(eq(RUN), eq("tool_call"), any());
     }
 }

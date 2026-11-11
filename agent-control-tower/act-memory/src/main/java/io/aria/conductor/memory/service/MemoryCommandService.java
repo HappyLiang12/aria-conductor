@@ -113,7 +113,20 @@ public class MemoryCommandService {
         EntityStatus status = origin == MemoryOrigin.EXTRACTION ? EntityStatus.PENDING : EntityStatus.ACTIVE;
         Optional<MemoryEntity> existing = entities.findByKindAndCanonicalKey(kind, canonicalKey);
         if (existing.isPresent()) {
-            return existing.get();
+            MemoryEntity row = existing.get();
+            // 2026-11-11 fix-round decision (T10 review Minor 1): a decided key must not swallow a
+            // new proposal. UNIQUE (kind, canonical_key) makes this row the identity of the key, so
+            // a second row for the key cannot exist without a migration (this program adds none).
+            // Re-proposing therefore resets the identity row to PENDING — never to ACTIVE, because
+            // the promotion stays the operator's decision — clears the merge redirect (the key is
+            // an open proposal again), re-stamps the proposal's own fields and publishes the card
+            // event again. The suppressed verdict stays auditable on the RETIRE/MERGE assertions and
+            // on this CREATE assertion's before-json. A PENDING or ACTIVE row is returned unchanged,
+            // so a repeated extraction remains a no-op (spec §11) exactly as before.
+            if (status == EntityStatus.PENDING && isTerminal(row.getStatus())) {
+                return rePropose(row, kind, canonicalKey, command, origin, status, actor);
+            }
+            return row;
         }
         Instant now = Instant.now();
 
@@ -141,6 +154,42 @@ public class MemoryCommandService {
                         "status", status.name())));
         publishEntityProposal(entity, actor);
         return entity;
+    }
+
+    /**
+     * Re-proposes a decided key on its identity row (see the comment in {@link #createEntity}).
+     * The row becomes PENDING review material again — never ACTIVE — the previous terminal status
+     * and merge redirect are recorded on the CREATE assertion, and the card event is published so
+     * the operator sees the new proposal.
+     */
+    private MemoryEntity rePropose(MemoryEntity row, String kind, String canonicalKey,
+                                   CreateEntityCommand command, MemoryOrigin origin,
+                                   EntityStatus status, MemoryActor actor) {
+        Instant now = Instant.now();
+        String before = audit(
+                "status", row.getStatus().name(),
+                "mergedInto", row.getMergedInto() == null ? null : row.getMergedInto().toString());
+        row.setStatus(status);
+        row.setOrigin(origin);
+        row.setDisplayName(isBlank(command.displayName()) ? canonicalKey : command.displayName());
+        if (command.sensitivity() != null) {
+            // Absence must never widen an existing label: only an explicit label replaces it.
+            row.setSensitivity(command.sensitivity());
+        }
+        row.setMergedInto(null);
+        row.setUpdatedAt(now);
+        entities.save(row);
+        assertions.save(assertion(MemorySubjectType.ENTITY, row.getId(), MemoryAction.CREATE, actor,
+                null, now, before, audit(
+                        "kind", kind,
+                        "canonicalKey", canonicalKey,
+                        "status", status.name())));
+        publishEntityProposal(row, actor);
+        return row;
+    }
+
+    private static boolean isTerminal(EntityStatus status) {
+        return status == EntityStatus.RETIRED || status == EntityStatus.MERGED;
     }
 
     @Transactional

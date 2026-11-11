@@ -66,7 +66,8 @@ class OrphanedRunRecoveryTest {
                 null /* ContextManifestService */, null /* ContextProperties */, workspaceManager,
                 approvalRepository, null /* coreExecutionServiceProvider */, null /* DoDService */,
                 null /* coreRunLauncherProvider */, null /* admission */,
-                null /* KanbanRepository */, null /* RunInputCoordinator */);
+                null /* KanbanRepository */, null /* RunInputCoordinator */,
+                new RunStreamRegistry());
     }
 
     private Run run(RunStatus status) {

@@ -33,7 +33,8 @@ import static org.mockito.Mockito.when;
  * The MCP approval boundary. {@code decide_approval} is operator-only: the tool
  * resolves the actor from the transport context only and a run-scoped worker
  * credential is refused before the coordinator is reached (Task 12: a worker may
- * never self-approve, on either MCP transport).
+ * never self-approve, on either MCP transport). The refusal names the action and the
+ * surface (Task 11: an actionable refusal, never a bare "forbidden").
  */
 @ExtendWith(MockitoExtension.class)
 class ApprovalToolsTest {
@@ -121,8 +122,23 @@ class ApprovalToolsTest {
 
         assertThat(json).contains("\"ok\":false")
                 .contains("\"errorType\":\"FORBIDDEN\"")
-                .contains("\"message\":\"Operator authority required\"");
+                .contains("\"message\":\"Operator authority required: deciding an approval is an operator decision. "
+                        + "Decide it in the Review Queue.\"");
         verifyNoInteractions(permissionCoordinator);
+    }
+
+    /** The explicit positive control for the same tool: the operator still decides. */
+    @Test
+    void anOperatorActorCanStillDecideAnApproval() {
+        UUID id = UUID.randomUUID();
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(true);
+
+        String json = tools.decideApproval(id, true, "lgtm", context(ActorPrincipal.operator(null)));
+
+        assertThat(json).contains("\"ok\":true").contains("\"status\":\"processed\"");
+        verify(permissionCoordinator).decide(org.mockito.ArgumentMatchers.eq(id),
+                org.mockito.ArgumentMatchers.eq(PermissionChoice.ALLOW_ONCE),
+                org.mockito.ArgumentMatchers.eq(ActorPrincipal.operator(null)));
     }
 
     @Test

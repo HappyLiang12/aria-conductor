@@ -545,6 +545,38 @@ describe('panelReducer clarifications, proposals and queue', () => {
     expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'rejected' });
   });
 
+  it('settles a proposal decided elsewhere without claiming a verdict', () => {
+    const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
+    let s = panelReducer(base, { type: 'proposalCreated', proposal });
+    expect(hasUnansweredCard(s)).toBe(true);
+    // The bounded PENDING inbox cannot tell an approval from a rejection, so the
+    // item settles into a state of its own rather than into either verdict.
+    s = panelReducer(s, { type: 'proposalSettled', proposalId: 'p1', state: 'decided-elsewhere' });
+    const card = s.items.find((i) => i.kind === 'proposal');
+    expect(card).toMatchObject({ state: 'decided-elsewhere' });
+    expect(card).not.toMatchObject({ state: 'approved' });
+    expect(card).not.toMatchObject({ state: 'rejected' });
+    // Settled for gating: its decision controls could only 409.
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
+  it('never reopens a decided-elsewhere proposal, nor downgrades it to a verdict', () => {
+    const proposal = { id: 'p1', subjectType: 'FACT' as const, factKey: 'timezone', valueText: 'Asia/Shanghai' };
+    let s = panelReducer(base, { type: 'proposalCreated', proposal });
+    s = panelReducer(s, { type: 'proposalSettled', proposalId: 'p1', state: 'decided-elsewhere' });
+    // A re-delivered creation signal…
+    s = panelReducer(s, { type: 'proposalCreated', proposal });
+    // …and a restore that lists it again (an off-page proposal that came back)
+    // must not resurrect an actionable card behind a claim it is still pending.
+    s = panelReducer(s, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [], approvals: [], proposals: [proposal],
+    });
+    expect(s.items.filter((i) => i.kind === 'proposal')).toHaveLength(1);
+    expect(s.items.find((i) => i.kind === 'proposal')).toMatchObject({ state: 'decided-elsewhere' });
+    expect(hasUnansweredCard(s)).toBe(false);
+  });
+
   it('replaces the single queued item and removes it on an empty list', () => {
     let s = panelReducer(base, { type: 'queuedRuns', runIds: ['r1', 'r2'] });
     expect(s.items.filter((i) => i.kind === 'queued')).toHaveLength(1);

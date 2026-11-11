@@ -49,7 +49,9 @@ type BatchRead =
  */
 function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
   const entityId = item.entityId;
-  const isEntity = item.subjectType === 'ENTITY';
+  // Only a PENDING entity proposal decides a batch; a settled one (including
+  // `decided-elsewhere`, whose outcome this panel cannot know) must not read it.
+  const isEntity = item.subjectType === 'ENTITY' && item.state === 'pending';
   const [batch, setBatch] = useState<BatchRead | null | undefined>(undefined);
 
   useEffect(() => {
@@ -95,7 +97,9 @@ function useEntityBatch(item: ProposalPanelItem): BatchRead | null | undefined {
  * the entity — so that card lists the batch before the decision. A decision is
  * authoritative on the server; the card flips to the settled state only after
  * the call resolves, and a 401/403 renders the local operator-session notice
- * instead of pretending the proposal was decided.
+ * instead of pretending the proposal was decided. A proposal settled as
+ * `decided-elsewhere` (the panel's PENDING reconcile no longer listed it) has
+ * no known outcome; the card reports exactly that and offers no decision.
  */
 export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   // Local settlement, layered over the item's own state: a re-render with a
@@ -194,7 +198,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       )}
       <div className="ask-meta">
         <span className={`pill ${state === 'pending' ? 'warn' : state === 'approved' ? 'ok' : 'dim'}`}>
-          {state}
+          {state === 'decided-elsewhere' ? 'decided elsewhere' : state}
         </span>
         {item.sensitivity && <span className="pill dim">{item.sensitivity}</span>}
       </div>
@@ -217,6 +221,17 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           >
             {inFlight === 'REJECT' ? 'Rejecting…' : 'Reject'}
           </button>
+        </div>
+      ) : state === 'decided-elsewhere' ? (
+        // A PENDING inbox read no longer listed it, and that inbox is a bounded
+        // page with no by-id outcome read: it cannot say whether the departure
+        // was an approval, a rejection, or a later retirement. Saying so is the
+        // honest report; "Approved" or "Rejected" here would be invented. No
+        // decision control survives either — a decision would only 409.
+        <div className="ask-ctx" role="status" data-testid="aria-proposal-decided-elsewhere">
+          This proposal is no longer pending — it was decided outside this panel (the Memory
+          page or another operator). The inbox cannot say whether it was approved or rejected;
+          open the Memory page to see its outcome.
         </div>
       ) : (
         <div className="ask-ctx" role="status">

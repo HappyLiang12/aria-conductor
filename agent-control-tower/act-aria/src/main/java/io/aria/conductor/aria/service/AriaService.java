@@ -12,6 +12,7 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import static io.aria.conductor.execution.engine.AgentLoopEngine.parseMaxIterationsFromConfig;
 import io.aria.conductor.execution.llm.*;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.common.model.PromptCall;
 import lombok.extern.slf4j.Slf4j;
@@ -42,19 +43,22 @@ public class AriaService {
     private final IntentClassifier intentClassifier;
     private final ToolCallRepository toolCallRepository;
     private final AriaSyncRunWaiter syncRunWaiter;
+    private final ApprovalRepository approvalRepository;
 
     public AriaService(AgentLoopEngine agentLoopEngine,
                        AgentRepository agentRepository,
                        RunRepository runRepository,
                        IntentClassifier intentClassifier,
                        ToolCallRepository toolCallRepository,
-                       AriaSyncRunWaiter syncRunWaiter) {
+                       AriaSyncRunWaiter syncRunWaiter,
+                       ApprovalRepository approvalRepository) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
         this.intentClassifier = intentClassifier;
         this.toolCallRepository = toolCallRepository;
         this.syncRunWaiter = syncRunWaiter;
+        this.approvalRepository = approvalRepository;
     }
 
     public AriaChatResponse chat(AriaChatRequest request) {
@@ -91,7 +95,8 @@ public class AriaService {
      * Maps the observed committed state to the wire contract (F2): the reply
      * always carries the run id and the status that was actually read, and only
      * a COMPLETED run may claim completion. A FAILED/ABORTED run carries its
-     * stable error identity and reason.
+     * stable error identity and reason. A WAITING_INPUT run additionally carries
+     * the clarification it is parked on (A4/F3) — question text and approval id.
      */
     private AriaChatResponse buildResponse(UUID runId, String conversationId, String intent,
                                            AriaSyncRunWaiter.Outcome outcome) {
@@ -99,22 +104,45 @@ public class AriaService {
         RunStatus status = snapshot != null && snapshot.getStatus() != null
                 ? snapshot.getStatus() : RunStatus.PENDING;
         List<AriaAction> actions = buildActionsTaken(runId);
+        Approval parkedAsk = status == RunStatus.WAITING_INPUT ? findPendingClarification(runId) : null;
+        String question = parkedAsk != null && parkedAsk.getContent() != null
+                && !parkedAsk.getContent().isBlank() ? parkedAsk.getContent() : null;
         return AriaChatResponse.builder()
                 .runId(runId.toString())
                 .conversationId(conversationId)
-                .message(messageFor(runId, status, snapshot, actions))
+                .message(messageFor(runId, status, snapshot, actions, question))
                 .intent(intent)
                 .actionsTaken(actions)
                 .status(status.name())
                 .errorCode(snapshot != null ? snapshot.getErrorCode() : null)
                 .errorMessage(snapshot != null ? snapshot.getErrorMessage() : null)
+                .question(question)
+                .approvalId(parkedAsk != null && parkedAsk.getId() != null
+                        ? parkedAsk.getId().toString() : null)
                 .timestamp(Instant.now())
                 .build();
     }
 
+    /**
+     * The ask a parked run is waiting on (A4): its pending CLARIFICATION approval,
+     * whose {@code content} is the question. Guarded like the tool-call lookup — a
+     * failed read must not turn a parked reply into an error; the reply then carries
+     * the observed status only and never a fabricated question.
+     */
+    private Approval findPendingClarification(UUID runId) {
+        try {
+            List<Approval> asks = approvalRepository.findByRunIdAndStatusAndSource(
+                    runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION);
+            return asks == null || asks.isEmpty() ? null : asks.get(0);
+        } catch (Exception e) {
+            log.warn("Failed to load the parked clarification for run {}: {}", runId, e.getMessage());
+            return null;
+        }
+    }
+
     private static String messageFor(UUID runId, RunStatus status,
                                      AriaRunStateRepository.RunSnapshot snapshot,
-                                     List<AriaAction> actions) {
+                                     List<AriaAction> actions, String question) {
         String output = snapshot != null ? snapshot.getFinalOutput() : null;
         if (status == RunStatus.COMPLETED) {
             if (output != null && !output.isBlank()) {
@@ -150,6 +178,10 @@ public class AriaService {
                 return output;
             }
             return "Run was cancelled before producing a result. Check the Runs dashboard for details.";
+        }
+        // A parked run's answer is the question itself (A4), when there is one.
+        if (status == RunStatus.WAITING_INPUT && question != null && !question.isBlank()) {
+            return question;
         }
         // Still live after the bounded sync window: report exactly what was seen.
         return "Run " + runId + " is still " + status

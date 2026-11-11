@@ -49,7 +49,8 @@ class AriaSynthesisPromptTest {
                 intentClassifier, toolCallRepository,
                 new AriaSyncRunWaiter(
                         org.mockito.Mockito.mock(io.aria.conductor.aria.repository.AriaRunStateRepository.class),
-                        AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L));
+                        AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L),
+                org.mockito.Mockito.mock(io.aria.conductor.execution.repository.ApprovalRepository.class));
     }
 
     /** The template's fixed header and tail, verbatim from the plan. */

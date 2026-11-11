@@ -573,7 +573,7 @@ describe('AriaPanel in-flow decisions', () => {
     expect(screen.getByText('WRITE_LOCAL')).toBeInTheDocument();
     expect(screen.getByText('WORKER_WRITE')).toBeInTheDocument();
     // A decision is pending: the composer is gated with an explicit reason.
-    expect(screen.getByText('Answer or cancel the pending decision first.')).toBeInTheDocument();
+    expect(screen.getByText('Answer the pending decision first.')).toBeInTheDocument();
     expect(textarea()).toBeDisabled();
   });
 
@@ -593,7 +593,7 @@ describe('AriaPanel in-flow decisions', () => {
     });
 
     expect(screen.getByText(/allowed once/i)).toBeInTheDocument();
-    expect(screen.queryByText('Answer or cancel the pending decision first.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
 
     // A re-delivery of the same decision (another plane, a reconnect) draws nothing new.
@@ -621,8 +621,34 @@ describe('AriaPanel in-flow decisions', () => {
 
     // The card is still the operator's to decide (positive control for the
     // unknown-id no-op: the same frame with a1 settles it in the test above).
-    expect(screen.getByText('Answer or cancel the pending decision first.')).toBeInTheDocument();
+    expect(screen.getByText('Answer the pending decision first.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+  });
+
+  it('carries the expiry reason the frame reports onto the settled card', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({ runId: 'r1', approvalId: 'a1', toolName: TOOL });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+
+    // The frame the backend broadcasts carries its own reason
+    // (EventBroadcastListener: `approval.expired` + reason), which the Review
+    // panel shows; dropping it leaves the card saying only "expired".
+    act(() => {
+      wsBridge.emit({
+        type: 'approval.expired',
+        payload: { approvalId: 'a1', runId: 'r1', reason: 'Auto-rejected: approval expired' },
+      });
+    });
+
+    const settled = await screen.findByText(/expired before a decision/i);
+    expect(settled.textContent).toMatch(/auto-rejected: approval expired/i);
+    expect(textarea()).toBeEnabled();
   });
 
   it('renders a waiting_input frame as a question card that gates the composer', async () => {
@@ -728,7 +754,7 @@ describe('AriaPanel in-flow decisions', () => {
 
     // The card belonged to the conversation that was just cleared.
     expect(screen.queryByText(TOOL)).not.toBeInTheDocument();
-    expect(screen.queryByText('Answer or cancel the pending decision first.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Answer the pending decision first.')).not.toBeInTheDocument();
     expect(textarea()).toBeEnabled();
 
     // A frame the cleared turn emits afterwards must not land in the new transcript.

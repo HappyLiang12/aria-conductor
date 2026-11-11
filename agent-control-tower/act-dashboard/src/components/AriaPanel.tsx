@@ -511,7 +511,15 @@ export function AriaPanel() {
         case 'approval.expired': {
           const approvalId = String(event.payload?.approvalId ?? '');
           if (!approvalId) return;
-          dispatch({ type: 'approvalSettled', approvalId, state: 'expired' });
+          // The frame carries the backend's own reason ("Auto-rejected: approval
+          // expired"), which the Review panel shows; the card says the same.
+          const reason = String(event.payload?.reason ?? '');
+          dispatch({
+            type: 'approvalSettled',
+            approvalId,
+            state: 'expired',
+            ...(reason !== '' ? { reason } : {}),
+          });
           dispatch({ type: 'clarificationSettled', approvalId, state: 'expired' });
           return;
         }
@@ -1072,7 +1080,14 @@ export function AriaPanel() {
                 );
               }
               if (item.kind === 'proposal') {
-                // Wave C (Task 12) renders the memory-proposal card into this list.
+                // Wave C (Task 12) renders the memory-proposal card into this
+                // list. Until it exists this item renders nothing, while
+                // `hasUnansweredCard` in ariaPanelState.ts already counts a
+                // PENDING proposal as an unanswered card — so wiring
+                // `proposalCreated` without the card here would gate the
+                // composer with no visible control to clear it. The gate and
+                // this render must land together (ariaPanelState.ts is Task 4's
+                // module; this lane cannot exclude proposals from the gate).
                 return null;
               }
               return (
@@ -1146,7 +1161,10 @@ export function AriaPanel() {
 
           {gated && (
             <div className="ai-gate-hint" role="status">
-              Answer or cancel the pending decision first.
+              {/* Name only what the cards actually offer: Allow/Deny on an
+                  approval, Answer on a question. There is no cancel affordance
+                  in this panel, so the copy must not promise one. */}
+              Answer the pending decision first.
             </div>
           )}
 

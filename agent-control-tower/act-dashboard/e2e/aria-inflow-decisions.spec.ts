@@ -81,8 +81,10 @@ test.describe('Aria in-flow decisions (live)', () => {
     await expect(card.locator('.ai-decision-tool code')).toContainText('remember_fact');
     await expect(card.locator('.ai-decision-tags .pill')).toHaveCount(2);
 
-    // The composer is gated by the unanswered ask, and says why.
-    await expect(page.locator('.ai-panel .ai-gate-hint')).toContainText('Answer or cancel the pending decision first.');
+    // The composer is gated by the unanswered ask, and says why. The copy names
+    // only what exists: the card offers Allow/Deny (and a question offers
+    // Answer), so it never promises a cancel that is not there.
+    await expect(page.locator('.ai-panel .ai-gate-hint')).toContainText('Answer the pending decision first.');
     await expect(page.locator('.ai-panel .ai-compose-input')).toBeDisabled();
 
     await card.getByRole('button', { name: /allow once/i }).click();

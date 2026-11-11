@@ -30,9 +30,10 @@ import java.util.UUID;
  * on both act-agent's services and act-execution's
  * {@link OperatorAuthorityResolver}).
  *
- * <p>{@code POST /{id}/retire} is the one operator-only action here, matching the
- * MCP {@code retire_agent} guard. Reads and the non-authority mutations
- * (create/update/runtime/templates/skills) keep their existing contract.
+ * <p>Two actions here are operator-only: {@code POST /{id}/retire} (matching the MCP
+ * {@code retire_agent} guard) and {@code PUT /runtime}, which rewrites the whole
+ * fleet's runtime pair and has no MCP twin. Reads and the remaining mutations
+ * (create/update/templates/skills) keep their existing contract.
  */
 @Validated
 @RestController
@@ -81,16 +82,31 @@ public class AgentController {
      * refuse the very action that cures a mixed fleet. Do NOT "unify" the two;
      * they are intentionally different (per-agent guard vs the batch convergence
      * write).
+     * <p>
+     * The bypass is of the uniformity guard ONLY: operator authority IS resolved
+     * here, before the service call (Wave C "authority honesty"). This route has no
+     * MCP twin, so the parity argument that leaves {@code create_agent} /
+     * {@code update_agent} worker-permitted does not apply: a sandbox worker reaching
+     * a non-loopback address cannot move the whole fleet onto the host. The refusal
+     * names the action and the surface the fleet error messages already point at
+     * ("Configure &gt; Runtime").
      */
     @PutMapping("/runtime")
-    public Map<String, Object> applyRuntime(@RequestBody ApplyRuntimeRequest request) {
+    public ResponseEntity<?> applyRuntime(@RequestBody ApplyRuntimeRequest request,
+                                          HttpServletRequest httpRequest) {
+        ResponseEntity<Object> refusal = rejectNonOperator(httpRequest,
+                "changing the fleet runtime",
+                "Change it fleet-wide in Configure > Runtime.");
+        if (refusal != null) {
+            return refusal;
+        }
         ApplyRuntimeResult result =
                 agentService.applyRuntimeToAll(request.adkProvider(), request.executionMode());
-        return Map.of(
+        return ResponseEntity.ok(Map.of(
                 "runtime", Map.of(
                         "adkProvider", result.adkProvider(),
                         "executionMode", result.executionMode().name()),
-                "updated", result.updated());
+                "updated", result.updated()));
     }
 
     /**
@@ -99,7 +115,8 @@ public class AgentController {
      */
     @PostMapping("/{id}/retire")
     public ResponseEntity<?> retireAgent(@PathVariable UUID id, HttpServletRequest request) {
-        ResponseEntity<Object> refusal = rejectNonOperator(request);
+        ResponseEntity<Object> refusal = rejectNonOperator(request,
+                "retiring an agent", "Retire it on the Crew page.");
         if (refusal != null) {
             return refusal;
         }
@@ -154,17 +171,19 @@ public class AgentController {
      * act, in the MCP {@code retire_agent} voice. Null means the caller is the
      * operator; call this before any side effect.
      */
-    private ResponseEntity<Object> rejectNonOperator(HttpServletRequest request) {
+    private ResponseEntity<Object> rejectNonOperator(HttpServletRequest request, String action,
+                                                     String surface) {
         try {
             operatorAuthority.resolveOperator(request, true);
         } catch (OperatorSessionService.ForbiddenMutationException e) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", RETIRE_REFUSAL));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", refusal(action, surface)));
         } catch (SecurityException e) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", RETIRE_REFUSAL));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", refusal(action, surface)));
         }
         return null;
     }
 
-    private static final String RETIRE_REFUSAL = "Operator authority required: retiring an agent"
-            + " is an operator decision. Retire it on the Crew page.";
+    private static String refusal(String action, String surface) {
+        return "Operator authority required: " + action + " is an operator decision. " + surface;
+    }
 }

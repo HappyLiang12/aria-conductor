@@ -2,17 +2,21 @@ package io.aria.conductor.dashboard.agent;
 
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.AgentTemplateDTO;
+import io.aria.conductor.agent.dto.ApplyRuntimeRequest;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.agent.service.AgentTemplateService;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.security.ActorTokenService;
 import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.test.WebMvcTestBase;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -55,11 +59,11 @@ class AgentControllerCrudTest extends WebMvcTestBase {
     private final AgentService agentService = mock(AgentService.class);
     private final AgentTemplateService templateService = mock(AgentTemplateService.class);
     private final ActorTokenService actorTokens = mock(ActorTokenService.class);
+    private final OperatorSessionService sessions = new OperatorSessionService(
+            "operator-bearer-secret", Duration.ofHours(8), "http://localhost:5173", false,
+            Clock.systemUTC());
     private final OperatorAuthorityResolver operatorAuthority =
-            new OperatorAuthorityResolver(
-                    new OperatorSessionService("operator-bearer-secret", Duration.ofHours(8),
-                            "http://localhost:5173", false, Clock.systemUTC()),
-                    actorTokens, "");
+            new OperatorAuthorityResolver(sessions, actorTokens, "");
     private final MockMvc mvc = mockMvcFor(
             new AgentController(agentService, templateService, operatorAuthority));
 
@@ -227,6 +231,78 @@ class AgentControllerCrudTest extends WebMvcTestBase {
                 .andExpect(status().isOk());
 
         verify(agentService).retireAgent(id);
+    }
+
+    // ------------------------------------------- fleet runtime authority boundary
+
+    /**
+     * {@code PUT /runtime} rewrites the whole fleet's (core, mode) pair, so a sandbox
+     * worker that can reach the port must not reach this route: it has no MCP twin to
+     * parity with, and the only callers are the dashboard and the fleet-wide error
+     * messages the uniformity guard itself points the operator at.
+     */
+    private static final String RUNTIME_REFUSAL = "Operator authority required: changing the fleet"
+            + " runtime is an operator decision. Change it fleet-wide in Configure > Runtime.";
+
+    private static ApplyRuntimeRequest runtimeRequest() {
+        return new ApplyRuntimeRequest("qoder", ExecutionMode.HOST);
+    }
+
+    /** A live operator session cookie, carrying the Origin and CSRF a mutation needs. */
+    private static RequestPostProcessor operatorSessionMutation(OperatorSessionService sessions) {
+        OperatorSessionService.OperatorSession session = sessions.createSession();
+        return request -> {
+            request.setRemoteAddr("203.0.113.7");
+            request.setCookies(new Cookie(OperatorSessionService.COOKIE_NAME, session.sessionId()));
+            request.addHeader("Origin", "http://localhost:5173");
+            request.addHeader(OperatorSessionService.CSRF_HEADER, session.csrfToken());
+            return request;
+        };
+    }
+
+    @Test
+    void applyRuntime_workerBearerIsForbidden_andNeverConvergesTheFleet() throws Exception {
+        when(actorTokens.resolveBearer(WORKER_AUTHORIZATION)).thenReturn(Optional.of(
+                ActorPrincipal.worker(UUID.randomUUID(), NOW.plus(Duration.ofHours(1)))));
+
+        mvc.perform(put("/api/v1/agents/runtime")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", WORKER_AUTHORIZATION)
+                        .content(json(runtimeRequest())))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(RUNTIME_REFUSAL));
+
+        verify(agentService, never()).applyRuntimeToAll(any(), any());
+    }
+
+    @Test
+    void applyRuntime_anonymousRemoteIsUnauthorized_andNeverConvergesTheFleet() throws Exception {
+        mvc.perform(put("/api/v1/agents/runtime")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .with(remote())
+                        .content(json(runtimeRequest())))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value(RUNTIME_REFUSAL));
+
+        verify(agentService, never()).applyRuntimeToAll(any(), any());
+    }
+
+    /** The dashboard's authenticated path: an operator session cookie from a remote peer. */
+    @Test
+    void applyRuntime_operatorSessionCookieConvergesTheFleet() throws Exception {
+        when(agentService.applyRuntimeToAll("qoder", ExecutionMode.HOST))
+                .thenReturn(new ApplyRuntimeResult("qoder", ExecutionMode.HOST, 2));
+
+        mvc.perform(put("/api/v1/agents/runtime")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .with(operatorSessionMutation(sessions))
+                        .content(json(runtimeRequest())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runtime.adkProvider").value("qoder"))
+                .andExpect(jsonPath("$.runtime.executionMode").value("HOST"))
+                .andExpect(jsonPath("$.updated").value(2));
+
+        verify(agentService).applyRuntimeToAll("qoder", ExecutionMode.HOST);
     }
 
     /** Reads stay open: the dashboard does not authenticate its inventory reads. */

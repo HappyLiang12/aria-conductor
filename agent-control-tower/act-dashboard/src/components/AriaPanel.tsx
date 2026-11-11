@@ -1055,9 +1055,9 @@ export function AriaPanel() {
               conversationRunIdsRef.current.add(runId);
             }
           },
-          onToolCall: (name) => {
+          onToolCall: (name, args) => {
             if (staleTurn()) return;
-            dispatch({ type: 'toolCall', turnId: turnId(), name });
+            dispatch({ type: 'toolCall', turnId: turnId(), name, args });
           },
           onToolResult: (name, result, ok) => {
             if (staleTurn()) return;

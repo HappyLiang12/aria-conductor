@@ -4,6 +4,7 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.common.tool.ToolPolicy;
 import io.aria.conductor.execution.approval.ApprovalAnswerService;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
@@ -113,7 +114,12 @@ public class ApprovalController {
             String source,
             String contextMd,
             String optionsJson,
-            String answer) {}
+            String answer,
+            // B1 (spec §5.3): the reviewed ToolPolicy the one catalog classifies the
+            // tool with (WORKER_READ/WORKER_WRITE/OPERATOR_ONLY/GATED), resolved at read
+            // time. Null when the catalog does not know the name, so the card can say
+            // "unclassified" instead of guessing an authority class.
+            String toolPolicy) {}
 
     /**
      * List approvals, optionally filtered by {@link ApprovalStatus} or by the kanban card the
@@ -204,6 +210,10 @@ public class ApprovalController {
         String riskTier = toolName != null
                 ? toolRiskResolver.resolve(toolName).name()
                 : a.getRiskTier();
+        // Authority is a second axis: the same catalog classification the tier comes from,
+        // reported as the reviewed policy name (null for an unclassified tool).
+        ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
+        String toolPolicy = policy != null ? policy.name() : null;
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -215,7 +225,7 @@ public class ApprovalController {
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
                 a.getSource() == null ? null : a.getSource().name(),
-                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer(), toolPolicy);
     }
 
     /**

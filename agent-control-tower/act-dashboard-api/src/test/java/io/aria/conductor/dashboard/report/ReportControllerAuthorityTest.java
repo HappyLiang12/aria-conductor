@@ -32,13 +32,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * The operator boundary of the report mutations (Wave C "authority honesty").
  *
  * <p>Regenerating and archiving a report are operator decisions with no worker-facing
- * twin: the MCP report tools are {@code generate_report}, {@code list_reports},
- * {@code get_report} and {@code amend_report}, so those two mutations resolve operator
- * authority before the service call. {@code POST /generate} and {@code POST /{id}/amend}
- * stay ungated on purpose — both are {@code WORKER_WRITE} in the MCP tool catalog and the
- * QA workflow instructs a run-scoped worker to call {@code generate_report}.
- *
- * <p>The refusal follows the controller idiom introduced by {@code AgentController.retire}
+ * twin: the report tools on the Java MCP surface are {@code generate_report},
+ * {@code list_reports} and {@code amend_report} ({@code ToolCatalog}; there is no
+ * {@code get_report} there), so those two mutations resolve operator authority before the
+ * service call. {@code POST /generate} and {@code POST /{id}/amend} stay ungated on
+ * purpose, and the catalog policy is the reason: both are {@code WORKER_WRITE}, i.e.
+ * worker-callable and not auto-approved.
+ * <p>
+ * The refusal follows the controller idiom introduced by {@code AgentController.retire}
  * and {@code LlmProviderController}: a worker credential (or a forged cookie mutation) is
  * {@code 403}, an anonymous non-loopback caller is {@code 401}. The three GETs stay open.
  */

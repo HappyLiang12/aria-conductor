@@ -185,14 +185,14 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
 | Frontend unit suite | `pnpm exec vitest run` | 90 files / 899 tests passed at `190f1bc8` (lane recovery, coverage OFF). **NOT RUN at the pre-T48 final head**; later lanes ran focused suites (T41: 24 files / 311 tests; T40 recovery: 1 test). **PASS at the T48 head: 92 files / 964 tests, 0 failed** |
 | Per-lane module gates (T48) | `bash scripts/mvn-lane.sh inner act-mcp -am`; `... inner act-aria -am` | act-mcp: 273 tests, 0 failures, 0 skipped (ToolCatalogParityTest 19, including the 67/65/10 and 57-line/<3000-char pins; McpActorContextTest 4); act-aria: rc=0 — PASS at the T48 head |
 | Per-lane module gates | `bash scripts/mvn-lane.sh inner <modules> -am` | green per lane; counts in each task report |
-| Full unit tier | `wave-gate.sh` step `unit` | **NOT RUN** at the final head |
-| Failsafe tier | `wave-gate.sh` step `itg` | **NOT RUN** at the final head |
-| Frontend coverage ratchet | `pnpm test -- --coverage` | preflight at `df93716d`: **90 files / 882 tests passed**, coverage 79.91% lines / 82.28% branches / 66.44% functions against thresholds 5 / 60 / 40 — PASS, no threshold error. **NOT RUN at the final head** |
-| MCP server coverage | `pnpm test -- --coverage` | **NOT RUN** — the preflight covered the dashboard only; this tier has never been exercised |
-| Dashboard build | `pnpm build` | **NOT RUN** at the pre-T48 final head; **PASS at the T48 head** (`tsc -b && vite build`, 254 modules, `dist/index.html` + 2 assets, rc=0) |
-| Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **NOT RUN** at the final head |
-| Clean-room | fresh worktree, no target/node_modules/dist, full gate | **NOT RUN** |
-| Artifact-first E2E | `e2e-gate.sh` — packaged harness + built dist + 5 smoke endpoints + Playwright `--repeat-each=2` | **NOT RUN** |
+| Full unit tier | `wave-gate.sh final4` step `unit` | **PASS at `17fa515a`**: run=3220 fail=0 err=0 skip=8, 325 classes |
+| Failsafe tier | `wave-gate.sh final4` step `itg` | **PASS at `17fa515a`**: run=265 fail=0 err=0 skip=6, 53 classes |
+| Frontend coverage ratchet | `pnpm test -- --coverage` | **PASS at `17fa515a`**: 92 files / 974 tests, coverage 79.7% lines / 82.97% branches / 67.95% functions / 79.7% statements against thresholds 5 / 60 / 40 — no threshold error |
+| MCP server coverage | `cd packages/mcp-server && pnpm test -- --coverage` | **RUN at `17fa515a`**: 20 files / 157 tests pass. The gate collects no coverage because `vitest.config.ts:9-14` sets every threshold to 0; a direct measurement gives 88.5 / 89.7 / 86.04 / 87.95. `ci.yml:278` runs the same command, so local and hosted are at parity. **Pre-existing repo gap, not introduced by this program** — see residual 6 |
+| Dashboard build | `pnpm build` | **PASS at `17fa515a`**: 255 modules, `dist/index.html` 705 B, rc=0 |
+| Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **PASS at `17fa515a`**: run=2 fail=0 err=0 skip=0, BUILD SUCCESS |
+| Clean-room | fresh worktree, no target/node_modules/dist, full gate | **PASS at `17fa515a`** in `D:/project/pa-clean2`: build outputs removed and measured before the run, `git rev-parse` verified before and after, 13/13 steps rc=0, overall rc=0 |
+| Artifact-first E2E | `e2e-gate.sh final4` — packaged harness + built dist + 5 smoke endpoints + Playwright `--repeat-each=2` | **PASS at `17fa515a`**: the harness started **natively from the delivered script** (no shim, no replay), `harness boundary: OK`, `harness health: OK`, `setup rc=0`, all 5 smoke endpoints OK, `dist preview: OK`. Playwright 560 instances (280×2): **517 passed / 0 failed / 1 flaky / 42 skipped, rc=0**. `aria-timeout-cancel.spec.ts:146` and `core-execution-modes.spec.ts:238` each passed **both repeats with no retry**. Both ports released by the script's own trap (`cleanup: port 5173 free`, `cleanup: port 8080 free`) |
 | Live PA bar | runbook Phase 1 O1-O5 on a fresh database, browser only | **NOT RUN** |
 | Governance probes | runbook Phase 1b P1a-P9 and Phase 3 | **NOT RUN** |
 | Five-turn scenario | runbook Phase 2 against the 2026-11-10 baseline | **NOT RUN** |

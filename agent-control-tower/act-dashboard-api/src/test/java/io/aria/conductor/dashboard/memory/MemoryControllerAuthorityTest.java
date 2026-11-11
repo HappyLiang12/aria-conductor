@@ -139,6 +139,22 @@ class MemoryControllerAuthorityTest {
                 .build();
     }
 
+    /** The review material a PENDING page lists: a proposal, not an ACTIVE row. */
+    private static MemoryEntity pendingEntity(UUID id) {
+        return MemoryEntity.builder()
+                .id(id)
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .version(1)
+                .createdAt(NOW)
+                .updatedAt(NOW)
+                .build();
+    }
+
     // ------------------------------------------------------- GET /entities
 
     @Test
@@ -189,6 +205,47 @@ class MemoryControllerAuthorityTest {
                         .cookie(operatorSessionCookie()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(id.toString()));
+    }
+
+    /**
+     * The authority gate precedes the status narrowing, and that order is load-bearing. Every
+     * positive above asks for {@code status=ACTIVE}, so nothing pinned the order: the route resolves
+     * authority, then narrows the read. If the gate were moved after the narrowing and left on only
+     * one branch, the refusal itself would become an enumeration oracle — a worker asking for
+     * {@code status=PENDING} could read 200/empty where the operator reads 403 and learn which
+     * statuses exist, and by the same move which ids exist. Both statuses are asked here by the same
+     * refused caller, both must answer the SAME refusal, and the service must never be reached.
+     */
+    @Test
+    void listEntities_refusesAWorkerForEitherStatusBeforeTheNarrowing_andNeverQueries() throws Exception {
+        workerTokenIsLive();
+
+        for (String status : List.of("PENDING", "ACTIVE")) {
+            mvc.perform(get("/api/v1/memory/entities").param("status", status)
+                            .header("Authorization", WORKER_AUTHORIZATION))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.ok").value(false))
+                    .andExpect(jsonPath("$.errorType").value("FORBIDDEN"))
+                    .andExpect(jsonPath("$.message").value(workerRefusal()));
+        }
+
+        verifyNoInteractions(query);
+    }
+
+    /**
+     * Positive control for the test above: the PENDING page is a normal operator read, so its 403 is
+     * the authority gate and not a refusal of the status itself.
+     */
+    @Test
+    void listEntities_anonymousLoopbackServesThePendingPage() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(query.listEntities(isNull(), eq(EntityStatus.PENDING), anyInt()))
+                .thenReturn(List.of(MemoryEntityView.from(pendingEntity(id))));
+
+        mvc.perform(get("/api/v1/memory/entities").param("status", "PENDING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(id.toString()))
+                .andExpect(jsonPath("$[0].status").value("PENDING"));
     }
 
     // ------------------------------------------------------- GET /proposals

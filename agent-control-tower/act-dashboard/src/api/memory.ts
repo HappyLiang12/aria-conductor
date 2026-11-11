@@ -7,10 +7,10 @@ import { applyOperatorHeaders } from './operatorSession';
  * Types are defined here rather than in `src/types/index.ts` because this lane
  * does not own that file; every field mirrors the shipped Java view / request
  * record exactly (do not add a field the server does not accept). Reads are
- * deterministic views; every mutation resolves operator authority
- * server-side, so each one applies the locally established operator session's
- * CSRF header first and a refusal is a 401/403 the caller must render, never an
- * empty list.
+ * deterministic views AND resolve operator authority, like every route on this
+ * surface: a refused read is a 401/403 the caller must render, never an empty
+ * list. Mutations additionally apply the locally established operator session's
+ * CSRF header before the request.
  */
 
 /** `EntityStatus` — PENDING is an extraction's proposal, never memory. */

@@ -397,6 +397,35 @@ class MemoryProposalServiceTest {
     }
 
     /**
+     * N3 (T10 fix round 1 re-review). The reject branch saved every batch fact without flushing,
+     * so the first flush was the entity one: a lost FACT version surfaced as "memory entity …
+     * changed", pointing the incident at the wrong row. The fact flush now runs per fact inside
+     * the same translation, so the conflict names the row that actually lost the race.
+     */
+    @Test
+    void aRejectedBatchWhoseFactVersionWasChangedUnderneathNamesTheFactNotTheEntity() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);
+        MemoryFact timezone = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(timezone));
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, timezone.getId()))
+                .when(facts).flush();
+
+        assertThatThrownBy(() -> proposals.decideProposal(entityId, ProposalDecision.REJECT, OPERATOR))
+                .as("the conflict names the row whose version was lost")
+                .isInstanceOf(MemoryConflictException.class)
+                .hasMessageContaining(timezone.getId().toString())
+                .hasMessageContaining("timezone")
+                .hasMessageContaining("rejection")
+                .hasMessageNotContaining(entityId.toString());
+
+        assertThat(entity.getStatus()).as("the loser retires nothing").isEqualTo(EntityStatus.PENDING);
+        verify(assertions, never()).save(any());
+    }
+
+    /**
      * Minor 4 (T10 fix round 1). The entity row carries its own {@code @Version}, but
      * {@code decideEntity} never flushed it: two operator clicks on the same card both pass the
      * PENDING check and the loser surfaces a raw optimistic-lock failure at commit (MCP answers

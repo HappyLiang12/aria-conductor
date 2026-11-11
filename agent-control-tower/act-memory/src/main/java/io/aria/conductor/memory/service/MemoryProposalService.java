@@ -213,6 +213,10 @@ public class MemoryProposalService {
             proposal.setStatus(FactStatus.RETIRED);
             proposal.setValidTo(now);
             facts.save(proposal);
+            // N3 (T10 fix round 1 re-review): flush here, not only at the entity flush that follows
+            // a batch rejection. Otherwise a lost fact version is reported as a lost entity row and
+            // the conflict points the operator at the wrong card during an incident.
+            flushFacts(proposal, "the rejection");
             assertions.save(assertion(MemorySubjectType.FACT, proposal.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", FactStatus.RETIRED.name(), "factKey", proposal.getFactKey())));
             return MemoryProposalView.fromFact(proposal);
@@ -278,13 +282,20 @@ public class MemoryProposalService {
      * transaction commit.
      */
     private void flushFacts(MemoryFact proposal) {
+        flushFacts(proposal, "the approval (the proposal or its conflicting current value)");
+    }
+
+    /**
+     * The shared flush translation. {@code what} names the write whose row actually lost the
+     * version race, so the governed conflict is attributable (N3, T10 fix round 1 re-review).
+     */
+    private void flushFacts(MemoryFact proposal, String what) {
         try {
             facts.flush();
         } catch (OptimisticLockingFailureException e) {
             throw new MemoryConflictException("memory fact " + proposal.getId()
                     + " for key '" + proposal.getFactKey()
-                    + "' or its conflicting current value changed while the approval was being "
-                    + "written; re-read before deciding");
+                    + "' changed while " + what + " was being written; re-read before deciding");
         }
     }
 

@@ -18,6 +18,7 @@ import io.aria.conductor.memory.repository.MemoryAssertionRepository;
 import io.aria.conductor.memory.repository.MemoryEntityRepository;
 import io.aria.conductor.memory.repository.MemoryFactRepository;
 import io.aria.conductor.memory.repository.MemoryRelationRepository;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -62,6 +63,19 @@ class MemoryProposalServiceTest {
     private static final MemoryActor WORKER_RUN = new MemoryActor(MemoryActorType.RUN, "run-1");
     private static final MemoryActor WORKER_EXTRACTION = new MemoryActor(MemoryActorType.EXTRACTION, "extract-1");
     private static final Instant OLD = Instant.parse("2026-01-01T00:00:00Z");
+
+    /**
+     * T38: the four wordings the PA front end discriminates a server outcome on, pinned as a
+     * taxonomy. The memory envelope carries the same {@code 409 CONFLICT} for every conflict and
+     * the same {@code 403 FORBIDDEN} for every refusal, so the message is the only field that tells
+     * them apart — that makes each phrase a contract rather than a phrasing. Every edit below is
+     * caught by the assertions in this class; task-38-report.md records the mutation probes.
+     */
+    private static final String ALREADY_DECIDED = "a decided proposal cannot be reopened";
+    private static final String RETRYABLE_RACE = "changed while";
+    private static final String RETRYABLE_REMEDY = "re-read before deciding";
+    private static final String PENDING_PARENT = "which is still PENDING; decide the entity proposal";
+    private static final String CROSS_SITE = "Cross-origin operator mutation rejected";
 
     @Mock
     MemoryFactRepository facts;
@@ -815,6 +829,239 @@ class MemoryProposalServiceTest {
                 assertion -> assertThat(assertion.getSubjectType()).isEqualTo(MemorySubjectType.RELATION));
     }
 
+    // ---------------------------------------------------------------- the 409/403 message taxonomy (T38)
+
+    /**
+     * T38 item 1. Every "already decided" throw in {@code MemoryProposalService} ends with this
+     * phrase, and it is the ONE signal that a retry cannot succeed: the front end settles the card
+     * on this marker and on nothing else ({@code AriaProposalCard.ALREADY_DECIDED_MARKER}). The
+     * 409 envelope is identical for all conflicts, so the pin must also prove the OTHER two
+     * conflict wordings are absent — four coincidences are not a contract. All three producers
+     * (fact, relation, entity) are driven, because a future edit could collapse just one of them.
+     */
+    @Test
+    void anAlreadyDecidedProposalCarriesOnlyTheAlreadyDecidedMarker() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact decidedFact = fact(entityId, "timezone", FactStatus.ACTIVE, OLD);
+        when(facts.findById(decidedFact.getId())).thenReturn(Optional.of(decidedFact));
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(decidedFact.getId(), ProposalDecision.REJECT, OPERATOR),
+                ALREADY_DECIDED);
+
+        MemoryRelation decidedRelation = relation(FactStatus.RETIRED);
+        when(facts.findById(decidedRelation.getId())).thenReturn(Optional.empty());
+        when(relations.findById(decidedRelation.getId())).thenReturn(Optional.of(decidedRelation));
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(decidedRelation.getId(), ProposalDecision.APPROVE, OPERATOR),
+                ALREADY_DECIDED);
+
+        MemoryEntity decidedEntity = pendingEntity(UUID.randomUUID());
+        decidedEntity.setStatus(EntityStatus.RETIRED);
+        when(facts.findById(decidedEntity.getId())).thenReturn(Optional.empty());
+        when(relations.findById(decidedEntity.getId())).thenReturn(Optional.empty());
+        when(entities.findById(decidedEntity.getId())).thenReturn(Optional.of(decidedEntity));
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(decidedEntity.getId(), ProposalDecision.APPROVE, OPERATOR),
+                ALREADY_DECIDED);
+    }
+
+    /**
+     * T38 item 1. A lost row version is the OTHER 409: the same status and errorType, but the call
+     * is retryable, so the front end must keep the ordinary error path instead of settling the
+     * card. Both governed translations are driven — the fact flush and the entity flush — because
+     * they are separate {@code catch} blocks and either could drift to the dead-end wording.
+     * <p>
+     * The marker is the pair {@code "changed while"} + {@code "re-read before deciding"}. The
+     * shipped wording differs in two places the brief credited to this marker and which are NOT
+     * pinned here (task-38-report.md): {@code MemoryCurrentValueSlot.claim} says "changed while …
+     * another writer won the race — re-read before writing" (reachable from an approval that loses
+     * the entity slot) and {@code MemoryCommandService} says "re-read before retrying".
+     */
+    @Test
+    void aLostVersionRaceCarriesOnlyTheRetryableMarker() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity(entityId)));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryFact.class, proposed.getId()))
+                .when(facts).flush();
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR),
+                RETRYABLE_RACE, RETRYABLE_REMEDY);
+
+        UUID cardId = UUID.randomUUID();
+        MemoryEntity card = pendingEntity(cardId);
+        when(entities.findById(cardId)).thenReturn(Optional.of(card));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(cardId, FactStatus.PENDING))
+                .thenReturn(List.of());
+        doThrow(new ObjectOptimisticLockingFailureException(MemoryEntity.class, cardId))
+                .when(entities).flush();
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(cardId, ProposalDecision.APPROVE, OPERATOR),
+                RETRYABLE_RACE, RETRYABLE_REMEDY);
+    }
+
+    /**
+     * T38 item 1. A PENDING parent is also a 409, but not retryable — the operator has to decide
+     * the entity card instead — so the wording has to name that case and the entity the decision
+     * belongs to, or the front end cannot point the operator at the right card. The fact id and
+     * the entity id both appear in the shipped message; the entity id is asserted explicitly
+     * because it is the actionable half.
+     */
+    @Test
+    void aPendingParentConflictCarriesOnlyThePendingParentMarker() {
+        UUID entityId = UUID.randomUUID();
+        MemoryFact proposed = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(facts.findById(proposed.getId())).thenReturn(Optional.of(proposed));
+        when(entities.findById(entityId)).thenReturn(Optional.of(pendingEntity(entityId)));
+
+        assertConflictTaxonomy(
+                () -> proposals.decideProposal(proposed.getId(), ProposalDecision.APPROVE, OPERATOR),
+                PENDING_PARENT, entityId.toString());
+    }
+
+    // ---------------------------------------------------------------- worker visibility of decided entities (T38 item 2)
+
+    /**
+     * T38 item 2. The catalog description now promises that a worker read with {@code status=ACTIVE}
+     * or {@code status=RETIRED} DOES receive ENTITY rows, but the only pin of the entity gate
+     * ({@code operator || status != PENDING}) used the default PENDING status, so the promise was
+     * unpinned here. Both worker identities are driven because the gate keys on OPERATOR versus
+     * every other type, not on which worker asked. The facts and relations on the same page are
+     * asserted too: the widening must not have replaced the page with entity rows.
+     */
+    @Test
+    void aWorkerInboxOfActiveRowsReceivesTheEntityRowWithItsKeyAndSubjectType() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity activeEntity = pendingEntity(happy);
+        activeEntity.setStatus(EntityStatus.ACTIVE);
+        MemoryFact activeFact = fact(happy, "timezone", FactStatus.ACTIVE, OLD.plusSeconds(3));
+        MemoryRelation activeRelation = relation(FactStatus.ACTIVE, OLD.plusSeconds(2));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(activeEntity));
+
+        for (MemoryActor worker : List.of(WORKER_RUN, WORKER_EXTRACTION)) {
+            List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.ACTIVE, worker);
+
+            assertThat(inbox).extracting(MemoryProposalView::subjectType)
+                    .as("a %s worker read of ACTIVE memory is the whole page, entity included", worker.type())
+                    .containsExactly("FACT", "RELATION", "ENTITY");
+            assertThat(inbox).filteredOn(view -> "ENTITY".equals(view.subjectType()))
+                    .singleElement()
+                    .satisfies(view -> {
+                        assertThat(view.id()).isEqualTo(happy.toString());
+                        assertThat(view.factKey()).as("the canonical key is the handle").isEqualTo("person:happy");
+                        assertThat(view.valueText()).isEqualTo("Happy");
+                        assertThat(view.status()).isEqualTo("ACTIVE");
+                    });
+        }
+    }
+
+    /** The RETIRED half of the same promise: a retired entity is history a worker may still read. */
+    @Test
+    void aWorkerInboxOfRetiredRowsReceivesTheRetiredEntityRow() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity retiredEntity = pendingEntity(happy);
+        retiredEntity.setStatus(EntityStatus.RETIRED);
+        MemoryFact retiredFact = fact(happy, "timezone", FactStatus.RETIRED, OLD.plusSeconds(2));
+        MemoryRelation retiredRelation = relation(FactStatus.RETIRED, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.RETIRED), any(Pageable.class)))
+                .thenReturn(List.of(retiredEntity));
+
+        List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.RETIRED, WORKER_EXTRACTION);
+
+        assertThat(inbox).extracting(MemoryProposalView::subjectType)
+                .containsExactly("FACT", "RELATION", "ENTITY");
+        assertThat(inbox).filteredOn(view -> "ENTITY".equals(view.subjectType()))
+                .singleElement()
+                .satisfies(view -> {
+                    assertThat(view.id()).isEqualTo(happy.toString());
+                    assertThat(view.factKey()).isEqualTo("person:happy");
+                    assertThat(view.status()).isEqualTo("RETIRED");
+                });
+    }
+
+    /**
+     * The withholding the widening must not erase: a PENDING entity's canonical key and display
+     * name stay review material for the operator. The operator half is in the same test as the
+     * positive control — an empty page for everyone would satisfy the negative alone, and the
+     * {@code status != PENDING} clause is the only thing that keeps this test honest.
+     */
+    @Test
+    void aWorkerInboxOfPendingRowsOmitsTheEntityWhileTheOperatorInboxKeepsIt() {
+        UUID happy = UUID.randomUUID();
+        MemoryEntity entityProposal = pendingEntity(happy);
+        MemoryFact pendingFact = fact(happy, "timezone", FactStatus.PENDING, OLD.plusSeconds(2));
+        MemoryRelation pendingRelation = relation(FactStatus.PENDING, OLD.plusSeconds(1));
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingFact));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(pendingRelation));
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.PENDING), any(Pageable.class)))
+                .thenReturn(List.of(entityProposal));
+
+        List<MemoryProposalView> workerView = proposals.listProposals(FactStatus.PENDING, WORKER_EXTRACTION);
+        List<MemoryProposalView> operatorView = proposals.listProposals(FactStatus.PENDING, OPERATOR);
+
+        assertThat(workerView).extracting(MemoryProposalView::subjectType)
+                .as("a PENDING entity identity is withheld from the worker")
+                .containsExactly("FACT", "RELATION");
+        assertThat(workerView).extracting(MemoryProposalView::factKey)
+                .as("the worker still sees the proposal it made")
+                .containsExactly("timezone", null);
+        assertThat(operatorView).extracting(MemoryProposalView::subjectType)
+                .as("the positive control: the operator page does carry the entity row")
+                .containsExactly("FACT", "RELATION", "ENTITY");
+        assertThat(operatorView).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", null, "person:happy");
+    }
+
+    /**
+     * T38 item 2's sensitivity bullet, pinned where the guarantee actually lives. The brief asked
+     * for "a worker read never returns a value above INTERNAL"; that is NOT this service's
+     * behaviour and asserting it here would be false. {@code listProposals} carries each row's own
+     * label through {@link MemoryProposalView#sensitivity()} and applies no ceiling — the ceiling
+     * is the caller's, {@code MemoryTools.list_memory_proposals} filtering with
+     * {@code withinCeiling}, which treats an unlabelled row as RESTRICTED (fail closed). Closing
+     * that gap at the service would be a production change, out of scope for this test-only lane.
+     * <p>
+     * What is pinned instead is the property that caller depends on: the label is the ROW's label,
+     * never a constant and never re-derived, so a ceiling filter downstream can work at all. The
+     * two labels differ inside one page, which is what makes this a control rather than a fixture
+     * echo.
+     */
+    @Test
+    void theInboxCarriesEachRowsOwnSensitivitySoTheCeilingCanBeAppliedByTheCaller() {
+        UUID happy = UUID.randomUUID();
+        MemoryFact internal = fact(happy, "timezone", FactStatus.ACTIVE, OLD.plusSeconds(2));
+        MemoryFact publicRow = fact(happy, "timezone_format", FactStatus.ACTIVE, OLD.plusSeconds(1));
+        publicRow.setSensitivity(Sensitivity.PUBLIC);
+        when(facts.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of(internal, publicRow));
+        when(relations.findByStatusOrderByCreatedAtDesc(eq(FactStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(entities.findByStatusOrderByUpdatedAtDesc(eq(EntityStatus.ACTIVE), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        List<MemoryProposalView> inbox = proposals.listProposals(FactStatus.ACTIVE, WORKER_EXTRACTION);
+
+        assertThat(inbox).extracting(MemoryProposalView::factKey)
+                .containsExactly("timezone", "timezone_format");
+        assertThat(inbox).extracting(MemoryProposalView::sensitivity)
+                .as("each row keeps its own label; the INTERNAL ceiling is applied by the caller")
+                .containsExactly("INTERNAL", "PUBLIC");
+    }
+
     // ---------------------------------------------------------------- transaction boundary
 
     /**
@@ -843,6 +1090,27 @@ class MemoryProposalServiceTest {
     }
 
     // ---------------------------------------------------------------- fixtures
+
+    /**
+     * The mutual-exclusion half of the T38 taxonomy. The message must carry every required
+     * marker and NONE of the other wordings in the table: without the negative half, two
+     * outcomes could become indistinguishable while every positive assertion still passed.
+     */
+    private static void assertConflictTaxonomy(ThrowingCallable call, String... required) {
+        List<String> requiredMarkers = List.of(required);
+        List<String> absent = List.of(ALREADY_DECIDED, RETRYABLE_RACE, RETRYABLE_REMEDY,
+                        PENDING_PARENT, CROSS_SITE).stream()
+                .filter(marker -> !requiredMarkers.contains(marker))
+                .toList();
+        assertThatThrownBy(call).isInstanceOf(MemoryConflictException.class).satisfies(error -> {
+            assertThat(error.getMessage()).as("the pinned wording").contains(requiredMarkers);
+            for (String marker : absent) {
+                assertThat(error.getMessage())
+                        .as("this conflict must not read like another outcome ('%s')", marker)
+                        .doesNotContain(marker);
+            }
+        });
+    }
 
     private static MemoryEntity entity(UUID entityId) {
         return MemoryEntity.builder()

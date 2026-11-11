@@ -63,7 +63,7 @@ export function AriaApprovalCard({
       )}
       {settled ? (
         <div className="ai-decision-settled">
-          {SETTLED_COPY[item.state]}
+          {item.state === 'approved' ? 'Allowed once' : item.state === 'denied' ? 'Denied' : 'Expired before a decision'}
           {item.reason !== undefined && item.reason !== '' ? ` — ${item.reason}` : ''}
         </div>
       ) : (
@@ -90,11 +90,5 @@ export function AriaApprovalCard({
     </div>
   );
 }
-
-const SETTLED_COPY: Record<Exclude<ApprovalOutcome, 'pending'>, string> = {
-  approved: 'Allowed once',
-  denied: 'Denied',
-  expired: 'Expired before a decision',
-};
 
 export default AriaApprovalCard;

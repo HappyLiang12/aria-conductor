@@ -173,7 +173,9 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
       <div className="ask-q">
         {titleOf(item.subjectType)} <span className="pill">{item.factKey ?? '—'}</span>
       </div>
-      {item.valueText && (
+      {/* An entity proposed without a display name carries its canonical key as
+          the value too; printing it again here would say the same thing twice. */}
+      {item.valueText && item.valueText !== item.factKey && (
         <div className="ask-ctx">
           <span data-testid="proposal-value">{item.valueText}</span>
         </div>

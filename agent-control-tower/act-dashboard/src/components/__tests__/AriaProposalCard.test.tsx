@@ -197,6 +197,31 @@ describe('AriaProposalCard', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
   });
 
+  // T14 review m4: an entity proposed without a display name carries its
+  // canonical key as the value too, and the card printed it twice — once as the
+  // title's key pill, once as the value line.
+  it('prints the canonical key once when there is no display name', async () => {
+    render(
+      <AriaProposalCard
+        item={entityItem({ factKey: 'person:happy', valueText: 'person:happy' })}
+        onSettled={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByTestId('proposal-batch')).toBeInTheDocument();
+    expect(screen.getAllByText('person:happy')).toHaveLength(1);
+    expect(screen.queryByTestId('proposal-value')).not.toBeInTheDocument();
+  });
+
+  // Positive control: a real display name still gets its own line.
+  it('keeps the value line when it differs from the canonical key', async () => {
+    render(<AriaProposalCard item={entityItem()} onSettled={vi.fn()} />);
+
+    expect(await screen.findByTestId('proposal-batch')).toBeInTheDocument();
+    expect(screen.getByText('person:happy')).toBeInTheDocument();
+    expect(screen.getByTestId('proposal-value')).toHaveTextContent('Happy');
+  });
+
   // Spec C1/C2: one entity decision promotes the entity AND every PENDING fact of
   // it. The operator cannot approve a batch they cannot read, so the card lists
   // that batch before the decision — read from the same proposals inbox the page

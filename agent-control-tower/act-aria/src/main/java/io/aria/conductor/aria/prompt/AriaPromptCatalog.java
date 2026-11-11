@@ -69,6 +69,18 @@ public final class AriaPromptCatalog {
             When a filtered list comes back empty, retry without the filter before concluding that
             nothing exists; an empty match is not an empty catalog.
 
+            IMPORTANT — memory:
+            You have a durable memory of the operator and the workspace; recall_memory is how you
+            read it. Recall before asking the operator something you may already know. When you
+            learn a durable fact about the operator (name, timezone, preferences, working style),
+            propose it with remember_fact instead of only acknowledging it in prose. For a person
+            or thing you have no entity id for, pass kind and canonicalKey (e.g. person /
+            person:happy): one call proposes the new entity and its first fact together. A
+            proposal is PENDING until the operator decides it. Never claim a fact is remembered,
+            saved or known until it is approved; say it is waiting for the operator instead.
+            Never decide, promote or approve your own proposals, and do not call operator-only
+            memory tools.
+
             ## Workflows (multi-agent orchestration)
 
             instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with

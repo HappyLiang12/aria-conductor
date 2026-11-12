@@ -402,6 +402,30 @@ class ToolCatalogParityTest {
     }
 
     /**
+     * T55, the write half of the live duplicate-identity defect. The Aria prompt teaches
+     * {@code remember_fact {kind:"person", canonicalKey:"person:happy"}} while the stored kind is
+     * {@code PERSON}. T53 made the kind READ case-insensitive and said so in the list description;
+     * the write half stored the kind as given, so the taught spelling could still mint a second
+     * identity. The write now canonicalises the kind with the same vocabulary, and this
+     * description must state that contract on BOTH copies — the registered {@code @Tool}
+     * annotation and the catalog mirror — so the model is not left guessing which spelling a
+     * write accepts.
+     */
+    @Test
+    void rememberFactStatesTheKindIsCaseInsensitiveAndAnUnknownKindIsRefused() {
+        String contract = "kind is case-insensitive (person and PERSON name the same entity kind; "
+                + "accepted kinds PERSON, PROJECT, REPO, MACHINE, AGENT, TASK, ORG; an unknown kind "
+                + "is refused with VALIDATION)";
+
+        assertThat(catalog.find("remember_fact").orElseThrow().description())
+                .as("catalog mirror")
+                .contains(contract);
+        assertThat(registeredRememberFactDescription())
+                .as("registered @Tool annotation")
+                .contains(contract);
+    }
+
+    /**
      * The {@code remember_fact} wording debt (T14 review): the description promised the two
      * shapes and the proposal rule but never said that one operator decision promotes the entity
      * and its first fact together. The sentence is asserted on BOTH copies — the registered

@@ -234,6 +234,30 @@ class MemoryToolsTest {
         assertThat(json).contains("\"ok\":true").contains("\"status\":\"ACTIVE\"");
     }
 
+    /**
+     * T55's surface half: the kind is canonicalised by {@code MemoryCommandService}, and that
+     * refusal has to reach the caller as the closed VALIDATION code rather than the catch-all
+     * REMEMBER_FACT_FAILED — a model that reads "failed" retries the same spelling, which is how
+     * the duplicate-identity proposal was born. The refusal itself is owned and proven by
+     * {@code MemoryCommandServiceTest.anUnknownKindIsRefusedInsteadOfBeingStoredAsANewVocabularyEntry};
+     * this test pins that the tool neither swallows it nor renames the code.
+     */
+    @Test
+    void anUnknownKindRefusalOnRememberFactIsReportedAsValidation() {
+        when(commands.addFactByKey(eq("wizard"), eq("wizard:merlin"), any(), any()))
+                .thenThrow(new MemoryValidationException("Unknown memory entity kind 'wizard'. "
+                        + "Entity kinds are case-insensitive: the accepted kinds are AGENT, MACHINE, "
+                        + "ORG, PERSON, PROJECT, REPO, TASK."));
+
+        String json = tools.rememberFact(null, "timezone", "UTC", null,
+                "wizard", "wizard:merlin", operatorContext());
+
+        assertThat(json).contains("\"ok\":false")
+                .contains("\"errorType\":\"VALIDATION\"")
+                .contains("wizard")
+                .contains("case-insensitive");
+    }
+
     @Test
     void rememberFactWithNeitherShapeIsAValidationError() {
         String json = tools.rememberFact(null, "timezone", "UTC", null, null, null, workerContext());

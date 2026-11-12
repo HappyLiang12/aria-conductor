@@ -228,10 +228,37 @@ describe('AriaApprovalCard', () => {
   it('renders a settled card without decision controls', () => {
     render(<AriaApprovalCard item={{ ...pendingAsk, state: 'denied', reason: 'wrong tenant' }} onSettled={vi.fn()} />);
 
-    expect(screen.getByText(/denied/i)).toBeInTheDocument();
-    expect(screen.getByText(/wrong tenant/)).toBeInTheDocument();
+    expect(document.querySelector('.ai-decision-settled')).toHaveTextContent('Denied — wrong tenant');
     expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^deny$/i })).not.toBeInTheDocument();
+  });
+
+  // F-LC1 (T54): a settled card already HAS its decision, so it must not ask for
+  // one. The live bar showed "ALLOWED ONCE" above "this tool needs your decision
+  // before it runs" — the card asking for what it had just recorded.
+  it.each(['approved', 'denied', 'expired'] as const)(
+    'a settled (%s) card does not ask for a decision it already has',
+    (state) => {
+      render(<AriaApprovalCard item={{ ...pendingAsk, state }} onSettled={vi.fn()} />);
+
+      const card = screen.getByText('mcp__aria-conductor__remember_fact')
+        .closest('.ai-decision-card') as HTMLElement;
+      expect(card).not.toBeNull();
+      expect(card).not.toHaveTextContent(/needs your decision/i);
+      // …it still says what happened, per state.
+      expect(card).toHaveTextContent(
+        state === 'approved' ? 'Allowed once'
+          : state === 'denied' ? 'Denied'
+            : 'Expired before a decision',
+      );
+    },
+  );
+
+  // Positive control: a genuinely pending ask keeps the instruction.
+  it('a pending card still asks for the decision', () => {
+    render(<AriaApprovalCard item={pendingAsk} onSettled={vi.fn()} />);
+
+    expect(screen.getByText(/this tool needs your decision before it runs/i)).toBeInTheDocument();
   });
 
   // A 409 is the backend saying the ask is no longer PENDING (expired, the run

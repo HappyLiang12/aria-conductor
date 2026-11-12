@@ -110,6 +110,25 @@ function isUnsettleableAsk(error: unknown): boolean {
  * applied first — without it the backend fails closed (401/403). A refusal is
  * reported where the operator can act on it, never retried silently.
  */
+/**
+ * The meta line under the tool name. A settled card already HAS its decision,
+ * so it must not ask for one (F-LC1): the live bar showed "ALLOWED ONCE" above
+ * "this tool needs your decision before it runs". Each settled state says what
+ * happened instead, and only a genuinely pending ask carries the instruction.
+ */
+function metaCopy(state: AriaApprovalItem['state']): string {
+  switch (state) {
+    case 'approved':
+      return 'you allowed this ask once';
+    case 'denied':
+      return 'you denied this ask';
+    case 'expired':
+      return 'the window to decide has closed';
+    case 'pending':
+      return 'this tool needs your decision before it runs';
+  }
+}
+
 export function AriaApprovalCard({
   item,
   onSettled,
@@ -177,7 +196,7 @@ export function AriaApprovalCard({
         </span>
       </div>
       <div className="ask-meta ai-decision-meta">
-        Run <code>{item.runId.slice(0, 8)}</code> · this tool needs your decision before it runs
+        Run <code>{item.runId.slice(0, 8)}</code> · {metaCopy(item.state)}
       </div>
       {summary !== '' ? (
         <pre

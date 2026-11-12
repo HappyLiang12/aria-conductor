@@ -2,6 +2,7 @@ package io.aria.conductor.memory.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.memory.dto.MemoryActor;
 import io.aria.conductor.memory.dto.MemoryProposalView;
 import io.aria.conductor.memory.dto.ProposalDecision;
@@ -76,6 +77,9 @@ public class MemoryProposalService {
 
     /** The review inbox page size: bounded, newest first. */
     static final int INBOX_LIMIT = 50;
+
+    /** The fact key whose operator-approved value may name its entity (T58, F-O3). */
+    private static final String DISPLAY_NAME_FACT_KEY = "display_name";
 
     /**
      * The review inbox as a NON-operator (worker) caller sees it: the newest
@@ -245,6 +249,10 @@ public class MemoryProposalService {
      * facts go through {@link #decideFact}, so the supersede and slot-claim rules are shared with a
      * single-fact decision instead of re-implemented here. The entity itself claims nothing on the
      * current-value slot — it has no fact key; only the promoted facts do.
+     * <p>
+     * T58 (F-O3): an APPROVE also adopts the batch's operator-approved {@code display_name} fact as
+     * the entity's display name when the stored name was never chosen — the canonical-key default
+     * ({@code MemoryCommandService:145}) is a handle, not a name. A REJECT changes no name.
      */
     private MemoryProposalView decideEntity(MemoryEntity entity, ProposalDecision decision, MemoryActor actor) {
         EntityStatus outcome = decision == ProposalDecision.APPROVE ? EntityStatus.ACTIVE : EntityStatus.RETIRED;
@@ -257,7 +265,7 @@ public class MemoryProposalService {
         }
         Instant now = Instant.now();
         String before = audit("status", EntityStatus.PENDING.name(), "kind", entity.getKind(),
-                "canonicalKey", entity.getCanonicalKey());
+                "canonicalKey", entity.getCanonicalKey(), "displayName", entity.getDisplayName());
         // "The same batch" is every PENDING fact of this PENDING entity: memory_facts has no batch
         // column and proposal_hash is per fact (spec §5.5).
         List<MemoryFact> batch = safe(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(
@@ -274,22 +282,80 @@ public class MemoryProposalService {
             flushEntity(entity);
             assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.RETIRE, actor, now,
                     before, audit("status", EntityStatus.RETIRED.name(), "kind", entity.getKind(),
-                            "canonicalKey", entity.getCanonicalKey(), "factsRetired", batch.size())));
+                            "canonicalKey", entity.getCanonicalKey(),
+                            "displayName", entity.getDisplayName(), "factsRetired", batch.size())));
             return MemoryProposalView.fromEntity(entity);
         }
 
+        // T58 (F-O3): the name is adopted while the batch is still the set being promoted, so only an
+        // operator-approved value can ever name the entity. See adoptApprovedDisplayName for the
+        // "never chosen", sensitivity and determinism rules.
+        adoptApprovedDisplayName(entity, batch);
         entity.setStatus(EntityStatus.ACTIVE);
         entities.save(entity);
         flushEntity(entity);
         assertions.save(assertion(MemorySubjectType.ENTITY, entity.getId(), MemoryAction.UPDATE, actor, now,
                 before, audit("status", EntityStatus.ACTIVE.name(), "kind", entity.getKind(),
-                        "canonicalKey", entity.getCanonicalKey(), "factsPromoted", batch.size())));
+                        "canonicalKey", entity.getCanonicalKey(),
+                        "displayName", entity.getDisplayName(), "factsPromoted", batch.size())));
         for (MemoryFact fact : batch) {
             if (fact != null) {
                 decideFact(fact, ProposalDecision.APPROVE, actor);
             }
         }
         return MemoryProposalView.fromEntity(entity);
+    }
+
+    /**
+     * Gives an entity whose name was never chosen (blank, or the canonical-key default written by
+     * {@code MemoryCommandService:145}/{@code :209}) the operator-approved {@code display_name} fact
+     * of the batch it is promoting. Three rules, each pinned by a test:
+     * <ul>
+     *   <li>a name the operator chose (anything else, blank excluded) is never overwritten;</li>
+     *   <li>only a row of THIS approved batch is read — the helper never queries, so a PENDING fact the
+     *       decision does not cover can never name an entity;</li>
+     *   <li>a fact more sensitive than the entity is refused, because the display name is rendered by
+     *       {@code MemoryContextContributor} outside the fact ceiling filter: adopting it would widen
+     *       egress past the ceiling recall applies to facts. An unlabelled fact or entity fails closed.</li>
+     * </ul>
+     * Several candidates resolve by newest {@code updatedAt} and then the greatest id, so the pick is
+     * a property of the rows rather than of the query's order.
+     */
+    private static void adoptApprovedDisplayName(MemoryEntity entity, List<MemoryFact> approvedBatch) {
+        String current = entity.getDisplayName();
+        String canonicalKey = entity.getCanonicalKey();
+        boolean chosen = current != null && !current.isBlank() && !current.equals(canonicalKey);
+        if (chosen) {
+            return;
+        }
+        MemoryFact adopted = null;
+        for (MemoryFact fact : approvedBatch) {
+            if (fact == null || fact.getStatus() != FactStatus.PENDING
+                    || !DISPLAY_NAME_FACT_KEY.equals(fact.getFactKey())
+                    || fact.getValueText() == null || fact.getValueText().isBlank()
+                    || aboveEntitySensitivity(fact, entity)) {
+                continue;
+            }
+            if (adopted == null || NEWEST_FACT_FIRST.compare(fact, adopted) > 0) {
+                adopted = fact;
+            }
+        }
+        if (adopted != null) {
+            entity.setDisplayName(adopted.getValueText().trim());
+        }
+    }
+
+    /** Newest {@code updatedAt} first, then the greatest id: a total order over one batch. */
+    private static final Comparator<MemoryFact> NEWEST_FACT_FIRST =
+            Comparator.comparing(MemoryFact::getUpdatedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+                    .thenComparing(MemoryFact::getId, Comparator.nullsFirst(Comparator.naturalOrder()));
+
+    /** Fail closed: an unlabelled fact or entity may not name the entity. */
+    private static boolean aboveEntitySensitivity(MemoryFact fact, MemoryEntity entity) {
+        Sensitivity factSensitivity = fact.getSensitivity();
+        Sensitivity entitySensitivity = entity.getSensitivity();
+        return factSensitivity == null || entitySensitivity == null
+                || factSensitivity.ordinal() > entitySensitivity.ordinal();
     }
 
     private MemoryProposalView decideFact(MemoryFact proposal, ProposalDecision decision, MemoryActor actor) {

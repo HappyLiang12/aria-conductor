@@ -227,7 +227,7 @@ class AriaPromptContributorTest {
         assertThat(flat).contains("A measured zero and an unreported state must not share a spelling.");
         assertThat(flat.indexOf("IMPORTANT — unreported usage:"))
                 .as("the usage rule belongs to the rules block, not after the workflow guidance")
-                .isGreaterThan(flat.indexOf("IMPORTANT — memory:"))
+                .isGreaterThan(flat.indexOf("## Rules"))
                 .isLessThan(flat.indexOf("## Workflows"));
     }
 

@@ -255,6 +255,29 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
                 .andExpect(content().string(not(containsString(SECRET))));
     }
 
+    /**
+     * T56 F2 (the shipped payload): the production wiring has no probe, and an operator may not
+     * have stored a credential yet. The view then serves {@code configured:false},
+     * {@code testSupported:false} AND a non-null {@code testUnavailableReason} — the probe reason
+     * is not conditioned on {@code configured}. Pinned here because the dashboard fixture must
+     * represent this shape, and because the card must not let that reason displace the "save one
+     * first" guidance (a frontend concern, tested in RuntimeCredentialsCard.test.tsx).
+     */
+    @Test
+    void withoutAProbeAnUnconfiguredCredentialStillCarriesTheUnavailableReason() throws Exception {
+        MockMvc noProbeMvc = mockMvcFor(new CoreCredentialController(credentials,
+                new OperatorAuthorityResolver(operatorSessions, actorTokens, ""), null,
+                CoreCredentialController.TEST_TIMEOUT));
+
+        noProbeMvc.perform(get("/api/v1/cores/qoder/credential").with(loopback()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configured").value(false))
+                .andExpect(jsonPath("$.testSupported").value(false))
+                .andExpect(jsonPath("$.testUnavailableReason").value(containsString("session/new")))
+                .andExpect(jsonPath("$.maskedSecret").value(nullValue()));
+        verifyNoInteractions(probe);
+    }
+
     /** The other half of the contract: a wired probe means no unavailable reason is reported. */
     @Test
     void withAProbeTheViewReportsNoUnavailableReason() throws Exception {

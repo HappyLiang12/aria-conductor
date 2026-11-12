@@ -25,6 +25,16 @@ const mockedDelete = vi.mocked(deleteQoderCredential);
 const mockedTest = vi.mocked(testQoderCredential);
 
 /**
+ * The reason the backend serves on `testUnavailableReason` when no probe is
+ * wired (T53 F3, `CoreCredentialController.NO_PROBE_REASON`). The card must
+ * render THIS text, not invent one.
+ */
+const BACKEND_SERVED_REASON =
+  'Save-time validation is unavailable: the pinned Qoder core only validates the token when it '
+  + 'opens an ACP session (session/new), which requires starting a run-owned core. A rejected '
+  + 'saved credential is reported on the next run with the marker E_CREDENTIAL_REJECTED.';
+
+/**
  * Masked metadata with one deliberate deviation from the backend contract:
  * `maskedSecret` carries raw credential material here (a masking regression, or
  * a hostile response). The card must still paint only its own fixed mask —
@@ -40,12 +50,20 @@ const CONFIGURED: QoderCredentialMetadata = {
   updatedAt: '2026-09-22T12:00:00Z',
 };
 
+/**
+ * The exact payload the shipped backend serves for an unconfigured credential:
+ * the production wiring has no `CredentialProbe`, so `testSupported` is false
+ * and `testUnavailableReason` carries NO_PROBE_REASON (`CoreCredentialController`
+ * `74-77`, `110`). It is independent of `configured` — which is why the "save
+ * one first" guidance cannot come from the served text.
+ */
 const UNCONFIGURED: QoderCredentialMetadata = {
   credentialRef: 'qoder:operator',
   coreId: 'qoder',
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: false,
-  testSupported: true,
+  testSupported: false,
+  testUnavailableReason: BACKEND_SERVED_REASON,
   maskedSecret: null,
   updatedAt: null,
 };
@@ -57,16 +75,6 @@ const COST_DISCLOSURE =
 const NOT_WIRED_REASON =
   'The bounded Qoder credential test requires the run-owned core bridge, which is not '
   + 'wired in this component; no model call was made.';
-
-/**
- * The reason the backend serves on `testUnavailableReason` when no probe is
- * wired (T53 F3, `CoreCredentialController.NO_PROBE_REASON`). The card must
- * render THIS text, not invent one.
- */
-const BACKEND_SERVED_REASON =
-  'Save-time validation is unavailable: the pinned Qoder core only validates the token when it '
-  + 'opens an ACP session (session/new), which requires starting a run-owned core. A rejected '
-  + 'saved credential is reported on the next run with the marker E_CREDENTIAL_REJECTED.';
 
 /** The local fallback for a backend older than the T53 contract (no field). */
 const NO_PROBE_FALLBACK_REASON =
@@ -291,13 +299,23 @@ describe('RuntimeCredentialsCard', () => {
     expect(mockedTest).not.toHaveBeenCalled();
   });
 
+  // T56 F2: the shipped payload for an unconfigured credential ALSO carries
+  // the served probe reason (the production wiring has no probe), and the card
+  // used to render it first — hiding the only actionable step. "Save one
+  // first" must win over the served reason when nothing is stored; the served
+  // reason takes over once a credential exists but cannot be probed (next
+  // test), and a wired probe still offers the test (positive control below).
   it('does not offer the bounded test before a credential is stored, and says why', async () => {
     mockedGet.mockResolvedValue(UNCONFIGURED);
     ui();
     await screen.findByText('Not configured');
 
     expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
-    expect(screen.getByText(NO_STORED_CREDENTIAL_TEST_REASON)).toBeInTheDocument();
+    const reason = screen.getByTestId('credential-test-unavailable');
+    expect(reason).toHaveTextContent(NO_STORED_CREDENTIAL_TEST_REASON);
+    // The served probe explanation is real, but it is not the next action.
+    expect(reason).not.toHaveTextContent(BACKEND_SERVED_REASON);
+    expect(reason).not.toHaveTextContent(/session\/new/);
     expect(mockedTest).not.toHaveBeenCalled();
   });
 

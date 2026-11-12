@@ -457,9 +457,20 @@ function RuntimePane({ open }: { open: boolean }) {
   // An unread fleet is not an empty one, and an unread one is not the previous
   // read either: both are "unknown", and the pane says so instead of guessing.
   const fleetKnown = agents !== undefined;
-  const fleetUnreadable = agentsQuery.isError && !fleetKnown;
+  // T56 F1: the query keeps its last successful data when a refetch rejects, so
+  // `fleetKnown` alone cannot say whether the fleet was read NOW. `isError` is
+  // the failure of the latest attempt, with or without cached data: a cached
+  // read behind it is the last known one, not the current one.
+  const fleetReadFailed = agentsQuery.isError;
   const liveAgents = agents ?? [];
   const composition = composeRuntimes(liveAgents);
+  /** The last read, for the two states that must not call it current. */
+  const lastKnownSummary =
+    composition.length === 0
+      ? 'no agents were read'
+      : composition.length === 1
+        ? `${composition[0].runtime} x${composition[0].count}`
+        : composition.map((c) => `${c.runtime} x${c.count}`).join(', ');
   const selectedProvider = (providers ?? []).find((p) => p.id === coreId);
   const modes: ExecutionMode[] =
     selectedProvider?.executionModes && selectedProvider.executionModes.length > 0
@@ -489,29 +500,37 @@ function RuntimePane({ open }: { open: boolean }) {
   const canApply = coreId !== '' && mode !== '';
   const targetLabel = `${coreId}/${RUNTIME_MODE_LABELS[mode as ExecutionMode] ?? mode}`;
   const compositionText =
-    fleetUnreadable
-      ? 'The fleet configuration could not be read — the current composition is unknown, '
-        + 'so this banner claims nothing about what the agents run. Reopen Configure to retry.'
-      : !fleetKnown
-        ? 'Reading the fleet configuration…'
-        : liveAgents.length === 0
-          ? 'No agents yet - the first agent defines the fleet runtime.'
-          : composition.length <= 1
-            ? `Fleet runtime: ${composition[0].runtime} - ${composition[0].count} agent${composition[0].count === 1 ? '' : 's'} (uniform)`
-            : `Mixed runtime - ${composition.map((c) => `${c.runtime} x${c.count}`).join(' - ')}; applying a pair below converges every agent.`;
+    fleetKnown && fleetReadFailed
+      ? `The fleet could not be re-read — the last known composition (${lastKnownSummary}) `
+        + 'may be out of date, and this banner does not claim it is current. Reopen Configure to retry.'
+      : fleetReadFailed
+        ? 'The fleet configuration could not be read — the current composition is unknown, '
+          + 'so this banner claims nothing about what the agents run. Reopen Configure to retry.'
+        : !fleetKnown
+          ? 'Reading the fleet configuration…'
+          : liveAgents.length === 0
+            ? 'No agents yet - the first agent defines the fleet runtime.'
+            : composition.length <= 1
+              ? `Fleet runtime: ${composition[0].runtime} - ${composition[0].count} agent${composition[0].count === 1 ? '' : 's'} (uniform)`
+              : `Mixed runtime - ${composition.map((c) => `${c.runtime} x${c.count}`).join(' - ')}; applying a pair below converges every agent.`;
   /**
    * The composition the confirmation quotes. It is the same read as the banner,
    * so the dialog can never claim a fleet the pane did not see — the previous
    * copy defaulted to `none x0`, which an unread fleet turned into a statement.
+   * T56 F1: a failed re-read is quoted as the last known read, never as the
+   * current composition.
    */
-  const currentComposition = fleetUnreadable
-    ? 'the current composition could not be read'
-    : !fleetKnown
-      ? 'the current composition is still being read'
-      : composition.length <= 1
-        ? `${composition[0]?.runtime ?? 'none'} x${composition[0]?.count ?? 0}`
-        : composition.map((c) => `${c.runtime} x${c.count}`).join(', ');
-  const fleetSettled = fleetKnown && !fleetUnreadable && !agentsQuery.isFetching;
+  const currentComposition =
+    fleetKnown && fleetReadFailed
+      ? `the last known composition (${lastKnownSummary}), which could not be re-read and may be out of date`
+      : fleetReadFailed
+        ? 'the current composition could not be read'
+        : !fleetKnown
+          ? 'the current composition is still being read'
+          : composition.length <= 1
+            ? `${composition[0]?.runtime ?? 'none'} x${composition[0]?.count ?? 0}`
+            : composition.map((c) => `${c.runtime} x${c.count}`).join(', ');
+  const fleetSettled = fleetKnown && !fleetReadFailed && !agentsQuery.isFetching;
   const bannerOk = fleetSettled && composition.length <= 1;
 
   return (

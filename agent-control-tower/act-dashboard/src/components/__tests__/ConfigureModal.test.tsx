@@ -406,3 +406,90 @@ describe('ConfigureModal fleet banner truthfulness (T54 F2)', () => {
     expect(mockedApply).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T56 F1: a failed RE-read after a successful read. TanStack Query keeps the
+// last successful data when a refetch rejects, so `agents !== undefined` cannot
+// tell "read now" from "read once, then failed": the pane painted that cached
+// composition in the uniform (green) banner and quoted it in the confirm dialog
+// as the current fleet. The last read must be labelled as the last read, and
+// the confirmation must not present it as current.
+// ---------------------------------------------------------------------------
+describe('ConfigureModal fleet re-read truthfulness (T56 F1)', () => {
+  const fleet = (core: 'qoder' | 'opencode', mode: 'HOST' | 'SANDBOX') => [
+    agent({ id: 'a1', adkProvider: core, executionMode: mode }),
+    agent({ id: 'a2', adkProvider: core, executionMode: mode }),
+  ];
+
+  async function choosePair() {
+    await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
+    await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'HOST');
+  }
+
+  it('withdraws the current-composition claim when the re-read fails', async () => {
+    mockedAgents.mockResolvedValueOnce(fleet('qoder', 'HOST'));
+    await renderOpenedModal();
+    expect(
+      await screen.findByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/),
+    ).toBeInTheDocument();
+
+    // The fleet changed under us and the fresh read rejects. The query still
+    // carries the data from the successful read.
+    mockedAgents.mockRejectedValue(new Error('Network Error'));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/ }));
+    window.dispatchEvent(new Event('act:open-configure'));
+
+    const banner = await screen.findByText(/could not be re-read/i);
+    // The cached value is still available, but only as the last known one.
+    expect(banner).toHaveTextContent(/last known/i);
+    expect(banner).toHaveTextContent(/qoder\/HOST x2/);
+    expect(banner).toHaveTextContent(/not claim it is current|may be out of date/i);
+    // The uniform claim (the green banner's wording) is gone.
+    expect(
+      screen.queryByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/),
+    ).not.toBeInTheDocument();
+
+    // The confirmation can never quote the cached read as the current fleet.
+    await choosePair();
+    await userEvent.click(screen.getByRole('button', { name: /Apply to all agents/i }));
+    const confirmation = screen.getByRole('dialog', { name: /apply runtime/i });
+    expect(confirmation.textContent).toMatch(/could not be re-read/i);
+    expect(confirmation.textContent).toMatch(/last known/i);
+    expect(confirmation.textContent).not.toMatch(/Current composition: qoder\/HOST x2/);
+    expect(mockedApply).not.toHaveBeenCalled();
+  });
+
+  // The other side of the same window: nothing was ever read.
+  it('says the fleet could not be read when the first read fails', async () => {
+    mockedAgents.mockRejectedValue(new Error('Network Error'));
+    await renderOpenedModal();
+
+    const banner = await screen.findByText(/fleet configuration could not be read/i);
+    expect(banner).toHaveTextContent(/composition is unknown/i);
+    expect(screen.queryByText(/Fleet runtime:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No agents yet/i)).not.toBeInTheDocument();
+  });
+
+  // Positive control: a re-read that succeeds still states the real composition
+  // and quotes it in the confirmation — the fix must not turn every re-open
+  // into "stale".
+  it('still states the composition when the re-read succeeds', async () => {
+    mockedAgents.mockResolvedValueOnce(fleet('qoder', 'HOST'));
+    await renderOpenedModal();
+    await screen.findByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/);
+
+    mockedAgents.mockResolvedValue(fleet('opencode', 'SANDBOX'));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/ }));
+    window.dispatchEvent(new Event('act:open-configure'));
+
+    expect(
+      await screen.findByText(/Fleet runtime: opencode\/SANDBOX - 2 agents \(uniform\)/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/could not be re-read/i)).not.toBeInTheDocument();
+
+    await choosePair();
+    await userEvent.click(screen.getByRole('button', { name: /Apply to all agents/i }));
+    const confirmation = screen.getByRole('dialog', { name: /apply runtime/i });
+    expect(confirmation.textContent).toMatch(/Current composition: opencode\/SANDBOX x2/);
+  });
+});

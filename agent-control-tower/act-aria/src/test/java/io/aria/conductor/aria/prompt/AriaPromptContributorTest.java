@@ -211,9 +211,10 @@ class AriaPromptContributorTest {
                 .as("remember_fact has no field for a guess label, so the rule must not name one")
                 .doesNotContain("Label anything you infer as a guess in the proposal");
         assertThat(flat.indexOf("IMPORTANT — propose only what the operator stated:"))
-                .as("the stated-facts rule is part of the memory guidance that teaches proposing")
+                .as("the stated-facts rule precedes the instruction that teaches remember_fact, so "
+                        + "the model reads the limit before the licence, as T53's ordering pins it")
                 .isGreaterThan(flat.indexOf("IMPORTANT — memory:"))
-                .isLessThan(flat.indexOf("## Workflows"));
+                .isLessThan(flat.indexOf("When you learn a durable fact about the operator"));
     }
 
     /**

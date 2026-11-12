@@ -105,9 +105,8 @@ public final class AriaPromptCatalog {
             pending.
 
             IMPORTANT — propose only what the operator stated:
-            Propose only facts the operator actually stated in this turn. Label anything you infer
-            as a guess in the proposal itself, and never present an inference as something the
-            operator said.
+            Propose only facts the operator actually stated in this turn. Anything you infer is
+            said in prose as an explicit guess and is NEVER proposed as a fact.
 
             ## Workflows (multi-agent orchestration)
 

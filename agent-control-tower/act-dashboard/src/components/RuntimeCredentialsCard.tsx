@@ -55,6 +55,14 @@ function fallbackTestUnavailableReason(metadata: QoderCredentialMetadata): strin
 
 /** The backend's stated reason when served; the local fallback otherwise. */
 function testUnavailableReason(metadata: QoderCredentialMetadata): string | null {
+  // T56 F2: an unconfigured credential is decided FIRST. The shipped backend
+  // serves `testUnavailableReason` whenever no probe is wired — including when
+  // nothing is stored — so leading with the served text displaced the only
+  // actionable step ("save one first") with an explanation of a test that has
+  // nothing to test.
+  if (!metadata.configured) {
+    return 'The bounded credential test needs a stored credential — save one first.';
+  }
   return metadata.testUnavailableReason ?? fallbackTestUnavailableReason(metadata);
 }
 

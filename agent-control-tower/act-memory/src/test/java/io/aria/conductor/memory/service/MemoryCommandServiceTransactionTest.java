@@ -503,6 +503,71 @@ class MemoryCommandServiceTransactionTest {
     }
 
     /**
+     * T55 over real persistence, the write half of the live duplicate-identity defect. The
+     * stored row is {@code PERSON/person:happy} (uppercase, as the entity model and the backfill
+     * write it); {@code remember_fact} is called with the lowercase {@code kind:"person"} the Aria
+     * prompt teaches. {@code UNIQUE (kind, canonical_key)} is the row identity, so with the kind
+     * stored as given the same key owned two identities and the fact landed on the second one.
+     * Here the caller's lowercase key must resolve to the stored row: one identity, one kind.
+     */
+    @Test
+    void aLowerCaseKindWriteAgainstAnActiveUpperCaseEntityDoesNotCreateASecondIdentity() {
+        MemoryActor operator = new MemoryActor(MemoryActorType.OPERATOR, "operator-session");
+        MemoryEntity happy = ownTransaction.execute(status -> entities.saveAndFlush(MemoryEntity.builder()
+                .id(UUID.randomUUID())
+                .kind("PERSON")
+                .canonicalKey("person:t55")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .build()));
+
+        MemoryFact fact = ownTransaction.execute(status -> command.addFactByKey("person", "person:t55",
+                new AddFactCommand("timezone", "UTC", "STRING", Sensitivity.INTERNAL, "mcp:memory"), operator));
+
+        assertThat(fact.getEntityId())
+                .as("the fact attaches to the stored identity of the key")
+                .isEqualTo(happy.getId());
+        List<MemoryEntity> identities = ownTransaction.execute(status -> entities.findAll().stream()
+                .filter(row -> "person:t55".equals(row.getCanonicalKey()))
+                .toList());
+        assertThat(identities)
+                .as("one canonical key is one identity, whatever casing the caller sent")
+                .singleElement()
+                .satisfies(row -> assertThat(row.getKind()).isEqualTo("PERSON"));
+        List<MemoryFact> current = ownTransaction.execute(status ->
+                facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy.getId(), FactStatus.ACTIVE));
+        assertThat(current)
+                .as("the fact is current memory on the stored entity")
+                .hasSize(1);
+    }
+
+    /**
+     * The positive control for the test above, at the same level of persistence: normalisation
+     * must not turn the write path into a lookup. A genuinely new canonical key under a lowercase
+     * kind still creates exactly one entity, stored in the uppercase vocabulary, so "one row"
+     * above cannot be confused with "nothing was ever created".
+     */
+    @Test
+    void aGenuinelyNewCanonicalKeyUnderALowercaseKindStillCreatesOneUppercaseEntity() {
+        MemoryActor operator = new MemoryActor(MemoryActorType.OPERATOR, "operator-session");
+
+        MemoryFact fact = ownTransaction.execute(status -> command.addFactByKey("person", "person:t55-new",
+                new AddFactCommand("timezone", "UTC", "STRING", Sensitivity.INTERNAL, "mcp:memory"), operator));
+
+        MemoryEntity created = ownTransaction.execute(status -> entities.findById(fact.getEntityId()).orElseThrow());
+        assertThat(created.getKind())
+                .as("the writer stores the same canonical kind the reader filters on")
+                .isEqualTo("PERSON");
+        List<MemoryEntity> rows = ownTransaction.execute(status -> entities.findAll());
+        long identities = rows.stream()
+                .filter(row -> "person:t55-new".equals(row.getCanonicalKey()))
+                .count();
+        assertThat(identities).isEqualTo(1L);
+    }
+
+    /**
      * T29 Item 3 (P3), the whole sequence over real persistence. An extraction proposes a fact
      * under an ACTIVE entity; the operator retires the entity (lifecycle retire writes no fact
      * row, so the PENDING fact stays PENDING); the same key is extracted again; the operator

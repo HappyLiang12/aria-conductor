@@ -769,6 +769,90 @@ describe('AriaPanel in-flow decisions', () => {
     expect(screen.getByRole('button', { name: /deny/i })).toBeEnabled();
   });
 
+  // F-B1 (T54): an ACP ask's record stores the WHOLE permission.request
+  // envelope as `arguments` (live evidence B-approvals-T1.json, ask
+  // c63cc395-…). The card must show what the tool will do — the envelope's
+  // `input` — and none of the protocol plumbing (seq/at/type/requestId/
+  // sessionId/toolCallId/inputBytes/argumentsDigest/options) that the operator
+  // cannot act on and that discloses the payload as protocol internals.
+  it('renders an ACP permission envelope as its tool input, never as a protocol dump', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({
+        runId: 'r1',
+        approvalId: 'a1',
+        toolName: TOOL,
+        riskTier: 'WRITE_LOCAL',
+        toolPolicy: 'WORKER_WRITE',
+      });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    // Verbatim from the live acceptance run (B-approvals-T1.json), the ask the
+    // operator was shown.
+    mockGetApproval.mockResolvedValue({
+      ...pendingToolAsk('a1', 'r1'),
+      arguments: JSON.stringify({
+        seq: 248,
+        at: '2026-11-11T23:26:57.051Z',
+        type: 'permission.request',
+        requestId: 7,
+        sessionId: '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+        toolCallId: 'call_76afe3236bab41868add80af',
+        toolName: TOOL,
+        toolKind: 'other',
+        toolCallTitle: 'remember_fact (aria-conductor)',
+        input: {
+          canonicalKey: 'person:operator',
+          factKey: 'morning_briefing_content',
+          kind: 'person',
+          sourceRef: 'message:good-morning-briefing-2026-11-12',
+          valueText: 'Wants a morning briefing covering the fleet.',
+        },
+        inputBytes: 295,
+        inputTruncated: false,
+        argumentsDigest: 'a790e991fa9d6983f46dcade8c5dcb13c5079e20419538e44094c878f5c60f7f',
+        options: [
+          { optionId: 'proceed_always_and_save', kind: 'allow_always', name: 'Always allow "remember_fact"' },
+          { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
+          { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+        ],
+      }),
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    const card = screen.getByText(TOOL).closest('.ai-decision-card') as HTMLElement;
+    expect(card).not.toBeNull();
+    // The card is drawn with its governance labels and its two decisions.
+    expect(card.textContent).toContain('WRITE_LOCAL');
+    expect(card.textContent).toContain('WORKER_WRITE');
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^deny$/i })).toBeEnabled();
+
+    // The payload the operator is deciding on is still shown, by key.
+    expect(card.textContent).toContain('canonicalKey: person:operator');
+    expect(card.textContent).toContain('factKey: morning_briefing_content');
+    expect(card.textContent).toContain('valueText: Wants a morning briefing covering the fleet.');
+
+    // …and none of the protocol envelope is painted anywhere in the card.
+    for (const leaked of [
+      'permission.request',
+      'seq:',
+      'sessionId',
+      'requestId',
+      'toolCallId',
+      'inputBytes',
+      'argumentsDigest',
+      'inputTruncated',
+      'proceed_always_and_save',
+      'reject_once',
+    ]) {
+      expect(card.textContent).not.toContain(leaked);
+    }
+  });
+
   it('says the arguments could not be read instead of drawing an empty summary', async () => {
     mockStream.mockImplementation(async (...args: StreamArgs) => {
       args[3]?.onThinking?.('r1');

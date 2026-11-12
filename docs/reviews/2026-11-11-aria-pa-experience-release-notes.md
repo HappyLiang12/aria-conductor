@@ -254,7 +254,8 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
    decision wording: the taxonomy javadoc (`:94-96`) records that it belongs to the private
    `MemoryCommandService.flushFacts`, unreachable from a proposal decision. The residual is that a
    future edit to that command-path wording would not be caught by a decision-path pin.
-8. **F-B4 — `recall_memory` misses the operator's own REPO entities (live, Major, OPEN).** Measured on the
+8. **F-B4 — `recall_memory` misses the operator's own REPO entities (live, Major). FIXED in T58 + T61,
+   independently reviewed — see residual 14 for the mechanism and the two halves of the fix.** Measured on the
    live stack: `recall_memory {"text":"aria-conductor repository release notes PR feedback version"}`
    returned only the `agent:aria` entity, and Aria told the operator "Nothing on file for the
    aria-conductor repo" while the DB held two ACTIVE REPO rows (`HappyLiang12/aria-conductor` and
@@ -266,10 +267,10 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
    inferred: both rows carry `owner/repo` and URL-shaped keys rather than `repo:`-prefixed keys, so a
    data-shape contribution cannot be excluded. Evidence:
    `.superpowers/sdd/2026-11-11-aria-pa-experience/live-bar-report-B.md` F-B4 with `B-T3-timeline.json`
-   entries 4-5 and `B-entities-pre.json`. **Not fixed in this program**: it was reported by the first live
-   seat and never routed into the fix round, and fixing it now would invalidate the gated head. Remedy:
-   make the lexical fallback match REPO canonical keys by repository name (and normalise the two legacy
-   key shapes), with a recall test that seeds exactly these two rows.
+   entries 4-5 and `B-entities-pre.json`. **Fixed by the same change as residual 14**: a shaped canonical key is now reachable by its
+   trailing segment, so both REPO rows are recalled by `aria-conductor`, with a recall test seeding
+   exactly those two keys. The legacy key shapes are NOT normalised — no migration ships — but they are
+   now reachable, which is the measured operator-facing defect.
 9. **The entity-kind vocabulary exists twice.** `MemoryQueryService.normalizeKind` and the extracted
    `MemoryEntityKind` carry the same seven-kind set and the same trim/upper-case/refuse-unknown rule.
    Both are tested, so they cannot silently diverge today, but the read path should delegate to
@@ -301,31 +302,77 @@ a product edit now would invalidate the gated head. Each carries its mechanism a
     (`MemoryContextContributor.java:93-101`, `:158-166`): 4 manifests, 0 `memory` sections. Aria answered
     O5 correctly by falling back to `list_memory_entities` + `get_memory_entity`, so the bar passes on the
     tool path while the injection path is dead. **This independently corroborates residual 8 (F-B4) on a
-    clean database, so it is not a stale-DB artefact.** Remedy: re-canonicalise an entity's `displayName`
-    from its `display_name` fact on approve, and/or let recall match fact values for PERSON entities.
-15. **F-O4 — a resumed run asserts stale proposal state (Major, product/prompt).** The run parked on a
-    clarification; the operator approved the entity batch at `14:19:28Z`; on resume the run's final output
-    asserted "the three `person:happy` memory proposals are still PENDING and will stay that way until you
-    decide them" — false at `14:20:15Z`, when the rows were ACTIVE and `?status=PENDING` returned 0. The
-    resumed run reuses its pre-park tool output and nothing re-reads proposal state before the closing
-    prose. Evidence: run `637f9cad` `finalOutput`, `O2-entities-after.json`, `O2-proposals-after.json`.
-    Remedy: require a fresh `list_memory_proposals` read before any sentence that states proposal status,
-    or soften the prompt to "as of my last check". This is the same truthfulness class the program set out
-    to remove, so it is the highest-value follow-up.
-16. **F-O2 — unrequested facts proposed as memory (Minor, prompt).** For "Hi, I'm Happy. I'm the operator
-    here." the model proposed `role = Aria Conductor operator` and `timezone = UTC`, neither stated by the
-    operator, and invited a new operator to approve both. Remedy: propose only facts the operator stated
-    this turn; label any inference as a guess.
-17. **F-O6 — "Tokens burned: 0" in prose while usage is unreported (Minor, prompt honesty).** The O1
-    briefing printed the numeral `0` with an honest parenthetical, while `usageState` is `NOT_REPORTED`
-    and every token field is `null`. The dashboard KPI already says `not reported`; the prose must match
-    it and never print `0` for an unreported state.
-18. **F-O5 — empty-DB first load logs a 404 (Minor, UI/console).** `GET /api/v1/aria/conversations/latest`
-    → 404 plus `net::ERR_ABORTED` on the first load against a fresh database. Nothing is user-visible —
-    the panel opens and a conversation is created. Remedy: treat 404 on `/latest` as "no conversation" at
-    the client, or serve an empty envelope.
+    clean database, so it is not a stale-DB artefact.** **FIXED in T58 + T61, independently reviewed (verdict: approve).** Two halves: an approved entity
+    whose name was defaulted now adopts its operator-approved `display_name` fact (only within the
+    entity's own sensitivity, never overwriting an operator-chosen name, recorded in the audit
+    assertion), and a shaped canonical key is reachable by its tail — `person:happy` by `happy`, both
+    REPO shapes by `aria-conductor` — with a shape guard so a namespace-only key (`person:`) cannot name
+    an entity from prose. Recall still does NOT match fact values: that was deliberately rejected,
+    because fact values can be sensitive and recall egress is fail-closed at the ceiling.
+    **Already-stored defaulted names:** recall is fixed for them, but their cards still render the
+    canonical key. The repair path is a PATCH rename, or retire -> re-propose -> approve — NOT
+    "re-approve", which is unreachable for an ACTIVE key. No backfill ships, because this program adds
+    no migration.
+15. **F-O4 — a resumed run asserts stale proposal state (Major, product/prompt). FIXED in T59,
+    independently reviewed.** The run parked on a clarification; the operator approved the entity batch
+    at `14:19:28Z`; on resume the run's final output asserted "the three `person:happy` memory proposals
+    are still PENDING and will stay that way until you decide them" — false at `14:20:15Z`, when the rows
+    were ACTIVE and `?status=PENDING` returned 0. Evidence: run `637f9cad` `finalOutput`,
+    `O2-entities-after.json`, `O2-proposals-after.json`. The prompt now requires a fresh
+    `list_memory_proposals` read in the same turn before any present-tense status sentence, otherwise
+    "as of my last check", and names park/resume as a moment that invalidates an earlier read. The rule
+    is prompt-side by ruling: the defect is an assertion the model makes from stale tool output, not a
+    value the backend computes. **A text pin holds text, not obedience** — live re-confirmation of the
+    park -> approve -> resume sequence is owed at the next live bar.
+16. **F-O2 — unrequested facts proposed as memory (Minor, prompt). FIXED in T59 + T62, independently
+    reviewed.** For "Hi, I'm Happy. I'm the operator here." the model proposed `role = Aria Conductor
+    operator` and `timezone = UTC`, neither stated by the operator, and invited a new operator to approve
+    both. The ruled wording is now: propose only facts the operator actually stated in this turn;
+    anything inferred is said in prose as an explicit guess and is NEVER proposed as a fact. The first
+    attempt told Aria to "label a guess in the proposal itself", which is uncarryable — `remember_fact`
+    takes `entityId, factKey, valueText, sourceRef, kind, canonicalKey` and builds
+    `AddFactCommand(factKey, valueText, valueType, sensitivity, sourceRef)`, with no label field, so the
+    instruction could only have polluted the value the operator approves. T62 removed that channel and
+    moved the constraint BEFORE the T22 instruction that licenses proposing, following the T53 precedent
+    in the same file. The T22 sentence itself is unchanged.
+17. **F-O6 — "Tokens burned: 0" in prose while usage is unreported (Minor, prompt honesty). FIXED in
+    T59, independently reviewed.** The O1 briefing printed the numeral `0` with an honest parenthetical,
+    while `usageState` is `NOT_REPORTED` and every token field is `null`. The prompt now requires the
+    prose to say `not reported` exactly as the dashboard KPI does, and never to print a numeral `0` for
+    an unreported state.
+18. **F-O5 — empty-DB first load logs a 404 (Minor, UI/console). OPEN / NOT VERIFIED — the recorded
+    causal story is contradicted by shipped code.** The live seat reported
+    `GET /api/v1/aria/conversations/latest` -> 404 plus `net::ERR_ABORTED` on the first load against a
+    fresh database, with nothing user-visible. The independent re-review verified, and the controller
+    confirmed by reading the code, that `AriaConversationController.getLatest()` returns
+    `ResponseEntity.noContent().build()` — **204, never 404** — when no run has a conversationId. So that
+    endpoint cannot produce the reported 404 on an empty DB, and a client-side null-reading cannot remove
+    a browser-logged network 404 in any case. The console capture was never preserved as an artifact,
+    only prose. **T60's client change is kept** (reading 404 as "none yet" is correct REST and matches the
+    same file's DELETE convention) but the finding is NOT closed. The producer is unattributed.
+    INFERRED, not proven: a first page load racing backend readiness, before MVC mappings are registered,
+    would answer 404 for a mapped path. Next step: on the next live first load, capture the console AND
+    the network entry as committed artifacts, read the response body and the correlation id, and
+    attribute the producer before any further code change.
 19. **Card-settle polling window (observation, INFERRED, not a defect claim).** For ~2.5s after a batch
     decision the three sibling fact cards still showed `pending` with live Approve/Reject although their
     rows were ACTIVE; a reload reconciled them. The panel settles cards off its PENDING-inbox reconcile
     (`AriaProposalCard.tsx:186-190`, `:203-206`), which polls — the observed window may simply be the poll
     interval, which was not measured. Confirm the interval before treating this as a defect.
+20. **Short, numeric and common-word key tails still match (disclosed, not fixed).** The T61 shape guard
+    refuses an EMPTY tail, so `person:` no longer names an entity from prose. A tail of `a`, `1` or
+    `main` is still a valid non-empty segment and still matches that ordinary word at rank 0, where it
+    can displace a real DISPLAY_NAME match inside `MAX_ENTITIES = 12`. A minimum-length rule would not
+    fix `main` or `123`, so closing this needs a common-word/stopword decision, not a one-line guard.
+    No measured operator-facing failure yet; recorded rather than expanded into another round.
+21. **The FOCUS token pass is still open (disclosed, pinned as known).** A focus reference of `person:`
+    no longer yields a guarded tail, but `candidateKeys` -> `addPhrases` still adds the bare token
+    `person` to the exact-key candidate set, so an entity whose canonical key is literally `person`
+    remains reachable at rank 0 from that focus. T63 pins this at the `candidateKeys` level as a
+    disclosed residual, so a future change to the token pass cannot pass silently. The tail clause is
+    closed; the token pass is not.
+22. **`rePropose` discards an operator-chosen display name (pre-existing).**
+    `MemoryCommandService.java:209` resets `displayName` to the canonical key when a command supplies
+    none, so a re-proposal against an existing key silently drops a name the operator chose. T58's
+    adoption on approve partly masks the symptom. Pre-existing, outside this program's five findings,
+    and not fixed here; the remedy is to preserve a non-defaulted stored name on the re-propose path.

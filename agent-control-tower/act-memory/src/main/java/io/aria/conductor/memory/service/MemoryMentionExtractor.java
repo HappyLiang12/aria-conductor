@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -131,9 +132,9 @@ public class MemoryMentionExtractor {
     }
 
     /**
-     * True when the text names the key's trailing segment. A key that has no tail (no separator, or
-     * a separator at the very end) is already covered by the whole-key comparison and is skipped, so
-     * this can only widen reach for shaped keys.
+     * True when the text names the key's trailing segment. A key with no tail — no separator, or a
+     * separator at the very end ("person:") — has no name after it and is skipped; such a key is
+     * already covered by the whole-key comparison, so this can only widen reach for shaped keys.
      */
     private static boolean mentionedTail(String haystack, String canonicalKey) {
         String key = normalize(canonicalKey);
@@ -209,15 +210,34 @@ public class MemoryMentionExtractor {
     }
 
     /**
-     * The key's tail: the last path, URL or namespace segment. {@code :} separates a namespaced key
+     * The key's tail: the last path, URL or namespace segment, and only when the key has that shape —
+     * a separator with a non-empty segment after it. {@code :} separates a namespaced key
      * ("person:happy") exactly as {@code /} separates a path, and a repository URL ends in
      * {@code .git} where its canonical key does not, so that suffix is dropped — both shapes then
      * yield the name an operator types. Used by the mention match, by the focus match and by the
      * exact-key candidate set, so one definition of "tail" governs all three.
+     * <p>
+     * A key with no separator, and a key that ends in a separator ("person:", "agent:"), have no
+     * tail. The shape of the key decides, not the word: {@code Pattern.split} drops the empty field
+     * after a trailing separator, so splitting alone would report the segment <em>before</em> it —
+     * the namespace, not a name — and the extractor would then name the entity from the ordinary
+     * English word, at canonical-key rank.
      */
-    private static String trailingSegment(String normalizedPath) {
-        String[] segments = PATH_SEPARATOR.split(normalizedPath);
-        String tail = segments.length == 0 ? "" : segments[segments.length - 1];
+    static String trailingSegment(String normalizedPath) {
+        Matcher separator = PATH_SEPARATOR.matcher(normalizedPath);
+        int last = -1;
+        while (separator.find()) {
+            last = separator.start();
+        }
+        if (last < 0) {
+            return "";
+        }
+        String tail = normalizedPath.substring(last + 1);
+        // A trailing separator leaves no segment after it: that empty field is a namespace boundary,
+        // and the field Pattern.split would report for it is the prefix on the other side.
+        if (tail.isEmpty()) {
+            return "";
+        }
         if (tail.length() > GIT_SUFFIX.length() && tail.endsWith(GIT_SUFFIX)) {
             return tail.substring(0, tail.length() - GIT_SUFFIX.length());
         }

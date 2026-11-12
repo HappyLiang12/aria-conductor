@@ -89,7 +89,11 @@ describe('ConfigureModal runtime tab', () => {
     await renderOpenedModal();
 
     // Mixed banner counts live agents only (the retired one is invisible).
-    expect(screen.getByText(/Mixed runtime - opencode\/SANDBOX x1 - qoder\/HOST x2/)).toBeTruthy();
+    // findBy: the fleet read starts when the modal opens (T54 F2 — never from a
+    // cache taken before), so the banner arrives asynchronously.
+    expect(
+      await screen.findByText(/Mixed runtime - opencode\/SANDBOX x1 - qoder\/HOST x2/),
+    ).toBeTruthy();
 
     await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
     await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'HOST');
@@ -336,5 +340,69 @@ describe('ConfigureModal honesty (Task 12)', () => {
 
     expect((await screen.findAllByTitle(/^Save /)).length).toBeGreaterThan(0);
     expect(screen.getAllByTitle('Reset to default').length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T54 F2: the Runtime banner is the operator's only statement of what the
+// fleet is configured to run, and it must be the persisted configuration. The
+// modal stays mounted while closed, so a read taken once at mount could be
+// presented as current truth minutes later (live bar: the banner said
+// qoder/HOST while the API said opencode/SANDBOX).
+// ---------------------------------------------------------------------------
+describe('ConfigureModal fleet banner truthfulness (T54 F2)', () => {
+  const fleet = (core: 'qoder' | 'opencode', mode: 'HOST' | 'SANDBOX') => [
+    agent({ id: 'a1', adkProvider: core, executionMode: mode }),
+    agent({ id: 'a2', adkProvider: core, executionMode: mode }),
+  ];
+
+  it('re-reads the fleet on every open instead of showing the read from before', async () => {
+    mockedAgents.mockResolvedValueOnce(fleet('qoder', 'HOST'));
+    await renderOpenedModal();
+    expect(
+      await screen.findByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/),
+    ).toBeTruthy();
+
+    // Another seat (or the API) converged the fleet after that read.
+    mockedAgents.mockResolvedValue(fleet('opencode', 'SANDBOX'));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/ }));
+
+    window.dispatchEvent(new Event('act:open-configure'));
+    expect(
+      await screen.findByText(/Fleet runtime: opencode\/SANDBOX - 2 agents \(uniform\)/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Fleet runtime: qoder\/HOST/)).not.toBeInTheDocument();
+  });
+
+  // Positive control for the test above: a fleet that really does store the
+  // documented default (no core, no mode) still reads as opencode/SANDBOX —
+  // the fix must not turn a genuine default into an unknown.
+  it('still reads a fleet with no stored core or mode as the documented default', async () => {
+    mockedAgents.mockResolvedValue([
+      agent({ id: 'a1', adkProvider: undefined, executionMode: undefined }),
+      agent({ id: 'a2', adkProvider: undefined, executionMode: undefined }),
+    ]);
+    await renderOpenedModal();
+
+    expect(
+      await screen.findByText(/Fleet runtime: opencode\/SANDBOX - 2 agents \(uniform\)/),
+    ).toBeTruthy();
+  });
+
+  it('says the fleet could not be read instead of claiming there are no agents', async () => {
+    mockedAgents.mockRejectedValue(new Error('Network Error'));
+    await renderOpenedModal();
+
+    expect(await screen.findByText(/fleet configuration could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No agents yet/i)).not.toBeInTheDocument();
+
+    // The confirmation quotes the same unknown, never a fabricated "none x0".
+    await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
+    await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'HOST');
+    await userEvent.click(screen.getByRole('button', { name: /Apply to all agents/i }));
+    const confirmation = screen.getByRole('dialog', { name: /apply runtime/i });
+    expect(confirmation.textContent).toMatch(/could not be read/i);
+    expect(confirmation.textContent).not.toMatch(/none x0/);
+    expect(mockedApply).not.toHaveBeenCalled();
   });
 });

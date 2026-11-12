@@ -524,6 +524,102 @@ describe('AriaPanel failed-turn reporting (timeline + stream)', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
+  // -------------------------------------------------------------------------
+  // T54 F3, against the T53 backend contract: run 961868f4 failed because the
+  // Qoder core rejected the stored credential at session/new. The message now
+  // STARTS with `E_CREDENTIAL_REJECTED` (the timeline clips it to 300 chars) and
+  // keeps the phrase "Qoder runtime credential". The bubble must point at the
+  // credential surface and the action, live and restored alike.
+  // -------------------------------------------------------------------------
+  const CREDENTIAL_REJECTED_REASON = 'E_CREDENTIAL_REJECTED: the core rejected the saved Qoder '
+    + 'runtime credential at session/new (E_AUTH_REQUIRED) — a credential failure, not a transport '
+    + 'failure; replace the saved credential at PUT /api/v1/cores/qoder/credential and re-dispatch '
+    + 'the run. The runtime endpoint of run 961868f4-1a5a-44d3-8923-6129991c16e4 did not '
+    + "authenticate the run's control secret (no authenticated answer within PT30S).";
+
+  it('turns a refused credential into an actionable remedy that opens the credential surface', async () => {
+    const configureListener = vi.fn();
+    window.addEventListener('act:open-configure', configureListener);
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onError?.({ turnFailed: true, reason: CREDENTIAL_REJECTED_REASON });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    const remedy = await screen.findByTestId('credential-remedy');
+    expect(remedy).toHaveTextContent(/Qoder runtime credential/);
+    expect(remedy).toHaveTextContent(/rejected/i);
+    expect(remedy).toHaveTextContent(/Qoder personal access token/i);
+    // The reason itself is not hidden — the operator can still quote it.
+    expect(screen.getByText(/control secret/)).toBeInTheDocument();
+
+    await userEvent.click(within(remedy).getByRole('button', { name: /LLM Providers/ }));
+    expect(configureListener).toHaveBeenCalledTimes(1);
+    expect((configureListener.mock.calls[0][0] as CustomEvent).detail).toEqual({ tab: 'llm' });
+    window.removeEventListener('act:open-configure', configureListener);
+  });
+
+  it('carries the remedy onto a restored credential failure too', async () => {
+    mockGetLatest.mockResolvedValue({ conversationId: 'conv-1', lastMessageAt: '2026-11-11T09:00:00Z', runCount: 1 });
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'Hi, I am Happy', timestamp: '2026-11-11T09:00:00Z', runId: 'r0' },
+      {
+        role: 'assistant',
+        content: `回合執行失敗：${CREDENTIAL_REJECTED_REASON}`,
+        timestamp: '2026-11-11T09:01:00Z',
+        runId: 'r1',
+        error: true,
+        retryPrompt: 'Hi, I am Happy',
+      },
+    ]);
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+
+    const remedy = await screen.findByTestId('credential-remedy');
+    expect(remedy).toHaveTextContent(/Qoder runtime credential/);
+  });
+
+  // Positive controls: an ordinary failure keeps the plain bubble, and a
+  // transport failure recorded BEFORE the classification is not relabelled as
+  // a credential problem — the marker is the evidence.
+  it('adds no credential remedy to an unrelated failure', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onError?.({ turnFailed: true, reason: 'relay dead' });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText(/relay dead/)).toBeInTheDocument();
+    expect(screen.queryByTestId('credential-remedy')).not.toBeInTheDocument();
+  });
+
+  it('adds no credential remedy to an unclassified transport failure', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onError?.({
+        turnFailed: true,
+        reason: "The runtime endpoint of run r1 did not authenticate the run's control secret.",
+      });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText(/control secret/)).toBeInTheDocument();
+    expect(screen.queryByTestId('credential-remedy')).not.toBeInTheDocument();
+  });
+
   it('a legacy stream error resolves to the failed-turn bubble when the timeline has a failure entry', async () => {
     mockGetTimeline.mockResolvedValue([
       { role: 'user', content: 'what next', timestamp: '2026-09-30T10:00:00Z', runId: 'r0' },
@@ -767,6 +863,111 @@ describe('AriaPanel in-flow decisions', () => {
     // Nothing was decided by the read.
     expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /deny/i })).toBeEnabled();
+  });
+
+  // F-B1 (T54): an ACP ask's record stores the WHOLE permission.request
+  // envelope as `arguments` (live evidence B-approvals-T1.json, ask
+  // c63cc395-…). The card must show what the tool will do — the envelope's
+  // `input` — and none of the protocol plumbing (seq/at/type/requestId/
+  // sessionId/toolCallId/inputBytes/argumentsDigest/options) that the operator
+  // cannot act on and that discloses the payload as protocol internals.
+  it('renders an ACP permission envelope as its tool input, never as a protocol dump', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onThinking?.('r1');
+      args[3]?.onApprovalRequired?.({
+        runId: 'r1',
+        approvalId: 'a1',
+        toolName: TOOL,
+        riskTier: 'WRITE_LOCAL',
+        toolPolicy: 'WORKER_WRITE',
+      });
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: '' });
+    });
+    // Verbatim from the live acceptance run (B-approvals-T1.json), the ask the
+    // operator was shown.
+    mockGetApproval.mockResolvedValue({
+      ...pendingToolAsk('a1', 'r1'),
+      arguments: JSON.stringify({
+        seq: 248,
+        at: '2026-11-11T23:26:57.051Z',
+        type: 'permission.request',
+        requestId: 7,
+        sessionId: '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+        toolCallId: 'call_76afe3236bab41868add80af',
+        toolName: TOOL,
+        toolKind: 'other',
+        toolCallTitle: 'remember_fact (aria-conductor)',
+        input: {
+          canonicalKey: 'person:operator',
+          factKey: 'morning_briefing_content',
+          kind: 'person',
+          sourceRef: 'message:good-morning-briefing-2026-11-12',
+          valueText: 'Wants a morning briefing covering the fleet.',
+        },
+        inputBytes: 295,
+        inputTruncated: false,
+        argumentsDigest: 'a790e991fa9d6983f46dcade8c5dcb13c5079e20419538e44094c878f5c60f7f',
+        options: [
+          { optionId: 'proceed_always_and_save', kind: 'allow_always', name: 'Always allow "remember_fact"' },
+          { optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' },
+          { optionId: 'cancel', kind: 'reject_once', name: 'Reject' },
+        ],
+      }),
+    });
+    renderPanel();
+    await openPanelForTest();
+    fireEvent.click(screen.getByRole('button', { name: 'My schedule today' }));
+
+    expect(await screen.findByText(TOOL)).toBeInTheDocument();
+    const card = screen.getByText(TOOL).closest('.ai-decision-card') as HTMLElement;
+    expect(card).not.toBeNull();
+    // The card is drawn with its governance labels and its two decisions.
+    expect(card.textContent).toContain('WRITE_LOCAL');
+    expect(card.textContent).toContain('WORKER_WRITE');
+    expect(screen.getByRole('button', { name: /allow once/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^deny$/i })).toBeEnabled();
+
+    // The payload the operator is deciding on is still shown, by key.
+    expect(card.textContent).toContain('canonicalKey: person:operator');
+    expect(card.textContent).toContain('factKey: morning_briefing_content');
+    expect(card.textContent).toContain('valueText: Wants a morning briefing covering the fleet.');
+
+    // …and none of the protocol envelope is painted anywhere in the card.
+    for (const leaked of [
+      'permission.request',
+      'seq:',
+      'sessionId',
+      'requestId',
+      'toolCallId',
+      'inputBytes',
+      'argumentsDigest',
+      'inputTruncated',
+      'proceed_always_and_save',
+      'reject_once',
+    ]) {
+      expect(card.textContent).not.toContain(leaked);
+    }
+
+    // F-B1 whole-transcript guard: the leak class is "a structured signal also
+    // paints as raw text", so the invariant is about the WHOLE transcript, not
+    // just the card body. A sibling raw bubble above the card would have
+    // painted these; the transcript must hold them nowhere, and the ask must
+    // appear exactly once (the card), not twice.
+    const transcript = document.body.textContent ?? '';
+    for (const leaked of [
+      'permission.request',
+      'argumentsDigest',
+      'a790e991fa9d6983f46dcade8c5dcb13c5079e20419538e44094c878f5c60f7f',
+      '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+      'call_76afe3236bab41868add80af',
+      'inputBytes',
+      'inputTruncated',
+      '"options"',
+    ]) {
+      expect(transcript).not.toContain(leaked);
+    }
+    expect(screen.getAllByText(TOOL)).toHaveLength(1);
+    expect(screen.getAllByText(/canonicalKey: person:operator/)).toHaveLength(1);
   });
 
   it('says the arguments could not be read instead of drawing an empty summary', async () => {

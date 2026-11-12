@@ -1171,6 +1171,194 @@ class MemoryProposalServiceTest {
                 .isTrue();
     }
 
+    // ---------------------------------------------------------------- T58 display name on approve
+
+    /**
+     * T58 / F-O3. `MemoryCommandService:145` defaults a proposal's displayName to its canonical key,
+     * so the operator-approved card settles on the machine handle `person:happy` even though the
+     * approved batch carries the name the operator actually used. The batch's `display_name` fact is
+     * the only truthful source, and it is read from the batch that this decision promotes — never
+     * from a PENDING row the decision does not cover.
+     */
+    @Test
+    void approvingAnEntityAdoptsTheApprovedDisplayNameFactAsItsName() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        MemoryFact name = displayNameFact(entityId, "Happy", Sensitivity.INTERNAL, OLD.plusSeconds(5),
+                UUID.randomUUID());
+        MemoryFact timezone = fact(entityId, "timezone", FactStatus.PENDING, OLD);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(name, timezone));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        MemoryProposalView decided = proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("Happy");
+        assertThat(decided.valueText())
+                .as("the card settles on the truthful name, not the defaulted key")
+                .isEqualTo("Happy");
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions, times(3)).save(written.capture());
+        assertThat(written.getAllValues()).filteredOn(assertion ->
+                        assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getBeforeJson())
+                            .as("the audit records the defaulted name it replaced")
+                            .contains("\"displayName\":\"person:happy\"");
+                    assertThat(assertion.getAfterJson())
+                            .as("and the name it adopted, so the change is attributable")
+                            .contains("\"displayName\":\"Happy\"");
+                });
+    }
+
+    /** A blank stored name is the same "never chosen" case as the defaulted canonical key. */
+    @Test
+    void aBlankDisplayNameIsFilledFromTheApprovedDisplayNameFact() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        entity.setDisplayName(null);
+        MemoryFact name = displayNameFact(entityId, "Happy", Sensitivity.INTERNAL, OLD, UUID.randomUUID());
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(name));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("Happy");
+    }
+
+    /** Positive control: a name the operator chose must never be overwritten by a fact. */
+    @Test
+    void anOperatorChosenDisplayNameIsNeverOverwritten() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntity(entityId);          // displayName "Happy", key person:happy
+        MemoryFact name = displayNameFact(entityId, "Someone Else", Sensitivity.INTERNAL, OLD,
+                UUID.randomUUID());
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(name));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("Happy");
+    }
+
+    /**
+     * Sensitivity pin. The display name is rendered by `MemoryContextContributor:223-224` outside the
+     * fact ceiling filter, so adopting a fact more sensitive than the entity itself would widen
+     * egress past the ceiling that recall applies to facts. Refuse and leave the name as it was.
+     */
+    @Test
+    void aDisplayNameFactAboveTheEntitySensitivityIsNotPromoted() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);   // INTERNAL
+        MemoryFact name = displayNameFact(entityId, "Happy", Sensitivity.CONFIDENTIAL, OLD,
+                UUID.randomUUID());
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(name));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName())
+                .as("a CONFIDENTIAL name under an INTERNAL entity would bypass the fact ceiling")
+                .isEqualTo("person:happy");
+        assertThat(name.getStatus())
+                .as("the fact itself is still promoted; only the name adoption is refused")
+                .isEqualTo(FactStatus.ACTIVE);
+    }
+
+    @Test
+    void rejectingAnEntityBatchChangesNoDisplayName() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        MemoryFact name = displayNameFact(entityId, "Happy", Sensitivity.INTERNAL, OLD, UUID.randomUUID());
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(name));
+
+        proposals.decideProposal(entityId, ProposalDecision.REJECT, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("person:happy");
+        ArgumentCaptor<MemoryAssertion> written = ArgumentCaptor.forClass(MemoryAssertion.class);
+        verify(assertions, times(2)).save(written.capture());
+        assertThat(written.getAllValues()).filteredOn(assertion ->
+                        assertion.getSubjectType() == MemorySubjectType.ENTITY)
+                .singleElement()
+                .satisfies(assertion -> {
+                    assertThat(assertion.getBeforeJson()).contains("\"displayName\":\"person:happy\"");
+                    assertThat(assertion.getAfterJson()).contains("\"displayName\":\"person:happy\"");
+                });
+    }
+
+    /** Several approved `display_name` facts: newest `updatedAt` wins, deterministically. */
+    @Test
+    void theNewestDisplayNameFactOfTheBatchWins() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        MemoryFact older = displayNameFact(entityId, "Old Name", Sensitivity.INTERNAL, OLD,
+                UUID.randomUUID());
+        MemoryFact newer = displayNameFact(entityId, "Happy", Sensitivity.INTERNAL, OLD.plusSeconds(30),
+                UUID.randomUUID());
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(older, newer));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("Happy");
+    }
+
+    /** The `updatedAt` tie falls back to the fact id, so the pick is not order-of-query luck. */
+    @Test
+    void displayNameFactsWithTheSameUpdatedAtResolveByFactId() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        MemoryFact first = displayNameFact(entityId, "Alpha", Sensitivity.INTERNAL, OLD,
+                UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        MemoryFact second = displayNameFact(entityId, "Beta", Sensitivity.INTERNAL, OLD,
+                UUID.fromString("00000000-0000-0000-0000-000000000002"));
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of(second, first));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("Beta");
+    }
+
+    /**
+     * A PENDING `display_name` row the batch does not contain can never supply a name: the decision
+     * reads its batch exactly once, and only an operator-approved value may become the display name.
+     */
+    @Test
+    void aPendingDisplayNameFactOutsideTheBatchIsNeverRead() {
+        UUID entityId = UUID.randomUUID();
+        MemoryEntity entity = pendingEntityDefaultedName(entityId);
+        when(entities.findById(entityId)).thenReturn(Optional.of(entity));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING))
+                .thenReturn(List.of());
+
+        proposals.decideProposal(entityId, ProposalDecision.APPROVE, OPERATOR);
+
+        assertThat(entity.getDisplayName()).isEqualTo("person:happy");
+        verify(facts, times(1))
+                .findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(entityId, FactStatus.PENDING);
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     /**
@@ -1217,6 +1405,41 @@ class MemoryProposalServiceTest {
                 .origin(MemoryOrigin.EXTRACTION)
                 .createdAt(OLD)
                 .updatedAt(OLD)
+                .build();
+    }
+
+    /**
+     * T58: the live shape — an extraction proposal whose display name was DEFAULTED to the canonical
+     * key (`MemoryCommandService:145`), with the operator's real name only in a `display_name` fact.
+     */
+    private static MemoryEntity pendingEntityDefaultedName(UUID entityId) {
+        return MemoryEntity.builder()
+                .id(entityId)
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("person:happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .createdAt(OLD)
+                .updatedAt(OLD)
+                .build();
+    }
+
+    private static MemoryFact displayNameFact(UUID entityId, String value, Sensitivity sensitivity,
+                                              Instant updatedAt, UUID id) {
+        return MemoryFact.builder()
+                .id(id)
+                .entityId(entityId)
+                .factKey("display_name")
+                .valueText(value)
+                .valueType("STRING")
+                .status(FactStatus.PENDING)
+                .origin(MemoryOrigin.EXTRACTION)
+                .sensitivity(sensitivity)
+                .validFrom(updatedAt)
+                .createdAt(updatedAt)
+                .updatedAt(updatedAt)
                 .build();
     }
 

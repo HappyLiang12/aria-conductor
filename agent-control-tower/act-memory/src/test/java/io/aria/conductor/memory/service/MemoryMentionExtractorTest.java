@@ -88,6 +88,62 @@ class MemoryMentionExtractorTest {
                 .containsEntry(repo.getId(), MentionSource.FOCUS);
     }
 
+    /**
+     * T58 / F-O3. The stored display name is the DEFAULTED canonical key
+     * (`MemoryCommandService:145`, `:209`), so the operator's name survives only as the tail of
+     * `person:happy`. The tail is still the canonical key, not a fact value — recall never reads
+     * fact values — so it ranks as {@link MentionSource#CANONICAL_KEY}.
+     */
+    @Test
+    void aNamespacedCanonicalKeyIsReachableByItsTrailingSegment() {
+        MemoryEntity person = entity("person:happy", "person:happy", null);
+
+        assertThat(extractor.match("What do you remember about me, Happy?", null, List.of(person)))
+                .as("the tail of person:happy names the entity in ordinary prose")
+                .containsEntry(person.getId(), MentionSource.CANONICAL_KEY);
+    }
+
+    /**
+     * T58 / F-B4. Both ACTIVE REPO keys from the live bar are unreachable by their own repository
+     * name: the path-shaped key is never contained in the text, and the URL-shaped key additionally
+     * carries the `.git` suffix. Both must resolve through the canonical key's tail.
+     */
+    @Test
+    void aPathOrUrlCanonicalKeyIsReachableByItsRepositoryName() {
+        MemoryEntity pathKey = entity("HappyLiang12/aria-conductor", "HappyLiang12/aria-conductor", null);
+        MemoryEntity urlKey = entity("https://github.com/HappyLiang12/aria-conductor.git",
+                "https://github.com/HappyLiang12/aria-conductor.git", null);
+
+        Map<UUID, MentionSource> mentions = extractor.match(
+                "aria-conductor repository release notes", null, List.of(pathKey, urlKey));
+
+        assertThat(mentions)
+                .containsEntry(pathKey.getId(), MentionSource.CANONICAL_KEY)
+                .containsEntry(urlKey.getId(), MentionSource.CANONICAL_KEY);
+    }
+
+    /**
+     * The tail is matched by the SAME boundary rule as the whole key, so widening reach must not
+     * reopen the "op" vs "operator" hole one segment down.
+     */
+    @Test
+    void aTrailingSegmentStillObeysTheTokenBoundary() {
+        MemoryEntity person = entity("person:happy", "person:happy", null);
+
+        assertThat(extractor.match("an unhappy customer", null, List.of(person)))
+                .as("'happy' inside 'unhappy' is not a mention of person:happy")
+                .isEmpty();
+    }
+
+    /** The ranking order is pinned by contract; the tail match reuses CANONICAL_KEY. */
+    @Test
+    void theMentionSourceRankingOrderIsPinned() {
+        assertThat(MentionSource.values()).extracting(MentionSource::name)
+                .containsExactly("CANONICAL_KEY", "DISPLAY_NAME", "ALIAS", "FOCUS", "NEIGHBOUR");
+        assertThat(MentionSource.values()).extracting(MentionSource::rank)
+                .containsExactly(0, 1, 2, 3, 4);
+    }
+
     @Test
     void anUnrelatedTextMatchesNothing() {
         MemoryEntity repo = entity("aria-conductor", "Aria Conductor", null);

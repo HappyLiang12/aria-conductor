@@ -643,7 +643,7 @@ public class HostExecutionBackend implements ExecutionBackend {
             // characters (RunFailureReason.MAX_CHARS), so the classification and the fix have to
             // survive the clip instead of trailing the handshake detail.
             message.append(CoreCredentialService.CREDENTIAL_REJECTED_MARKER)
-                    .append(": the core rejected the saved Qoder credential at session/new")
+                    .append(": the core rejected the saved Qoder runtime credential at session/new")
                     .append(" (E_AUTH_REQUIRED) — a credential failure, not a transport failure;")
                     .append(" replace the saved credential at PUT /api/v1/cores/qoder/credential")
                     .append(" and re-dispatch the run. ");

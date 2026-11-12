@@ -82,7 +82,7 @@ class HostAuthenticationFailureTextTest {
         assertThat(message)
                 .as("the operator learns the cause, not just the transport symptom")
                 .contains(CoreCredentialService.CREDENTIAL_REJECTED_MARKER)
-                .contains("rejected the saved Qoder credential")
+                .contains("rejected the saved Qoder runtime credential")
                 .contains("a credential failure, not a transport failure")
                 .contains("PUT /api/v1/cores/qoder/credential");
         assertThat(message)
@@ -93,6 +93,11 @@ class HostAuthenticationFailureTextTest {
                 .as("the classification survives the 300-character failed-turn clip")
                 .startsWith(CoreCredentialService.CREDENTIAL_REJECTED_MARKER)
                 .hasSizeGreaterThan(300);
+        assertThat(message.toLowerCase(java.util.Locale.ROOT))
+                .as("the shipped dashboard matcher (errorActionFor) already routes this phrase to"
+                        + " Configure > LLM Providers, so the action is reachable before the"
+                        + " frontend lane matches the new marker")
+                .contains("qoder runtime credential");
         assertThat(message)
                 .as("still one bounded line")
                 .doesNotContain("\n");
@@ -117,7 +122,7 @@ class HostAuthenticationFailureTextTest {
         assertThat(message)
                 .as("a non-credential bridge error is not relabelled")
                 .doesNotContain(CoreCredentialService.CREDENTIAL_REJECTED_MARKER)
-                .doesNotContain("rejected the saved Qoder credential")
+                .doesNotContain("rejected the saved Qoder runtime credential")
                 .contains("did not authenticate")
                 .contains("run-owned core log at " + coreLog);
     }

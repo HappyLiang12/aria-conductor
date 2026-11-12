@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
 /**
@@ -76,6 +77,11 @@ import java.util.function.Consumer;
  *       within a bounded budget so the cursor is settled when it returns; the
  *       sink is never called under the emission lock, so a slow persistence
  *       write costs the halt at most that budget;</li>
+ *   <li>the halt NEVER interrupts the worker: it clears the running flag and
+ *       {@linkplain LockSupport#unpark unparks} it. The worker runs the sink
+ *       synchronously on the same thread, and the sink writes the run-owned store
+ *       (one interruptible channel shared by the whole process), so an interrupt
+ *       delivered there closes the store instead of shortening a wait;</li>
  *   <li>{@link #drain()} performs at most {@value #DRAIN_ATTEMPTS} reads, emits
  *       through this same part-keyed cursor and sink (a part already streamed at
  *       its final content is not streamed twice), stops as soon as the turn's
@@ -350,12 +356,23 @@ public class CoreProgressPump {
      * sink and the session cursor is settled: a later prompt's baseline seed
      * cannot interleave with a diff of this pump.
      *
-     * <p>The interrupt only shortens the poll interval; the join is what makes the
-     * halt observable. If the worker does not exit within the budget (a sink that
-     * is stuck in a slow insert), {@code stop()} logs a WARN and returns: the run's
-     * terminal result is never blocked on progress observability. The remaining
-     * fragments of that batch are still dropped, because every emission re-checks
-     * the running flag, and an abandoned poll no longer advances the cursor.
+     * <p><strong>The halt is a flag plus an unpark, never an interrupt.</strong> The
+     * worker runs the sink synchronously on its own thread ({@link #emit} -> the
+     * owning session -> a persistence insert), so an interrupt issued from here could
+     * land inside that insert's I/O. The run-owned store's channel is one interruptible
+     * channel for the whole process: an interrupt inside its read throws
+     * {@code ClosedByInterruptException}, the channel closes, and every later statement
+     * fails until the process restarts -- a cancelled run would take the whole stack
+     * down. {@link LockSupport#unpark} wakes the poll wait with no such status, and the
+     * loop re-reads the flag after every wake-up, so the halt stays prompt without ever
+     * putting an interrupt into a thread that may be inside the sink.
+     *
+     * <p>The join is what makes the halt observable. If the worker does not exit within
+     * the budget (a sink stuck in a slow insert, or a poll still waiting on its own read
+     * timeout), {@code stop()} logs a WARN and returns: the run's terminal result is
+     * never blocked on progress observability. The remaining fragments of that batch are
+     * still dropped, because every emission re-checks the running flag, and an abandoned
+     * poll no longer advances the cursor.
      */
     public void stop() {
         Thread current;
@@ -369,7 +386,9 @@ public class CoreProgressPump {
             // Stopping from inside the sink must not wait for itself.
             return;
         }
-        current.interrupt();
+        // Wake the poll wait; never interrupt. See the javadoc: the worker may be inside
+        // the sink, and an interrupt there closes the process-wide store channel.
+        LockSupport.unpark(current);
         try {
             current.join(stopJoinTimeout.toMillis());
         } catch (InterruptedException ie) {
@@ -418,16 +437,40 @@ public class CoreProgressPump {
                 backoff = nextBackoff(backoff);
                 degrade(e.getClass().getSimpleName() + ": " + e.getMessage(), backoff);
             }
-            if (!running) {
-                break;
-            }
-            try {
-                Thread.sleep(backoff.toMillis());
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
+            if (!pause(backoff)) {
                 break;
             }
         }
+    }
+
+    /**
+     * Waits out the poll interval in a way the halt can end without an interrupt.
+     * {@link LockSupport#parkNanos} is woken by the {@link LockSupport#unpark} in
+     * {@link #stop()}, so {@code stop()} is prompt and the worker never has to be
+     * interrupted -- which matters because the worker's next step after this wait is a
+     * poll whose batch runs the sink on this same thread (see {@link #stop()}).
+     *
+     * <p>Returns {@code false} when the pump was halted while waiting. The wait is
+     * bounded by the interval itself: a spurious wake-up parks again for the remainder,
+     * and an interrupt status set on this thread by something other than this pump is
+     * consumed rather than spinning the loop (a parked thread returns immediately while
+     * that status is set). The pump's halt is the running flag, never this thread's
+     * interrupt status.
+     */
+    private boolean pause(Duration backoff) {
+        long deadline = System.nanoTime() + backoff.toNanos();
+        while (running) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return true;
+            }
+            LockSupport.parkNanos(this, remaining);
+            if (Thread.interrupted()) {
+                log.debug("OpenCode progress pump of run {} discarded a foreign interrupt during its"
+                        + " poll wait; the halt is the running flag, not an interrupt", runId);
+            }
+        }
+        return false;
     }
 
     /**

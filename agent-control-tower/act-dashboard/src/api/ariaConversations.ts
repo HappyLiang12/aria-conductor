@@ -27,9 +27,20 @@ export interface TimelineEntry {
   toolCallId?: string;
 }
 
+/**
+ * `GET /api/v1/aria/conversations/latest`: the conversation this operator should open, or
+ * `null` when none exists yet.
+ *
+ * A 404 means "no conversation exists yet" — the server's correct REST answer for the
+ * first load against a fresh database — so it is read as the same empty answer as the 204
+ * it later sends. Left throwing, a brand-new operator's first load logged a 404 plus
+ * `net::ERR_ABORTED` in the console for a normal state. This is the convention the DELETE
+ * below already uses (`:89`); every other non-ok status still throws, because those are
+ * real faults and the panel says the history was not loaded.
+ */
 export async function getLatestConversation(): Promise<ConversationSummary | null> {
   const res = await fetch('/api/v1/aria/conversations/latest');
-  if (res.status === 204) return null;
+  if (res.status === 204 || res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch latest conversation: ${res.statusText}`);
   return res.json();
 }

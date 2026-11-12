@@ -177,6 +177,70 @@ class MemoryMentionExtractorTest {
                 .isEmpty();
         assertThat(MemoryMentionExtractor.trailingSegment("agent:")).isEmpty();
         assertThat(MemoryMentionExtractor.trailingSegment("")).isEmpty();
+        // P3a (fix-round-6b re-review): a PATH-shaped key stored with a trailing separator loses its
+        // tail too, so its parent directory never names it. The loss is deliberate — the shape rule
+        // reads "the segment after the last separator, if any" and the last field here is empty — and
+        // this row exists so it cannot be narrowed or widened without a failing test.
+        assertThat(MemoryMentionExtractor.trailingSegment("d:/project/"))
+                .as("a copy-pasted directory with a trailing separator has no segment after it")
+                .isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment("a/b/"))
+                .as("the same shape in a relative path")
+                .isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment("/"))
+                .as("a key that is only a separator has no segment after it")
+                .isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment(":"))
+                .as("the namespace separator alone is the same shape")
+                .isEmpty();
+    }
+
+    /**
+     * P3a (fix-round-6b re-review) — DISCLOSED RESIDUAL, pinned as known and unchanged.
+     * <p>
+     * A key stored with a trailing separator (`D:/project/`) keeps the whole string as its defaulted
+     * display name (`MemoryCommandService:145`), and the whole-key comparison needs the literal
+     * trailing separator, which ordinary prose never contains. With no tail and no other name, nothing
+     * names it from prose: recall silently loses a REPO/PROJECT/MACHINE entity stored from a
+     * copy-pasted path. Accepted by controller ruling for this round; do not "fix" this pin, and do
+     * not implement a tail rule here.
+     */
+    @Test
+    void aTrailingSeparatorKeyCannotNameAnEntityFromProse() {
+        MemoryEntity directory = entity("D:/project/", "D:/project/", null);
+        MemoryEntity inside = entity("D:/project/aria-conductor", "D:/project/aria-conductor", null);
+
+        assertThat(extractor.match("open the project folder", null, List.of(directory)))
+                .as("no tail, and the whole key is not in prose, so the entity is not named")
+                .isEmpty();
+        assertThat(extractor.match("open the aria-conductor repository", null, List.of(inside)))
+                .as("positive control: the same path shape without the trailing separator keeps its tail")
+                .containsEntry(inside.getId(), MentionSource.CANONICAL_KEY);
+    }
+
+    /**
+     * P3c (fix-round-6b re-review) — DISCLOSED RESIDUAL, pinned as known and unchanged, NOT as
+     * desirable.
+     * <p>
+     * The focus reference is looked up as an exact key AND fed to the token pass
+     * ({@code addPhrases}, the single-token loop at {@code MemoryMentionExtractor:186-192}), so a focus
+     * of {@code person:} still contributes the bare token {@code person}. Recall admits any exact-key
+     * hit from {@code findByCanonicalKeyInAndStatus} at {@link MentionSource#CANONICAL_KEY} rank 0 with
+     * no text check ({@code MemoryRecallService:90-94}), so an entity whose canonical key is literally
+     * {@code person} stays reachable from this focus even though the guarded tail clause no longer mints
+     * a FOCUS match for it (pinned above by {@link #aGuardedFocusTailMintsNoFocusMatch()}).
+     * <p>
+     * This is the pre-existing token pass every word of the text already feeds, so it adds no new class
+     * of reach; the seam a future fix would change is the token pass, not the tail guard. If this test
+     * fails, that seam changed — update the residual record deliberately.
+     */
+    @Test
+    void aNamespaceOnlyFocusStillFeedsTheBareTokenToTheCandidateSet() {
+        Set<String> keys = extractor.candidateKeys("", "person:");
+
+        assertThat(keys)
+                .as("the focus key itself, plus the bare token the single-token pass derives from it")
+                .containsExactlyInAnyOrder("person:", "person");
     }
 
     /**

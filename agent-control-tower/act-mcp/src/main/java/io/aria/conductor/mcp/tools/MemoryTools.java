@@ -98,7 +98,7 @@ public class MemoryTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "remember_fact",
-            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) resolves the key first — a new key creates the entity with this first fact in the same transaction; an existing ACTIVE key adds the fact to that entity, and an existing PENDING key takes only a worker's PENDING proposal (an operator call on a PENDING key is refused as a conflict). A RETIRED or MERGED key is re-proposed to PENDING by a worker's call, which retires that key's live ACTIVE and PENDING facts and ACTIVE relations so the new proposal decides only what it adds; an operator call on a decided key is refused as a conflict. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. One operator decision on the entity proposal promotes the new entity and its first fact together. Returns the fact with id, status, origin, sensitivity and validity.")
+            description = "Record one fact about a memory entity, in exactly one of two shapes: (entityId) adds the fact to an existing entity, (kind, canonicalKey) resolves the key first — kind is case-insensitive (person and PERSON name the same entity kind; accepted kinds PERSON, PROJECT, REPO, MACHINE, AGENT, TASK, ORG; an unknown kind is refused with VALIDATION); a new key creates the entity with this first fact in the same transaction; an existing ACTIVE key adds the fact to that entity, and an existing PENDING key takes only a worker's PENDING proposal (an operator call on a PENDING key is refused as a conflict). A RETIRED or MERGED key is re-proposed to PENDING by a worker's call, which retires that key's live ACTIVE and PENDING facts and ACTIVE relations so the new proposal decides only what it adds; an operator call on a decided key is refused as a conflict. A worker call is recorded as a PENDING extraction proposal that an operator must approve; an operator call writes ACTIVE memory. One operator decision on the entity proposal promotes the new entity and its first fact together. Returns the fact with id, status, origin, sensitivity and validity.")
     public String rememberFact(
             @ToolParam(description = "Existing memory entity id (UUID); supply this or kind + canonicalKey, not both",
                     required = false)
@@ -107,9 +107,9 @@ public class MemoryTools implements McpTool {
             @ToolParam(description = "Fact value; credential-like values are rejected") String valueText,
             @ToolParam(description = "Provenance pointer (tool call, message, extraction job)", required = false)
             String sourceRef,
-            @ToolParam(description = "Kind of the entity, e.g. person or repo; requires canonicalKey. "
-                    + "An existing kind + canonicalKey reuses the stored entity instead of creating one",
-                    required = false)
+            @ToolParam(description = "Kind of the entity, case-insensitive (e.g. person or PERSON); requires "
+                    + "canonicalKey. An existing kind + canonicalKey reuses the stored entity instead of creating "
+                    + "one; an unknown kind is refused", required = false)
             String kind,
             @ToolParam(description = "Canonical key of that entity, e.g. person:happy; requires kind. "
                     + "A key that already exists resolves to its entity; a new key creates it",

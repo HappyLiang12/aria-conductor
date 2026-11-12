@@ -231,6 +231,41 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
         verifyNoInteractions(probe);
     }
 
+    /**
+     * T53 F3 (live bar): the live symptom was a credential rejection surfacing as a control-secret
+     * transport error, with {@code testSupported:false} and no way to validate at save time. The
+     * pinned Qoder core only validates the token when it opens an ACP session ({@code session/new}),
+     * which needs a run-owned core to be started, so a real save-time test is not available without
+     * that composition. The honest contract is: {@code testSupported} stays false and the view says
+     * why, and names the marker the failed run will carry.
+     */
+    @Test
+    void withoutAProbeTheViewStatesWhySaveTimeValidationIsUnavailable() throws Exception {
+        credentials.put("qoder", SECRET, ActorPrincipal.operator(null));
+        MockMvc noProbeMvc = mockMvcFor(new CoreCredentialController(credentials,
+                new OperatorAuthorityResolver(operatorSessions, actorTokens, ""), null,
+                CoreCredentialController.TEST_TIMEOUT));
+
+        noProbeMvc.perform(get("/api/v1/cores/qoder/credential").with(loopback()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.testSupported").value(false))
+                .andExpect(jsonPath("$.testUnavailableReason").isNotEmpty())
+                .andExpect(jsonPath("$.testUnavailableReason").value(containsString("session/new")))
+                .andExpect(jsonPath("$.testUnavailableReason").value(containsString("E_CREDENTIAL_REJECTED")))
+                .andExpect(content().string(not(containsString(SECRET))));
+    }
+
+    /** The other half of the contract: a wired probe means no unavailable reason is reported. */
+    @Test
+    void withAProbeTheViewReportsNoUnavailableReason() throws Exception {
+        credentials.put("qoder", SECRET, ActorPrincipal.operator(null));
+
+        mvc.perform(get("/api/v1/cores/qoder/credential").with(loopback()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.testSupported").value(true))
+                .andExpect(jsonPath("$.testUnavailableReason").value(nullValue()));
+    }
+
     @Test
     void testWithoutProbeMakesNoCallAndReportsNoResult() throws Exception {
         credentials.put("qoder", SECRET, ActorPrincipal.operator(null));

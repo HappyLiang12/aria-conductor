@@ -164,9 +164,10 @@ public class MemoryTools implements McpTool {
     }
 
     @Tool(name = "list_memory_entities",
-            description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind (e.g. PERSON, REPO, AGENT) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.")
+            description = "List memory entities at or below the INTERNAL sensitivity ceiling. Optional kind, case-insensitive (e.g. person or PERSON; accepted kinds PERSON, PROJECT, REPO, MACHINE, AGENT, TASK, ORG) and status (ACTIVE/MERGED/RETIRED; default ACTIVE); limit defaults to 50 and is capped at 200. A blank kind lists every entity; an unknown kind is refused with VALIDATION rather than answered as an empty list, and a known kind with no matching rows is an empty list. A PENDING entity is review material: the explicit status=PENDING listing is operator authority only, and a run-scoped worker credential is refused with FORBIDDEN.")
     public String listMemoryEntities(
-            @ToolParam(description = "Entity kind or blank", required = false) String kind,
+            @ToolParam(description = "Entity kind, case-insensitive (e.g. person or PERSON); blank lists every "
+                    + "entity; an unknown kind is refused", required = false) String kind,
             @ToolParam(description = "ACTIVE, MERGED, RETIRED or PENDING (PENDING is operator authority only); "
                     + "default ACTIVE", required = false) String status,
             @ToolParam(description = "Page size, default 50, max 200", required = false) Integer limit,

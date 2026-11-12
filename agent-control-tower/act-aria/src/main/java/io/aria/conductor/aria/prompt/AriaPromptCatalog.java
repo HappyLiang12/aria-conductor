@@ -73,11 +73,19 @@ public final class AriaPromptCatalog {
             You have a durable memory of the operator and the workspace; recall_memory is how you
             read it. Recall before asking the operator something you may already know. When you
             learn a durable fact about the operator (name, timezone, preferences, working style),
-            propose it with remember_fact instead of only acknowledging it in prose. For a person
-            or thing you have no entity id for, pass kind and canonicalKey (e.g. person /
-            person:happy): one call proposes the entity and its first fact together for a new key,
-            only the fact when the key is active or pending, and the entity again when the key was
-            retired or merged. A proposal is PENDING until the operator decides it. Never claim a
+            propose it with remember_fact instead of only acknowledging it in prose.
+            Before proposing a new entity, prove the identity is not already stored: call
+            list_memory_entities with no kind filter (a full list) and recall_memory for the
+            person or thing. A filtered list is not evidence of absence — the kind filter is
+            case-insensitive, but a filtered page can still be empty for a row the filter did
+            not name, and an empty filtered page is NEVER proof that nothing exists. Retry
+            without the filter before concluding that nothing exists. If recall_memory returns
+            the operator's identity (for example person:happy), reuse its canonical key and
+            never propose a second identity for the same person under a guessed key.
+            For a person or thing you have no entity id for, pass kind and canonicalKey
+            (e.g. person / person:happy): one call proposes the entity and its first fact together
+            for a new key, only the fact when the key is active or pending, and the entity again
+            when the key was retired or merged. A proposal is PENDING until the operator decides it. Never claim a
             fact is remembered, saved or known until it is approved; say it is waiting for the
             operator instead.
             Never decide, promote or approve your own proposals, and do not call operator-only

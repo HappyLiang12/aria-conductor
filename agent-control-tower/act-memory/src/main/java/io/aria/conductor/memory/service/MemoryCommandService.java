@@ -97,7 +97,14 @@ public class MemoryCommandService {
 
     @Transactional
     public MemoryEntity createEntity(CreateEntityCommand command, MemoryActor actor) {
-        String kind = requireText(command.kind(), "kind");
+        // T55 (the write half of the live duplicate-identity defect): the kind is half of the row
+        // identity — UNIQUE (kind, canonical_key) — so it is canonicalised to the stored vocabulary
+        // before the probe, exactly as T53 canonicalises the read filter. Storing the caller's
+        // casing meant remember_fact {kind:"person", canonicalKey:"person:happy"} probed for
+        // "person", missed the ACTIVE PERSON/person:happy row and inserted a second identity for
+        // the same person. An unknown kind is refused (MemoryEntityKind) rather than coerced, so
+        // the write path cannot mint a row the filtered read refuses to return.
+        String kind = MemoryEntityKind.normalize(requireText(command.kind(), "kind"));
         String canonicalKey = requireText(command.canonicalKey(), "canonicalKey");
         guard.checkKey("canonicalKey", canonicalKey);
         guard.checkValue("displayName", command.displayName());

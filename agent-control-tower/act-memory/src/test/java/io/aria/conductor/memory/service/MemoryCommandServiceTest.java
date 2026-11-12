@@ -1279,6 +1279,112 @@ class MemoryCommandServiceTest {
         verify(assertions, times(1)).save(any(MemoryAssertion.class));
     }
 
+    // ---------------------------------------------------------------- kind normalisation (T55)
+
+    /**
+     * T55, the write half of the live duplicate-identity defect. The Aria prompt teaches
+     * {@code remember_fact {kind:"person", canonicalKey:"person:happy"}} while the stored kind is
+     * {@code PERSON}. T53 normalised the kind READ path; the write path still stored the kind as
+     * given, so the identity probe looked for {@code person} and found nothing, and
+     * {@code UNIQUE (kind, canonical_key)} — the row identity — accepted a second row for the same
+     * person. The probe must run on the normalised kind, so one canonical key names one row.
+     */
+    @Test
+    void aLowercaseKindWriteResolvesToTheStoredUppercaseIdentityInsteadOfCreatingASecondOne() {
+        MemoryEntity happy = MemoryEntity.builder()
+                .id(id("person:happy"))
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .build();
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(happy));
+
+        MemoryEntity resolved = command.createEntity(
+                new CreateEntityCommand("person", "person:happy", null, Sensitivity.INTERNAL), OPERATOR);
+
+        assertThat(resolved.getId())
+                .as("the key names the stored row, not a second identity")
+                .isEqualTo(happy.getId());
+        verify(entities).findByKindAndCanonicalKey("PERSON", "person:happy");
+        verify(entities, never()).saveAndFlush(any(MemoryEntity.class));
+        verify(assertions, never()).save(any(MemoryAssertion.class));
+    }
+
+    /**
+     * The positive control for the test above: normalisation must not turn every write into a
+     * lookup. A genuinely new canonical key still creates exactly one entity, stored in the same
+     * uppercase vocabulary the read path filters on, so "no second row" above cannot be confused
+     * with "the write path stopped writing".
+     */
+    @Test
+    void aLowercaseKindForAGenuinelyNewCanonicalKeyStillCreatesOneCanonicalEntity() {
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:new-hire")).thenReturn(Optional.empty());
+        when(entities.saveAndFlush(any(MemoryEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MemoryEntity created = command.createEntity(
+                new CreateEntityCommand("person", "person:new-hire", null, Sensitivity.INTERNAL), OPERATOR);
+
+        ArgumentCaptor<MemoryEntity> saved = ArgumentCaptor.forClass(MemoryEntity.class);
+        verify(entities).saveAndFlush(saved.capture());
+        assertThat(saved.getValue().getKind())
+                .as("the row is stored in the vocabulary both halves of memory agree on")
+                .isEqualTo("PERSON");
+        assertThat(created.getCanonicalKey()).isEqualTo("person:new-hire");
+        assertThat(captureAssertions(1).get(0).getAfterJson()).contains("\"kind\":\"PERSON\"");
+    }
+
+    /**
+     * Normalising case must not become coercion: a kind outside the documented vocabulary is
+     * refused before any row is probed or written, and the refusal names the accepted kinds. A
+     * silently stored unknown kind would be invisible to a read path that refuses unknown kinds
+     * (T53), i.e. the same class of defect in the other direction.
+     */
+    @Test
+    void anUnknownKindIsRefusedInsteadOfBeingStoredAsANewVocabularyEntry() {
+        assertThatThrownBy(() -> command.createEntity(
+                new CreateEntityCommand("wizard", "wizard:merlin", null, Sensitivity.INTERNAL), OPERATOR))
+                .as("an unknown kind fails honestly, it is never silently coerced")
+                .isInstanceOf(MemoryValidationException.class)
+                .hasMessageContaining("wizard")
+                .hasMessageContaining("case-insensitive")
+                .hasMessageContaining("PERSON");
+        verifyNoInteractions(entities, assertions);
+    }
+
+    /**
+     * The MCP {@code remember_fact} shape — {@code (kind, canonicalKey)} — is the producer the
+     * live incident used. With a lowercase kind it must attach the fact to the stored uppercase
+     * entity instead of minting a second identity and hanging the fact off that one.
+     */
+    @Test
+    void theUnknownKeyFactWriteWithALowercaseKindAttachesToTheStoredEntity() {
+        MemoryEntity happy = MemoryEntity.builder()
+                .id(id("person:happy"))
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .build();
+        when(entities.findByKindAndCanonicalKey("PERSON", "person:happy")).thenReturn(Optional.of(happy));
+        when(entities.findById(happy.getId())).thenReturn(Optional.of(happy));
+        when(facts.findByEntityIdAndStatusAndValidToIsNullOrderByUpdatedAtDesc(happy.getId(), FactStatus.ACTIVE))
+                .thenReturn(List.of());
+
+        MemoryFact fact = command.addFactByKey("person", "person:happy",
+                new AddFactCommand("timezone", "UTC", "STRING", Sensitivity.INTERNAL, "mcp:memory"), OPERATOR);
+
+        assertThat(fact.getEntityId())
+                .as("the fact lands on the stored entity, not on a second identity")
+                .isEqualTo(happy.getId());
+        verify(entities, never()).saveAndFlush(any(MemoryEntity.class));
+        assertThat(captureAssertions(1).get(0).getAfterJson()).contains("\"entityId\":\"" + happy.getId() + "\"");
+    }
+
     /**
      * Minor 1 (T10 fix round 1). {@code UNIQUE (kind, canonical_key)} makes the row the identity
      * of the key, so a new extraction for a key whose proposal was rejected receives that same

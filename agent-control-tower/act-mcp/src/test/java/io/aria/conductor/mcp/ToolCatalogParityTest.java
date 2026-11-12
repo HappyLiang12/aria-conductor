@@ -317,6 +317,26 @@ class ToolCatalogParityTest {
     }
 
     /**
+     * T53 F-B2 (live bar): the catalog taught {@code kind} as "(e.g. PERSON, REPO, AGENT)" while
+     * the Aria prompt taught {@code person / person:happy}, and the filter was an exact,
+     * case-sensitive match, so the taught lowercase spelling answered an empty page for a stored
+     * ACTIVE {@code PERSON}. The read now normalises case; the description must say so, and it
+     * must say that an unknown kind is refused rather than reported as an empty list, so the two
+     * shipped contracts describe one behaviour.
+     */
+    @Test
+    void theEntityListDescriptionStatesTheKindFilterIsCaseInsensitiveAndRefusesAnUnknownKind() {
+        String description = catalog.find("list_memory_entities").orElseThrow().description();
+
+        assertThat(description)
+                .contains("case-insensitive")
+                .contains("person or PERSON")
+                .contains("PERSON, PROJECT, REPO, MACHINE, AGENT, TASK, ORG")
+                .contains("refused with VALIDATION")
+                .doesNotContain("(e.g. PERSON, REPO, AGENT)");
+    }
+
+    /**
      * The two entity reads refuse a PENDING view to a worker, so their descriptions must say that
      * PENDING is a review status with an operator-only listing/read rather than leaving the reader
      * with ACTIVE/MERGED/RETIRED as the whole status set. The detail read must also name where the

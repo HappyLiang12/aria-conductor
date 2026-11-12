@@ -60,6 +60,56 @@ class MemoryQueryServiceTest {
         assertThat(page).extracting(MemoryEntityView::canonicalKey).containsExactly("a-repo");
     }
 
+    /**
+     * T53 F-B2 (live bar): `list_memory_entities {"kind":"person"}` answered `{"ok":true,"data":[]}`
+     * while `person:happy` was ACTIVE, because the filter was passed unchanged into an exact
+     * match against the stored `PERSON`. The prompt teaches `person / person:happy` and the tool
+     * description taught `PERSON`, so both spellings must name the same rows; the canonical form
+     * is the stored uppercase vocabulary.
+     */
+    @Test
+    void listEntitiesNormalisesTheKindFilterSoTheTaughtLowercaseSpellingFindsTheStoredEntity() {
+        MemoryEntity person = MemoryEntity.builder()
+                .id(UUID.nameUUIDFromBytes("person:happy".getBytes()))
+                .kind("PERSON")
+                .canonicalKey("person:happy")
+                .displayName("Happy")
+                .sensitivity(Sensitivity.INTERNAL)
+                .status(EntityStatus.ACTIVE)
+                .origin(MemoryOrigin.OPERATOR)
+                .createdAt(OLD)
+                .updatedAt(OLD)
+                .build();
+        when(entities.findByKindAndStatus("PERSON", EntityStatus.ACTIVE)).thenReturn(List.of(person));
+
+        List<MemoryEntityView> page = query.listEntities("person", null, 0);
+
+        assertThat(page).extracting(MemoryEntityView::canonicalKey).containsExactly("person:happy");
+        verify(entities).findByKindAndStatus("PERSON", EntityStatus.ACTIVE);
+    }
+
+    /**
+     * The positive control for the test above, and the other half of F-B2: a known kind with no
+     * matching rows still answers an empty page, while an unknown kind is refused with a named
+     * VALIDATION error. An empty list therefore never means "unknown kind" and an unknown kind
+     * can never be mistaken for "nothing exists".
+     */
+    @Test
+    void listEntitiesKeepsAnEmptyKnownKindAndRefusesAnUnknownKind() {
+        when(entities.findByKindAndStatus("PERSON", EntityStatus.ACTIVE)).thenReturn(List.of());
+
+        assertThat(query.listEntities("PERSON", EntityStatus.ACTIVE, 0))
+                .as("a known kind with no rows is an empty page, not an error")
+                .isEmpty();
+
+        assertThatThrownBy(() -> query.listEntities("personn", EntityStatus.ACTIVE, 0))
+                .as("a typo must not be reported as an empty kind")
+                .isInstanceOf(MemoryValidationException.class)
+                .hasMessageContaining("personn")
+                .hasMessageContaining("PERSON")
+                .hasMessageContaining("case-insensitive");
+    }
+
     @Test
     void listEntitiesWithoutAKindKeepsOnlyTheRequestedStatus() {
         MemoryEntity active = entity("active-one", EntityStatus.ACTIVE);

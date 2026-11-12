@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime.host;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ExecutionBackend;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
@@ -128,6 +129,14 @@ public class HostExecutionBackend implements ExecutionBackend {
 
     /** Authenticated bridge route used to authenticate the endpoint; {@code /health} would prove nothing. */
     private static final String SESSION_ROUTE = "session";
+
+    /** Bridge error code and method that together mean "the saved credential was rejected". */
+    private static final String AUTH_REJECTION_CODE = "E_AUTH_REQUIRED";
+    private static final String AUTH_REJECTION_METHOD = "session/new";
+
+    /** Bound on the run-owned core log read used for that classification. */
+    private static final int CREDENTIAL_EVIDENCE_LIMIT = 256 * 1024;
+
     /** How long a launch waits for its runtime to answer the authenticated call. */
     private static final Duration AUTHENTICATION_WINDOW = Duration.ofSeconds(30);
     private static final Duration AUTHENTICATION_PAUSE = Duration.ofMillis(100);
@@ -617,9 +626,29 @@ public class HostExecutionBackend implements ExecutionBackend {
      * that file so the operator can find the real cause; it names the path only
      * and never quotes contents, which can carry paths and other run detail. The
      * text stays one bounded line.
+     * <p>
+     * T53 F3: a rejected saved credential is a distinct cause with the same
+     * transport symptom, because the bridge exits on {@code E_AUTH_REQUIRED} at
+     * {@code session/new} and the handshake only sees a closed port. When the
+     * same run-owned log holds that rejection, the message says so under
+     * {@link CoreCredentialService#CREDENTIAL_REJECTED_MARKER} and tells the
+     * operator where to replace the credential. The classification reads the log
+     * and never echoes it; an unreadable log is not evidence, so the marker is
+     * absent rather than guessed.
      */
     static String authenticationFailureMessage(UUID runId, String detail, Path coreLogPath) {
-        StringBuilder message = new StringBuilder("The runtime endpoint of run ").append(runId)
+        StringBuilder message = new StringBuilder();
+        if (credentialWasRejected(coreLogPath)) {
+            // Placed first on purpose: the Aria timeline clips a failed reason to its first 300
+            // characters (RunFailureReason.MAX_CHARS), so the classification and the fix have to
+            // survive the clip instead of trailing the handshake detail.
+            message.append(CoreCredentialService.CREDENTIAL_REJECTED_MARKER)
+                    .append(": the core rejected the saved Qoder credential at session/new")
+                    .append(" (E_AUTH_REQUIRED) — a credential failure, not a transport failure;")
+                    .append(" replace the saved credential at PUT /api/v1/cores/qoder/credential")
+                    .append(" and re-dispatch the run. ");
+        }
+        message.append("The runtime endpoint of run ").append(runId)
                 .append(" did not authenticate the run's control secret (").append(detail)
                 .append("); the runtime was terminated instead of being trusted on its executable name.");
         if (coreLogPath != null) {
@@ -627,6 +656,25 @@ public class HostExecutionBackend implements ExecutionBackend {
                     .append(coreLogPath).append('.');
         }
         return message.toString();
+    }
+
+    /**
+     * True only when the run-owned core log holds the bridge's credential rejection: the
+     * {@code E_AUTH_REQUIRED} code together with the {@code session/new} method. Both must be
+     * present, so an unrelated bridge error (or a log that merely mentions one of them) is not
+     * relabelled. Reads a bounded head, the location of a startup rejection; any IO failure
+     * answers false because a claim needs evidence.
+     */
+    private static boolean credentialWasRejected(Path coreLogPath) {
+        if (coreLogPath == null) {
+            return false;
+        }
+        try (InputStream head = Files.newInputStream(coreLogPath)) {
+            String text = new String(head.readNBytes(CREDENTIAL_EVIDENCE_LIMIT), StandardCharsets.UTF_8);
+            return text.contains(AUTH_REJECTION_CODE) && text.contains(AUTH_REJECTION_METHOD);
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
     }
 
     /** Bounded read of the runtime's answer: a listener cannot make this unbounded. */

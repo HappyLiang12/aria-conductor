@@ -50,14 +50,31 @@ public class CoreCredentialController {
      * wiring -- a {@link CredentialProbe} may simply not exist in the deployed
      * component -- so the dashboard can state it instead of offering a call that
      * can only be refused. No credential value is part of the view.
+     * <p>
+     * T53 F3 (live bar): {@code testSupported:false} alone left the operator with no explanation
+     * of why a bad token cannot be caught at save time. {@code testUnavailableReason} states the
+     * capability limit and names the marker a rejected credential produces on the next run. It is
+     * null exactly when a probe is wired, so {@code testSupported} and the reason cannot disagree.
      */
     public record CoreCredentialView(String credentialRef, String coreId, String environmentVariable,
-            boolean configured, String maskedSecret, Instant updatedAt, boolean testSupported) {
+            boolean configured, String maskedSecret, Instant updatedAt, boolean testSupported,
+            String testUnavailableReason) {
+
+        /**
+         * Why a real save-time test is unavailable without the run-owned bridge. Evidence: the
+         * pinned Qoder core only consumes the token when it opens an ACP session
+         * ({@code session/new} in the bridge's startup order), so validating it means starting a
+         * run-owned core -- not a token-only check.
+         */
+        static final String NO_PROBE_REASON = "Save-time validation is unavailable: the pinned Qoder core"
+                + " only validates the token when it opens an ACP session (session/new), which requires"
+                + " starting a run-owned core. A rejected saved credential is reported on the next run"
+                + " with the marker " + CoreCredentialService.CREDENTIAL_REJECTED_MARKER + ".";
 
         static CoreCredentialView of(CoreCredentialService.MaskedMetadata metadata, boolean testSupported) {
             return new CoreCredentialView(metadata.credentialRef(), metadata.coreId(),
                     metadata.environmentVariable(), metadata.configured(), metadata.maskedSecret(),
-                    metadata.updatedAt(), testSupported);
+                    metadata.updatedAt(), testSupported, testSupported ? null : NO_PROBE_REASON);
         }
     }
 

@@ -135,6 +135,69 @@ class MemoryMentionExtractorTest {
                 .isEmpty();
     }
 
+    /**
+     * T61 / re-review m1. A canonical key that merely ENDS in a separator has no tail: the segment
+     * before it is the namespace, not a name. `Pattern.split` drops the empty field after a trailing
+     * separator, so splitting alone reported "person" and the extractor named the entity from the
+     * ordinary English word in any text — at canonical-key rank. `person:` and `agent:` are storable
+     * (`MemoryValueGuard.checkKey` rejects only credential-shaped keys) and carry the defaulted
+     * display name, so only the tail could have named them.
+     */
+    @Test
+    void aKeyThatEndsInASeparatorHasNoTail() {
+        MemoryEntity personNamespace = entity("person:", "person:", null);
+        MemoryEntity agentNamespace = entity("agent:", "agent:", null);
+
+        assertThat(extractor.match("who is the person here", null, List.of(personNamespace)))
+                .as("'person' before the trailing separator is the namespace, not the entity's name")
+                .isEmpty();
+        assertThat(extractor.match("which agent handles this", null, List.of(agentNamespace)))
+                .as("the same false mention for a namespace-only agent key")
+                .isEmpty();
+    }
+
+    /**
+     * The shape rule itself, pinned next to its positive controls: a tail exists only for a key with
+     * a separator that has a non-empty segment after it.
+     */
+    @Test
+    void onlyAShapedKeyHasATail() {
+        assertThat(MemoryMentionExtractor.trailingSegment("person:happy")).isEqualTo("happy");
+        assertThat(MemoryMentionExtractor.trailingSegment("HappyLiang12/aria-conductor"))
+                .isEqualTo("aria-conductor");
+        assertThat(MemoryMentionExtractor.trailingSegment(
+                "https://github.com/HappyLiang12/aria-conductor.git"))
+                .as("the URL shape still yields the repository name")
+                .isEqualTo("aria-conductor");
+        assertThat(MemoryMentionExtractor.trailingSegment("person"))
+                .as("no separator: the whole key is already the whole-key comparison")
+                .isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment("person:"))
+                .as("a trailing separator has no non-empty segment after it")
+                .isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment("agent:")).isEmpty();
+        assertThat(MemoryMentionExtractor.trailingSegment("")).isEmpty();
+    }
+
+    /**
+     * T61 / brief item 3. The focus reference reaches the exact-key `IN` query and the focus match
+     * through the SAME tail definition, so the shape guard governs it too: a focus of `person:`
+     * yields no tail and therefore cannot stand in for an entity keyed `person` through the tail
+     * clause. A genuinely shaped focus still names its tail (positive control).
+     */
+    @Test
+    void aGuardedFocusTailMintsNoFocusMatch() {
+        MemoryEntity bare = entity("person", "Person", null);
+        MemoryEntity person = entity("person:happy", "person:happy", null);
+
+        assertThat(extractor.match("", "person:", List.of(bare)))
+                .as("the namespace-only focus contributes no tail, so no focus match")
+                .isEmpty();
+        assertThat(extractor.match("", "person:happy", List.of(person)))
+                .as("a shaped focus still reaches its entity by the tail")
+                .containsEntry(person.getId(), MentionSource.FOCUS);
+    }
+
     /** The ranking order is pinned by contract; the tail match reuses CANONICAL_KEY. */
     @Test
     void theMentionSourceRankingOrderIsPinned() {

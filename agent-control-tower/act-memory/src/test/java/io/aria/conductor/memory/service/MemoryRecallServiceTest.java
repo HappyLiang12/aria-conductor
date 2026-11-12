@@ -468,6 +468,35 @@ class MemoryRecallServiceTest {
                         "https://github.com/HappyLiang12/aria-conductor.git");
     }
 
+    /**
+     * T61 / re-review m1 + o1. A namespace-only canonical key (`person:`) has no tail, so ordinary
+     * prose no longer names it. Before the shape guard the tail "person" ranked the unrelated entity
+     * as a CANONICAL_KEY match (rank 0), ahead of the real DISPLAY_NAME match, and its facts entered
+     * the prompt with it — the displacement the re-review observed inside MAX_ENTITIES.
+     */
+    @Test
+    void aNamespaceOnlyKeyIsNotRecalledFromProseAndCannotDisplaceADisplayNameMatch() {
+        MemoryEntity namespaceOnly = entity("person:", "person:", "PERSON", MemoryOrigin.EXTRACTION, null);
+        MemoryEntity named = entity("operator-1", "Person", "PERSON", MemoryOrigin.OPERATOR, null);
+        MemoryFact strayFact = fact(namespaceOnly.getId(), "note", "unrelated", MemoryOrigin.EXTRACTION, RECENT);
+        MemoryFact namedFact = fact(named.getId(), "timezone", "Asia/Hong_Kong", MemoryOrigin.OPERATOR, RECENT);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of());
+        stubUniverse(namespaceOnly, named);
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(strayFact, namedFact));
+
+        RecallResult result = recall.recall(query("who is the person here"));
+
+        assertThat(result.entities()).extracting(view -> view.canonicalKey())
+                .as("only the display-name match is a mention; the namespace-only key is not")
+                .containsExactly("operator-1");
+        assertThat(result.facts()).extracting(view -> view.factKey())
+                .as("and the unrelated entity's facts never reach the prompt")
+                .containsExactly("timezone");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private void stubUniverse(MemoryEntity... rows) {

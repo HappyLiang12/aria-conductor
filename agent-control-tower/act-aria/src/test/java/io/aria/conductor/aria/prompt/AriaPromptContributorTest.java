@@ -191,8 +191,12 @@ class AriaPromptContributorTest {
     /**
      * T59 F-O2 (Minor, live bar). To "Hi, I'm Happy. I'm the operator here." the model proposed
      * {@code role = Aria Conductor operator} and {@code timezone = UTC} — neither stated — and invited
-     * the operator to approve both as their own words. The rule must say where a guess belongs: in the
-     * proposal, labelled, never reported as something the operator said.
+     * the operator to approve both as their own words. T59's first wording told Aria to label a guess
+     * "in the proposal itself", but {@code remember_fact} has no label field — its parameters are
+     * entityId, factKey, valueText, sourceRef, kind and canonicalKey ({@code MemoryTools.java:100-118})
+     * — so the only writable place was the value the operator would then approve into memory. An
+     * inference therefore belongs in prose as an explicit guess and must never be proposed. T62 fixes
+     * the wording (re-review m3) and the order (m4).
      */
     @Test
     void policyProposesOnlyFactsTheOperatorActuallyStated() {
@@ -201,12 +205,16 @@ class AriaPromptContributorTest {
 
         assertThat(flat).contains("IMPORTANT — propose only what the operator stated:");
         assertThat(flat).contains("Propose only facts the operator actually stated in this turn.");
-        assertThat(flat).contains("Label anything you infer as a guess in the proposal itself, "
-                + "and never present an inference as something the operator said.");
+        assertThat(flat).contains("Anything you infer is said in prose as an explicit guess "
+                + "and is NEVER proposed as a fact.");
+        assertThat(flat)
+                .as("remember_fact has no field for a guess label, so the rule must not name one")
+                .doesNotContain("Label anything you infer as a guess in the proposal");
         assertThat(flat.indexOf("IMPORTANT — propose only what the operator stated:"))
-                .as("the stated-facts rule is part of the memory guidance that teaches proposing")
+                .as("the stated-facts rule precedes the instruction that teaches remember_fact, so "
+                        + "the model reads the limit before the licence, as T53's ordering pins it")
                 .isGreaterThan(flat.indexOf("IMPORTANT — memory:"))
-                .isLessThan(flat.indexOf("## Workflows"));
+                .isLessThan(flat.indexOf("When you learn a durable fact about the operator"));
     }
 
     /**

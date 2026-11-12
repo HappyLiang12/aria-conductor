@@ -58,9 +58,21 @@ const NOT_WIRED_REASON =
   'The bounded Qoder credential test requires the run-owned core bridge, which is not '
   + 'wired in this component; no model call was made.';
 
-const NO_PROBE_WIRED_REASON =
+/**
+ * The reason the backend serves on `testUnavailableReason` when no probe is
+ * wired (T53 F3, `CoreCredentialController.NO_PROBE_REASON`). The card must
+ * render THIS text, not invent one.
+ */
+const BACKEND_SERVED_REASON =
+  'Save-time validation is unavailable: the pinned Qoder core only validates the token when it '
+  + 'opens an ACP session (session/new), which requires starting a run-owned core. A rejected '
+  + 'saved credential is reported on the next run with the marker E_CREDENTIAL_REJECTED.';
+
+/** The local fallback for a backend older than the T53 contract (no field). */
+const NO_PROBE_FALLBACK_REASON =
   'No credential probe is wired in this build: the bounded test needs the run-owned core '
-  + 'bridge, so the dashboard cannot make that call.';
+  + 'bridge, so the dashboard cannot make that call. To verify the token, dispatch a Qoder '
+  + 'run — a rejected credential fails it with E_CREDENTIAL_REJECTED at session/new.';
 
 const NO_STORED_CREDENTIAL_TEST_REASON =
   'The bounded credential test needs a stored credential — save one first.';
@@ -104,6 +116,77 @@ describe('RuntimeCredentialsCard', () => {
     await waitFor(() => expect(screen.getByLabelText('Runtime credential')).toHaveValue(''));
     expect(screen.queryByText('fixture-secret-value')).not.toBeInTheDocument();
     expect(await screen.findByText('••••••••')).toBeInTheDocument();
+  });
+
+  // T54 F3: `testSupported:false` means a bad token cannot be caught at save
+  // time (the live bar's credential was stored correctly and rejected by the
+  // core at session/new). The save outcome must say "stored, not verified" and
+  // name the action that verifies it — never imply the token works.
+  it('says a stored credential was not validated, and what verifies it', async () => {
+    const UNPROBEABLE = {
+      ...CONFIGURED,
+      testSupported: false,
+      testUnavailableReason: BACKEND_SERVED_REASON,
+    };
+    mockedPut.mockResolvedValue(UNPROBEABLE);
+    mockedGet.mockResolvedValue(UNPROBEABLE);
+    ui();
+    await screen.findByText('••••••••');
+
+    await userEvent.type(screen.getByLabelText('Runtime credential'), 'fixture-secret-value');
+    await userEvent.click(screen.getByRole('button', { name: 'Save credential' }));
+
+    const notice = await screen.findByTestId('credential-save-notice');
+    expect(notice).toHaveTextContent(/stored/i);
+    expect(notice).toHaveTextContent(/not validated|not verified/i);
+    // The backend's own reason, quoted rather than replaced.
+    expect(notice).toHaveTextContent(BACKEND_SERVED_REASON);
+    expect(notice).toHaveTextContent(/Configure → LLM Providers/);
+    expect(notice).toHaveTextContent(/Qoder runtime credential/);
+    expect(notice).toHaveTextContent(/dispatch a Qoder run/i);
+    expect(notice).toHaveTextContent(/E_CREDENTIAL_REJECTED/);
+    // The secret is never echoed, not even in the notice.
+    expect(notice.textContent).not.toContain('fixture-secret-value');
+    expect(screen.queryByText('fixture-secret-value')).not.toBeInTheDocument();
+  });
+
+  // The operator must learn that save-time validation is impossible BEFORE
+  // pressing Save, from the reason the backend served — not after a run fails.
+  it('shows the backend\'s testUnavailableReason before any save', async () => {
+    mockedGet.mockResolvedValue({
+      ...CONFIGURED,
+      testSupported: false,
+      testUnavailableReason: BACKEND_SERVED_REASON,
+    });
+    ui();
+
+    const reason = await screen.findByTestId('credential-test-unavailable');
+    expect(reason).toHaveTextContent(BACKEND_SERVED_REASON);
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
+    expect(mockedPut).not.toHaveBeenCalled();
+    expect(mockedTest).not.toHaveBeenCalled();
+  });
+
+  // Positive control for the reason display: a backend whose probe IS wired
+  // serves `testUnavailableReason: null`, so nothing is rendered and the test
+  // stays available.
+  it('renders no unavailability reason when the backend serves null', async () => {
+    mockedGet.mockResolvedValue({ ...CONFIGURED, testSupported: true, testUnavailableReason: null });
+    ui();
+    await screen.findByText('••••••••');
+
+    expect(screen.queryByTestId('credential-test-unavailable')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeEnabled();
+  });
+
+  // Backend older than the T53 contract: the field is absent. The card must
+  // still explain the disabled test instead of drawing a bare "not supported".
+  it('falls back to a local reason when an older backend omits the field', async () => {
+    mockedGet.mockResolvedValue({ ...CONFIGURED, testSupported: false });
+    ui();
+
+    const reason = await screen.findByTestId('credential-test-unavailable');
+    expect(reason).toHaveTextContent(NO_PROBE_FALLBACK_REASON);
   });
 
   it('reports an unconfigured credential explicitly', async () => {
@@ -193,12 +276,18 @@ describe('RuntimeCredentialsCard', () => {
   });
 
   it('does not offer the bounded test when this build has no probe, and says why', async () => {
-    mockedGet.mockResolvedValue({ ...CONFIGURED, testSupported: false });
+    mockedGet.mockResolvedValue({
+      ...CONFIGURED,
+      testSupported: false,
+      testUnavailableReason: BACKEND_SERVED_REASON,
+    });
     ui();
     await screen.findByText('••••••••');
 
     expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
-    expect(screen.getByText(NO_PROBE_WIRED_REASON)).toBeInTheDocument();
+    expect(screen.getByTestId('credential-test-unavailable')).toHaveTextContent(
+      BACKEND_SERVED_REASON,
+    );
     expect(mockedTest).not.toHaveBeenCalled();
   });
 

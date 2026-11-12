@@ -47,6 +47,51 @@ describe('approval arguments formatting', () => {
     expect(formatted).toContain('"dryRun": true');
   });
 
+  // F-B1 (T54), the Review surface's half: an ACP ask stores the whole
+  // `permission.request` envelope as `arguments` (live evidence
+  // B-approvals-T1.json), so this formatter was pretty-printing the protocol
+  // envelope — seq/sessionId/digest/options — into the Review panel too. Only
+  // the envelope's `input` is the tool's own arguments. The test above is the
+  // positive control: a plain argument object still pretty-prints.
+  it('reduces an ACP permission envelope to the tool input it carries', () => {
+    const formatted = formatApprovalArguments(JSON.stringify({
+      seq: 248,
+      at: '2026-11-11T23:26:57.051Z',
+      type: 'permission.request',
+      requestId: 7,
+      sessionId: '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+      toolCallId: 'call_76afe3236bab41868add80af',
+      toolName: 'mcp__aria-conductor__remember_fact',
+      input: { canonicalKey: 'person:operator', factKey: 'morning_briefing_content' },
+      inputBytes: 295,
+      argumentsDigest: 'a790e991',
+      options: [{ optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' }],
+    }));
+
+    expect(formatted).not.toBeNull();
+    expect(formatted).toContain('"canonicalKey": "person:operator"');
+    expect(formatted).toContain('"factKey": "morning_briefing_content"');
+    for (const leaked of [
+      'permission.request', 'sessionId', 'requestId', 'toolCallId',
+      'inputBytes', 'argumentsDigest', 'proceed_once', '"seq"',
+    ]) {
+      expect(formatted).not.toContain(leaked);
+    }
+  });
+
+  it('still redacts a secret inside an envelope input', () => {
+    const formatted = formatApprovalArguments(JSON.stringify({
+      type: 'permission.request',
+      seq: 1,
+      input: { token: 'ghp_live_secret', command: 'git status' },
+    }));
+
+    expect(formatted).not.toBeNull();
+    expect(formatted).not.toContain('ghp_live_secret');
+    expect(formatted).toContain('"token": "***"');
+    expect(formatted).toContain('"command": "git status"');
+  });
+
   it('returns null for absent, blank or non-string input', () => {
     expect(formatApprovalArguments(null)).toBeNull();
     expect(formatApprovalArguments(undefined)).toBeNull();

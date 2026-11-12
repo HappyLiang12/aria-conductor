@@ -32,8 +32,14 @@ export const MASKED_CREDENTIAL_DISPLAY = '••••••••';
 
 export const CREDENTIAL_QUERY_KEY = ['qoder-runtime-credential'];
 
-/** Why the bounded test cannot run right now; null when it can. */
-function testUnavailableReason(metadata: QoderCredentialMetadata): string | null {
+/**
+ * Why the bounded test cannot run right now; null when it can. The backend
+ * serves this as `testUnavailableReason` (T53 F3), and the served text is what
+ * is rendered — this local copy is the fallback for a backend older than that
+ * contract, and it names the action that still verifies the token: a stored
+ * credential that cannot be probed is only proven by a run.
+ */
+function fallbackTestUnavailableReason(metadata: QoderCredentialMetadata): string | null {
   if (!metadata.configured) {
     return 'The bounded credential test needs a stored credential — save one first.';
   }
@@ -41,9 +47,34 @@ function testUnavailableReason(metadata: QoderCredentialMetadata): string | null
   // and a missing capability must not read as "no probe wired".
   if (metadata.testSupported === false) {
     return 'No credential probe is wired in this build: the bounded test needs the run-owned core '
-      + 'bridge, so the dashboard cannot make that call.';
+      + 'bridge, so the dashboard cannot make that call. To verify the token, dispatch a Qoder '
+      + 'run — a rejected credential fails it with E_CREDENTIAL_REJECTED at session/new.';
   }
   return null;
+}
+
+/** The backend's stated reason when served; the local fallback otherwise. */
+function testUnavailableReason(metadata: QoderCredentialMetadata): string | null {
+  return metadata.testUnavailableReason ?? fallbackTestUnavailableReason(metadata);
+}
+
+/**
+ * What a save actually proved: the platform stored the value, and nothing else.
+ * When no probe is wired the token has NOT been validated, and the operator's
+ * only verification is a run — a credential the core rejects fails that run
+ * under E_CREDENTIAL_REJECTED (T54 F3, contract from T53). Saying "stored" alone
+ * read as "working".
+ */
+function saveNotice(metadata: QoderCredentialMetadata): string {
+  const base = `Credential stored — mask ${MASKED_CREDENTIAL_DISPLAY}, variable ${metadata.environmentVariable}. `
+    + 'It was not validated';
+  const reason = testUnavailableReason(metadata);
+  if (reason !== null) {
+    return `${base}: ${reason} To verify it, keep the value in Configure → LLM Providers → `
+      + 'Qoder runtime credential — save a Qoder personal access token the qoder CLI accepts — and '
+      + 'dispatch a Qoder run; a rejected credential fails that run with E_CREDENTIAL_REJECTED.';
+  }
+  return `${base} yet — use Test credential to verify it before relying on it.`;
 }
 
 function usageLine(outcome: CredentialTestOutcome): string {
@@ -77,7 +108,7 @@ export function RuntimeCredentialsCard() {
     mutationFn: (value: string) => putQoderCredential(value),
     onSuccess: (metadata: QoderCredentialMetadata) => {
       setError(null);
-      setNotice(`Credential stored — mask ${MASKED_CREDENTIAL_DISPLAY}, variable ${metadata.environmentVariable}.`);
+      setNotice(saveNotice(metadata));
       queryClient.invalidateQueries({ queryKey: CREDENTIAL_QUERY_KEY });
     },
     onError: (err: unknown) => {
@@ -188,6 +219,17 @@ export function RuntimeCredentialsCard() {
               onChange={(e) => setSecret(e.target.value)}
               style={{ width: '100%', padding: '8px 10px', borderRadius: 8, background: 'rgba(0,0,0,.25)', color: 'var(--text)', border: '1px solid var(--line-2)', font: 'inherit', fontSize: 13, boxSizing: 'border-box' }}
             />
+            {/* T54 F3: stated BEFORE the controls, because it is what the
+                operator needs to know before pressing Save: this build cannot
+                pre-validate the token. The backend serves the wording. */}
+            {testUnavailable && (
+              <div
+                data-testid="credential-test-unavailable"
+                style={{ color: 'var(--text-mute)', fontSize: 11.5, marginTop: 8 }}
+              >
+                {testUnavailable}
+              </div>
+            )}
             <div className="actions" style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
               <button type="submit" className="btn primary" disabled={save.isPending}>
                 {save.isPending ? 'Storing…' : 'Save credential'}
@@ -218,13 +260,11 @@ export function RuntimeCredentialsCard() {
             </div>
           </form>
 
-          {testUnavailable && (
-            <div style={{ color: 'var(--text-mute)', fontSize: 11.5, marginTop: 8 }}>
-              {testUnavailable}
+          {notice && (
+            <div data-testid="credential-save-notice" style={{ marginTop: 8, fontSize: 11.5 }}>
+              {notice}
             </div>
           )}
-
-          {notice && <div style={{ marginTop: 8, fontSize: 11.5 }}>{notice}</div>}
           {error && <div style={{ marginTop: 8, color: 'var(--red)', fontSize: 11.5 }}>{error}</div>}
 
           {test.data && <TestOutcomeBlock outcome={test.data} />}

@@ -148,6 +148,44 @@ describe('AriaApprovalCard', () => {
     expect(summary).toHaveAttribute('title', '{"command":"npm test","cwd":"/w/repo"}');
   });
 
+  // F-B1 (T54): an ACP ask stores the whole `permission.request` envelope in
+  // `arguments` (live evidence B-approvals-T1.json). Only the envelope's
+  // `input` is what the tool will do; the rest is protocol plumbing the
+  // operator cannot act on. Positive control above: a plain object keeps the
+  // one-line-per-key summary.
+  it('reduces an ACP permission envelope to the tool input it carries', () => {
+    const envelope = {
+      seq: 248,
+      at: '2026-11-11T23:26:57.051Z',
+      type: 'permission.request',
+      requestId: 7,
+      sessionId: '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+      toolCallId: 'call_76afe3236bab41868add80af',
+      toolName: 'mcp__aria-conductor__remember_fact',
+      toolKind: 'other',
+      toolCallTitle: 'remember_fact (aria-conductor)',
+      input: { canonicalKey: 'person:operator', factKey: 'morning_briefing_content' },
+      inputBytes: 295,
+      inputTruncated: false,
+      argumentsDigest: 'a790e991fa9d6983f46dcade8c5dcb13c5079e20419538e44094c878f5c60f7f',
+      options: [{ optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' }],
+    };
+    render(
+      <AriaApprovalCard item={{ ...pendingAsk, args: JSON.stringify(envelope) }} onSettled={vi.fn()} />,
+    );
+
+    const summary = screen.getByText(/canonicalKey: person:operator/);
+    expect(summary.textContent).toBe(
+      'canonicalKey: person:operator\nfactKey: morning_briefing_content',
+    );
+    for (const leaked of [
+      'permission.request', 'seq:', 'sessionId', 'requestId', 'toolCallId',
+      'inputBytes', 'argumentsDigest', 'inputTruncated', 'proceed_once',
+    ]) {
+      expect(summary.textContent).not.toContain(leaked);
+    }
+  });
+
   it('shows a non-JSON argument verbatim instead of guessing its structure', () => {
     render(<AriaApprovalCard item={{ ...pendingAsk, args: 'git push --force origin main' }} onSettled={vi.fn()} />);
 
@@ -190,10 +228,37 @@ describe('AriaApprovalCard', () => {
   it('renders a settled card without decision controls', () => {
     render(<AriaApprovalCard item={{ ...pendingAsk, state: 'denied', reason: 'wrong tenant' }} onSettled={vi.fn()} />);
 
-    expect(screen.getByText(/denied/i)).toBeInTheDocument();
-    expect(screen.getByText(/wrong tenant/)).toBeInTheDocument();
+    expect(document.querySelector('.ai-decision-settled')).toHaveTextContent('Denied — wrong tenant');
     expect(screen.queryByRole('button', { name: /allow once/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^deny$/i })).not.toBeInTheDocument();
+  });
+
+  // F-LC1 (T54): a settled card already HAS its decision, so it must not ask for
+  // one. The live bar showed "ALLOWED ONCE" above "this tool needs your decision
+  // before it runs" — the card asking for what it had just recorded.
+  it.each(['approved', 'denied', 'expired'] as const)(
+    'a settled (%s) card does not ask for a decision it already has',
+    (state) => {
+      render(<AriaApprovalCard item={{ ...pendingAsk, state }} onSettled={vi.fn()} />);
+
+      const card = screen.getByText('mcp__aria-conductor__remember_fact')
+        .closest('.ai-decision-card') as HTMLElement;
+      expect(card).not.toBeNull();
+      expect(card).not.toHaveTextContent(/needs your decision/i);
+      // …it still says what happened, per state.
+      expect(card).toHaveTextContent(
+        state === 'approved' ? 'Allowed once'
+          : state === 'denied' ? 'Denied'
+            : 'Expired before a decision',
+      );
+    },
+  );
+
+  // Positive control: a genuinely pending ask keeps the instruction.
+  it('a pending card still asks for the decision', () => {
+    render(<AriaApprovalCard item={pendingAsk} onSettled={vi.fn()} />);
+
+    expect(screen.getByText(/this tool needs your decision before it runs/i)).toBeInTheDocument();
   });
 
   // A 409 is the backend saying the ask is no longer PENDING (expired, the run

@@ -8,10 +8,45 @@ import {
   isOperatorRejection,
 } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
+import { isPermissionRequestEnvelope, permissionRequestInput } from '../utils/approvalArguments';
 
 export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
 /** The states a decision can produce; `pending` is the absence of one. */
 export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
+
+/**
+ * What an ACP envelope with no usable `input` says instead of a payload.
+ *
+ * The envelope class itself is shared with the Review surface
+ * (`isPermissionRequestEnvelope`), so the two cannot disagree about what an ACP
+ * ask's stored `arguments` are.
+ */
+const ENVELOPE_WITHOUT_INPUT =
+  'This request carries no argument summary — the core sent no tool input.';
+
+export interface ArgumentView {
+  /** The compact `key: value` lines the card paints. */
+  summary: string;
+  /** The same payload as one string, for the element's tooltip. */
+  detail: string;
+}
+
+/** One `key: value` line per entry; JSON punctuation only is dropped. */
+function summarizeEntries(entries: Record<string, unknown>): string {
+  return Object.entries(entries)
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
+    .join('\n');
+}
+
+/** The tool's own input, as the summary lines the operator decides on. */
+function summarizeInput(input: unknown): string {
+  if (typeof input === 'string') return input.trim();
+  if (input !== null && typeof input === 'object' && !Array.isArray(input)) {
+    return summarizeEntries(input as Record<string, unknown>);
+  }
+  if (input === undefined || input === null) return '';
+  return JSON.stringify(input) ?? '';
+}
 
 /**
  * The arguments as a compact, truthful summary (spec A3, T45 Item 3): a JSON
@@ -19,24 +54,41 @@ export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
  * are legible at a glance; anything else is shown verbatim. Nothing is invented
  * and nothing is dropped except JSON punctuation — the operator is approving
  * this payload, not a paraphrase of it.
+ *
+ * ONE exception, because it is not the tool's argument object at all: an ACP
+ * `permission.request` envelope (F-B1). Its protocol fields — sequence number,
+ * timestamp, session and call ids, byte count, digest, raw provider options —
+ * are not things the operator can act on, and painting them into the transcript
+ * asks them to read transport plumbing. The envelope's `input` IS the payload
+ * the decision is about, so it is summarized in full and nothing else is shown.
  */
-export function argumentSummary(args: string): string {
+export function argumentView(args: string): ArgumentView {
   const text = args.trim();
-  if (text === '') return '';
+  if (text === '') return { summary: '', detail: '' };
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const entries = Object.entries(parsed as Record<string, unknown>);
-      if (entries.length > 0) {
-        return entries
-          .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
-          .join('\n');
-      }
-    }
+    parsed = JSON.parse(text);
   } catch {
-    /* not JSON: the raw text IS the argument */
+    return { summary: text, detail: text }; // not JSON: the raw text IS the argument
   }
-  return text;
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { summary: text, detail: text };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (isPermissionRequestEnvelope(record)) {
+    const input = permissionRequestInput(record);
+    const summary = summarizeInput(input);
+    if (summary === '') return { summary: ENVELOPE_WITHOUT_INPUT, detail: '' };
+    const detail = typeof input === 'string' ? input : JSON.stringify(input) ?? summary;
+    return { summary, detail };
+  }
+  const summary = summarizeEntries(record);
+  return summary === '' ? { summary: text, detail: text } : { summary, detail: text };
+}
+
+/** The card's painted summary; see `argumentView`. */
+export function argumentSummary(args: string): string {
+  return argumentView(args).summary;
 }
 
 /**
@@ -58,6 +110,25 @@ function isUnsettleableAsk(error: unknown): boolean {
  * applied first — without it the backend fails closed (401/403). A refusal is
  * reported where the operator can act on it, never retried silently.
  */
+/**
+ * The meta line under the tool name. A settled card already HAS its decision,
+ * so it must not ask for one (F-LC1): the live bar showed "ALLOWED ONCE" above
+ * "this tool needs your decision before it runs". Each settled state says what
+ * happened instead, and only a genuinely pending ask carries the instruction.
+ */
+function metaCopy(state: AriaApprovalItem['state']): string {
+  switch (state) {
+    case 'approved':
+      return 'you allowed this ask once';
+    case 'denied':
+      return 'you denied this ask';
+    case 'expired':
+      return 'the window to decide has closed';
+    case 'pending':
+      return 'this tool needs your decision before it runs';
+  }
+}
+
 export function AriaApprovalCard({
   item,
   onSettled,
@@ -68,7 +139,8 @@ export function AriaApprovalCard({
   const [submitting, setSubmitting] = useState<'allow' | 'deny' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const settled = item.state !== 'pending';
-  const summary = item.args !== undefined ? argumentSummary(item.args) : '';
+  const argument = item.args !== undefined ? argumentView(item.args) : { summary: '', detail: '' };
+  const summary = argument.summary;
   // The backend serves `toolPolicy: null` for a tool the catalog does not
   // classify (ApprovalDetail), so the type's optionality is not enough: only a
   // real policy name may be rendered as a reviewed authority.
@@ -124,10 +196,15 @@ export function AriaApprovalCard({
         </span>
       </div>
       <div className="ask-meta ai-decision-meta">
-        Run <code>{item.runId.slice(0, 8)}</code> · this tool needs your decision before it runs
+        Run <code>{item.runId.slice(0, 8)}</code> · {metaCopy(item.state)}
       </div>
       {summary !== '' ? (
-        <pre className="ask-args ai-decision-args" title={item.args}>{summary}</pre>
+        <pre
+          className="ask-args ai-decision-args"
+          title={argument.detail !== '' ? argument.detail : undefined}
+        >
+          {summary}
+        </pre>
       ) : item.argsStatus === 'unavailable' ? (
         // Not "no arguments": the read failed. Say so, so the operator knows the
         // card is showing them less than the ask carries.

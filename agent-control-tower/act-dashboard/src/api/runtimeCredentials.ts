@@ -38,6 +38,14 @@ export interface QoderCredentialMetadata {
    * be refused.
    */
   testSupported: boolean;
+  /**
+   * Why a save-time test cannot run, as the backend states it (T53 F3). Null
+   * exactly when `testSupported` is true, so the two cannot disagree.
+   *
+   * Absent only on a backend older than this contract; the card then keeps a
+   * local explanation rather than pretending the capability is unknown.
+   */
+  testUnavailableReason?: string | null;
 }
 
 /**

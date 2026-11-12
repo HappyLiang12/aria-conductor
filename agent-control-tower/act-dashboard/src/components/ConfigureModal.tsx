@@ -212,7 +212,7 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
           )}
           {activeTab === 'runtime' && (
             <div style={{ padding: '0', margin: '0' }}>
-              <RuntimePane />
+              <RuntimePane open={open} />
               {/* F8: the workflow git handoff credential (pack-git-0001) had no
                   editor; it lives with the other runtime credentials. */}
               <GitCredentialCard />
@@ -428,9 +428,20 @@ const RUNTIME_MODE_LABELS: Record<ExecutionMode, string> = {
  * write that would mix the fleet (409), so this pane is the only converging
  * action.
  */
-function RuntimePane() {
+function RuntimePane({ open }: { open: boolean }) {
   const queryClient = useQueryClient();
-  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const agentsQuery = useQuery({
+    queryKey: ['agents'],
+    queryFn: listAgents,
+    // F2 (T54): the modal's panes stay mounted while the modal is closed, so a
+    // fleet read once at mount could be presented as the current composition
+    // long after the fleet changed (live bar: the banner said qoder/HOST while
+    // the API said opencode/SANDBOX). Every open is a fresh read of the
+    // persisted configuration, and nothing is drawn from a cache alone.
+    enabled: open,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
   const { data: providers } = useQuery({
     queryKey: ['adk-providers'],
     queryFn: listAdkProviders,
@@ -442,6 +453,11 @@ function RuntimePane() {
   // kept as the API error and rendered as a notice that names the fix.
   const [applyError, setApplyError] = useState<unknown | null>(null);
 
+  const agents = agentsQuery.data;
+  // An unread fleet is not an empty one, and an unread one is not the previous
+  // read either: both are "unknown", and the pane says so instead of guessing.
+  const fleetKnown = agents !== undefined;
+  const fleetUnreadable = agentsQuery.isError && !fleetKnown;
   const liveAgents = agents ?? [];
   const composition = composeRuntimes(liveAgents);
   const selectedProvider = (providers ?? []).find((p) => p.id === coreId);
@@ -473,18 +489,37 @@ function RuntimePane() {
   const canApply = coreId !== '' && mode !== '';
   const targetLabel = `${coreId}/${RUNTIME_MODE_LABELS[mode as ExecutionMode] ?? mode}`;
   const compositionText =
-    liveAgents.length === 0
-      ? 'No agents yet - the first agent defines the fleet runtime.'
+    fleetUnreadable
+      ? 'The fleet configuration could not be read — the current composition is unknown, '
+        + 'so this banner claims nothing about what the agents run. Reopen Configure to retry.'
+      : !fleetKnown
+        ? 'Reading the fleet configuration…'
+        : liveAgents.length === 0
+          ? 'No agents yet - the first agent defines the fleet runtime.'
+          : composition.length <= 1
+            ? `Fleet runtime: ${composition[0].runtime} - ${composition[0].count} agent${composition[0].count === 1 ? '' : 's'} (uniform)`
+            : `Mixed runtime - ${composition.map((c) => `${c.runtime} x${c.count}`).join(' - ')}; applying a pair below converges every agent.`;
+  /**
+   * The composition the confirmation quotes. It is the same read as the banner,
+   * so the dialog can never claim a fleet the pane did not see — the previous
+   * copy defaulted to `none x0`, which an unread fleet turned into a statement.
+   */
+  const currentComposition = fleetUnreadable
+    ? 'the current composition could not be read'
+    : !fleetKnown
+      ? 'the current composition is still being read'
       : composition.length <= 1
-        ? `Fleet runtime: ${composition[0].runtime} - ${composition[0].count} agent${composition[0].count === 1 ? '' : 's'} (uniform)`
-        : `Mixed runtime - ${composition.map((c) => `${c.runtime} x${c.count}`).join(' - ')}; applying a pair below converges every agent.`;
+        ? `${composition[0]?.runtime ?? 'none'} x${composition[0]?.count ?? 0}`
+        : composition.map((c) => `${c.runtime} x${c.count}`).join(', ');
+  const fleetSettled = fleetKnown && !fleetUnreadable && !agentsQuery.isFetching;
+  const bannerOk = fleetSettled && composition.length <= 1;
 
   return (
     <div style={{ padding: '0', margin: '0' }}>
       <div
         style={{
-          background: composition.length <= 1 ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
-          border: `1px solid ${composition.length <= 1 ? '#22c55e' : 'var(--amber, #f59e0b)'}`,
+          background: bannerOk ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
+          border: `1px solid ${bannerOk ? '#22c55e' : 'var(--amber, #f59e0b)'}`,
           borderRadius: 6,
           padding: '8px 10px',
           fontSize: 12,
@@ -546,7 +581,7 @@ function RuntimePane() {
       <button
         type="button"
         className="btn primary"
-        disabled={!canApply || apply.isPending}
+        disabled={!canApply || apply.isPending || agentsQuery.isFetching}
         onClick={() => setConfirmOpen(true)}
       >
         Apply to all agents
@@ -558,14 +593,12 @@ function RuntimePane() {
         message={
           <>
             Every agent will run <strong>{targetLabel}</strong>. Current composition:{' '}
-            {composition.length <= 1
-              ? `${composition[0]?.runtime ?? 'none'} x${composition[0]?.count ?? 0}`
-              : composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}
+            {currentComposition}
             . New runs start on the new runtime immediately; running runs finish on the one
             they were frozen with.
           </>
         }
-        danger={composition.length > 1}
+        danger={fleetKnown && composition.length > 1}
         onConfirm={() => {
           if (!canApply) return;
           apply.mutate();

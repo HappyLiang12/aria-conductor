@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { ErrorNotice } from '../ErrorNotice';
+import { ErrorNotice, RunErrorNotice } from '../ErrorNotice';
 
 function LocationTracker({ paths }: { paths: string[] }) {
   const location = useLocation();
@@ -157,5 +157,55 @@ describe('ErrorNotice operator-session refusal', () => {
     // different element: keep its identity and its copy pinned here as well.
     expect(notice).toHaveClass('ask-ctx');
     expect(notice).toHaveTextContent('Applying the fleet runtime is operator-only');
+  });
+});
+
+// T54 F3, against the T53 backend contract: a run that failed because the
+// Qoder core rejected the saved credential carries `E_CREDENTIAL_REJECTED` at
+// the front of its message. The run surfaces must read as a credential problem
+// with a fix, not as an unactionable security/transport fault.
+describe('RunErrorNotice credential rejection (T54 F3)', () => {
+  const MESSAGE = 'E_CREDENTIAL_REJECTED: the core rejected the saved Qoder runtime credential at '
+    + 'session/new (E_AUTH_REQUIRED) — a credential failure, not a transport failure; replace the '
+    + 'saved credential at PUT /api/v1/cores/qoder/credential and re-dispatch the run. The runtime '
+    + 'endpoint of run 961868f4 did not authenticate the run\'s control secret (no authenticated '
+    + 'answer within PT30S); the runtime was terminated instead of being trusted on its executable '
+    + 'name.';
+
+  it('renders the remedy and the credential action beside the failure', async () => {
+    const listener = vi.fn();
+    window.addEventListener('act:open-configure', listener);
+
+    render(<RunErrorNotice message={MESSAGE} />);
+
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent(/control secret/);
+    expect(notice).toHaveTextContent(/Qoder runtime credential/);
+    expect(notice).toHaveTextContent(/Qoder personal access token/i);
+    await userEvent.click(screen.getByRole('button', { name: /LLM Providers/ }));
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ tab: 'llm' });
+    window.removeEventListener('act:open-configure', listener);
+  });
+
+  // A transport failure recorded before the classification is a different
+  // failure and must not be relabelled (evidence, not guesswork).
+  it('does not add a credential remedy to an unclassified transport failure', () => {
+    render(
+      <RunErrorNotice
+        message={'The runtime endpoint of run 961868f4 did not authenticate the run\'s control '
+          + 'secret (last: ConnectException: null).'}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/Qoder personal access token/i);
+    expect(screen.queryByTestId('error-remedy')).toBeNull();
+  });
+
+  it('leaves an unrelated run failure as the plain notice', () => {
+    render(<RunErrorNotice message="relay dead" surface={null} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('relay dead');
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByTestId('error-remedy')).toBeNull();
   });
 });

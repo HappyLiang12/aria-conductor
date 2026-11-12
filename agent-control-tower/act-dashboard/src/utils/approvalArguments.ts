@@ -72,6 +72,28 @@ function redactRawText(raw: string): string {
   return scrubSecretsInText(raw);
 }
 
+/**
+ * F-B1 (T54): the `type` an ACP permission ask's stored `arguments` carry. The
+ * backend keeps the WHOLE `permission.request` envelope there for a NATIVE_TOOL
+ * ask (live evidence B-approvals-T1.json: `seq`, `at`, `requestId`,
+ * `sessionId`, `toolCallId`, `input`, `inputBytes`, `argumentsDigest`,
+ * `options`), not the tool's own argument object. Rendering the envelope asks
+ * the operator to read transport plumbing; its `input` is what the tool will
+ * do. One predicate, so every surface that shows approval arguments reduces the
+ * payload the same way.
+ */
+export function isPermissionRequestEnvelope(value: unknown): value is Record<string, unknown> {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).type === 'permission.request';
+}
+
+/** The tool's own arguments inside a permission envelope, when it carries any. */
+export function permissionRequestInput(envelope: Record<string, unknown>): unknown {
+  return envelope.input;
+}
+
 function bound(text: string): string {
   if (text.length <= MAX_ARGUMENTS_LENGTH) return text;
   return `${text.slice(0, MAX_ARGUMENTS_LENGTH)}…`;
@@ -81,6 +103,10 @@ function bound(text: string): string {
  * The approval's arguments as display text: pretty-printed JSON (redacted and
  * size-bounded), the masked raw string when the payload is not JSON, or null
  * when there is nothing to render (absent/blank/non-string payloads).
+ *
+ * An ACP permission envelope is reduced to its `input` first — the protocol
+ * fields are not the tool's arguments (F-B1) — so the Review surface shows the
+ * same payload the Aria card does.
  */
 export function formatApprovalArguments(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
@@ -94,8 +120,11 @@ export function formatApprovalArguments(raw: string | null | undefined): string 
     return bound(redactRawText(trimmed));
   }
 
+  const payload = isPermissionRequestEnvelope(parsed) ? permissionRequestInput(parsed) : parsed;
+  if (payload === undefined || payload === null) return null;
+
   try {
-    return bound(JSON.stringify(redactApprovalValue(parsed), null, 2));
+    return bound(JSON.stringify(redactApprovalValue(payload), null, 2));
   } catch {
     // Circular structures cannot arrive over JSON, but never let formatting
     // throw inside a render pass.

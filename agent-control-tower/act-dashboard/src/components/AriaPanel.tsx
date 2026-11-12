@@ -5,7 +5,9 @@ import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isCrossOriginRejection, isOperatorRejection } from '../api/operatorSession';
 import {
   OPERATOR_REMEDY_COPY,
+  credentialRejectionRemedy,
   crossSiteSessionMessage,
+  openConfigure,
   operatorSessionMessage,
 } from '../api/errorPresentation';
 import { cancelRun, getRun } from '../api/runs';
@@ -1460,6 +1462,11 @@ export function AriaPanel() {
             )}
 
             {items.map((item) => {
+              // Live and restored failures carry the same server text, so the one
+              // remedy mapping serves both planes here (T54 F3).
+              const remedy = item.kind === 'assistant' && item.error === true
+                ? credentialRejectionRemedy(item.content)
+                : null;
               if (item.kind === 'activity') {
                 return <AriaActivityStrip key={item.id} item={item} />;
               }
@@ -1533,6 +1540,21 @@ export function AriaPanel() {
                   </div>
                   <div className="ai-msg-body">
                     <div className={`ai-msg-bubble ${item.kind === 'assistant' && item.error ? 'ai-msg-bubble-error' : ''}`}>
+                      {item.kind === 'assistant' && item.error === true && remedy !== null && (
+                        // T54 F3: a failure whose server text names no fix leads
+                        // with the cause and the action, then keeps the original
+                        // wording below it as the record the operator can quote.
+                        <div className="ai-msg-remedy" data-testid="credential-remedy">
+                          <p className="ai-msg-remedy-text">{remedy}</p>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => openConfigure('llm')}
+                          >
+                            Open Configure → LLM Providers
+                          </button>
+                        </div>
+                      )}
                       {item.kind === 'assistant' ? (
                         <div
                           className="ai-msg-md markdown-content"

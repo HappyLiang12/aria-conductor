@@ -60,6 +60,16 @@ export function ErrorNotice({ presented, className, operatorSession, actionLabel
       <span className="error-text" style={{ flex: '1 1 240px', wordBreak: 'break-word' }}>
         {presented.text}
       </span>
+      {presented.remedy !== undefined && (
+        // The cause and the fix, when the server text names neither (T54 F3).
+        <p
+          className="error-remedy"
+          data-testid="error-remedy"
+          style={{ flex: '1 1 100%', margin: 0, color: 'var(--text-dim)', fontSize: 12 }}
+        >
+          {presented.remedy}
+        </p>
+      )}
       {action && ('tab' in action
         ? (
           <button type="button" className="btn" onClick={() => openConfigure(action.tab)}>

@@ -32,6 +32,16 @@ public class CoreCredentialService {
     /** The exact variable the pinned CLI consumes (capability evidence, qoder/HOST). */
     public static final String QODER_ENVIRONMENT_VARIABLE = "QODER_PERSONAL_ACCESS_TOKEN";
 
+    /**
+     * Stable marker that tells a rejected saved credential from a transport failure (T53 F3).
+     * The Qoder bridge exits on {@code E_AUTH_REQUIRED} at {@code session/new}, so the
+     * control-secret handshake only ever sees a closed port; the run failure text carries this
+     * marker when the run-owned core log shows that rejection, and the credential view names it
+     * as the symptom a save cannot pre-empt. It is one constant so the two surfaces cannot drift.
+     * Additive only: the REST error envelope's closed {@code errorType} set is untouched.
+     */
+    public static final String CREDENTIAL_REJECTED_MARKER = "E_CREDENTIAL_REJECTED";
+
     private final CoreCredentialRepository credentials;
     private final Clock clock;
 

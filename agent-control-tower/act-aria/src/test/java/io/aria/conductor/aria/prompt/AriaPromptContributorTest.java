@@ -138,6 +138,29 @@ class AriaPromptContributorTest {
         assertThat(flat).contains("do not call operator-only memory tools");
     }
 
+    /**
+     * T53 F-B3 (live bar): the prompt told Aria to retry an empty filtered list without the
+     * filter, but in the live turn it did not — it went straight to {@code remember_fact} with a
+     * guessed key and proposed a duplicate identity. The rule must sit inside the memory section,
+     * before the sentence that teaches the new-key call, so the model reads the verification step
+     * before it reads how to propose. A prompt cannot force model behaviour; this pins the text.
+     */
+    @Test
+    void policyTellsAriaToProveAnIdentityDoesNotExistBeforeProposingANewOne() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+        String flat = content.replaceAll("\\s+", " ");
+
+        assertThat(flat).contains("Before proposing a new entity, prove the identity is not already stored");
+        assertThat(flat).contains("call list_memory_entities with no kind filter");
+        assertThat(flat).contains("an empty filtered page is NEVER proof that nothing exists");
+        assertThat(flat).contains("Retry without the filter before concluding that nothing exists.");
+        assertThat(flat).contains("never propose a second identity for the same person under a guessed key");
+        assertThat(flat.indexOf("Before proposing a new entity"))
+                .as("the verification rule precedes the instruction that proposes a new key")
+                .isGreaterThan(-1)
+                .isLessThan(flat.indexOf("pass kind and canonicalKey"));
+    }
+
     private static ContextRequest requestFor(UUID agentId) {
         return new ContextRequest(UUID.randomUUID(), "conv-1", agentId, ContextAdapter.SYNC,
                 1, "list my agents", null, Sensitivity.INTERNAL, 24_000, null, "", List.of());

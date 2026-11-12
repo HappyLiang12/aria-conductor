@@ -13,6 +13,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.Pipe;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -299,6 +302,140 @@ class CoreProgressPumpTest {
         assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
                 .containsExactly(1L, 2L, 3L);
         assertThat(emitterThreads).containsOnly("oc-progress-pump-" + runId + "-" + agentId);
+    }
+
+    // ---- P-2: the halt must never reach the worker as an interrupt inside the sink ----
+
+    /**
+     * P-2 (release gate, BLOCKER): {@code stop()} must not deliver an interrupt to a
+     * worker that is inside the sink. The sink is a synchronous persistence write --
+     * {@code CoreProgressPump.emit} -> {@code OpenCodeCoreSession} -> {@code
+     * CoreExecutionService.publishProgress} -> {@code EventBroadcastListener} -> a
+     * Hibernate insert -- and the run-owned H2 store keeps ONE {@code FileChannel} for
+     * the whole process. An interrupt that lands in that channel's read throws
+     * {@code java.nio.channels.ClosedByInterruptException}, which CLOSES the shared
+     * channel, so every later statement fails "The database has been closed
+     * [90098-232]" until the process restarts. The gate captured exactly that chain
+     * (backend.log:90637, act_db.trace.db:1-93) and lost 31 Playwright instances to it.
+     *
+     * <p>The sink here blocks in a real {@link java.nio.channels.InterruptibleChannel}
+     * read -- the same contract H2's {@code FileChannel} implements -- so the mechanism
+     * is reproduced deterministically rather than raced: a {@code Thread.interrupt()}
+     * in {@code stop()} breaks the read, closes the channel, and leaves the worker
+     * carrying the interrupt status. A halt flag plus {@code unpark} does none of that.
+     */
+    @Test
+    void stopDeliversNoInterruptToASinkThatIsInsideAnInterruptibleChannelRead() throws Exception {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"tool\", \"tool\": \"read\" },"
+                                + "{ \"id\": \"b\", \"type\": \"tool\", \"tool\": \"bash\" }"))));
+
+        Pipe sharedChannel = Pipe.open();
+        CountDownLatch sinkEntered = new CountDownLatch(1);
+        CountDownLatch sinkReturned = new CountDownLatch(1);
+        AtomicReference<Thread> workerInsideTheSink = new AtomicReference<>();
+        AtomicReference<Throwable> sinkIoFailure = new AtomicReference<>();
+        AtomicBoolean channelStillOpenAfterTheSink = new AtomicBoolean();
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, fragment -> {
+            events.add(fragment);
+            if (!"read".equals(fragment.toolName())) {
+                return;
+            }
+            workerInsideTheSink.set(Thread.currentThread());
+            sinkEntered.countDown();
+            try {
+                // The shared-resource read an interrupt would destroy: one interruptible
+                // channel serving every writer of the process, as H2's store is.
+                sharedChannel.source().read(ByteBuffer.allocate(4));
+            } catch (Throwable t) {
+                sinkIoFailure.set(t);
+            } finally {
+                channelStillOpenAfterTheSink.set(sharedChannel.source().isOpen());
+                sinkReturned.countDown();
+            }
+        }, POLL, COALESCE, new CoreProgressPump.ProgressCursor(), Duration.ofMillis(150));
+        pump.start();
+        assertThat(sinkEntered.await(5, TimeUnit.SECONDS))
+                .as("the pump worker is inside the sink's channel read")
+                .isTrue();
+
+        ExecutorService stopper = Executors.newSingleThreadExecutor();
+        try {
+            stopper.submit(pump::stop).get(5, TimeUnit.SECONDS);
+
+            // Measured before the read is released: a correctly gated halt leaves the
+            // sink's I/O untouched, so the read is still pending and the worker carries
+            // no interrupt status. The unconditional interrupt does both forms of damage.
+            assertThat(sinkIoFailure.get())
+                    .as("stop() must not interrupt the sink's shared-channel read"
+                            + " (H2 answers a ClosedByInterruptException by closing the store"
+                            + " for the whole process)")
+                    .isNull();
+            assertThat(workerInsideTheSink.get())
+                    .as("the sink published its own thread")
+                    .isNotNull();
+            assertThat(workerInsideTheSink.get().isInterrupted())
+                    .as("the poll worker must not carry an interrupt while it is inside the sink")
+                    .isFalse();
+
+            // Release the simulated read so a correct pump can finish.
+            try {
+                sharedChannel.sink().write(ByteBuffer.wrap(new byte[] {1, 2, 3, 4}));
+            } catch (ClosedChannelException alreadyClosedByTheDefect) {
+                // Only reachable in the defect: the halt closed the shared channel.
+            }
+            assertThat(sinkReturned.await(5, TimeUnit.SECONDS))
+                    .as("the sink completed once the read was released")
+                    .isTrue();
+        } finally {
+            stopper.shutdownNow();
+            sharedChannel.sink().close();
+            sharedChannel.source().close();
+        }
+
+        assertThat(channelStillOpenAfterTheSink)
+                .as("the shared channel outlived the halt")
+                .isTrue();
+        assertThat(events)
+                .as("the halt still drops the rest of that batch after the sink returns")
+                .extracting(CoreProgressPump.ProgressFragment::toolName)
+                .containsExactly("read");
+    }
+
+    /**
+     * The positive control for the P-2 halt: dropping the interrupt must not make
+     * {@code stop()} wait out its join budget. The worker is parked for a 30s poll
+     * interval when {@code stop()} is called with a 5s join budget; the halt must wake
+     * it (flag plus unpark) and join it well inside that budget. An elapsed time under
+     * the budget is also the proof that the worker EXITED rather than being timed out.
+     */
+    @Test
+    void aStopDuringThePollSleepWakesTheWorkerAndReturnsWellInsideTheJoinBudget() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"tool\", \"tool\": \"read\" }"))));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                Duration.ofSeconds(30), COALESCE, new CoreProgressPump.ProgressCursor(),
+                Duration.ofSeconds(5));
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> events.size() >= 1);
+        assertThat(requestsToThePumpPath())
+                .as("one poll is through, so the worker is on its way into the 30s park")
+                .isEqualTo(1);
+
+        long startedAt = System.nanoTime();
+        pump.stop();
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        assertThat(elapsed)
+                .as("the halt wakes the parked worker instead of joining out its budget")
+                .isLessThan(Duration.ofSeconds(1));
+        assertThat(requestsToThePumpPath())
+                .as("a halted pump does not poll again")
+                .isEqualTo(1);
     }
 
     /**

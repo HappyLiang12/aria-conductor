@@ -161,6 +161,76 @@ class AriaPromptContributorTest {
                 .isLessThan(flat.indexOf("pass kind and canonicalKey"));
     }
 
+    /**
+     * T59 F-O4 (Major, live bar). A run parked awaiting a clarification. While it was parked the
+     * operator approved the entity batch, so the rows were ACTIVE and {@code ?status=PENDING} returned
+     * zero. On resume the run closed with "the three person:happy memory proposals are still PENDING
+     * and will stay that way until you decide them" — a present-tense claim assembled from a pre-park
+     * read. The rule must sit inside the memory section, where the model reads the proposal guidance,
+     * and it must name the tool, the fallback-phrasing, and the park/resume invalidation.
+     */
+    @Test
+    void policyRequiresAFreshProposalReadBeforeStatingProposalStatus() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+        String flat = content.replaceAll("\\s+", " ");
+
+        assertThat(flat).contains("IMPORTANT — proposal status is only as fresh as your last read:");
+        assertThat(flat).contains("Before any sentence that states the status of a memory proposal, "
+                + "take a fresh list_memory_proposals read in that same turn.");
+        assertThat(flat).contains("If you have not re-read in this turn, say \"as of my last check\" "
+                + "and name that check, and never state the status in the present tense.");
+        assertThat(flat).contains("A park or resume invalidates every earlier read: the operator may "
+                + "have decided the batch while the run was parked, so re-read before describing what "
+                + "is still pending.");
+        assertThat(flat.indexOf("IMPORTANT — proposal status is only as fresh as your last read:"))
+                .as("the freshness rule is part of the memory guidance, not stranded after it")
+                .isGreaterThan(flat.indexOf("IMPORTANT — memory:"))
+                .isLessThan(flat.indexOf("## Workflows"));
+    }
+
+    /**
+     * T59 F-O2 (Minor, live bar). To "Hi, I'm Happy. I'm the operator here." the model proposed
+     * {@code role = Aria Conductor operator} and {@code timezone = UTC} — neither stated — and invited
+     * the operator to approve both as their own words. The rule must say where a guess belongs: in the
+     * proposal, labelled, never reported as something the operator said.
+     */
+    @Test
+    void policyProposesOnlyFactsTheOperatorActuallyStated() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+        String flat = content.replaceAll("\\s+", " ");
+
+        assertThat(flat).contains("IMPORTANT — propose only what the operator stated:");
+        assertThat(flat).contains("Propose only facts the operator actually stated in this turn.");
+        assertThat(flat).contains("Label anything you infer as a guess in the proposal itself, "
+                + "and never present an inference as something the operator said.");
+        assertThat(flat.indexOf("IMPORTANT — propose only what the operator stated:"))
+                .as("the stated-facts rule is part of the memory guidance that teaches proposing")
+                .isGreaterThan(flat.indexOf("IMPORTANT — memory:"))
+                .isLessThan(flat.indexOf("## Workflows"));
+    }
+
+    /**
+     * T59 F-O6 (Minor, live bar). The briefing printed "Tokens burned: 0 (my own run reports no
+     * usage)" while {@code usageState} was {@code NOT_REPORTED} and every token field was null. The
+     * dashboard KPI already spells that state "not reported"; the prompt must make Aria use the same
+     * spelling and never reuse the numeral for it, because a measured zero and an unreported state
+     * are different facts.
+     */
+    @Test
+    void policySpellsUnreportedUsageExactlyAsTheKpiDoes() {
+        String content = contributor.contribute(requestFor(AriaConstants.ARIA_AGENT_ID)).get(0).content();
+        String flat = content.replaceAll("\\s+", " ");
+
+        assertThat(flat).contains("IMPORTANT — unreported usage:");
+        assertThat(flat).contains("When a run's usage is not reported, say \"not reported\" exactly as "
+                + "the dashboard KPI does, and never print the numeral 0 for it.");
+        assertThat(flat).contains("A measured zero and an unreported state must not share a spelling.");
+        assertThat(flat.indexOf("IMPORTANT — unreported usage:"))
+                .as("the usage rule belongs to the rules block, not after the workflow guidance")
+                .isGreaterThan(flat.indexOf("## Rules"))
+                .isLessThan(flat.indexOf("## Workflows"));
+    }
+
     private static ContextRequest requestFor(UUID agentId) {
         return new ContextRequest(UUID.randomUUID(), "conv-1", agentId, ContextAdapter.SYNC,
                 1, "list my agents", null, Sensitivity.INTERNAL, 24_000, null, "", List.of());

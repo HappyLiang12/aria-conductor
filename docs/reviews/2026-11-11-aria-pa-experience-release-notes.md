@@ -185,17 +185,19 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
 | Frontend unit suite | `pnpm exec vitest run` | 90 files / 899 tests passed at `190f1bc8` (lane recovery, coverage OFF). **NOT RUN at the pre-T48 final head**; later lanes ran focused suites (T41: 24 files / 311 tests; T40 recovery: 1 test). **PASS at the T48 head: 92 files / 964 tests, 0 failed** |
 | Per-lane module gates (T48) | `bash scripts/mvn-lane.sh inner act-mcp -am`; `... inner act-aria -am` | act-mcp: 273 tests, 0 failures, 0 skipped (ToolCatalogParityTest 19, including the 67/65/10 and 57-line/<3000-char pins; McpActorContextTest 4); act-aria: rc=0 — PASS at the T48 head |
 | Per-lane module gates | `bash scripts/mvn-lane.sh inner <modules> -am` | green per lane; counts in each task report |
-| Full unit tier | `wave-gate.sh final4` step `unit` | **PASS at `17fa515a`**: run=3220 fail=0 err=0 skip=8, 325 classes |
-| Failsafe tier | `wave-gate.sh final4` step `itg` | **PASS at `17fa515a`**: run=265 fail=0 err=0 skip=6, 53 classes |
-| Frontend coverage ratchet | `pnpm test -- --coverage` | **PASS at `17fa515a`**: 92 files / 974 tests, coverage 79.7% lines / 82.97% branches / 67.95% functions / 79.7% statements against thresholds 5 / 60 / 40 — no threshold error |
-| MCP server coverage | `cd packages/mcp-server && pnpm test -- --coverage` | **RUN at `17fa515a`**: 20 files / 157 tests pass. The gate collects no coverage because `vitest.config.ts:9-14` sets every threshold to 0; a direct measurement gives 88.5 / 89.7 / 86.04 / 87.95. `ci.yml:278` runs the same command, so local and hosted are at parity. **Pre-existing repo gap, not introduced by this program** — see residual 6 |
-| Dashboard build | `pnpm build` | **PASS at `17fa515a`**: 255 modules, `dist/index.html` 705 B, rc=0 |
-| Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **PASS at `17fa515a`**: run=2 fail=0 err=0 skip=0, BUILD SUCCESS |
-| Clean-room | fresh worktree, no target/node_modules/dist, full gate | **PASS at `17fa515a`** in `D:/project/pa-clean2`: build outputs removed and measured before the run, `git rev-parse` verified before and after, 13/13 steps rc=0, overall rc=0 |
-| Artifact-first E2E | `e2e-gate.sh final4` — packaged harness + built dist + 5 smoke endpoints + Playwright `--repeat-each=2` | **PASS at `17fa515a`**: the harness started **natively from the delivered script** (no shim, no replay), `harness boundary: OK`, `harness health: OK`, `setup rc=0`, all 5 smoke endpoints OK, `dist preview: OK`. Playwright 560 instances (280×2): **517 passed / 0 failed / 1 flaky / 42 skipped, rc=0**. `aria-timeout-cancel.spec.ts:146` and `core-execution-modes.spec.ts:238` each passed **both repeats with no retry**. Both ports released by the script's own trap (`cleanup: port 5173 free`, `cleanup: port 8080 free`) |
-| Live PA bar | runbook Phase 1 O1-O5 on a fresh database, browser only | **NOT RUN** |
-| Governance probes | runbook Phase 1b P1a-P9 and Phase 3 | **NOT RUN** |
-| Five-turn scenario | runbook Phase 2 against the 2026-11-10 baseline | **NOT RUN** |
+| Full unit tier | `wave-gate.sh final6` step `unit` | **PASS at `138e5e05`**: run=3240 fail=0 err=0 skip=8 (`gate-final6/wave-gate-console.log`) |
+| Failsafe tier | `wave-gate.sh final6` step `itg` | **PASS at `138e5e05`**: run=265 fail=0 err=0 skip=6 |
+| Frontend coverage ratchet | `pnpm test -- --coverage` | **PASS at `138e5e05`**: 92 files / 1004 tests, coverage 79.83% lines / 83.02% branches / 68.27% functions / 79.83% statements against thresholds 5 / 60 / 40 — no threshold error |
+| MCP server coverage | `cd packages/mcp-server && pnpm test -- --coverage` | **RUN at `138e5e05`**: 20 files / 157 tests pass. The gate collects no coverage because `vitest.config.ts:9-14` sets every threshold to 0; a direct measurement at `17fa515a` gave 88.5 / 89.7 / 86.04 / 87.95. `ci.yml:278` runs the same command, so local and hosted are at parity. **Pre-existing repo gap, not introduced by this program** — see residual 6 |
+| Dashboard build | `pnpm build` | **PASS at `138e5e05`**: 255 modules, `dist/index.html` 0.71 kB, built in 1.60s, rc=0 |
+| Harness packaging IT | `mvn -Pcore-e2e-harness -pl act-app verify -Dit.test=CoreE2ePackagingIntegrationTest` | **PASS at `138e5e05`**: run=2 fail=0 err=0 skip=0, BUILD SUCCESS |
+| Tool-catalog hard pins | `CatalogProbe` against the packaged harness at `138e5e05` (`gate-final6/CatalogProbe.java`, `final-gate-report-6.md`) | **PASS**: DESCRIPTORS=**67**, registered NAMES=**65**, OPERATOR_ONLY=**10**, generated tool section LINES=**57**, CHARS=**1887** against the 3000 ceiling. `CoreProgressPumpTest` 36/0/0/0 in full-suite order |
+| Clean-room | fresh worktree, no target/node_modules/dist, full gate | **PASS at `17fa515a`** in `D:/project/pa-clean2`: build outputs removed and measured before the run, `git rev-parse` verified before and after, 13/13 steps rc=0. **Re-gated at `138e5e05`** in the same clean worktree: 13/13 steps rc=0, overall rc=0 (incremental install, 34s — the from-scratch install evidence is the `17fa515a` run) |
+| Artifact-first E2E | `e2e-gate.sh final6` and `final6b` — packaged harness + built dist + 5 smoke endpoints + Playwright `--repeat-each=2`, **run twice** | **PASS at `138e5e05`, both runs.** The harness started **natively from the delivered script** (no shim, no replay): `harness boundary: OK`, `harness health: OK`, `setup rc=0`, all 5 smoke endpoints OK, `dist preview: OK`. Run 1 (`gate-final6`): 560 instances (280×2) → **517 passed / 0 failed / 1 flaky / 42 skipped, rc=0** (17.9m). Run 2 (`gate-final6b`, fresh work root): **518 passed / 0 failed / 0 flaky / 42 skipped** (15.8m). `aria-timeout-cancel.spec.ts:146` and `core-execution-modes.spec.ts:238` each passed both repeats in both runs. Both ports released by the script's own trap (`cleanup: port 5173 free`, `cleanup: port 8080 free`). **The run was doubled deliberately**: the P-2 database-closed defect below fired in 1 of 2 runs before the fix, so one green run would not have established it. A grep for `90098\|ClosedByInterruptException\|database has been closed` across each run's whole output directory (including the 25 MB and 6 MB backend logs) returned **no matches in either run** |
+| P-2 regression — interrupt during H2 I/O closed the database process-wide | `CoreProgressPump.stop()` no longer interrupts; RED then GREEN, then two artifact E2E runs | **FIXED at `138e5e05` (T57).** Before the fix, `stop()` interrupted the poll worker on the assumption that the interrupt only shortens the poll interval, but the worker also runs the sink synchronously (`CoreProgressPump.emit` → `OpenCodeCoreSession` → `CoreExecutionService.publishProgress` → `EventBroadcastListener` → Hibernate insert). An interrupt landing inside that H2 file read raised `java.nio.channels.ClosedByInterruptException`, closing H2's single shared `FileChannel`; every later request then failed `The database has been closed [90098-232]` until restart (6,237 occurrences, 31 Playwright specs failed). `stop()` now clears the running flag and `LockSupport.unpark`s the worker, and the poll wait is `parkNanos` + a flag re-check, so **no interrupt is ever delivered** — the mechanism is removed, not the window narrowed. RED reproduced the actual exception (36 run / 1 fail), then GREEN 36/0/0 on three consecutive runs; module gate `inner act-execution -am` 1511/0/0/0 |
+| Live PA bar | runbook Phase 1 O1-O5 on a fresh database, browser only | **PASS — bar met at `138e5e05`** (`live-bar-report-O.md`, evidence in `live-evidence/`). A brand-new operator onboarded entirely in chat on an empty H2 (the previous `data/` moved aside to `data-prev-20261112-221454`, never deleted). **O1** "Hi, I'm Happy…" produced the `New entity person:happy` card plus 3 fact cards in the panel (entity `c8e11398`, 4 PENDING rows in the DB). **O2** the card settled `approved — this memory is now active`; `PERSON person:happy ACTIVE 14:19:28.964Z`, PENDING → 0. **O3** two fact cards (`response_bullets_max 3`, `timezone Asia/Hong_Kong`). **O4** both settled approved, facts ACTIVE, the invented `timezone=UTC` RETIRED `14:22:40Z`, PENDING → 0. **O5** the answer named Happy / Asia/Hong_Kong / max-3-bullets and rendered exactly 3 bullets; run `41645916` shows 2 read-tool rows both policy-`APPROVED` and **zero operator asks** (the memory-read auto-approval amendment working live). **Zero curl and zero page switches for all six operator actions**; the one Configure visit is labelled platform bootstrap, not onboarding, and its confirm dialog now reads the true `opencode/SANDBOX x4` pre-state (F2 fixed, verified live). Console: 0 errors during O1-O5. Artifacts verified by sha256 before launch (jar `65cf15ae…c475`, dist `9e0e0db2…6d07`, bridge `dist/main.js` `30007f1f…b5af`); ports released afterwards by stopping only the seat's own PIDs, identified by command line. **Five findings recorded, not fixed** — see residuals 8 and 14-18 |
+| Governance probes | runbook Phase 1b P1a-P9 and Phase 3 | **PASS on every step that has a producer** at `17fa515a` (`live-bar-report-B.md` Phase 3, `live-bar-report-A.md` P-table): 3.1 PENDING never leaks **PASS** (absent from the manifest while PENDING, present after the operator's in-panel approval); 3.2 no successful self-approval **PASS** with the PENDING-row leg exercised; 3.4 prompt honesty **PASS**; P5 usage truth **PASS** (`not reported` + "6 runs reported no usage", API `{"NOT_REPORTED":6}`); P7 non-loopback authority **PASS** (4/4 mutations 401, no side effect, re-read 40 min later unchanged). **3.3 / P1a / P1b / P6 / P8 NOT RUN — no external producer**: `RunMcpWiring.forRun:51` wires MCP only for Aria, and a live worker reported 34 CLI tools and no MCP namespace. Tier-verified instead: 10/10 tools classified OPERATOR_ONLY, worker refusal + operator positive control in `McpActorTransportIntegrationTest` (`Tests run: 11, Failures: 0` at `gate-final4/itg.log:1399`). **P9 MEASURED RESIDUAL**: unauthenticated loopback `GET /api/v1/llm-providers` → 200 with `apiKeyMasked ****c230` — the disclosed cost of the human-approved narrow authority scope |
+| Five-turn scenario | runbook Phase 2 against the 2026-11-10 baseline | **PASS** on the live stack with the real qoder core (`live-bar-report-B.md` T1-T5): briefing with in-panel approval resume and clarification park/resume on the same run id; read-only memory turns produced 8 policy approvals and zero operator asks while the single write asked; usage honesty ("total tokens burned reads 0, with 31 runs reporting no usage data") replaces the baseline's asserted zero; plan honesty about APPROVED templates; recall returned 3/3 DB-verified ids; a second conversation ran while the first was parked. Phase 2 restored-history-after-reload **PASS**. Six live findings surfaced and **were fixed and re-reviewed in T53-T56** (F-B1 raw protocol dump, F-B2 case-sensitive kind filter, F-B3 no retry-without-filter, F2 fleet-banner truth, F3 credential-rejection classification, F-LC1 settled-card wording). **One live finding remains open: F-B4** — see residual 8 |
 | Hosted CI matrix | push + PR + `workflow_dispatch` | **DEFERRED to the operator's checkpoint** |
 | Docker build verification | ci.yml `:335-352` | **DEFERRED to hosted CI** (no Dockerfile changed) |
 
@@ -236,8 +238,11 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
    plan's git-ignored scratch workspace
    (`.superpowers/sdd/2026-11-11-aria-pa-experience/coverage-preflight-df93716d.log`) and is therefore
    NOT a committed artifact — the command and the head are the durable evidence. **The `packages/mcp-server`
-   coverage tier has never been run**, so its threshold is unexercised. The full clean-room gate runs
-   both; a threshold failure there is a real failure to triage, not to suppress.
+   coverage tier HAS now been run** (20 files / 157 tests at `17fa515a` and `138e5e05`) and it collects no
+   coverage: `packages/mcp-server/vitest.config.ts:9-14` sets lines/functions/branches/statements thresholds
+   to 0. A direct measurement gave 88.5 / 89.7 / 86.04 / 87.95, so the code is well covered but the ratchet
+   is inert. `ci.yml:278` runs the same command, so local and hosted are at parity — this is a pre-existing
+   repo gap, not a regression from this program. Raising those thresholds is a one-line follow-up.
 7. **The retryable-409 taxonomy is pinned for the decision path only.** The card's positive-marker rule
    (above) means a divergent retryable tail cannot mis-settle it: neither
    `MemoryCurrentValueSlot.java:50-51` (`another writer won the race — re-read before writing`) nor
@@ -249,3 +254,78 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
    decision wording: the taxonomy javadoc (`:94-96`) records that it belongs to the private
    `MemoryCommandService.flushFacts`, unreachable from a proposal decision. The residual is that a
    future edit to that command-path wording would not be caught by a decision-path pin.
+8. **F-B4 — `recall_memory` misses the operator's own REPO entities (live, Major, OPEN).** Measured on the
+   live stack: `recall_memory {"text":"aria-conductor repository release notes PR feedback version"}`
+   returned only the `agent:aria` entity, and Aria told the operator "Nothing on file for the
+   aria-conductor repo" while the DB held two ACTIVE REPO rows (`HappyLiang12/aria-conductor` and
+   `https://github.com/HappyLiang12/aria-conductor.git`). Mechanism from source:
+   `MemoryRecallService.recall` first queries `findByCanonicalKeyInAndStatus` with keys derived by
+   `MemoryMentionExtractor.candidateKeys` (single words + 2-3 grams, so `aria-conductor`), which equals
+   neither stored key, so the lexical fallback must win on its own. **Operator-facing cost:** Aria asks
+   for facts it already holds — the opposite of the "recall before asking" contract. Caveat measured, not
+   inferred: both rows carry `owner/repo` and URL-shaped keys rather than `repo:`-prefixed keys, so a
+   data-shape contribution cannot be excluded. Evidence:
+   `.superpowers/sdd/2026-11-11-aria-pa-experience/live-bar-report-B.md` F-B4 with `B-T3-timeline.json`
+   entries 4-5 and `B-entities-pre.json`. **Not fixed in this program**: it was reported by the first live
+   seat and never routed into the fix round, and fixing it now would invalidate the gated head. Remedy:
+   make the lexical fallback match REPO canonical keys by repository name (and normalise the two legacy
+   key shapes), with a recall test that seeds exactly these two rows.
+9. **The entity-kind vocabulary exists twice.** `MemoryQueryService.normalizeKind` and the extracted
+   `MemoryEntityKind` carry the same seven-kind set and the same trim/upper-case/refuse-unknown rule.
+   Both are tested, so they cannot silently diverge today, but the read path should delegate to
+   `MemoryEntityKind` — a one-line change plus deleting the private copy.
+10. **Clear's cancel set skips PAUSED.** `RunService.java:59` and `CoreExecutionService.java:1229-1236`
+    enumerate the cancellable states without PAUSED, so a paused run survives a conversation Clear.
+    Measured in review, not live; the operator-visible effect is a run that keeps its conversation link.
+11. **The Aria card shows the ACP `input` payload unredacted while the Review Queue masks it.** Two
+    surfaces, one datum, two policies. Neither leaks a credential in the measured turns, but the
+    inconsistency is a truthfulness defect waiting for a tool whose input carries one.
+12. **P-1 — shared-job identity race in the E2E harness.** `CoreE2eProcessBackend.java:205` can attribute
+    a job to the wrong run under concurrent reuse. Harness-only (test infrastructure), no product path;
+    it did not fire in either final E2E run.
+13. **Legacy lowercase `kind` rows.** The normalisation added in T53/T55 refuses unknown kinds and
+    upper-cases input, but rows written before it keep their stored spelling; an operator merge would be
+    needed to canonicalise them. No migration ships in this program, by design.
+
+The five findings below were measured by the final onboarding seat at `138e5e05` on a **fresh empty
+database** (`live-bar-report-O.md`). They are recorded, not fixed: the bar they were found in is met, and
+a product edit now would invalidate the gated head. Each carries its mechanism and its remedy.
+
+14. **F-O3 — recall returns empty for the operator's own entity (Major, product).** On a clean DB,
+    `recall_memory` returned **empty** twice for "What do you remember about me?" while `person:happy`
+    held 4 ACTIVE facts. The entity's stored `displayName` is the canonical key `person:happy`, not
+    "Happy", and recall matches only canonical key / display name / aliases / focus
+    (`MemoryMentionExtractor.java:102-116`) after a candidate-key plus bounded-lexical pass
+    (`MemoryRecallService.java:75-104`) — **fact values are never matched**, and the operator's name lives
+    only in the `display_name` fact. Empty recall means the automatic manifest `memory` section is absent
+    (`MemoryContextContributor.java:93-101`, `:158-166`): 4 manifests, 0 `memory` sections. Aria answered
+    O5 correctly by falling back to `list_memory_entities` + `get_memory_entity`, so the bar passes on the
+    tool path while the injection path is dead. **This independently corroborates residual 8 (F-B4) on a
+    clean database, so it is not a stale-DB artefact.** Remedy: re-canonicalise an entity's `displayName`
+    from its `display_name` fact on approve, and/or let recall match fact values for PERSON entities.
+15. **F-O4 — a resumed run asserts stale proposal state (Major, product/prompt).** The run parked on a
+    clarification; the operator approved the entity batch at `14:19:28Z`; on resume the run's final output
+    asserted "the three `person:happy` memory proposals are still PENDING and will stay that way until you
+    decide them" — false at `14:20:15Z`, when the rows were ACTIVE and `?status=PENDING` returned 0. The
+    resumed run reuses its pre-park tool output and nothing re-reads proposal state before the closing
+    prose. Evidence: run `637f9cad` `finalOutput`, `O2-entities-after.json`, `O2-proposals-after.json`.
+    Remedy: require a fresh `list_memory_proposals` read before any sentence that states proposal status,
+    or soften the prompt to "as of my last check". This is the same truthfulness class the program set out
+    to remove, so it is the highest-value follow-up.
+16. **F-O2 — unrequested facts proposed as memory (Minor, prompt).** For "Hi, I'm Happy. I'm the operator
+    here." the model proposed `role = Aria Conductor operator` and `timezone = UTC`, neither stated by the
+    operator, and invited a new operator to approve both. Remedy: propose only facts the operator stated
+    this turn; label any inference as a guess.
+17. **F-O6 — "Tokens burned: 0" in prose while usage is unreported (Minor, prompt honesty).** The O1
+    briefing printed the numeral `0` with an honest parenthetical, while `usageState` is `NOT_REPORTED`
+    and every token field is `null`. The dashboard KPI already says `not reported`; the prose must match
+    it and never print `0` for an unreported state.
+18. **F-O5 — empty-DB first load logs a 404 (Minor, UI/console).** `GET /api/v1/aria/conversations/latest`
+    → 404 plus `net::ERR_ABORTED` on the first load against a fresh database. Nothing is user-visible —
+    the panel opens and a conversation is created. Remedy: treat 404 on `/latest` as "no conversation" at
+    the client, or serve an empty envelope.
+19. **Card-settle polling window (observation, INFERRED, not a defect claim).** For ~2.5s after a batch
+    decision the three sibling fact cards still showed `pending` with live Approve/Reject although their
+    rows were ACTIVE; a reload reconciled them. The panel settles cards off its PENDING-inbox reconcile
+    (`AriaProposalCard.tsx:186-190`, `:203-206`), which polls — the observed window may simply be the poll
+    interval, which was not measured. Confirm the interval before treating this as a defect.

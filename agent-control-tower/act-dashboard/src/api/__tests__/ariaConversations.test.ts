@@ -5,6 +5,7 @@ import {
   CLEAR_CONVERSATION_TIMEOUT_MS,
   composeSynthesis,
   deleteConversation,
+  getLatestConversation,
 } from '../ariaConversations';
 import { OPERATOR_CSRF_HEADER, OPERATOR_SESSION_STORAGE_KEY } from '../operatorSession';
 
@@ -142,5 +143,77 @@ describe('ariaConversations mutations carry the operator CSRF header', () => {
     expect(
       (error as { response: { data: { error: string } } }).response.data.error,
     ).toBe('CSRF validation failed');
+  });
+});
+
+/**
+ * T60 (F-O5). On the first load against a fresh database the console logged
+ * `GET /api/v1/aria/conversations/latest → 404` plus `net::ERR_ABORTED` although
+ * nothing was wrong: a 404 is the server's correct REST answer for "no
+ * conversation exists yet", the same answer as the 204 the route sends once one
+ * exists. This file already reads 404 as success for the DELETE, so the read gets
+ * the same reading. Each non-throw is asserted by its resolved value; a throw's
+ * absence alone is not enough.
+ */
+describe('getLatestConversation reads "no conversation yet" as null', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The fields `getLatestConversation` reads off the response. */
+  function response(status: number, body?: unknown) {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      statusText: `HTTP ${status}`,
+      json: async () => body,
+    };
+  }
+
+  it('resolves to null on a 404, which is the fresh-database first load', async () => {
+    fetchMock.mockResolvedValue(response(404, { error: 'Not Found' }));
+
+    await expect(getLatestConversation()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/aria/conversations/latest');
+  });
+
+  // Positive control for the null above: the 204 path already produced null
+  // before this change, so "null" is the empty answer and not a swallowed body.
+  it('still resolves to null on a 204', async () => {
+    fetchMock.mockResolvedValue(response(204));
+
+    await expect(getLatestConversation()).resolves.toBeNull();
+  });
+
+  // Positive control: a conversation that does exist still yields the summary,
+  // so a blanket "always null" would fail here.
+  it('resolves to the summary on a 200 with a body', async () => {
+    const summary = {
+      conversationId: 'conv-1',
+      lastMessageAt: '2026-11-11T00:00:00Z',
+      runCount: 3,
+    };
+    fetchMock.mockResolvedValue(response(200, summary));
+
+    await expect(getLatestConversation()).resolves.toEqual(summary);
+  });
+
+  // Positive control: only 404 (and 204) mean "none"; a real server fault must
+  // still reach the caller, which the panel turns into its history-unavailable note.
+  it('still rejects on a 500', async () => {
+    fetchMock.mockResolvedValue(response(500));
+
+    await expect(getLatestConversation()).rejects.toThrow(
+      'Failed to fetch latest conversation: HTTP 500',
+    );
   });
 });

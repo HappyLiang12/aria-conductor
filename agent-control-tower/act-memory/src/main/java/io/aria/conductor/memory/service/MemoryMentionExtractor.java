@@ -20,9 +20,9 @@ import java.util.regex.Pattern;
 
 /**
  * Lexical entity-mention extraction for deterministic recall (spec §8.4 step 1). It is
- * deliberately an exact matcher — canonical key, display name, and aliases compared
- * case-insensitively on token boundaries — so the same text always yields the same
- * mentions. No embeddings, no fuzzy scoring.
+ * deliberately an exact matcher — canonical key (or the key's trailing path/URL/namespace
+ * segment), display name, and aliases compared case-insensitively on token boundaries — so the
+ * same text always yields the same mentions. No embeddings, no fuzzy scoring.
  * <p>
  * {@link #candidateKeys(String, String)} produces the exact keys handed to
  * {@code MemoryEntityRepository.findByCanonicalKeyInAndStatus}; {@link #match} narrows a
@@ -49,7 +49,13 @@ public class MemoryMentionExtractor {
     static final int MAX_NGRAM = 3;
 
     private static final Pattern TOKEN = Pattern.compile("[a-z0-9]+");
-    private static final Pattern PATH_SEPARATOR = Pattern.compile("[\\\\/]");
+    /**
+     * Path, URL and namespace separators. {@code :} is a separator too, so a namespaced canonical
+     * key ("person:happy", "agent:&lt;uuid&gt;") has the same tail semantics as a path or a URL.
+     */
+    private static final Pattern PATH_SEPARATOR = Pattern.compile("[\\\\/:]");
+    /** A repository URL's suffix; the matching canonical key usually omits it. */
+    private static final String GIT_SUFFIX = ".git";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Upper bound of compiled boundary patterns kept for reuse; bounded so it cannot grow. */
@@ -103,6 +109,15 @@ public class MemoryMentionExtractor {
         if (mentioned(haystack, entity.getCanonicalKey())) {
             return MentionSource.CANONICAL_KEY;
         }
+        // A path-, URL- or namespace-shaped key ("HappyLiang12/aria-conductor",
+        // "https://…/aria-conductor.git", "person:happy") is never contained in ordinary prose, so
+        // its own tail is the handle an operator actually types. The tail IS the canonical key, not
+        // a separate signal, so it carries the canonical-key rank instead of a new enum constant
+        // (the ranking order is pinned). Matching it by the same boundary rule keeps the "op" vs
+        // "operator" guarantee one segment down.
+        if (mentionedTail(haystack, entity.getCanonicalKey())) {
+            return MentionSource.CANONICAL_KEY;
+        }
         if (mentioned(haystack, entity.getDisplayName())) {
             return MentionSource.DISPLAY_NAME;
         }
@@ -113,6 +128,17 @@ public class MemoryMentionExtractor {
             return MentionSource.FOCUS;
         }
         return null;
+    }
+
+    /**
+     * True when the text names the key's trailing segment. A key that has no tail (no separator, or
+     * a separator at the very end) is already covered by the whole-key comparison and is skipped, so
+     * this can only widen reach for shaped keys.
+     */
+    private static boolean mentionedTail(String haystack, String canonicalKey) {
+        String key = normalize(canonicalKey);
+        String tail = trailingSegment(key);
+        return !tail.isEmpty() && !tail.equals(key) && mentioned(haystack, tail);
     }
 
     private static boolean focusMatches(String canonicalKey, String focus) {
@@ -182,9 +208,20 @@ public class MemoryMentionExtractor {
         keys.add(key);
     }
 
+    /**
+     * The key's tail: the last path, URL or namespace segment. {@code :} separates a namespaced key
+     * ("person:happy") exactly as {@code /} separates a path, and a repository URL ends in
+     * {@code .git} where its canonical key does not, so that suffix is dropped — both shapes then
+     * yield the name an operator types. Used by the mention match, by the focus match and by the
+     * exact-key candidate set, so one definition of "tail" governs all three.
+     */
     private static String trailingSegment(String normalizedPath) {
         String[] segments = PATH_SEPARATOR.split(normalizedPath);
-        return segments.length == 0 ? "" : segments[segments.length - 1];
+        String tail = segments.length == 0 ? "" : segments[segments.length - 1];
+        if (tail.length() > GIT_SUFFIX.length() && tail.endsWith(GIT_SUFFIX)) {
+            return tail.substring(0, tail.length() - GIT_SUFFIX.length());
+        }
+        return tail;
     }
 
     private static String normalize(String raw) {

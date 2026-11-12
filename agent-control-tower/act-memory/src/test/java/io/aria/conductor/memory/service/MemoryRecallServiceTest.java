@@ -413,6 +413,61 @@ class MemoryRecallServiceTest {
                 .containsExactly("operator");
     }
 
+    /**
+     * T58 / F-O3. On the live bar the entity was stored with displayName = its canonical key
+     * (`MemoryCommandService:145`), so the text "…me, Happy?" named the operator and recall still
+     * returned nothing — the name lived only in an ACTIVE `display_name` fact, and fact values are
+     * deliberately never matched. The canonical key's tail is the handle; the fact proves the value
+     * is present without recall reading it.
+     */
+    @Test
+    void anEntityWhoseDisplayNameWasDefaultedToItsKeyIsRecalledByItsOwnTailName() {
+        MemoryEntity person = entity("person:happy", "person:happy", "PERSON", MemoryOrigin.EXTRACTION, null);
+        MemoryFact name = fact(person.getId(), "display_name", "Happy", MemoryOrigin.OPERATOR, RECENT);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of());
+        stubUniverse(person);
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of(name));
+
+        RecallResult result = recall.recall(query("What do you remember about me, Happy?"));
+
+        assertThat(result.entities()).extracting(view -> view.canonicalKey())
+                .containsExactly("person:happy");
+        assertThat(result.facts()).extracting(view -> view.factKey())
+                .containsExactly("display_name");
+    }
+
+    /**
+     * T58 / F-B4. Both ACTIVE REPO entities from the live bar, keyed by path and by URL, are named
+     * by the text through their trailing segment. Neither canonical key is contained in the text, so
+     * neither the exact-key pass nor the whole-key lexical pass can find them.
+     */
+    @Test
+    void theRepositoryEntitiesAreRecalledByTheRepositoryNameInTheText() {
+        MemoryEntity pathKey = entity("HappyLiang12/aria-conductor", "HappyLiang12/aria-conductor",
+                "REPO", MemoryOrigin.RUN, null);
+        MemoryEntity urlKey = entity("https://github.com/HappyLiang12/aria-conductor.git",
+                "https://github.com/HappyLiang12/aria-conductor.git", "REPO", MemoryOrigin.RUN, null);
+        when(entities.findByCanonicalKeyInAndStatus(anyCollection(), eq(EntityStatus.ACTIVE)))
+                .thenReturn(List.of());
+        stubUniverse(pathKey, urlKey);
+        when(facts.findByEntityIdInAndStatusAndValidFromLessThanEqualAndValidToIsNull(
+                anyCollection(), eq(FactStatus.ACTIVE), any()))
+                .thenReturn(List.of());
+
+        RecallResult result = recall.recall(query("aria-conductor repository release notes"));
+
+        assertThat(result.entities()).extracting(view -> view.canonicalKey())
+                .containsExactlyInAnyOrder("HappyLiang12/aria-conductor",
+                        "https://github.com/HappyLiang12/aria-conductor.git");
+        assertThat(result.entities()).extracting(view -> view.displayName())
+                .as("the stored display name is still the defaulted key — recall matched the key's tail")
+                .containsExactlyInAnyOrder("HappyLiang12/aria-conductor",
+                        "https://github.com/HappyLiang12/aria-conductor.git");
+    }
+
     // ---------------------------------------------------------------- fixtures
 
     private void stubUniverse(MemoryEntity... rows) {

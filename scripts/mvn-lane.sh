@@ -23,14 +23,9 @@
 # scripts/lanes/measured-costs.json from one serial run there before trusting the fragment `# cost=`
 # headers, and see AGENTS.md for the previous daily's own table.
 #
-# Fan-out on the MacBook (M5 Pro 6P+12E, 64 GB, macOS 27.2.1, 2026-11-12, 2923 tests): serial
-# `clean test` 155.2 s, shard 2 86.8 s, shard 3 65.6 s, shard 4 60.9 s, shard 5 57.5 s, shard 6
-# 55.1-57.8 s over three runs, shard 8 61.8 s. K=6 is the peak: 124.9 s of shardable class time
-# divides to ~20.8 s a lane, while 8 lanes put 16 JVMs on 18 cores and lose more to contention than
-# they gain. Splitting act-app was measured and rejected - its tests share Spring contexts, so a
-# second split boots them in more processes instead of reusing them (K=4: 60.9 s -> 72.5 s).
-# A Windows checkout measured at 98d0d29e ran K=3 131.8 s, K=4 132.6 s and K=6 152.9 s on the same
-# 2923-test suite: fan out to 3 there, and rebuild measured-costs.json from that box first.
+# Fan-out is box-specific; AGENTS.md ("Inner loop vs gate") owns the measured per-box tables
+# (MacBook, i5-12500, Windows checkout) and the reasons behind each number. Keep this header free
+# of copied timings so the two copies cannot drift.
 #
 # Isolation contract for shard lanes:
 #   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to

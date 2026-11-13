@@ -163,13 +163,13 @@ public class MemoryController {
         if (!"ACTIVE".equals(view.status())) {
             String remedy = "PENDING".equals(view.status())
                     ? "approve or reject it in the Memory proposal card instead of creating it again"
-                    : "a decided key is reopened only by a worker's re-proposal (retire -> re-propose -> approve), "
-                            + "and PATCH cannot change a non-ACTIVE entity";
+                    : "a decided key is reopened only by a worker's re-proposal, which retires the old "
+                            + "live graph and then waits for your approval; PATCH cannot change a non-ACTIVE entity";
             throw new MemoryConflictException("an entity with kind " + view.kind()
                     + " and canonical key '" + view.canonicalKey() + "' is " + view.status()
                     + "; nothing was created: " + remedy);
         }
-        // For an existing non-terminal key `createEntity` returns the stored row unchanged (the
+        // For an existing ACTIVE key `createEntity` returns the stored row unchanged (the
         // re-propose path applies the fields; a new row carries them). So a request that names a
         // display name or sensitivity the stored row does not carry created nothing and applied
         // nothing, and answering 201 with the old row told the operator their edit had landed.

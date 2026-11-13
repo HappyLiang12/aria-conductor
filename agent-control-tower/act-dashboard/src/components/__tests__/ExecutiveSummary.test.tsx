@@ -230,7 +230,7 @@ describe('ExecutiveSummary usage truth', () => {
 
     await waitFor(() => expect(tokenCell().querySelector('.v')).toHaveTextContent('120'));
     expect(tokenCell()).not.toHaveTextContent('not reported');
-    expect(tokenCell()).toHaveTextContent('1 runs reported no usage');
+    expect(tokenCell()).toHaveTextContent('1 run reported no usage');
   });
 
   it('keeps a real zero when no run was silent about usage', async () => {

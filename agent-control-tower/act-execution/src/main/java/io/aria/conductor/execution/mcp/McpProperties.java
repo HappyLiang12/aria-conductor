@@ -38,7 +38,7 @@ public class McpProperties {
     @ToString.Exclude
     private String token = "";
 
-    /** Override for the sandbox-reachable host; blank = auto-resolve (SandboxHostResolver). */
+    /** Sandbox-reachable host for run-owned cores; blank leaves the run without the platform MCP (the address is never guessed). */
     private String sandboxHostAddress = "";
 
     /** Backend port the sandbox-side MCP client targets. */

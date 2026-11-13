@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.tool;
 
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,10 +29,10 @@ class WorkspaceManagerTest {
     private WorkspaceManager manager;
 
     @BeforeEach
-    void setUp() throws java.io.IOException {
+    void setUp() {
         // The manager adopts its root canonically (toRealPath). Adopt the fixture the same way,
         // otherwise macOS /var -> /private/var makes every provisioned path differ from tempDir.
-        tempDir = tempDir.toRealPath();
+        tempDir = TempPaths.canonical(tempDir);
         manager = new WorkspaceManager(tempDir.toString());
     }
 
@@ -50,6 +51,21 @@ class WorkspaceManagerTest {
         String first = manager.provision(runId);
         String second = manager.provision(runId);
         assertEquals(first, second);
+    }
+
+    /**
+     * A workspace root spelled through a directory alias is adopted at the target: the manager
+     * and every later deletion walk work on the real path, not the alias that was configured.
+     */
+    @Test
+    void adoptsASymlinkedRootCanonically() throws Exception {
+        Path real = Files.createDirectories(tempDir.resolve("real-root"));
+        Path alias = tempDir.resolve("workspace-alias");
+        createDirectoryAlias(alias, real);
+        WorkspaceManager aliased = new WorkspaceManager(alias.toString());
+
+        UUID runId = UUID.randomUUID();
+        assertEquals(real.toRealPath().resolve(runId.toString()).toString(), aliased.provision(runId));
     }
 
     @Test

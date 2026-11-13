@@ -7,6 +7,7 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -107,8 +108,8 @@ class CoreE2eQoderAdapterTest {
                 new AgentExecutionSettings("qoder", ExecutionMode.HOST, WorkspaceMode.DIRECT, "/tmp/aria-e2e", null),
                 null, null, null);
         PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.HOST, "e2e-host-" + runId,
-                Files.createTempDirectory("aria-e2e-ws-").toString(),
-                Files.createTempDirectory("aria-e2e-cfg-").toString(),
+                TempPaths.createCanonicalTempDirectory("aria-e2e-ws-").toString(),
+                TempPaths.createCanonicalTempDirectory("aria-e2e-cfg-").toString(),
                 URI.create("http://127.0.0.1:45678/"));
 
         LaunchProfile profile = adapter.launchProfile(spec, environment, new SecretBundle(null, Map.of()));

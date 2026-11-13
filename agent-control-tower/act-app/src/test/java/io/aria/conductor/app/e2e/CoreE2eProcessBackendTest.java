@@ -49,6 +49,13 @@ class CoreE2eProcessBackendTest {
     @TempDir
     Path temp;
 
+    @org.junit.jupiter.api.BeforeEach
+    void adoptCanonicalTemp() throws IOException {
+        // macOS /var -> /private/var: adopt the fixture as production adopts the workspace root,
+        // or the link-safe deletion guard refuses the run-owned tree.
+        temp = temp.toRealPath();
+    }
+
     @Test
     void anAlreadyExitedPeerRootIsAVerifiedStop() throws Exception {
         CoreE2eProcessBackend.State state = newState();

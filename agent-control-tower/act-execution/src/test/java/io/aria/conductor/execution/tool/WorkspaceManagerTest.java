@@ -28,7 +28,10 @@ class WorkspaceManagerTest {
     private WorkspaceManager manager;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws java.io.IOException {
+        // The manager adopts its root canonically (toRealPath). Adopt the fixture the same way,
+        // otherwise macOS /var -> /private/var makes every provisioned path differ from tempDir.
+        tempDir = tempDir.toRealPath();
         manager = new WorkspaceManager(tempDir.toString());
     }
 

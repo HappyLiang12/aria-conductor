@@ -140,8 +140,9 @@ a real run. Details in
 
 `shard total wall` excludes the shared `install -DskipTests` that runs first (3-4 s warm).
 
-Sharding keeps the suite complete and proves it: lanes run 2846 tests with `-DexcludedGroups=timing`
-and the serial timing lane replays the remaining 77, which is exactly the 2923 one process runs. Which
+Sharding keeps the suite complete and proves it: at `6370549` the lanes run 2846 tests with
+`-DexcludedGroups=timing` and the serial timing lane replays the remaining 77, which is exactly the 2923
+one process runs. Which
 *classes* ran is what is enforced — after the run by `node scripts/lane-plan.mjs verify`, which fails on a
 planned class that printed no result, a class in two lanes, a tagged class under contention, or a class
 compiled into `target/test-classes` that no lane was given; and *before* Maven starts by `check`, which

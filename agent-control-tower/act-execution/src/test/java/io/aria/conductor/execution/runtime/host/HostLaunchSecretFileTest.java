@@ -174,26 +174,31 @@ class HostLaunchSecretFileTest {
         Path real = Files.createDirectories(root.resolve("real"));
         Path alias = root.resolve("spelled");
         TempPaths.createDirectoryAlias(alias, real);
-        Path workspace = Files.createDirectories(real.resolve("workspace"));
-        Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
-        UUID runId = UUID.randomUUID();
-        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "qoder", ExecutionMode.HOST,
-                new AgentExecutionSettings("qoder", ExecutionMode.HOST, null, null, null),
-                "qoder:operator", "rev-1", Instant.now().plusSeconds(600));
-        WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), runId, WorkspaceKind.DIRECT,
-                workspace, workspace, runtimeRoot.toString(), null);
-        HostExecutionBackend backend = backend(URI.create("http://127.0.0.1:1/"));
+        try {
+            Path workspace = Files.createDirectories(real.resolve("workspace"));
+            Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
+            UUID runId = UUID.randomUUID();
+            ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "qoder", ExecutionMode.HOST,
+                    new AgentExecutionSettings("qoder", ExecutionMode.HOST, null, null, null),
+                    "qoder:operator", "rev-1", Instant.now().plusSeconds(600));
+            WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), runId, WorkspaceKind.DIRECT,
+                    workspace, workspace, runtimeRoot.toString(), null);
+            HostExecutionBackend backend = backend(URI.create("http://127.0.0.1:1/"));
 
-        PreparedEnvironment environment = backend.prepare(spec, lease);
+            PreparedEnvironment environment = backend.prepare(spec, lease);
 
-        assertThat(environment.configurationDirectory())
-                .isEqualTo(real.toRealPath().resolve("runtime").resolve("host").toString());
-        RuntimeHandle handle = new RuntimeHandle(runId, ExecutionMode.HOST, environment.environmentId(),
-                OwnedProcess.ownershipIdentityOf(
-                        new OwnedProcess(runId, "nonce", 4711L, "4711@1", "supervisor", "stub", null)),
-                environment.endpoint());
-        assertThat(backend.destroyAndReport(handle)).isTrue();
-        assertThat(Files.exists(Path.of(environment.configurationDirectory()))).isFalse();
+            assertThat(environment.configurationDirectory())
+                    .isEqualTo(real.toRealPath().resolve("runtime").resolve("host").toString());
+            RuntimeHandle handle = new RuntimeHandle(runId, ExecutionMode.HOST, environment.environmentId(),
+                    OwnedProcess.ownershipIdentityOf(
+                            new OwnedProcess(runId, "nonce", 4711L, "4711@1", "supervisor", "stub", null)),
+                    environment.endpoint());
+            assertThat(backend.destroyAndReport(handle)).isTrue();
+            assertThat(Files.exists(Path.of(environment.configurationDirectory()))).isFalse();
+        } finally {
+            // The junction must go before tearDown walks the root: a dangling one fails the walk.
+            Files.deleteIfExists(alias);
+        }
     }
 
     @Test

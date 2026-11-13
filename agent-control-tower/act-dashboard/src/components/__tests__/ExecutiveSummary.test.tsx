@@ -219,7 +219,7 @@ describe('ExecutiveSummary usage truth', () => {
     expect(tokenCell()).toHaveTextContent('29 runs reported no usage');
   });
 
-  it('shows the measured total when at least one run reported usage', async () => {
+  it('shows the measured total and discloses the silent runs', async () => {
     mockedSummary.mockResolvedValue({
       activeAgents: 2, degradedAgents: 0, runningRuns: 0,
       totalTokensBurned: 120, runsWithoutUsage: 1,
@@ -230,7 +230,7 @@ describe('ExecutiveSummary usage truth', () => {
 
     await waitFor(() => expect(tokenCell().querySelector('.v')).toHaveTextContent('120'));
     expect(tokenCell()).not.toHaveTextContent('not reported');
-    expect(tokenCell()).not.toHaveTextContent('runs reported no usage');
+    expect(tokenCell()).toHaveTextContent('1 runs reported no usage');
   });
 
   it('keeps a real zero when no run was silent about usage', async () => {

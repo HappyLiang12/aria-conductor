@@ -361,7 +361,10 @@ class ToolCatalogParityTest {
      * not write.
      * <p>
      * T39 Item 2 (P2): the second shape used to promise "creates a new entity with this first fact
-     * in the same transaction", which is true only for a new key. Read against
+     * in the same transaction". That was false twice over: it applied to existing keys too, and the
+     * new-key fact proposal commits in its own transaction ({@code MemoryProposalWriter.insertProposal}
+     * is {@code REQUIRES_NEW}), so the entity and fact are one proposal batch rather than one
+     * transaction. Read against
      * {@code MemoryCommandService.addFactByKey} / {@code createEntity}: an existing ACTIVE or
      * PENDING key attaches the fact to that entity (a PENDING entity takes only a worker's PENDING
      * proposal), a RETIRED or MERGED key is re-proposed to PENDING by a worker's call, and an
@@ -385,8 +388,8 @@ class ToolCatalogParityTest {
                 .contains("exactly one of two shapes")
                 .contains("(entityId)")
                 .contains("(kind, canonicalKey)")
-                .as("the new-key case, now scoped to a new key")
-                .contains("a new key creates the entity with this first fact in the same transaction")
+                .as("the new-key case, now scoped to a new key and its own proposal transaction")
+                .contains("a new key creates the entity and its first fact as one proposal batch")
                 .as("the existing ACTIVE-key case the old wording denied")
                 .contains("an existing ACTIVE key adds the fact to that entity")
                 .as("the existing PENDING-key case: a worker's proposal only, an operator call conflicts")

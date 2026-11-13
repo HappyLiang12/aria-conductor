@@ -174,6 +174,14 @@ describe('TopBar usage truth', () => {
     expect(kpi).not.toHaveTextContent('not reported');
   });
 
+  it('discloses the silent runs beside a measured total', async () => {
+    mockSummary({ totalTokensBurned: 120, runsWithoutUsage: 1 });
+    renderTopBar();
+    const kpi = screen.getByTestId('kpi-tokens');
+    await waitFor(() => expect(kpi).toHaveTextContent('120'));
+    expect(kpi.getAttribute('title')).toContain('1 runs reported no usage');
+  });
+
   it('keeps a real zero when no run was silent about usage', async () => {
     mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 0 });
     renderTopBar();

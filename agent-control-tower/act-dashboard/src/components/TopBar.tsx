@@ -87,12 +87,14 @@ export function TopBar() {
   const pendingApprovals = summary?.pendingApprovals;
   const tokensBurned = summary?.totalTokensBurned;
   // A zero total beside runs that reported nothing is a silence, not a
-  // measurement — render the silence, not a false zero.
+  // measurement — render the silence, not a false zero. A positive total is
+  // still partial while any run was silent, so the count is disclosed there too.
   const runsWithoutUsage = summary?.runsWithoutUsage ?? 0;
   const tokensUnreported = tokensBurned === 0 && runsWithoutUsage > 0;
-  const tokensDetail = tokensUnreported
-    ? [kpiDetail, `${runsWithoutUsage} runs reported no usage`].filter(Boolean).join(' · ')
-    : kpiDetail;
+  const tokensDetail =
+    runsWithoutUsage > 0
+      ? [kpiDetail, `${runsWithoutUsage} runs reported no usage`].filter(Boolean).join(' · ')
+      : kpiDetail;
   const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
   // Honesty rule: the badge may only report a verdict it actually has evidence for.
   // `data` is the only field that carries a verdict — a pending probe has none yet and

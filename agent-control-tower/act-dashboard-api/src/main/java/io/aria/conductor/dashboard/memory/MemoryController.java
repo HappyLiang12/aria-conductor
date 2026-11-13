@@ -156,6 +156,19 @@ public class MemoryController {
                                                          HttpServletRequest request) {
         MemoryEntity entity = command.createEntity(body.toCommand(), operator(request));
         MemoryEntityView view = MemoryEntityView.from(entity);
+        // A create that resolves an existing non-ACTIVE row created nothing: a PENDING row is still
+        // awaiting its proposal decision, and a RETIRED/MERGED row stays decided unless a worker
+        // re-proposes it. Answering 201 with that row would tell the operator an edit landed, and the
+        // PATCH remedy below is refused for every non-ACTIVE row, so name the route that can work.
+        if (!"ACTIVE".equals(view.status())) {
+            String remedy = "PENDING".equals(view.status())
+                    ? "approve or reject it in the Memory proposal card instead of creating it again"
+                    : "a decided key is reopened only by a worker's re-proposal (retire -> re-propose -> approve), "
+                            + "and PATCH cannot change a non-ACTIVE entity";
+            throw new MemoryConflictException("an entity with kind " + view.kind()
+                    + " and canonical key '" + view.canonicalKey() + "' is " + view.status()
+                    + "; nothing was created: " + remedy);
+        }
         // For an existing non-terminal key `createEntity` returns the stored row unchanged (the
         // re-propose path applies the fields; a new row carries them). So a request that names a
         // display name or sensitivity the stored row does not carry created nothing and applied

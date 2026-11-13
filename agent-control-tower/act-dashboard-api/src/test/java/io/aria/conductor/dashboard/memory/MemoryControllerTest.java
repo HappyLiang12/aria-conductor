@@ -123,13 +123,17 @@ class MemoryControllerTest {
     }
 
     private static MemoryEntity entity(UUID id, String displayName) {
+        return entity(id, displayName, EntityStatus.ACTIVE);
+    }
+
+    private static MemoryEntity entity(UUID id, String displayName, EntityStatus status) {
         return MemoryEntity.builder()
                 .id(id)
                 .kind("PERSON")
                 .canonicalKey("operator")
                 .displayName(displayName)
                 .sensitivity(Sensitivity.INTERNAL)
-                .status(EntityStatus.ACTIVE)
+                .status(status)
                 .origin(MemoryOrigin.OPERATOR)
                 .version(1)
                 .createdAt(NOW)
@@ -242,6 +246,46 @@ class MemoryControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\"}"))
                 .andExpect(status().isCreated());
+    }
+
+    /**
+     * A create that resolves an existing PENDING row created nothing: the row is waiting on the
+     * proposal decision, not on a second create. 201 would claim the request made it.
+     */
+    @Test
+    void aCreateOnAPendingRowIsAConflictThatNamesTheProposalCard() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(id, "Operator", EntityStatus.PENDING));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\","
+                                + "\"displayName\":\"Operator\",\"sensitivity\":\"INTERNAL\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value(containsString("nothing was created")))
+                .andExpect(jsonPath("$.message").value(containsString("PENDING")))
+                .andExpect(jsonPath("$.message").value(containsString("proposal card")));
+    }
+
+    /**
+     * A decided row is reopened only by a worker's re-proposal; the PATCH remedy that works for an
+     * ACTIVE row is refused for this one, so the conflict must name the route that can work.
+     */
+    @Test
+    void aCreateOnADecidedRowIsAConflictThatNamesTheReproposePath() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(command.createEntity(any(), any())).thenReturn(entity(id, "Operator", EntityStatus.RETIRED));
+
+        mvc.perform(post("/api/v1/memory/entities")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PERSON\",\"canonicalKey\":\"operator\","
+                                + "\"displayName\":\"Operator\",\"sensitivity\":\"INTERNAL\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorType").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value(containsString("nothing was created")))
+                .andExpect(jsonPath("$.message").value(containsString("RETIRED")))
+                .andExpect(jsonPath("$.message").value(containsString("re-propose")));
     }
 
     @Test

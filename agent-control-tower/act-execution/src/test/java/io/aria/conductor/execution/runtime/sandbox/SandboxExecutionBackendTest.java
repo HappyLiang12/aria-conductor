@@ -18,6 +18,7 @@ import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -655,6 +656,31 @@ class SandboxExecutionBackendTest {
         assertThat(fixture.lifecycle.owns(RUN_ID)).isFalse();
     }
 
+    /**
+     * The sandbox staging directory is a deletion root too: a lease root spelled through a
+     * directory above it is adopted at prepare, so destroy removes the staging directory
+     * through the real base instead of refusing its own run's root.
+     */
+    @Test
+    void destroyRemovesTheStagingDirectoryThroughASpelledLeaseRoot() throws IOException {
+        Fixture fixture = new Fixture();
+        Path real = Files.createDirectories(fixture.temp.resolve("real"));
+        Path alias = fixture.temp.resolve("spelled");
+        TempPaths.createDirectoryAlias(alias, real);
+        Path localRoot = Files.createDirectories(real.resolve("workspace"));
+        Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
+        WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), RUN_ID, WorkspaceKind.SANDBOX_SNAPSHOT,
+                localRoot, null, runtimeRoot.toString(), null);
+
+        PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+
+        Path staging = Path.of(environment.configurationDirectory());
+        assertThat(staging).isEqualTo(real.toRealPath().resolve("runtime").resolve("sandbox"));
+        fixture.backend.destroy(new RuntimeHandle(RUN_ID, ExecutionMode.SANDBOX, environment.environmentId(),
+                "sandbox-1", environment.endpoint()));
+        assertThat(Files.exists(staging)).isFalse();
+    }
+
     // ------------------------------------------------------------------ fixture
 
     private static int renewals(Fixture fixture) {
@@ -687,13 +713,9 @@ class SandboxExecutionBackendTest {
 
         Fixture(String coreId) {
             this.coreId = coreId;
-            try {
-                // Canonical, as the production workspace root is adopted: macOS /var is a link to
-                // /private/var and the link-safe deletion guard refuses a non-real base.
-                this.temp = Files.createTempDirectory("aria-sandbox-backend-test").toRealPath();
-            } catch (IOException e) {
-                throw new IllegalStateException(e);
-            }
+            // Canonical, as the production workspace root is adopted: macOS /var is a link to
+            // /private/var and the link-safe deletion guard refuses a non-real base.
+            this.temp = TempPaths.createCanonicalTempDirectory("aria-sandbox-backend-test");
             this.lifecycle = new SandboxLifecycle(sdk);
             this.backend = new SandboxExecutionBackend(lifecycle, requested -> switch (requested == null ? "" : requested) {
                 case "opencode", "qoder" -> new SandboxExecutionBackend.SandboxProfile(IMAGE, CORE_PORT);

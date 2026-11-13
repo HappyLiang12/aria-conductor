@@ -19,7 +19,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Map;
@@ -127,12 +126,20 @@ public class SandboxExecutionBackend implements ExecutionBackend {
             throw new IllegalStateException("This backend already owns run " + spec.runId()
                     + "; a sandbox run key is never reused");
         }
-        Path staging = Path.of(workspace.runtimeRoot()).toAbsolutePath().normalize().resolve(STAGING_DIRECTORY);
+        Path spelledRoot = Path.of(workspace.runtimeRoot()).toAbsolutePath().normalize();
+        Path staging;
         try {
+            // The deletion base is adopted while the run still owns it: the link-safe deletion
+            // at destroy refuses a base that is not its own real path, so a lease root spelled
+            // through a link above it (/var vs /private/var on macOS) is resolved here. A base
+            // that is itself a link is never adopted: that deletion stays refused, as designed.
+            Path runtimeRoot = WorkspacePaths.isLinkLikeEntry(spelledRoot)
+                    ? spelledRoot : spelledRoot.toRealPath();
+            staging = runtimeRoot.resolve(STAGING_DIRECTORY);
             Files.createDirectories(staging);
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to prepare the run-owned sandbox staging directory " + staging
-                    + ": " + e.getMessage(), e);
+            throw new IllegalStateException("Unable to prepare the run-owned sandbox staging directory under "
+                    + workspace.runtimeRoot() + ": " + e.getMessage(), e);
         }
         String sandboxId = lifecycle.create(spec.runId(), profile.image(), Map.of());
         URI endpoint;

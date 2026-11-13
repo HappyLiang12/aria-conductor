@@ -189,13 +189,21 @@ public class HostExecutionBackend implements ExecutionBackend {
             throw new IllegalArgumentException("Execution spec run " + spec.runId()
                     + " does not match workspace lease run " + workspace.runId());
         }
-        Path runConfigurationRoot = Path.of(workspace.runtimeRoot()).toAbsolutePath().normalize();
-        Path generated = runConfigurationRoot.resolve(CONFIGURATION_DIRECTORY);
+        Path spelledRoot = Path.of(workspace.runtimeRoot()).toAbsolutePath().normalize();
+        Path runConfigurationRoot;
+        Path generated;
         try {
+            // The deletion base is adopted while the run still owns it: the link-safe deletion
+            // at destroy refuses a base that is not its own real path, so a lease root spelled
+            // through a link above it (/var vs /private/var on macOS) is resolved here. A base
+            // that is itself a link is never adopted: that deletion stays refused, as designed.
+            runConfigurationRoot = WorkspacePaths.isLinkLikeEntry(spelledRoot)
+                    ? spelledRoot : spelledRoot.toRealPath();
+            generated = runConfigurationRoot.resolve(CONFIGURATION_DIRECTORY);
             Files.createDirectories(generated);
         } catch (IOException e) {
-            throw new IllegalStateException("Unable to prepare the run-owned configuration directory " + generated
-                    + ": " + e.getMessage(), e);
+            throw new IllegalStateException("Unable to prepare the run-owned configuration directory under "
+                    + workspace.runtimeRoot() + ": " + e.getMessage(), e);
         }
         URI endpoint;
         try {

@@ -81,10 +81,27 @@ class SandboxExecutionBackendTest {
 
     @AfterEach
     void removeFixtureTempRoots() throws IOException {
-        for (Path root : TEMP_ROOTS) {
-            deleteTree(root);
+        IOException failure = null;
+        try {
+            for (Path root : TEMP_ROOTS) {
+                try {
+                    deleteTree(root);
+                } catch (IOException e) {
+                    // One undeletable root must not skip the others, and the list must still be
+                    // cleared: a stale root would make the next test delete it again.
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+            }
+        } finally {
+            TEMP_ROOTS.clear();
         }
-        TEMP_ROOTS.clear();
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     // ------------------------------------------------------------------ ordering / proofs

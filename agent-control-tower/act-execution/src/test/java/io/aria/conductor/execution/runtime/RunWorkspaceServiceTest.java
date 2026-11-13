@@ -87,18 +87,22 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         Files.createDirectories(repo.resolve("src"));
         Path alias = temp.resolve("repo-alias");
         createDirectoryAlias(alias, repo);
+        try {
+            assertThat(alias.toRealPath()).isEqualTo(repo.toRealPath());
+            assertThat(WorkspacePaths.overlaps(repo, alias)).isEqualTo(true);
 
-        assertThat(alias.toRealPath()).isEqualTo(repo.toRealPath());
-        assertThat(WorkspacePaths.overlaps(repo, alias)).isEqualTo(true);
-
-        WorkspaceLease first = service().acquire(hostSpec(UUID.randomUUID(), WorkspaceMode.DIRECT, repo.toString(), null));
-        UUID secondRun = UUID.randomUUID();
-        assertThatThrownBy(() -> service().acquire(
-                hostSpec(secondRun, WorkspaceMode.DIRECT, alias.toString(), null)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Workspace conflict: " + repo.toRealPath()
-                        + " overlaps active lease " + first.leaseId() + " (run " + first.runId() + ")");
-        assertThat(leases.findByRunId(secondRun)).isEmpty();
+            WorkspaceLease first = service().acquire(hostSpec(UUID.randomUUID(), WorkspaceMode.DIRECT, repo.toString(), null));
+            UUID secondRun = UUID.randomUUID();
+            assertThatThrownBy(() -> service().acquire(
+                    hostSpec(secondRun, WorkspaceMode.DIRECT, alias.toString(), null)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Workspace conflict: " + repo.toRealPath()
+                            + " overlaps active lease " + first.leaseId() + " (run " + first.runId() + ")");
+            assertThat(leases.findByRunId(secondRun)).isEmpty();
+        } finally {
+            // A junction left to the fixture cleanup is the Windows failure this round fixed.
+            Files.deleteIfExists(alias);
+        }
     }
 
     // ----------------------------------------------------------- direct leases

@@ -9,23 +9,15 @@
 #   scripts/mvn-lane.sh timing                               the @Tag("timing") classes, serially
 #   scripts/mvn-lane.sh shard K                              K concurrent lanes over the unit tier, then timing
 #
-# Fan-out, measured on Happy (i5-12500 6C/12T, 16 GB DDR5 in ONE channel, SATA SSD): serial
-# `clean test` 199 s, shard 2 93.8-96.4 s over two runs, shard 3 78.5-86.3 s over five runs, shard 4
-# 74.7-78.3 s over two.
-# So K=3 is the default worth reaching for and K=4 buys 0.2-11.6 s more - the two samples do not overlap,
-# but only by 0.2 s at the closest edge, so it is a few seconds rather than a step change. The single
-# memory channel, not the 12 threads, is what flattens the curve: at K=4 the four lanes each ran 7.6-22.4 s
-# longer than their planned cost, in the wrong order (the lightest planned lane finished second-slowest in
-# both runs), and the box was down to 2.8 GB free at the worst moment. K=1 is the whole tier in one lane,
-# useful as the reference run. CI runs four groups on four separate runners
-# (.github/workflows/ci.yml:113-139) where nothing is shared, which is why the hosted lane can be
-# wider than any local one. Every number above is Happy's: on another box rebuild
-# scripts/lanes/measured-costs.json from one serial run there before trusting the fragment `# cost=`
-# headers, and see AGENTS.md for the previous daily's own table.
-#
 # Fan-out is box-specific; AGENTS.md ("Inner loop vs gate") owns the measured per-box tables
-# (MacBook, i5-12500, Windows checkout) and the reasons behind each number. Keep this header free
-# of copied timings so the two copies cannot drift.
+# (MacBook, i5-12500, Windows checkout), the shard walls and the reasons behind them. This header
+# deliberately carries none of those timings, so the two copies cannot drift.
+#
+# K=1 is the whole tier in one lane, useful as the reference run. CI runs four groups on four
+# separate runners (.github/workflows/ci.yml:113-139) where nothing is shared, which is why the
+# hosted lane can be wider than any local one. On another box, rebuild
+# scripts/lanes/measured-costs.json from one serial run there before trusting the fragment
+# `# cost=` headers.
 #
 # Isolation contract for shard lanes:
 #   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to

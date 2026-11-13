@@ -19,13 +19,18 @@ import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.test.TempPaths;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -70,6 +75,17 @@ class SandboxExecutionBackendTest {
     private static final int CORE_PORT = 4096;
     private static final List<String> SERVE_ARGV =
             List.of("opencode", "serve", "--hostname", "0.0.0.0", "--port", String.valueOf(CORE_PORT));
+
+    /** Temp roots created by {@link Fixture}; tests build one per case, so the class cleans them. */
+    private static final List<Path> TEMP_ROOTS = new CopyOnWriteArrayList<>();
+
+    @AfterEach
+    void removeFixtureTempRoots() throws IOException {
+        for (Path root : TEMP_ROOTS) {
+            deleteTree(root);
+        }
+        TEMP_ROOTS.clear();
+    }
 
     // ------------------------------------------------------------------ ordering / proofs
 
@@ -667,24 +683,48 @@ class SandboxExecutionBackendTest {
         Path real = Files.createDirectories(fixture.temp.resolve("real"));
         Path alias = fixture.temp.resolve("spelled");
         TempPaths.createDirectoryAlias(alias, real);
-        Path localRoot = Files.createDirectories(real.resolve("workspace"));
-        Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
-        WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), RUN_ID, WorkspaceKind.SANDBOX_SNAPSHOT,
-                localRoot, null, runtimeRoot.toString(), null);
+        try {
+            Path localRoot = Files.createDirectories(real.resolve("workspace"));
+            Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
+            WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), RUN_ID, WorkspaceKind.SANDBOX_SNAPSHOT,
+                    localRoot, null, runtimeRoot.toString(), null);
 
-        PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+            PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
 
-        Path staging = Path.of(environment.configurationDirectory());
-        assertThat(staging).isEqualTo(real.toRealPath().resolve("runtime").resolve("sandbox"));
-        fixture.backend.destroy(new RuntimeHandle(RUN_ID, ExecutionMode.SANDBOX, environment.environmentId(),
-                "sandbox-1", environment.endpoint()));
-        assertThat(Files.exists(staging)).isFalse();
+            Path staging = Path.of(environment.configurationDirectory());
+            assertThat(staging).isEqualTo(real.toRealPath().resolve("runtime").resolve("sandbox"));
+            fixture.backend.destroy(new RuntimeHandle(RUN_ID, ExecutionMode.SANDBOX, environment.environmentId(),
+                    "sandbox-1", environment.endpoint()));
+            assertThat(Files.exists(staging)).isFalse();
+        } finally {
+            // The junction must go before the temp cleanup walks the root: a dangling one fails it.
+            Files.deleteIfExists(alias);
+        }
     }
 
     // ------------------------------------------------------------------ fixture
 
     private static int renewals(Fixture fixture) {
         return (int) fixture.sdk.operations.stream().filter("renew"::equals).count();
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.deleteIfExists(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                Files.deleteIfExists(dir);
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")
@@ -716,6 +756,7 @@ class SandboxExecutionBackendTest {
             // Canonical, as the production workspace root is adopted: macOS /var is a link to
             // /private/var and the link-safe deletion guard refuses a non-real base.
             this.temp = TempPaths.createCanonicalTempDirectory("aria-sandbox-backend-test");
+            TEMP_ROOTS.add(this.temp);
             this.lifecycle = new SandboxLifecycle(sdk);
             this.backend = new SandboxExecutionBackend(lifecycle, requested -> switch (requested == null ? "" : requested) {
                 case "opencode", "qoder" -> new SandboxExecutionBackend.SandboxProfile(IMAGE, CORE_PORT);

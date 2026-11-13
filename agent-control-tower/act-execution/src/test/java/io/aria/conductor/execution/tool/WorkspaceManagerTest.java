@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static io.aria.conductor.test.TempPaths.createDirectoryAlias;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorkspaceManagerTest {
@@ -56,16 +57,23 @@ class WorkspaceManagerTest {
     /**
      * A workspace root spelled through a directory alias is adopted at the target: the manager
      * and every later deletion walk work on the real path, not the alias that was configured.
+     * <p>
+     * The alias is deleted here, not left to the JUnit cleanup: a Windows junction whose target
+     * was removed first is a dangling mount point, and the cleanup walk fails opening it.
      */
     @Test
     void adoptsASymlinkedRootCanonically() throws Exception {
         Path real = Files.createDirectories(tempDir.resolve("real-root"));
         Path alias = tempDir.resolve("workspace-alias");
         createDirectoryAlias(alias, real);
-        WorkspaceManager aliased = new WorkspaceManager(alias.toString());
+        try {
+            WorkspaceManager aliased = new WorkspaceManager(alias.toString());
 
-        UUID runId = UUID.randomUUID();
-        assertEquals(real.toRealPath().resolve(runId.toString()).toString(), aliased.provision(runId));
+            UUID runId = UUID.randomUUID();
+            assertEquals(real.toRealPath().resolve(runId.toString()).toString(), aliased.provision(runId));
+        } finally {
+            Files.deleteIfExists(alias);
+        }
     }
 
     @Test
@@ -277,20 +285,6 @@ class WorkspaceManagerTest {
             assertEquals("outside-content\n", Files.readString(victim.resolve("user-data.txt")));
         } finally {
             Files.deleteIfExists(platformRoot);
-        }
-    }
-
-    /** Junction on Windows (`mklink /J`), symbolic link elsewhere — the guard used by the sibling test class. */
-    private static void createDirectoryAlias(Path link, Path target) throws Exception {
-        if (System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
-            ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString());
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(p.waitFor(20, TimeUnit.SECONDS), "mklink /J timed out");
-            assertEquals(0, p.exitValue(), "mklink /J failed: " + out);
-        } else {
-            Files.createSymbolicLink(link, target);
         }
     }
 

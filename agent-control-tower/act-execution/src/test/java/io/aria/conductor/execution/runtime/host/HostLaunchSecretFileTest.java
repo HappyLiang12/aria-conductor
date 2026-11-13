@@ -12,6 +12,7 @@ import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -82,7 +83,7 @@ class HostLaunchSecretFileTest {
     private Fixture fixture() throws IOException {
         // Canonical, as the production workspace root is adopted: macOS /var is a link to /private/var
         // and the link-safe deletion guard refuses a base that is not its own real path.
-        root = Files.createTempDirectory("host-secret-file").toRealPath();
+        root = TempPaths.createCanonicalTempDirectory("host-secret-file");
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path runtimeRoot = Files.createDirectories(root.resolve("runtime"));
         UUID runId = UUID.randomUUID();
@@ -160,6 +161,39 @@ class HostLaunchSecretFileTest {
 
     private static URI uriOf(HttpServer server) {
         return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/");
+    }
+
+    /**
+     * A lease root spelled through a directory above it (the macOS {@code /var} -> {@code /private/var}
+     * shape) is adopted at prepare: the run's generated configuration is created under the real
+     * base, so the link-safe deletion at destroy removes it instead of refusing its own base.
+     */
+    @Test
+    void destroyRemovesTheGeneratedConfigurationThroughASpelledLeaseRoot() throws Exception {
+        root = TempPaths.createCanonicalTempDirectory("host-spelled-lease");
+        Path real = Files.createDirectories(root.resolve("real"));
+        Path alias = root.resolve("spelled");
+        TempPaths.createDirectoryAlias(alias, real);
+        Path workspace = Files.createDirectories(real.resolve("workspace"));
+        Path runtimeRoot = Files.createDirectories(alias.resolve("runtime"));
+        UUID runId = UUID.randomUUID();
+        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "qoder", ExecutionMode.HOST,
+                new AgentExecutionSettings("qoder", ExecutionMode.HOST, null, null, null),
+                "qoder:operator", "rev-1", Instant.now().plusSeconds(600));
+        WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), runId, WorkspaceKind.DIRECT,
+                workspace, workspace, runtimeRoot.toString(), null);
+        HostExecutionBackend backend = backend(URI.create("http://127.0.0.1:1/"));
+
+        PreparedEnvironment environment = backend.prepare(spec, lease);
+
+        assertThat(environment.configurationDirectory())
+                .isEqualTo(real.toRealPath().resolve("runtime").resolve("host").toString());
+        RuntimeHandle handle = new RuntimeHandle(runId, ExecutionMode.HOST, environment.environmentId(),
+                OwnedProcess.ownershipIdentityOf(
+                        new OwnedProcess(runId, "nonce", 4711L, "4711@1", "supervisor", "stub", null)),
+                environment.endpoint());
+        assertThat(backend.destroyAndReport(handle)).isTrue();
+        assertThat(Files.exists(Path.of(environment.configurationDirectory()))).isFalse();
     }
 
     @Test

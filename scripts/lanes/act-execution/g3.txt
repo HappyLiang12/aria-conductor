@@ -1,29 +1,37 @@
 # act-execution shard fragment 3 of 4 - a surefire includes file (one FQCN per line).
-# cost=17.21s  classes=24
-# measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
+# cost=15.15s  classes=32
+# measured at 6370549 on Happy-Mac (MacBook Pro 14, Apple M5 Pro) (Apple M5 Pro 6P+12E (18 logical), 64GB unified)
 # by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
 
-io.aria.conductor.execution.controller.WorkflowYamlControllerTest
+io.aria.conductor.execution.approval.ApprovalExpiryCheckerSddTest
+io.aria.conductor.execution.controller.CoreCredentialControllerTest
+io.aria.conductor.execution.controller.ToolPackControllerTest
 io.aria.conductor.execution.credential.PackCredentialCipherPropertyTest
-io.aria.conductor.execution.dod.DoDServiceSddTest
-io.aria.conductor.execution.engine.AgentLoopEngineWaitingInputTest
+io.aria.conductor.execution.credential.PackCredentialServiceTest
+io.aria.conductor.execution.dod.DoDControllerTest
+io.aria.conductor.execution.dod.DoDServiceTest
 io.aria.conductor.execution.engine.OrphanedRunRecoveryTest
-io.aria.conductor.execution.kanban.AgentRepositoryCandidatesTest
+io.aria.conductor.execution.kanban.ApprovalSettleCardListenerTest
+io.aria.conductor.execution.kanban.DeferredRunStopPendingStopSliceTest
 io.aria.conductor.execution.kanban.DeferredRunStopTest
-io.aria.conductor.execution.kanban.KanbanListenerTransactionTest
-io.aria.conductor.execution.kanban.KanbanReviewAskCreatorTest
+io.aria.conductor.execution.kanban.KanbanListenerNonTransactionalPublishTest
+io.aria.conductor.execution.kanban.KanbanServiceTest
+io.aria.conductor.execution.kanban.KanbanTransitionServiceSweepTest
 io.aria.conductor.execution.kanban.KanbanTransitionServiceTest
-io.aria.conductor.execution.listener.RunKanbanAutoCreatorTest
+io.aria.conductor.execution.kanban.KanbanTransitionTableTest
+io.aria.conductor.execution.listener.ReportStepTreeGuardTest
+io.aria.conductor.execution.listener.RunExecutionListenerTest
 io.aria.conductor.execution.listener.WorkflowAutoCaptureListenerTest
-io.aria.conductor.execution.llm.LlmClientRetryDecoratorTest
-io.aria.conductor.execution.mcp.RunMcpWiringTest
-io.aria.conductor.execution.repository.ApprovalDecisionRepositoryTest
-io.aria.conductor.execution.runtime.CoreExecutionServiceTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerQaTreeGuardTest
+io.aria.conductor.execution.mcp.SandboxHostResolverTest
+io.aria.conductor.execution.pipeline.ToolRiskResolverTest
+io.aria.conductor.execution.runtime.AgentExecutionPolicyTest
+io.aria.conductor.execution.runtime.CoreRuntimeConfigurationTest
 io.aria.conductor.execution.runtime.RunAdmissionBootstrapTest
+io.aria.conductor.execution.runtime.RunAdmissionQueueEventsTest
 io.aria.conductor.execution.runtime.RunAdmissionQueueTest
-io.aria.conductor.execution.runtime.core.OpenCodeLaunchProfileTest
-io.aria.conductor.execution.runtime.host.OwnerIdentityTest
+io.aria.conductor.execution.runtime.RunFinalizerTest
+io.aria.conductor.execution.runtime.host.OwnedProcessControllerTest
 io.aria.conductor.execution.runtime.progress.CoreProgressPumpTest
-io.aria.conductor.execution.runtime.sandbox.LaunchObservationTest
-io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackendTest
+io.aria.conductor.execution.telemetry.CoreEventTelemetryTest
 io.aria.conductor.execution.tool.AgentSkillResolverTest

@@ -9,7 +9,7 @@ import { OPERATOR_BEARER_TOKEN, establishOperatorSession } from './fixtures';
  *     conversation dialog — no page switch, no trip to the Review Queue;
  *   - clicking Allow once sends the decision and the SAME turn resumes, so the
  *     card settles and the composer comes back;
- *   - a second conversation can be started while the first one is parked.
+ *   - Clear cancels the parked turn and the next conversation is usable.
  *
  * There is no WebSocket stubbing and no fetch interception here: the point is
  * the whole path (ordered SSE signal → card → operator decision → resumed
@@ -100,7 +100,7 @@ test.describe('Aria in-flow decisions (live)', () => {
     expect(new URL(page.url()).pathname).toBe('/');
   });
 
-  test('a second conversation can be started while the first one is parked', async ({ page }) => {
+  test('Clear cancels the parked turn and the next conversation is usable', async ({ page }) => {
     const card = await parkOnAsk(page);
     // The header truncates its visible text; `title` carries the whole id, which is
     // what the server-side check below has to name.
@@ -150,7 +150,7 @@ test.describe('Aria in-flow decisions (live)', () => {
       expect((await latest.json()).conversationId).not.toBe(firstConversation);
     }
 
-    // The second conversation accepts a turn while the first is still parked.
+    // The next conversation accepts a turn after Clear cancelled the parked run.
     await sendPrompt(page, 'What is the current run queue status?');
     await expect(page.locator('.ai-panel .ai-msg-user').last()).toBeVisible({ timeout: 30_000 });
     await expect(card).toHaveCount(0);

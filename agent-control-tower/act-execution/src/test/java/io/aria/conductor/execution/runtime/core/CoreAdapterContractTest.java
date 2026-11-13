@@ -26,6 +26,7 @@ import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -1043,7 +1044,7 @@ class CoreAdapterContractTest {
     }
 
     private static RunFixture fixture(String coreId, UUID agentId) throws IOException {
-        Path root = Files.createTempDirectory("core-adapter-contract").toRealPath();
+        Path root = TempPaths.createCanonicalTempDirectory("core-adapter-contract");
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path runtimeRoot = Files.createDirectories(root.resolve("runtime"));
         UUID runId = UUID.randomUUID();

@@ -38,6 +38,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+import static io.aria.conductor.test.TempPaths.createDirectoryAlias;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -1399,19 +1400,6 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         assertThat(p.waitFor(60, TimeUnit.SECONDS)).as("git timed out: %s", argv).isTrue();
         assertThat(p.exitValue()).as("git %s failed: %s", argv, out).isZero();
         return out.trim();
-    }
-
-    private static void createDirectoryAlias(Path link, Path target) throws Exception {
-        if (System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
-            ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString());
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            assertThat(p.waitFor(20, TimeUnit.SECONDS)).as("mklink /J timed out").isTrue();
-            assertThat(p.exitValue()).as("mklink /J failed: %s", out).isZero();
-        } else {
-            Files.createSymbolicLink(link, target);
-        }
     }
 
     /** A file link whose target does not exist and never will: `mklink` on Windows, a symbolic link elsewhere. */

@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime.host;
 
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.StopProof;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -52,7 +53,7 @@ class PosixProcessControllerIntegrationTest {
 
     @Test
     void stopVerifiesEveryDescendantSpawnedWhileTheSweepIsInFlight() throws Exception {
-        Path root = Files.createTempDirectory("host-posix-window").toRealPath();
+        Path root = TempPaths.createCanonicalTempDirectory("host-posix-window");
         cleanups.add(() -> deleteTree(root));
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path registry = workspace.resolve("spawned.pids");

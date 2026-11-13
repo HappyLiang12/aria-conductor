@@ -66,6 +66,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import static io.aria.conductor.test.TempPaths.canonical;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -2923,10 +2924,6 @@ class HostExecutionBackendIntegrationTest {
         }
     }
 
-    private static Path canonical(Path path) throws IOException {
-        return path.toRealPath();
-    }
-
     private static void deleteTree(Path root) throws IOException {
         if (!Files.exists(root)) {
             return;
@@ -2974,7 +2971,7 @@ class HostExecutionBackendIntegrationTest {
             Path candidate = directory.resolve(relative);
             if (Files.isRegularFile(candidate)) {
                 try {
-                    return canonical(candidate);
+                    return candidate.toRealPath();
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }

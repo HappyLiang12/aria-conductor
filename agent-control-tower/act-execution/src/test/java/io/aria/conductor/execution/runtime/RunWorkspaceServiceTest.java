@@ -61,6 +61,9 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
 
     @BeforeEach
     void setUpDirectories() throws IOException {
+        // The service adopts its roots canonically; the fixture must match, or macOS
+        // /var -> /private/var makes every returned path differ from the asserted one.
+        temp = temp.toRealPath();
         runtimeRoot = Files.createDirectories(temp.resolve("runtime-root"));
         resultRoot = Files.createDirectories(temp.resolve("result-root"));
     }

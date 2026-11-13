@@ -688,7 +688,9 @@ class SandboxExecutionBackendTest {
         Fixture(String coreId) {
             this.coreId = coreId;
             try {
-                this.temp = Files.createTempDirectory("aria-sandbox-backend-test");
+                // Canonical, as the production workspace root is adopted: macOS /var is a link to
+                // /private/var and the link-safe deletion guard refuses a non-real base.
+                this.temp = Files.createTempDirectory("aria-sandbox-backend-test").toRealPath();
             } catch (IOException e) {
                 throw new IllegalStateException(e);
             }

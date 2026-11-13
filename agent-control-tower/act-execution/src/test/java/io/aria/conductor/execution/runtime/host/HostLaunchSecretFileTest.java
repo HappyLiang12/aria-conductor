@@ -80,7 +80,9 @@ class HostLaunchSecretFileTest {
     }
 
     private Fixture fixture() throws IOException {
-        root = Files.createTempDirectory("host-secret-file");
+        // Canonical, as the production workspace root is adopted: macOS /var is a link to /private/var
+        // and the link-safe deletion guard refuses a base that is not its own real path.
+        root = Files.createTempDirectory("host-secret-file").toRealPath();
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path runtimeRoot = Files.createDirectories(root.resolve("runtime"));
         UUID runId = UUID.randomUUID();

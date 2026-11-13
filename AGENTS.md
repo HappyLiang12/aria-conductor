@@ -156,15 +156,16 @@ act-execution is split into four cost-derived fragments, so the floor is act-app
 of act-execution's 67.2 s; a lane invokes `surefire:test` as a goal (never the `test` phase) so two lanes
 can share one module's `target/` without either compiling into it.
 
-Fan out per box. **MacBook (current daily): 6** — the curve bottoms there (55.1-57.8 s over three runs);
-8 lanes put 16 JVMs on 18 cores and lose to contention (61.8 s), and splitting act-app was measured and
-rejected (K=4: 60.9 s -> 72.5 s). **i5-12500: 3, not 4** — across two K=4 runs (74.7, 78.3 s) and five
+Fan out per box. **MacBook (current daily): 6** — 124.9 s of shardable class time divides to ~20.8 s
+a lane, and the curve bottoms there (55.1-57.8 s over three runs); 8 lanes put 16 JVMs on 18 cores and
+lose to contention (61.8 s), and splitting act-app was measured and rejected (K=4: 60.9 s -> 72.5 s). **i5-12500: 3, not 4** — across two K=4 runs (74.7, 78.3 s) and five
 K=3 runs (78.5-86.3 s) the extra lane gains 0.2-11.6 s, while free RAM drops to 2.8 GB and the four
 lanes inflate 7.6-22.4 s past their planned cost, in the wrong order (the lightest lane finishes
 second-slowest in both runs); the single memory channel is the limit, not the 12 threads. **Windows
-checkout: 3** — measured 2026-11-13 at `98d0d29e` with the same 2923-test suite: K=3 131.8 s, K=4
-132.6 s, K=6 152.9 s, so the Mac cost table packs too tightly there; rebuild `measured-costs.json` from
-that box's serial run before trusting the fragment costs. CI runs four groups because
+checkout: 3** — a Windows session measured 2026-11-13 at `98d0d29e` with the same 2923-test suite:
+K=3 131.8 s, K=4 132.6 s, K=6 152.9 s (session measurement, no committed artifact), so the Mac cost
+table packs too tightly there; rebuild `measured-costs.json` from that box's serial run before trusting
+the fragment costs. CI runs four groups because
 `.github/workflows/ci.yml:113-139` puts each group on its own runner, where nothing is shared.
 
 **Previous daily — i5-8400 (6C/6T), 2026-10-27, kept for the deltas rather than the absolutes; details in [docs/reviews/2026-10-27-maven-loop-audit.md](docs/reviews/2026-10-27-maven-loop-audit.md)**

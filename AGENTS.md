@@ -94,10 +94,11 @@ no removed provider to select.
 re-deriving them. Do not report an unrun tier as verified. Lane numbers are box-specific, so
 each table says where it was measured.
 
-**Current daily — MacBook Pro 14 (Apple M5 Pro, 6P+12E / 18 logical, 64 GB), macOS 27.2, warm
-`~/.m2`, measured 2026-11-12 at `ec995a9` plus four uncommitted macOS temp-dir fixture fixes. This run
-owns `scripts/lanes/measured-costs.json` and the regenerated `scripts/lanes/act-execution/` fragments.
-Best-of-three for the K=6 row; single runs elsewhere.**
+**Current daily — MacBook Pro 14 (Apple M5 Pro, 6P+12E / 18 logical, 64 GB), macOS 27.2.1, warm
+`~/.m2`, measured 2026-11-12 at `ec995a9` plus the macOS temp-dir fixture fixes, committed as
+`6370549` (the `measured.at` value). This run owns `scripts/lanes/measured-costs.json` and the
+regenerated `scripts/lanes/act-execution/` fragments. Best-of-three for the K=6 row; single runs
+elsewhere.**
 
 | Lane | Command | Measured |
 |------|---------|----------|
@@ -139,23 +140,27 @@ a real run. Details in
 
 `shard total wall` excludes the shared `install -DskipTests` that runs first (3-4 s warm).
 
-Sharding keeps the suite complete and proves it: lanes run 2256 tests with `-DexcludedGroups=timing`
-and the serial timing lane replays the remaining 70, which is exactly the 2326 one process runs. Which
+Sharding keeps the suite complete and proves it: lanes run 2846 tests with `-DexcludedGroups=timing`
+and the serial timing lane replays the remaining 77, which is exactly the 2923 one process runs. Which
 *classes* ran is what is enforced — after the run by `node scripts/lane-plan.mjs verify`, which fails on a
 planned class that printed no result, a class in two lanes, a tagged class under contention, or a class
 compiled into `target/test-classes` that no lane was given; and *before* Maven starts by `check`, which
-refuses a partition that is not an exact cover of `scripts/lanes`. The 2326 arithmetic is printed as a
+refuses a partition that is not an exact cover of `scripts/lanes`. The 2923 arithmetic is printed as a
 NOTE, not a gate: it is a snapshot, and one added `@Test` method must not redden the daily lane.
-act-execution is split into four cost-derived fragments, so the floor is act-app's 34.5 s class-sum instead
-of act-execution's 76.8 s; a lane invokes `surefire:test` as a goal (never the `test` phase) so two lanes
+act-execution is split into four cost-derived fragments, so the floor is act-app's 26.8 s class-sum instead
+of act-execution's 67.2 s; a lane invokes `surefire:test` as a goal (never the `test` phase) so two lanes
 can share one module's `target/` without either compiling into it.
 
-Fan out to 3, not 4: across two K=4 runs (74.7, 78.3 s) and five K=3 runs (78.5-86.3 s) the extra lane
-gains 0.2-11.6 s — the samples do not overlap, but only by 0.2 s at the closest edge — while free RAM drops
-to 2.8 GB and the four lanes inflate 7.6-22.4 s past their planned cost, in the wrong order (the lightest
-lane finishes second-slowest in both runs). The single memory channel is the limit, not the 12 threads. CI
-runs four groups because `.github/workflows/ci.yml:113-139` puts each group on its own runner, where
-nothing is shared.
+Fan out per box. **MacBook (current daily): 6** — the curve bottoms there (55.1-57.8 s over three runs);
+8 lanes put 16 JVMs on 18 cores and lose to contention (61.8 s), and splitting act-app was measured and
+rejected (K=4: 60.9 s -> 72.5 s). **i5-12500: 3, not 4** — across two K=4 runs (74.7, 78.3 s) and five
+K=3 runs (78.5-86.3 s) the extra lane gains 0.2-11.6 s, while free RAM drops to 2.8 GB and the four
+lanes inflate 7.6-22.4 s past their planned cost, in the wrong order (the lightest lane finishes
+second-slowest in both runs); the single memory channel is the limit, not the 12 threads. **Windows
+checkout: 3** — measured 2026-11-13 at `98d0d29e` with the same 2923-test suite: K=3 131.8 s, K=4
+132.6 s, K=6 152.9 s, so the Mac cost table packs too tightly there; rebuild `measured-costs.json` from
+that box's serial run before trusting the fragment costs. CI runs four groups because
+`.github/workflows/ci.yml:113-139` puts each group on its own runner, where nothing is shared.
 
 **Previous daily — i5-8400 (6C/6T), 2026-10-27, kept for the deltas rather than the absolutes; details in [docs/reviews/2026-10-27-maven-loop-audit.md](docs/reviews/2026-10-27-maven-loop-audit.md)**
 

@@ -93,7 +93,9 @@ export function TopBar() {
   const tokensUnreported = tokensBurned === 0 && runsWithoutUsage > 0;
   const tokensDetail =
     runsWithoutUsage > 0
-      ? [kpiDetail, `${runsWithoutUsage} runs reported no usage`].filter(Boolean).join(' · ')
+      ? [kpiDetail, `${runsWithoutUsage} run${runsWithoutUsage === 1 ? '' : 's'} reported no usage`]
+          .filter(Boolean)
+          .join(' · ')
       : kpiDetail;
   const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
   // Honesty rule: the badge may only report a verdict it actually has evidence for.

@@ -285,7 +285,7 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.errorType").value("CONFLICT"))
                 .andExpect(jsonPath("$.message").value(containsString("nothing was created")))
                 .andExpect(jsonPath("$.message").value(containsString("RETIRED")))
-                .andExpect(jsonPath("$.message").value(containsString("re-propose")));
+                .andExpect(jsonPath("$.message").value(containsString("re-proposal")));
     }
 
     @Test

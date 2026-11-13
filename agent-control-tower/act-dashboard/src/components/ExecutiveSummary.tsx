@@ -213,9 +213,9 @@ export default function ExecutiveSummary() {
           detail={
             phaseDetail(summaryPhase) ??
             (tokensUnreported
-              ? `${runsWithoutUsage} runs reported no usage`
+              ? `${runsWithoutUsage} run${runsWithoutUsage === 1 ? '' : 's'} reported no usage`
               : tokensSilent
-                ? `Cumulative recorded input + output over retained records · ${runsWithoutUsage} runs reported no usage`
+                ? `Cumulative recorded input + output over retained records · ${runsWithoutUsage} run${runsWithoutUsage === 1 ? '' : 's'} reported no usage`
                 : 'Cumulative recorded input + output over retained records')
           }
           variant="green"

@@ -390,6 +390,7 @@ class ToolCatalogParityTest {
                 .contains("(kind, canonicalKey)")
                 .as("the new-key case, now scoped to a new key and its own proposal transaction")
                 .contains("a new key creates the entity and its first fact as one proposal batch")
+                .contains("(the fact proposal commits in its own transaction)")
                 .as("the existing ACTIVE-key case the old wording denied")
                 .contains("an existing ACTIVE key adds the fact to that entity")
                 .as("the existing PENDING-key case: a worker's proposal only, an operator call conflicts")

@@ -179,7 +179,7 @@ describe('TopBar usage truth', () => {
     renderTopBar();
     const kpi = screen.getByTestId('kpi-tokens');
     await waitFor(() => expect(kpi).toHaveTextContent('120'));
-    expect(kpi.getAttribute('title')).toContain('1 runs reported no usage');
+    expect(kpi.getAttribute('title')).toContain('1 run reported no usage');
   });
 
   it('keeps a real zero when no run was silent about usage', async () => {

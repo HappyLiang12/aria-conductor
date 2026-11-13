@@ -2,8 +2,9 @@
 
 Program: `docs/superpowers/plans/2026-11-11-aria-pa-experience.md`
 Spec: `docs/superpowers/specs/2026-11-11-aria-pa-experience-design.md` (commit `a752acef`)
-Status at the time of writing: **implemented, not released.** Push, PR and hosted CI are the operator's
-checkpoint and have not been performed. Every "NOT RUN" below is a real gap, not a formality.
+Status at the time of writing: **implemented and published as PR #120.** The hosted CI matrix is green
+at product head `1d081b01`; the later commits `991ef091` and `2f65a9d9` are docs-only. Every "NOT RUN"
+below is a real gap, not a formality.
 
 ## What this release is
 
@@ -44,9 +45,11 @@ the operator can actually run from the conversation. Three waves, twelve defects
 
 **Memory operation**
 - `remember_fact` accepts either `entityId` or `kind` + `canonicalKey`. Only the **new-key** shape
-  creates a PENDING entity together with its first PENDING fact in one transaction, and one operator
-  decision promotes both. An existing ACTIVE or PENDING key adds a fact to that entity; a RETIRED or
-  MERGED key is re-proposed to PENDING by a worker call, with the fact waiting on that proposal.
+  creates a PENDING entity and its first PENDING fact as one proposal batch; the fact proposal commits
+  in its own transaction (`MemoryProposalWriter.insertProposal` is `REQUIRES_NEW`, so a lost
+  proposal-hash race stays survivable), and one operator decision promotes both. An existing ACTIVE or
+  PENDING key adds a fact to that entity; a RETIRED or MERGED key is re-proposed to PENDING by a worker
+  call, with the fact waiting on that proposal.
 - A proposal batch is the entity's PENDING facts (spec `:116-117`, `:323-324`). The `entityId` filter on
   `GET /api/v1/memory/proposals` returns exactly the set the decision promotes, uncapped.
 - The Memory page lists and opens PENDING entities through an operator-authorised review read; the
@@ -120,13 +123,17 @@ the operator can actually run from the conversation. Three waves, twelve defects
 
 ## Schema and configuration changes
 
-**None.** No Flyway migration is added or required. No new configuration key, no environment variable,
-no compose change, no Dockerfile change. The re-proposal path reuses the existing identity row because
-`UNIQUE(kind, canonical_key)` forbids a second one.
+**No schema change.** No Flyway migration is added or required, and the re-proposal path reuses the
+existing identity row because `UNIQUE(kind, canonical_key)` forbids a second one. No new configuration
+key, no environment variable, no compose change and no Dockerfile change.
+
+One shipped default changes: `aria.runs.aria-reserved` moves from 1 to 3 in both places that ship it
+(`application.yml:78`, `RunAdmissionProperties:24`), with per-conversation serialization. An
+installation that sets `ARIA_RUNS_ARIA_RESERVED` keeps its own value.
 
 ## Upgrade notes
 
-Nothing to run. Four behaviour changes affect clients other than the dashboard:
+Nothing to run. Five behaviour changes affect clients other than the dashboard:
 
 1. **Operator authority is now resolved on routes that previously resolved none.** A call presenting a
    worker/run-scoped bearer is refused (403) even from loopback. An anonymous call from a non-loopback
@@ -149,6 +156,9 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
    that path never makes. Same `errorType` (`FORBIDDEN`), same named surface (reconnect with an
    authenticated credential), different wording. A client that matched on the old sentence text was
    matching a claim that was not true; match on `errorType` and the code instead.
+5. **`aria.runs.aria-reserved` defaults to 3 (was 1).** Up to three Aria runs may execute at once;
+   Aria runs serialize per conversation, so a parked turn blocks only its own conversation. Set
+   `ARIA_RUNS_ARIA_RESERVED` to keep the old cap.
 
 ## Behaviour changes to watch
 
@@ -177,6 +187,9 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
 
 ## Verification evidence (filled at each gate)
 
+Scratch outputs cited below (`gate-final8/`, `final-gate-report-8.md`, `live-bar-report-*.md`,
+`live-evidence/`, `.superpowers/`) are not committed; the plan names the steps they were produced from.
+
 | Tier | Command | Result |
 | --- | --- | --- |
 | Start-script self-tests | `bash scripts/lib/workspace-roots.test.sh`; `pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1` | 15 passed / 0 failed; 38 assertions — PASS at `94955f56` |
@@ -199,7 +212,7 @@ Nothing to run. Four behaviour changes affect clients other than the dashboard:
 | Live PA bar | runbook Phase 1 O1-O5 on a fresh database, browser only | **PASS — bar met at `138e5e05`** (`live-bar-report-O.md`, evidence in `live-evidence/`). A brand-new operator onboarded entirely in chat on an empty H2 (the previous `data/` moved aside to `data-prev-20261112-221454`, never deleted). **O1** "Hi, I'm Happy…" produced the `New entity person:happy` card plus 3 fact cards in the panel (entity `c8e11398`, 4 PENDING rows in the DB). **O2** the card settled `approved — this memory is now active`; `PERSON person:happy ACTIVE 14:19:28.964Z`, PENDING → 0. **O3** two fact cards (`response_bullets_max 3`, `timezone Asia/Hong_Kong`). **O4** both settled approved, facts ACTIVE, the invented `timezone=UTC` RETIRED `14:22:40Z`, PENDING → 0. **O5** the answer named Happy / Asia/Hong_Kong / max-3-bullets and rendered exactly 3 bullets; run `41645916` shows 2 read-tool rows both policy-`APPROVED` and **zero operator asks** (the memory-read auto-approval amendment working live). **Zero curl and zero page switches for all six operator actions**; the one Configure visit is labelled platform bootstrap, not onboarding, and its confirm dialog now reads the true `opencode/SANDBOX x4` pre-state (F2 fixed, verified live). Console: 0 errors during O1-O5. Artifacts verified by sha256 before launch (jar `65cf15ae…c475`, dist `9e0e0db2…6d07`, bridge `dist/main.js` `30007f1f…b5af`); ports released afterwards by stopping only the seat's own PIDs, identified by command line. **Five findings were recorded by that seat; four are now fixed and independently reviewed (F-O3, F-O4, F-O2, F-O6 — T58/T59/T61/T62/T63), and F-O5 remains OPEN / NOT VERIFIED because its recorded causal story is contradicted by shipped code** — see residuals 8 and 14-18. The bar itself was met on the pre-fix artifact; the fixes are gated at `1d081b01` and their live re-confirmation is owed at the next live bar |
 | Governance probes | runbook Phase 1b P1a-P9 and Phase 3 | **PASS on every step that has a producer** at `17fa515a` (`live-bar-report-B.md` Phase 3, `live-bar-report-A.md` P-table): 3.1 PENDING never leaks **PASS** (absent from the manifest while PENDING, present after the operator's in-panel approval); 3.2 no successful self-approval **PASS** with the PENDING-row leg exercised; 3.4 prompt honesty **PASS**; P5 usage truth **PASS** (`not reported` + "6 runs reported no usage", API `{"NOT_REPORTED":6}`); P7 non-loopback authority **PASS** (4/4 mutations 401, no side effect, re-read 40 min later unchanged). **3.3 / P1a / P1b / P6 / P8 NOT RUN — no external producer**: `RunMcpWiring.forRun:51` wires MCP only for Aria, and a live worker reported 34 CLI tools and no MCP namespace. Tier-verified instead: 10/10 tools classified OPERATOR_ONLY, worker refusal + operator positive control in `McpActorTransportIntegrationTest` (`Tests run: 11, Failures: 0` at `gate-final4/itg.log:1399`). **P9 MEASURED RESIDUAL**: unauthenticated loopback `GET /api/v1/llm-providers` → 200 with `apiKeyMasked ****c230` — the disclosed cost of the human-approved narrow authority scope |
 | Five-turn scenario | runbook Phase 2 against the 2026-11-10 baseline | **PASS** on the live stack with the real qoder core (`live-bar-report-B.md` T1-T5): briefing with in-panel approval resume and clarification park/resume on the same run id; read-only memory turns produced 8 policy approvals and zero operator asks while the single write asked; usage honesty ("total tokens burned reads 0, with 31 runs reporting no usage data") replaces the baseline's asserted zero; plan honesty about APPROVED templates; recall returned 3/3 DB-verified ids; a second conversation ran while the first was parked. Phase 2 restored-history-after-reload **PASS**. Six live findings surfaced and **were fixed and re-reviewed in T53-T56** (F-B1 raw protocol dump, F-B2 case-sensitive kind filter, F-B3 no retry-without-filter, F2 fleet-banner truth, F3 credential-rejection classification, F-LC1 settled-card wording). **F-B4, the one finding that round left open, is now fixed too** (T58/T61, recall reaches a shaped canonical key by its tail) — see residuals 8 and 14 |
-| Hosted CI matrix | PR #120 to `main`, triggered automatically on `pull_request` | **GREEN at HEAD `991ef091`**: run **43266287720** (`CI`) conclusion `success` — Detect Changed Trees, Frontend Build Check, Build Backend + Harness Distribution, Start Script Self-Tests, Java Integration Tests (Failsafe), all five Java Unit Test groups (execution, api-mcp-app, knowledge-aria, memory, common-agent), E2E Smoke Test (deterministic harness), all four E2E Playwright shards, Docker Build Verification. Run **43266287569** (`Sandbox Lifecycle (real OpenSandbox)`) conclusion `success`. **`TS MCP Server Tests + Coverage` was SKIPPED, and the skip is correct**: `dorny/paths-filter` (`ci.yml:41-53`) gates it on `packages/mcp-server/**`, and `git diff --name-only main...HEAD` contains **0** files under that path — this program changed the Java `act-mcp` module (covered by the green `api-mcp-app` unit job), not the TS package. The local MCP run (20 files / 157 tests) was extra assurance, not a tier this diff required |
+| Hosted CI matrix | PR #120 to `main`, triggered automatically on `pull_request` | **GREEN at `991ef091`** (docs-only after product head `1d081b01`; final head `2f65a9d9` is also docs-only): run **43266287720** (`CI`) conclusion `success` — Detect Changed Trees, Frontend Build Check, Build Backend + Harness Distribution, Start Script Self-Tests, Java Integration Tests (Failsafe), all five Java Unit Test groups (execution, api-mcp-app, knowledge-aria, memory, common-agent), E2E Smoke Test (deterministic harness), all four E2E Playwright shards, Docker Build Verification. Run **43266287569** (`Sandbox Lifecycle (real OpenSandbox)`) conclusion `success`. **`TS MCP Server Tests + Coverage` was SKIPPED, and the skip is correct**: `dorny/paths-filter` (`ci.yml:41-53`) gates it on `packages/mcp-server/**`, and `git diff --name-only main...HEAD` contains **0** files under that path — this program changed the Java `act-mcp` module (covered by the green `api-mcp-app` unit job), not the TS package. The local MCP run (20 files / 157 tests) was extra assurance, not a tier this diff required |
 | Docker build verification | ci.yml `:335-352` | **PASS on hosted CI** (run 43266287720, `Docker Build Verification` success). No Dockerfile changed in this program |
 
 ## Residual risks

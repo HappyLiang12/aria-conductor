@@ -94,7 +94,31 @@ no removed provider to select.
 re-deriving them. Do not report an unrun tier as verified. Lane numbers are box-specific, so
 each table says where it was measured.
 
-**Current daily — Happy: i5-12500 (6C/12T), 16 GB DDR5 in one channel, SATA SSD, warm `~/.m2`,
+**Current daily — MacBook Pro 14 (Apple M5 Pro, 6P+12E / 18 logical, 64 GB), macOS 27.2, warm
+`~/.m2`, measured 2026-11-12 at `ec995a9` plus four uncommitted macOS temp-dir fixture fixes. This run
+owns `scripts/lanes/measured-costs.json` and the regenerated `scripts/lanes/act-execution/` fragments.
+Best-of-three for the K=6 row; single runs elsewhere.**
+
+| Lane | Command | Measured |
+|------|---------|----------|
+| inner (one class) | `bash scripts/mvn-lane.sh inner act-app -Dtest=RunControllerRegressionTest` | 11.0 s |
+| inner (one module, coverage off) | `bash scripts/mvn-lane.sh inner act-aria` | 7.2 s |
+| gate (upstream refresh + module + coverage) | `bash scripts/mvn-lane.sh gate act-mcp` | 5.5 s + 2.8 s refresh |
+| gate on the heaviest module | `bash scripts/mvn-lane.sh gate act-app` | 32.6 s + 2.9 s refresh |
+| timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 13.4-14.4 s |
+| shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 86.8 s |
+| shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 65.6 s |
+| shard 4 lanes | `bash scripts/mvn-lane.sh shard 4` | 60.9 s |
+| shard 5 lanes | `bash scripts/mvn-lane.sh shard 5` | 57.5 s |
+| shard 6 lanes (peak) | `bash scripts/mvn-lane.sh shard 6` | 55.1-57.8 s (three runs) |
+| shard 8 lanes | `bash scripts/mvn-lane.sh shard 8` | 61.8 s |
+| full unit tier, one process | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 155.2 s (2923 tests) |
+
+K=6 is the peak here; 8 lanes put 16 JVMs on 18 cores and lose more to contention than they gain.
+Splitting act-app on top of act-execution was measured and rejected (K=4: 60.9 s -> 72.5 s) because
+its tests share Spring contexts, which the split re-boots per lane.
+
+**Other daily — Happy: i5-12500 (6C/12T), 16 GB DDR5 in one channel, SATA SSD, warm `~/.m2`,
 measured 2026-11-03. Each row names the commit its numbers were taken at — `e0ad2d0c` for the serial
 baseline, `ebcf14c7`/`70e89ad9` for the `gate` rows, `4fb16ea7` for the `inner` rows and `97279dc3` for the
 K=2 re-run; the `shard` and `timing` ranges span `ebcf14c7`..`97279dc3` and every value inside the range is

@@ -1,29 +1,38 @@
 # act-execution shard fragment 1 of 4 - a surefire includes file (one FQCN per line).
-# cost=17.21s  classes=24
-# measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
+# cost=15.15s  classes=33
+# measured at 6370549 on Happy-Mac (MacBook Pro 14, Apple M5 Pro) (Apple M5 Pro 6P+12E (18 logical), 64GB unified)
 # by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
 
-io.aria.conductor.execution.adk.opencode.OpenCodeHttpClientTest
-io.aria.conductor.execution.adk.opencode.OpenCodePropertiesBindingTest
 io.aria.conductor.execution.approval.ApprovalAnswerServiceTest
-io.aria.conductor.execution.approval.RunEndPermissionSettlerTest
+io.aria.conductor.execution.approval.ApprovalExpiryCheckerTest
 io.aria.conductor.execution.approval.WriteGrantServiceTest
-io.aria.conductor.execution.controller.ApprovalControllerTest
-io.aria.conductor.execution.controller.ExecutionControllerTest
-io.aria.conductor.execution.controller.ToolPackControllerTest
-io.aria.conductor.execution.credential.PackCredentialServiceTest
-io.aria.conductor.execution.engine.LooksLikeActionRequestTest
+io.aria.conductor.execution.context.ContextAssemblerTest
+io.aria.conductor.execution.context.ContextBudgetTest
+io.aria.conductor.execution.context.contributor.SystemContributorsTest
+io.aria.conductor.execution.controller.AdkProviderControllerTest
+io.aria.conductor.execution.controller.RunToolCallControllerWebTest
+io.aria.conductor.execution.engine.AgentLoopEngineContextTest
+io.aria.conductor.execution.engine.AgentLoopEngineWaitingInputTest
+io.aria.conductor.execution.engine.ZombieRunReaperTest
 io.aria.conductor.execution.git.GitBranchConfigTest
-io.aria.conductor.execution.housekeeping.HousekeepingServiceExecuteTest
+io.aria.conductor.execution.housekeeping.HousekeepingControllerTest
 io.aria.conductor.execution.housekeeping.HousekeepingServiceTest
-io.aria.conductor.execution.kanban.AgentPickerServiceTest
-io.aria.conductor.execution.kanban.KanbanReviewCardListenerTest
-io.aria.conductor.execution.kanban.KanbanServiceAskCountTest
-io.aria.conductor.execution.listener.WorkflowAutoChainerSddTest
-io.aria.conductor.execution.mcp.PlatformMcpAutoApprovalTest
-io.aria.conductor.execution.pipeline.ToolRiskResolverTest
-io.aria.conductor.execution.runtime.CoreConfigurationServiceTest
-io.aria.conductor.execution.runtime.CoreExecutionServiceSandboxLaunchAbortTest
-io.aria.conductor.execution.runtime.CoreRuntimeConfigurationTest
-io.aria.conductor.execution.runtime.RuntimeLedgerTypesTest
-io.aria.conductor.execution.runtime.core.QoderLaunchProfileTest
+io.aria.conductor.execution.kanban.AgentRepositoryCandidatesTest
+io.aria.conductor.execution.kanban.KanbanReviewAskCreatorTest
+io.aria.conductor.execution.listener.GitTreeDiffSupplierTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerTest
+io.aria.conductor.execution.llm.DefaultLlmClientWireMockTest
+io.aria.conductor.execution.mcp.RunMcpWiringTest
+io.aria.conductor.execution.repository.ApprovalAskRepositoryTest
+io.aria.conductor.execution.runtime.CoreLaunchEnvironmentTest
+io.aria.conductor.execution.runtime.LaunchProfileTest
+io.aria.conductor.execution.runtime.TaskDeadlinePropertiesTest
+io.aria.conductor.execution.runtime.WorkspacePathsConfiguredRootTest
+io.aria.conductor.execution.runtime.core.OpenCodeCoreSessionTest
+io.aria.conductor.execution.runtime.sandbox.LaunchObservationTest
+io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackendTest
+io.aria.conductor.execution.runtime.sandbox.SandboxLaunchFaultTest
+io.aria.conductor.execution.security.ActorTokenServiceTest
+io.aria.conductor.execution.security.CredentialRedactorTest
+io.aria.conductor.execution.telemetry.CoreEventTelemetrySliceTest
+io.aria.conductor.execution.tool.WorkspaceManagerTest

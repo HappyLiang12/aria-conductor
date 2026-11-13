@@ -23,6 +23,13 @@
 # scripts/lanes/measured-costs.json from one serial run there before trusting the fragment `# cost=`
 # headers, and see AGENTS.md for the previous daily's own table.
 #
+# Fan-out on the MacBook (M5 Pro 6P+12E, 64 GB, macOS 27.2, 2026-11-12, 2923 tests): serial
+# `clean test` 155.2 s, shard 2 86.8 s, shard 3 65.6 s, shard 4 60.9 s, shard 5 57.5 s, shard 6
+# 55.1-57.8 s over three runs, shard 8 61.8 s. K=6 is the peak: 121 s of shardable class time
+# divides to ~21 s a lane, while 8 lanes put 16 JVMs on 18 cores and lose more to contention than
+# they gain. Splitting act-app was measured and rejected - its tests share Spring contexts, so a
+# second split boots them in more processes instead of reusing them (K=4: 60.9 s -> 72.5 s).
+#
 # Isolation contract for shard lanes:
 #   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to
 #   - a lane runs `surefire:test` as a GOAL only: it never compiles, which is what makes it safe for
@@ -214,7 +221,7 @@ case "$LANE" in
 
   shard)
     K="${ARG2:-2}"
-    case "$K" in 1|2|3|4) : ;; *) die "shard takes 1..4 (see the fan-out note in this file's header)" ;; esac
+    case "$K" in [1-8]) : ;; *) die "shard takes 1..8 (see the fan-out note in this file's header)" ;; esac
     need_node
     # The guard runs before Maven, so a partition that no longer covers the suite cannot burn a run.
     node "$ROOT/scripts/lane-plan.mjs" check \

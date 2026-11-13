@@ -8,6 +8,7 @@ import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.test.DataJpaTestBase;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -63,7 +64,7 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
     void setUpDirectories() throws IOException {
         // The service adopts its roots canonically; the fixture must match, or macOS
         // /var -> /private/var makes every returned path differ from the asserted one.
-        temp = temp.toRealPath();
+        temp = TempPaths.canonical(temp);
         runtimeRoot = Files.createDirectories(temp.resolve("runtime-root"));
         resultRoot = Files.createDirectories(temp.resolve("result-root"));
     }

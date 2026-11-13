@@ -13,6 +13,7 @@ import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.host.OwnedProcess;
 import io.aria.conductor.execution.runtime.host.OwnedProcessController;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.test.TempPaths;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -53,7 +54,7 @@ class CoreE2eProcessBackendTest {
     void adoptCanonicalTemp() throws IOException {
         // macOS /var -> /private/var: adopt the fixture as production adopts the workspace root,
         // or the link-safe deletion guard refuses the run-owned tree.
-        temp = temp.toRealPath();
+        temp = TempPaths.canonical(temp);
     }
 
     @Test

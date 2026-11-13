@@ -100,6 +100,10 @@ each table says where it was measured.
 regenerated `scripts/lanes/act-execution/` fragments. Best-of-three for the K=6 row; single runs
 elsewhere.**
 
+The shard walls and the per-class cost table describe that head. Classes added since are packed at
+0 s (`node scripts/lane-plan.mjs check` lists them as `UNMEASURED`), so refresh the table with one
+serial run on the current head before trusting a lane balance.
+
 | Lane | Command | Measured |
 |------|---------|----------|
 | inner (one class) | `bash scripts/mvn-lane.sh inner act-app -Dtest=RunControllerRegressionTest` | 11.0 s |

@@ -2001,7 +2001,7 @@ Expected: the only references live in the validator (decode) and the DTO. No log
 - [ ] **Step 3: Verify the seed and run row never carry the image**
 
 ```bash
-grep -c "jpg\|jpeg\|base64" agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/service/AriaObservationSeed.java
+grep -c "jpg\|jpeg\|base64" agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/service/AriaObservationSeed.java || true
 ```
 Expected: `0`. The seed test asserts the same behaviour at runtime.
 

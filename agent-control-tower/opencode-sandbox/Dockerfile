@@ -39,8 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-c
 # NOTE: use `opencode-ai` (bin: opencode). The package `@opencode-ai/cli` is a DIFFERENT
 # project (anomalyco/opencode, bin: lildax) and must not be used.
 # Version pinned to the latest stable verified for the image (npm view opencode-ai dist-tags ->
-# latest 1.19.6). 1.19.6 keeps the file-part API and the data: URL image path the observe
-# endpoint uses.
+# latest 1.19.6), keeping the file-part API and the data: URL image path the observe endpoint uses.
+# The registry is overridable so builds behind a corporate mirror need not reach the official one.
 ARG NPM_REGISTRY=https://registry.npmjs.org
 RUN npm install -g opencode-ai@1.19.6 --registry=$NPM_REGISTRY
 

@@ -198,7 +198,7 @@ Registered in `act-mcp` as one more `McpTool` bean, with one `ToolCatalog` entry
 - `durationS` applies to `timer` and to any primitive that should auto-clear; for non-timer primitives, `0` or absent means "until replaced or cleared".
 - `clear` ignores `target` and removes the current overlay.
 - Argument names are camelCase because Spring AI 1.0.9 names JSON arguments from Java parameters. A wrapper record would add an extra level to the payload, so the tool takes individual parameters.
-- Return `{"ok":true,"ack":true,"primitive":"…"}`. A validation failure returns the standard `VALIDATION` error envelope so Aria can correct itself in the same turn.
+- Return the shared envelope `{"ok":true,"data":{"ack":true,"primitive":"…"}}` via `ToolResponses.ok`. A validation failure returns the standard `VALIDATION` error envelope so Aria can correct itself in the same turn.
 - Policy: `WORKER_READ`, auto-approve true. It changes no platform state; the audit row is the existing tool-call record.
 - Target resolution priority is the phone's: `trackId`, then `objectId`, then `label`, then `bbox`.
 

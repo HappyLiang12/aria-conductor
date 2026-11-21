@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -86,6 +87,32 @@ class AriaObserveControllerTest {
                         .content(body("image/jpeg", "/9j/2Q==")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("opencode only"));
+    }
+
+    @Test
+    void aWorkerCredentialIs403EvenWhenTheBodyWouldFailValidation() throws Exception {
+        when(authority.resolveOperator(any(), eq(true)))
+                .thenThrow(new OperatorSessionService.ForbiddenMutationException("worker"));
+
+        mockMvc.perform(post("/api/v1/aria/observe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("image/gif", "/9j/2Q==")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("worker"));
+
+        verify(service, never()).preflight(any());
+    }
+
+    @Test
+    void anUnsupportedMimeIs415EvenWhenTheCoreWouldRefuse() throws Exception {
+        when(service.preflight(any())).thenReturn(Optional.of(
+                new AriaObservationValidator.Rejection(HttpStatus.CONFLICT, "opencode only")));
+
+        mockMvc.perform(post("/api/v1/aria/observe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("image/gif", "/9j/2Q==")))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error").value("image.mimeType must be image/jpeg or image/png"));
     }
 
     @Test

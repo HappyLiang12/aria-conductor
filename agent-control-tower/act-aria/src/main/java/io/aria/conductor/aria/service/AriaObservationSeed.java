@@ -5,6 +5,7 @@ import io.aria.conductor.aria.dto.AriaObserveRequest;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * The text a glasses observation becomes on the run's prompt seed. It is the
@@ -14,6 +15,9 @@ import java.util.Locale;
 public final class AriaObservationSeed {
 
     static final int MAX_SEED_CHARS = 8192;
+
+    /** CR, LF and every C0 control character collapse to a space; the seed is line-oriented. */
+    private static final Pattern CONTROL_CHARS = Pattern.compile("[\\r\\n\\u0000-\\u001F]");
 
     private AriaObservationSeed() {
     }
@@ -73,7 +77,7 @@ public final class AriaObservationSeed {
             line.append(" trackId=").append(object.getTrackId());
         }
         if (isNotBlank(object.getId())) {
-            line.append(" objectId=").append(object.getId());
+            line.append(" objectId=").append(clip(object.getId(), 64, ""));
         }
         if (isNotBlank(object.getLabel())) {
             line.append(" label=\"").append(clip(object.getLabel(), 64, "")).append('"');
@@ -119,10 +123,17 @@ public final class AriaObservationSeed {
         return value != null && !value.isBlank();
     }
 
+    /**
+     * One free-text field, flattened to a single line and capped. Line breaks and
+     * control characters become a space first: the seed is a line-oriented format,
+     * so a multi-line OCR result or a crafted description would otherwise restructure
+     * it into forged {@code - } object lines and forged {@code trackId=} fields.
+     */
     private static String clip(String value, int max, String fallback) {
         if (value == null || value.isBlank()) {
             return fallback;
         }
-        return value.length() <= max ? value : value.substring(0, max) + " [truncated]";
+        String flattened = CONTROL_CHARS.matcher(value).replaceAll(" ");
+        return flattened.length() <= max ? flattened : flattened.substring(0, max) + " [truncated]";
     }
 }

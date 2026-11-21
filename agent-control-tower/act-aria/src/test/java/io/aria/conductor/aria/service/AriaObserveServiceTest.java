@@ -9,9 +9,9 @@ import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.runtime.CoreAttachment;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,7 +38,8 @@ class AriaObserveServiceTest {
     void theRunCarriesTheSeedAndTheImageAsAnAttachment() {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
                 .thenReturn(Optional.of(agent("opencode")));
-        when(runRepository.findAll()).thenReturn(List.of());
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any(Pageable.class)))
+                .thenReturn(List.of());
         when(runRepository.save(any(Run.class))).thenAnswer(invocation -> {
             Run run = invocation.getArgument(0);
             run.setId(RUN_ID);
@@ -73,9 +74,9 @@ class AriaObserveServiceTest {
     void anOmittedConversationReusesTheLatestOne() {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
                 .thenReturn(Optional.of(agent("opencode")));
-        when(runRepository.findAll()).thenReturn(List.of(
-                run("older", Instant.parse("2026-11-20T10:00:00Z")),
-                run("newest", Instant.parse("2026-11-21T10:00:00Z"))));
+        // The query orders by createdAt DESC and reads one row, so the newest id comes first.
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any(Pageable.class)))
+                .thenReturn(List.of("newest"));
         when(runRepository.save(any(Run.class))).thenAnswer(invocation -> {
             Run saved = invocation.getArgument(0);
             saved.setId(RUN_ID);
@@ -92,6 +93,13 @@ class AriaObserveServiceTest {
         ArgumentCaptor<Run> runCaptor = ArgumentCaptor.forClass(Run.class);
         verify(runRepository).save(runCaptor.capture());
         assertThat(runCaptor.getValue().getConversationId()).isEqualTo("newest");
+
+        // Page 0 of size 1 is the newest row: that is the whole of the "latest" claim.
+        ArgumentCaptor<Pageable> pageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(runRepository).findLatestConversationIds(
+                eq(AriaConstants.ARIA_AGENT_ID), pageCaptor.capture());
+        assertThat(pageCaptor.getValue().getPageNumber()).isZero();
+        assertThat(pageCaptor.getValue().getPageSize()).isEqualTo(1);
     }
 
     @Test
@@ -113,12 +121,5 @@ class AriaObserveServiceTest {
         agent.setId(AriaConstants.ARIA_AGENT_ID);
         agent.setAdkProvider(core);
         return agent;
-    }
-
-    private static Run run(String conversationId, Instant createdAt) {
-        Run run = new Run();
-        run.setConversationId(conversationId);
-        run.setCreatedAt(createdAt);
-        return run;
     }
 }

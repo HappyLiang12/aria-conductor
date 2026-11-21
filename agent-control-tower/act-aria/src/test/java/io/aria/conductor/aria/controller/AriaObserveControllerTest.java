@@ -30,6 +30,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -131,6 +132,24 @@ class AriaObserveControllerTest {
                         .content(body("image/jpeg", "/9j/2Q==")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("worker"));
+    }
+
+    /**
+     * A body that cannot be deserialized is a 400, not a negotiation failure: the
+     * client asks for the stream, so the JSON body only reaches it if the concrete
+     * content type is set by the controller's own handler.
+     */
+    @Test
+    void aMalformedBodyIsAJson400EvenWhenTheClientAsksForTheStream() throws Exception {
+        mockMvc.perform(post("/api/v1/aria/observe")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("not-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error").exists());
+
+        verify(service, never()).stream(any(), any(), any());
     }
 
     @Test

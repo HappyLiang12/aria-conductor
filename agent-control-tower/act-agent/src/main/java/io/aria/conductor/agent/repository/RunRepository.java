@@ -2,6 +2,7 @@ package io.aria.conductor.agent.repository;
 
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -31,6 +32,18 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findTop20ByConversationIdOrderByCreatedAtDesc(String conversationId);
 
     List<Run> findByDispatchedByRunId(UUID dispatchedByRunId);
+
+    /**
+     * The newest conversation ids an agent has run in, newest first, selected by the
+     * database. Only the {@code conversation_id} column is read: a full-entity scan
+     * would load every run's {@code prompt_seed}/{@code final_output} text just to
+     * pick a maximum. Scoped to one agent so a caller can never adopt a foreign run's
+     * conversation.
+     */
+    @Query("SELECT r.conversationId FROM Run r WHERE r.agentId = :agentId"
+            + " AND r.conversationId IS NOT NULL AND r.conversationId <> ''"
+            + " ORDER BY r.createdAt DESC")
+    List<String> findLatestConversationIds(@Param("agentId") UUID agentId, Pageable pageable);
 
     /**
      * The run's committed status and output, read straight from the database.

@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -87,6 +88,31 @@ public class AriaObserveController {
         return ResponseEntity.status(refusal.status())
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("error", refusal.getMessage() == null ? "error" : refusal.getMessage()));
+    }
+
+    /**
+     * A body that cannot be deserialized is a 400 (spec 5.1). Handled here rather
+     * than in the global handler for the same reason as {@link #refuse(Refusal)}:
+     * the concrete JSON content type must be set, or negotiation against
+     * {@code Accept: text/event-stream} turns the 400 into a 406.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, String>> unreadableBody(HttpMessageNotReadableException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", "Malformed request body"));
+    }
+
+    /**
+     * Anything else that escapes the handler answers a JSON 500 instead of a
+     * negotiation failure. The message is never echoed back: it could carry
+     * client data.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, String>> unexpected(Exception e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", "Observation failed"));
     }
 
     /**

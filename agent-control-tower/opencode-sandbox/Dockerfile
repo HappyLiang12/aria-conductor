@@ -38,11 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-c
 # Install the opencode CLI globally (official npm package, see https://opencode.ai/docs)
 # NOTE: use `opencode-ai` (bin: opencode). The package `@opencode-ai/cli` is a DIFFERENT
 # project (anomalyco/opencode, bin: lildax) and must not be used.
-# Version pinned to the one verified in the sandbox image (see npm view opencode-ai@1.18.15).
-# The registry is overridable so builds behind a corporate mirror do not need the
-# official registry to be reachable; CI and public builds keep the official default.
+# Version pinned to the latest stable verified for the image (npm view opencode-ai dist-tags ->
+# latest 1.19.6). 1.19.6 keeps the file-part API and the data: URL image path the observe
+# endpoint uses.
 ARG NPM_REGISTRY=https://registry.npmjs.org
-RUN npm install -g opencode-ai@1.18.15 --registry=$NPM_REGISTRY
+RUN npm install -g opencode-ai@1.19.6 --registry=$NPM_REGISTRY
 
 # The fixed run-owned launcher and writer-control script (single source of truth
 # in agent-control-tower/runtime-sandbox; copied, never re-implemented here).

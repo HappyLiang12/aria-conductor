@@ -3,6 +3,7 @@ package io.aria.conductor.execution.engine;
 import io.aria.conductor.common.exception.ActionableFailure;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.runtime.CoreAttachment;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +42,8 @@ public class RunContext {
      * conversation timeline (aggregated across runs) stays free of duplicates.
      */
     private List<LlmMessage> priorContext = List.of();
+    /** Binary parts for this run's turn; memory only, never persisted. */
+    private List<CoreAttachment> attachments = List.of();
 
     public RunContext(UUID runId, UUID agentId, Agent agent, String conversationId) {
         this.runId = runId;
@@ -96,5 +99,10 @@ public class RunContext {
     public List<LlmMessage> getPriorContext() { return priorContext; }
     public void setPriorContext(List<LlmMessage> priorContext) {
         this.priorContext = priorContext == null ? List.of() : List.copyOf(priorContext);
+    }
+
+    public List<CoreAttachment> getAttachments() { return attachments; }
+    public void setAttachments(List<CoreAttachment> attachments) {
+        this.attachments = attachments == null ? List.of() : List.copyOf(attachments);
     }
 }

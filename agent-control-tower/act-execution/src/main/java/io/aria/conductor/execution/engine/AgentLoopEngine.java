@@ -27,6 +27,7 @@ import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
+import io.aria.conductor.execution.runtime.CoreAttachment;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
@@ -225,13 +226,26 @@ public class AgentLoopEngine {
      * @param intent          classified intent for SSE done event
      */
     public void startRunStream(UUID runId, SseEmitter emitter, List<LlmMessage> initialContext, String intent) {
+        startRunStream(runId, emitter, initialContext, intent, List.of());
+    }
+
+    /**
+     * The attachment-carrying form of {@link #startRunStream(UUID, SseEmitter, List, String)}:
+     * the binary parts travel with this turn only and reach the core task as-is.
+     *
+     * @param attachments binary parts for this turn, empty for a text-only turn; held in
+     *                    memory only and never written to a run row or an SSE frame
+     */
+    public void startRunStream(UUID runId, SseEmitter emitter, List<LlmMessage> initialContext, String intent,
+                               List<CoreAttachment> attachments) {
         // Bind the stream before the turn can be asked anything: an ask arrives on the
         // bridge reader thread and is emitted only while the run has a live stream.
         // Every terminal path unbinds it again (completeRun, abandonContext and the run
         // loop's finally), so a finished turn never receives another signal.
         streamRegistry.register(runId, emitter);
         try {
-            startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent);
+            startRunInternal(runId, emitter, initialContext != null ? initialContext : List.of(), intent,
+                    attachments != null ? attachments : List.of());
         } catch (RuntimeException e) {
             // A refused start is the one path with no run loop to unbind in its finally:
             // the caller catches this and completes the emitter, but Spring has not
@@ -243,10 +257,16 @@ public class AgentLoopEngine {
     }
 
     private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
-        startRunInternal(runId, emitter, initialContext, null);
+        startRunInternal(runId, emitter, initialContext, null, List.of());
     }
 
-    private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext, @Nullable String intent) {
+    private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext,
+                                  @Nullable String intent) {
+        startRunInternal(runId, emitter, initialContext, intent, List.of());
+    }
+
+    private void startRunInternal(UUID runId, @Nullable SseEmitter emitter, List<LlmMessage> initialContext,
+                                  @Nullable String intent, List<CoreAttachment> attachments) {
         log.info("Starting run: runId={}, streaming={}", runId, emitter != null);
 
         Run run = runRepository.findById(runId)
@@ -307,6 +327,7 @@ public class AgentLoopEngine {
         sessionStateManager.loadOrCreateSession(runId, agent.getId());
 
         RunContext ctx = new RunContext(runId, agent.getId(), agent, run.getConversationId());
+        ctx.setAttachments(attachments);
         if (intent != null) {
             ctx.setIntent(intent);
         }
@@ -525,7 +546,7 @@ public class AgentLoopEngine {
                 history.add(message);
             }
         }
-        return new CoreTask(system.toString(), List.copyOf(history), userPrompt);
+        return new CoreTask(system.toString(), List.copyOf(history), userPrompt, ctx.getAttachments());
     }
 
     /** Waits (bounded) for a control acknowledgement; a missing one is a refused control, never a success. */

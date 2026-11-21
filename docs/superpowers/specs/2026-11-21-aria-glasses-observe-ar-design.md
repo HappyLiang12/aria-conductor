@@ -166,11 +166,12 @@ Identical names and payloads to `chat/stream` (`act-dashboard/src/api/aria.ts` i
 | `tool_result` | `{runId, name, result, ok}` | optional status |
 | `message` | `{content}` | HUD card and TTS |
 | `done` | `{runId, conversationId, intent}` | end of turn; `intent` is `observe` |
-| `error` | `{message, turnFailed, runId, reason}` | HUD error and voice |
+| `error` | `{message}`; `{message, turnFailed, runId, reason}` only on a pre-stream/startup failure | HUD error and voice |
 | `approval_required` | `{runId, approvalId, toolName, riskTier, toolPolicy, optionsJson, expiresAt}` | decision card (Section 5.4) |
 | `waiting_input` | `{runId, approvalId, question}` | question card (Section 5.4); unreachable on opencode, see below |
 
 - Multiple `ar_render` calls may arrive in one turn. Apply them in arrival order.
+- A mid-run failure ends the turn with `done` followed by `error` carrying only `{"message": …}`; the enriched `{message, turnFailed, runId, reason}` shape is produced only by the pre-stream/startup failure path, where a run exists but no turn ran. A client must therefore treat the absent `turnFailed` as "transport/turn ended", not as a success.
 - `args` is a redacted JSON string. Redaction only replaces token-shaped values and named secret keys, so the string remains valid JSON; the client must still `try/catch` the parse and drop a malformed render rather than crash.
 - There is no replay. A reconnect does not receive earlier frames; the phone re-observes or reads `GET /api/v1/approvals?status=PENDING` to rebuild cards.
 - On opencode, a clarification park cannot occur (`CoreExecutionService:511-513`), so `waiting_input` is effectively unreachable for an observe turn. The frame stays in the contract because the same parser serves plain chat and because a future Qoder observe path would produce it.
@@ -286,7 +287,7 @@ use a label with a bbox instead of guessing a location.
 
 | Situation | Behaviour |
 |-----------|-----------|
-| Active model is not multimodal | The run fails; the SSE `error` frame carries `turnFailed`, `runId` and the provider reason. The phone shows it and falls back to text chat or its Direct engine. No silent digest fallback. |
+| Active model is not multimodal | The run fails mid-turn: the engine emits `done`, then `error` with only `{"message": …}` (no `turnFailed`/`runId`/`reason` — those are the pre-stream/startup failure shape). The phone shows the message and falls back to text chat or its Direct engine. No silent digest fallback. |
 | Aria's core is not opencode | 409 before a Run is created |
 | Image over the cap or wrong MIME | 413 / 415 |
 | Invalid base64 | 400 |
@@ -302,12 +303,14 @@ Every contract test runs without a real model.
 
 | Test | Proves |
 |------|--------|
-| `AriaObserveControllerTest` (MockMvc) | 401/403 authority; 400/413/415/422 mapping; 409 on a non-opencode core; latest-conversation default; SSE emitter returned on success |
-| `ObservationSeedTest` | seed contains no base64; 8 KiB cap; field truncation; ISO timestamp |
-| `OpenCodeHttpClientAttachmentTest` | file part JSON shape (`type/mime/filename/url`), text parts order, no `model` member, attachment omitted when empty |
-| `OpenCodeCoreSessionTest` | attachments appended after the user text part; empty attachments unchanged |
-| `AriaObserveCoreRefusalTest` | Qoder session refuses attachments with a clear failure |
-| `ArRenderToolsTest` | all eight primitives; missing target → `VALIDATION`; ack shape; `CredentialRedactor.redact(args)` still parses as JSON |
+| `AriaObserveControllerTest` (MockMvc) | 401/403 authority; 409 on a non-opencode core; a malformed body is a JSON 400 even under `Accept: text/event-stream`; SSE emitter returned on success |
+| `AriaObservationValidatorTest` | 400/413/415/422 mapping |
+| `AriaObserveServiceTest` | latest-conversation default: the newest Aria conversation is reused, else a fresh id |
+| `AriaObservationSeedTest` | seed contains no base64; 8 KiB cap; field truncation; ISO timestamp; free text cannot forge object lines |
+| `OpenCodeHttpClientTest` (attachment methods) | file part JSON shape (`type/mime/filename/url`), text parts order, no `model` member, attachment omitted when empty |
+| `OpenCodeCoreSessionAttachmentTest` | attachments appended after the user text part; empty attachments unchanged |
+| `QoderCoreSessionAttachmentRefusalTest` | Qoder session refuses attachments with a clear failure |
+| `ArRenderToolsTest` | all eight primitives (parameterised happy path); missing target → `VALIDATION`; ack shape; `CredentialRedactor.redact(args)` still parses as JSON |
 | `ToolCatalogParityTest` (act-mcp) | inventory equals the catalog, which now includes `ar_render` |
 | `AriaPromptToolNamesTest` (act-mcp) | every snake_case tool name in the policy exists in the catalog, `ar_render` included |
 | `AriaGlassesPromptTest` (new, act-aria) | the glasses block is present in the policy and still names the rules above |

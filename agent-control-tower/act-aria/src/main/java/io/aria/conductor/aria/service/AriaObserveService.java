@@ -12,11 +12,11 @@ import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.runtime.CoreAttachment;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -116,14 +116,19 @@ public class AriaObserveService {
         }
     }
 
+    /**
+     * The conversation this observation joins: the caller's when it names one, else
+     * Aria's newest existing conversation, else a fresh id. The lookup reads only
+     * {@code conversation_id} rows and is scoped to Aria, so it neither loads every
+     * run's text nor adopts a worker run's conversation.
+     */
     private String resolveConversationId(String requested) {
         if (requested != null && !requested.isBlank()) {
             return requested;
         }
-        return runRepository.findAll().stream()
-                .filter(r -> r.getConversationId() != null && !r.getConversationId().isBlank())
-                .max(Comparator.comparing(Run::getCreatedAt))
-                .map(Run::getConversationId)
+        return runRepository.findLatestConversationIds(
+                        AriaConstants.ARIA_AGENT_ID, PageRequest.of(0, 1)).stream()
+                .findFirst()
                 .orElseGet(() -> UUID.randomUUID().toString());
     }
 

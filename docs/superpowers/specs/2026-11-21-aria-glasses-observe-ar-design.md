@@ -34,7 +34,7 @@ Fixed hardware context: XREAL One (DisplayPort display plus USB audio), vivo X F
 | opencode 1.18.15 already accepts image file parts | Published SDK 1.18.15 types include `FilePartInput {type:"file", mime, filename?, url, source?}` in the `POST /session/{id}/message` parts union (`@opencode-ai/sdk` 1.18.15, `dist/gen/types.gen.d.ts:1245`, `:2257`) |
 | opencode accepts `data:` URLs for images | At tag `v1.18.15`, `packages/opencode/src/session/prompt.ts:785-788` branches on `case "data:"`, and `:1010-1016` normalizes every file part whose mime starts with `image/`. Identical at `v1.19.6` (`:787`, `:1012`) |
 | Latest stable opencode is 1.19.6 | `npm view opencode-ai dist-tags` → `latest: 1.19.6`; SDK 1.19.6 still exports `FilePartInput` |
-| The pinned sandbox version is 1.18.15 | `agent-control-tower/opencode-sandbox/Dockerfile:45` |
+| The pinned sandbox version is 1.19.6 | `agent-control-tower/opencode-sandbox/Dockerfile:45` |
 | Progress streaming cannot leak the image | `CoreProgressPump` emits only assistant messages (`.../runtime/progress/CoreProgressPump.java:555-575`), and `PartSnapshot` carries no `url` (`OpenCodeHttpClient.listMessages`, `:365-372`) |
 | Tool args on the wire are redacted but stay JSON | `CoreEventTelemetry.streamSignal` puts `CredentialRedactor.redact(serialized(input))` in `args`; `CredentialRedactor` only replaces token-shaped values and named secret JSON keys; `.../telemetry/CoreEventTelemetry.java:160-195`, `.../security/CredentialRedactor.java:46-58` |
 | `@ToolParam` cannot rename a JSON argument | Spring AI 1.0.9 `org.springframework.ai.tool.annotation.ToolParam` declares only `required` and `description`; `MethodToolCallback.buildMethodArguments` reads each argument by the Java parameter name |

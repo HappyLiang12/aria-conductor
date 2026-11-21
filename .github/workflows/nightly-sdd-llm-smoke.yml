@@ -71,7 +71,7 @@ jobs:
 
       - name: Install the OpenCode core CLI (same pin as the sandbox image)
         if: steps.live.outputs.enabled == 'true'
-        run: npm install -g opencode-ai@1.18.15 && opencode --version
+        run: npm install -g opencode-ai@1.19.6 && opencode --version
 
       - name: Build backend (skip tests)
         if: steps.live.outputs.enabled == 'true'

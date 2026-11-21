@@ -4,6 +4,7 @@ import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
 import com.github.tomakehurst.wiremock.junit5.WireMockTest;
 import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.runtime.CoreAttachment;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
 import static com.github.tomakehurst.wiremock.client.WireMock.notMatching;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.verify;
@@ -116,6 +118,44 @@ class OpenCodeHttpClientTest {
                 client.sendPrompt("sess-1", null, List.of("hi"), Duration.ofSeconds(5));
 
         assertThat(result.finalOutput()).isEqualTo("line one\nline two");
+    }
+
+    @Test
+    void sendPrompt_appendsAttachmentsAsDataUrlFileParts() {
+        stubFor(post(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"ok"}]}
+                                """)));
+
+        client.sendPrompt("sess-abc", null, List.of("look at this"), Duration.ofSeconds(5),
+                List.of(new CoreAttachment("image/jpeg", new byte[]{(byte) 0xFF, (byte) 0xD8}, "frame.jpg")));
+
+        verify(postRequestedFor(urlEqualTo("/session/sess-abc/message"))
+                .withRequestBody(matchingJsonPath("$.parts[0].type", equalTo("text")))
+                .withRequestBody(matchingJsonPath("$.parts[0].text", equalTo("look at this")))
+                .withRequestBody(matchingJsonPath("$.parts[1].type", equalTo("file")))
+                .withRequestBody(matchingJsonPath("$.parts[1].mime", equalTo("image/jpeg")))
+                .withRequestBody(matchingJsonPath("$.parts[1].filename", equalTo("frame.jpg")))
+                .withRequestBody(matchingJsonPath("$.parts[1].url", equalTo("data:image/jpeg;base64,/9g="))));
+    }
+
+    @Test
+    void sendPrompt_withoutAttachmentsKeepsTheTextOnlyPayload() {
+        stubFor(post(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"ok"}]}
+                                """)));
+
+        client.sendPrompt("sess-abc", null, List.of("hello"), Duration.ofSeconds(5));
+
+        verify(postRequestedFor(urlEqualTo("/session/sess-abc/message"))
+                .withRequestBody(notMatching("(?s).*\"type\"\\s*:\\s*\"file\".*")));
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.runtime.CoreAttachment;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -15,6 +16,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -159,6 +161,17 @@ public class OpenCodeHttpClient implements AutoCloseable {
      */
     public MessageResult sendPrompt(String sessionId, String systemPrompt,
             List<String> textParts, Duration timeout) {
+        return sendPrompt(sessionId, systemPrompt, textParts, timeout, List.of());
+    }
+
+    /**
+     * The governed prompt path with binary attachments: the ordered text parts
+     * first, then one {@code file} part per attachment as a data URL. opencode
+     * resolves {@code data:} URLs and normalizes every {@code image/*} part, so
+     * no file is staged in the sandbox workspace.
+     */
+    public MessageResult sendPrompt(String sessionId, String systemPrompt,
+            List<String> textParts, Duration timeout, List<CoreAttachment> attachments) {
         ObjectNode body = objectMapper.createObjectNode();
         // No model member: the pin is a session-level record and this client has
         // no model-object spec to send, so the server's configured model serves.
@@ -168,6 +181,15 @@ public class OpenCodeHttpClient implements AutoCloseable {
         ArrayNode parts = body.putArray("parts");
         for (String text : textParts) {
             parts.addObject().put("type", "text").put("text", text == null ? "" : text);
+        }
+        List<CoreAttachment> attachmentList = attachments == null ? List.of() : attachments;
+        for (CoreAttachment attachment : attachmentList) {
+            parts.addObject()
+                    .put("type", "file")
+                    .put("mime", attachment.mimeType())
+                    .put("filename", attachment.filename())
+                    .put("url", "data:" + attachment.mimeType() + ";base64,"
+                            + Base64.getEncoder().encodeToString(attachment.bytes()));
         }
         String path = "/session/" + sessionId + "/message";
         Duration effectiveTimeout = timeout != null ? timeout : requestTimeout;

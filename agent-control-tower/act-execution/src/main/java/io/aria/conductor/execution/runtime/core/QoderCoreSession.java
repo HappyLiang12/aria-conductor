@@ -186,6 +186,14 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
     public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events, Instant deadline) {
         Objects.requireNonNull(task, "task");
         Objects.requireNonNull(events, "events");
+        // The Qoder prompt path is text-only: a turn that carries binary parts is
+        // refused here, before any in-flight state is claimed or the bridge is
+        // touched, instead of being silently sent as text without them.
+        if (!task.attachments().isEmpty()) {
+            return CompletableFuture.failedFuture(new TaskExecutionException(
+                    TaskExecutionException.Cause.PROVIDER_ERROR,
+                    "The Qoder core does not accept image attachments; use the opencode core for observations"));
+        }
         if (deadline == null) {
             return CompletableFuture.failedFuture(noDeadlineRefusal());
         }

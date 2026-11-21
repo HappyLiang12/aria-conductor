@@ -221,6 +221,14 @@ class AriaObservationValidatorTest {
         assertRejected(request(object), 1_000, HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
+    @Test
+    void aConversationIdLongerThanTheColumnIs400() {
+        AriaObserveRequest request = request(objectWithBbox(0.1, 0.2, 0.3, 0.4));
+        request.setConversationId("observe-e2e-" + java.util.UUID.randomUUID());
+
+        assertRejected(request, 1_000, HttpStatus.BAD_REQUEST);
+    }
+
     private static void assertRejected(AriaObserveRequest request, long contentLength, HttpStatus status) {
         AriaObservationValidator.Result result = AriaObservationValidator.validate(request, contentLength);
         assertThat(result.isRejected()).isTrue();

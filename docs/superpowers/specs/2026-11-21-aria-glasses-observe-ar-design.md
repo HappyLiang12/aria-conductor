@@ -115,7 +115,7 @@ Headers: `Authorization: Bearer <operator bearer>`, `Content-Type: application/j
 
 Rules:
 
-- `conversationId`: optional. When absent the server uses the latest conversation (the most recent run with a non-blank `conversationId`; `AriaConversationController.getLatest` and `AriaTools.getLatestConversation` both apply that rule). When none exists, a new UUID is generated. The chosen id is returned in the `done` frame.
+- `conversationId`: optional. When absent the server uses the latest conversation (the most recent run with a non-blank `conversationId`; `AriaConversationController.getLatest` and `AriaTools.getLatestConversation` both apply that rule). When none exists, a new UUID is generated. The chosen id is returned in the `done` frame. It is at most 36 characters, the `runs.conversation_id` column width; a longer id is a 400, not a failed run.
 - `timestamp`: epoch milliseconds. Rendered into the seed as ISO-8601 UTC.
 - `bbox`: normalized `[x, y, w, h]`; `center`: normalized `[x, y]`; both in `[0, 1]` with the top-left origin. `bbox` width and height must be > 0.
 - `heading`, `pitch`, `roll`: degrees. `heading` 0 = magnetic north, clockwise. In v2.0 it is recorded only; rendering is screen-space.

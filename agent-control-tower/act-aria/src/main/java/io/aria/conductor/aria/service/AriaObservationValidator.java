@@ -18,6 +18,7 @@ public final class AriaObservationValidator {
     public static final long MAX_CONTENT_LENGTH = 3_000_000L;
     private static final Set<String> ALLOWED_MIME = Set.of("image/jpeg", "image/png");
     private static final int MAX_OBJECTS = 32;
+    private static final int MAX_CONVERSATION_ID_CHARS = 36;
 
     public record Rejection(HttpStatus status, String message) {}
     public record ObservedImage(byte[] bytes, String mimeType) {}
@@ -40,6 +41,13 @@ public final class AriaObservationValidator {
                 || request.getImage().getDataBase64() == null
                 || request.getImage().getDataBase64().isBlank()) {
             return reject(HttpStatus.BAD_REQUEST, "image.dataBase64 is required");
+        }
+        if (request.getConversationId() != null
+                && request.getConversationId().length() > MAX_CONVERSATION_ID_CHARS) {
+            // runs.conversation_id is VARCHAR(36); a longer id would fail the run insert
+            // after admission, so it is refused at the boundary instead.
+            return reject(HttpStatus.BAD_REQUEST,
+                    "conversationId must be at most " + MAX_CONVERSATION_ID_CHARS + " characters");
         }
         String mime = request.getImage().getMimeType();
         if (mime == null || !ALLOWED_MIME.contains(mime)) {

@@ -254,6 +254,8 @@ jobs:
           curl -sf "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
           echo ""
           echo "All smoke tests passed."
+      - name: Observe API E2E (deterministic harness)
+        run: node e2e/observe/observe-smoke.mjs
       - name: Dump backend log tail (diagnose)
         if: failure()
         run: tail -n 300 backend.log || true

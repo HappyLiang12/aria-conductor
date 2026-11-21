@@ -6,6 +6,7 @@ import io.aria.conductor.aria.service.AriaObservationValidator;
 import io.aria.conductor.aria.service.AriaObserveService;
 import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
+import jakarta.servlet.AsyncContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -13,13 +14,17 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -139,6 +144,71 @@ class AriaObserveControllerTest {
 
         verify(service).stream(any(), any(), any());
         result.getRequest().getAsyncContext().complete();
+    }
+
+    /**
+     * Section 11 of the glasses observe spec: a mocked observe request must
+     * produce thinking, at least one ar_render tool call from a fixture, a
+     * message, and done with the conversation id. The four frame names are the
+     * ones {@code act-dashboard/src/api/aria.ts} dispatches on.
+     */
+    @Test
+    void theStreamedResponseCarriesTheFourFixtureFrames() throws Exception {
+        doAnswer(invocation -> {
+            SseEmitter emitter = invocation.getArgument(2);
+            send(emitter,
+                    SseEmitter.event().name("thinking").data("{\"runId\":\"run-1\"}"),
+                    SseEmitter.event().name("tool_call").data(
+                            "{\"runId\":\"run-1\",\"name\":\"ar_render\",\"toolCallId\":\"c1\","
+                                    + "\"args\":\"{\\\"primitive\\\":\\\"track\\\","
+                                    + "\\\"target\\\":{\\\"trackId\\\":7}}\"}"),
+                    SseEmitter.event().name("message").data("{\"content\":\"TV 遙控器喺茶几\"}"),
+                    SseEmitter.event().name("done").data(
+                            "{\"runId\":\"run-1\",\"conversationId\":\"conv-1\",\"intent\":\"observe\"}"));
+            emitter.complete();
+            return null;
+        }).when(service).stream(any(), any(), any());
+
+        MvcResult result = null;
+        try {
+            result = mockMvc.perform(post("/api/v1/aria/observe")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .accept(MediaType.TEXT_EVENT_STREAM)
+                            .content(body("image/jpeg", "/9j/2Q==")))
+                    .andExpect(status().isOk())
+                    .andReturn();
+
+            String streamed = result.getResponse().getContentAsString();
+            assertThat(streamed).contains("event:thinking");
+            assertThat(streamed).contains("event:tool_call");
+            assertThat(streamed).contains("\"name\":\"ar_render\"");
+            assertThat(streamed).contains("event:message");
+            assertThat(streamed).contains("event:done");
+            assertThat(streamed).contains("\"conversationId\":\"conv-1\"");
+        } finally {
+            closeAsyncContext(result);
+        }
+    }
+
+    private void send(SseEmitter emitter, SseEmitter.SseEventBuilder... events) throws IOException {
+        for (SseEmitter.SseEventBuilder event : events) {
+            emitter.send(event);
+        }
+    }
+
+    /** The async context outlives the assertions; closing it keeps the next test clean. */
+    private void closeAsyncContext(MvcResult result) {
+        if (result == null) {
+            return;
+        }
+        try {
+            AsyncContext asyncContext = result.getRequest().getAsyncContext();
+            if (asyncContext != null) {
+                asyncContext.complete();
+            }
+        } catch (IllegalStateException alreadyCompletedOrNotAsync) {
+            // Nothing to clean up: the emitter completed during the request.
+        }
     }
 
     private String body(String mime, String base64) throws Exception {

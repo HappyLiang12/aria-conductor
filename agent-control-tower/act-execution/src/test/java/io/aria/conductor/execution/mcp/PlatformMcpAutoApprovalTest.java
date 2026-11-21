@@ -26,6 +26,9 @@ class PlatformMcpAutoApprovalTest {
             // assistant uses, so a read-only memory turn stops interrupting the operator.
             "recall_memory", "list_memory_entities", "get_memory_entity",
             "list_memory_proposals", "get_context_manifest",
+            // 2026-11-21 glasses: ar_render renders on the device and changes no platform
+            // state, so it keeps the read-only auto-approval.
+            "ar_render",
             "WebSearch", "WebFetch");
 
     /**

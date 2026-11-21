@@ -207,8 +207,11 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                     progressPump = pump;
                     pump.start();
                 }
-                OpenCodeHttpClient.MessageResult message =
-                        client.sendPrompt(sessionId, systemPrompt, parts, turnTimeout);
+                // A text-only turn takes the text-only overload: the attachment list is
+                // forwarded only when the task actually carries one.
+                OpenCodeHttpClient.MessageResult message = task.attachments().isEmpty()
+                        ? client.sendPrompt(sessionId, systemPrompt, parts, turnTimeout)
+                        : client.sendPrompt(sessionId, systemPrompt, parts, turnTimeout, task.attachments());
                 // The success path only, and before the halt: opencode 1.18.15 finalizes
                 // the assistant's text part at/after this POST returns, so the terminal
                 // parts of the turn exist only in a read taken now. A failed or cancelled

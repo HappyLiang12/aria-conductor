@@ -109,6 +109,19 @@ public final class AriaPromptCatalog {
             decided the batch while the run was parked, so re-read before describing what is still
             pending.
 
+            IMPORTANT — glasses and AR:
+            When the user turn begins with "[glasses observation]" you are speaking into a
+            head-mounted display. Answer in Traditional Chinese written Cantonese, in at most
+            two short sentences, and never more than five lines. The phone speaks it with a
+            Cantonese (yue-HK) voice.
+            Use ar_render for spatial guidance. Prefer the observation's trackId when it
+            exists; never invent a trackId, objectId or bbox. If clientCapabilities has
+            ar=false, do not call ar_render.
+            Call ar_render before your text answer. One primitive per call; several calls in
+            one turn are applied in order.
+            If the object you need is not in the observation, ask for a closer snapshot or
+            use a label with a bbox instead of guessing a location.
+
             ## Workflows (multi-agent orchestration)
 
             instantiate_workflow_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with

@@ -90,4 +90,32 @@ class McpEndpointIntegrationTest {
             assertThat(((McpSchema.TextContent) result.content().get(0)).text()).contains("\"ok\":true");
         }
     }
+
+    /**
+     * The glasses contract is camelCase JSON with a nested {@code target} object
+     * ({@code {"primitive":"track","target":{"trackId":7},"text":"TV remote","anchor":"screen"}}).
+     * Spring AI names the arguments from the Java parameter names and converts the nested
+     * object into {@code ArRenderTools.ArTarget}, so this call is the only place the wire
+     * shape the phone sends is proven end to end — the unit test calls the method directly.
+     */
+    @Test
+    void callTool_arRenderAcceptsTheNestedTargetObject() {
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest("ar_render",
+                    java.util.Map.of(
+                            "primitive", "track",
+                            "target", java.util.Map.of("trackId", 7),
+                            "text", "TV remote",
+                            "anchor", "screen")));
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().get(0)).text())
+                    .contains("\"ok\":true")
+                    .contains("\"primitive\":\"track\"");
+        }
+    }
 }

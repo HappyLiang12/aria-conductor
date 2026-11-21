@@ -48,7 +48,8 @@ final class McpToolInventory {
             "list_notifications", "get_unread_notification_count",
             "mark_notification_read", "mark_all_notifications_read",
             "list_scheduled_jobs", "create_scheduled_job", "cancel_scheduled_job",
-            "get_latest_conversation", "get_conversation_timeline"));
+            "get_latest_conversation", "get_conversation_timeline",
+            "ar_render"));
 
     private McpToolInventory() {
     }

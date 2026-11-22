@@ -541,6 +541,33 @@ describe('panelReducer restore merge', () => {
     ]);
   });
 
+  it('attributes a repeated message preview to its own occurrence', () => {
+    const withHistory = panelReducer(base, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [{ role: 'user', content: 'look', timestamp: 't0', runId: 'r0' }],
+      approvals: [], proposals: [],
+    });
+    const sent = panelReducer(withHistory, {
+      type: 'userSent', id: 'u2', content: 'look', timestamp: '2026-11-22T10:00:00.000Z',
+      attachments: [{ filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' }],
+    });
+
+    const next = panelReducer(sent, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        { role: 'user', content: 'look', timestamp: 't0', runId: 'r0' },
+        { role: 'user', content: 'look', timestamp: 't1', runId: 'r1' },
+      ],
+      approvals: [], proposals: [],
+    });
+
+    const rows = next.items.filter((entry) => entry.kind === 'user');
+    expect(rows.map((row) => (row.kind === 'user' ? row.attachments : undefined))).toEqual([
+      undefined,
+      [{ filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' }],
+    ]);
+  });
+
   it('keeps a live settled tool when the snapshot only holds its call row', () => {
     let s = panelReducer(base, { type: 'toolCall', turnId: 'r1', name: 'recall_memory', now: 1_000 });
     s = panelReducer(s, { type: 'toolResult', turnId: 'r1', name: 'recall_memory', result: '{"hits":1}', ok: true, now: 1_250 });

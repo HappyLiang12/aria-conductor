@@ -535,6 +535,11 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
  * The snapshot re-delivers the operator's own message as text only; the live
  * turn's previews are client-side and would otherwise vanish on the first
  * reconcile. Match same-content occurrences in order and carry the previews.
+ *
+ * Every prior user row advances its content's cursor, not only the rows that
+ * carry previews: the snapshot row a prior occurrence stands for is the nth
+ * occurrence whatever the prior row holds, so skipping an attachment-less row
+ * would land a later row's previews on an earlier bubble of the same text.
  */
 function withCarriedPreviews(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
   const indices = new Map<string, number[]>();
@@ -548,9 +553,10 @@ function withCarriedPreviews(prior: PanelItem[], base: PanelItem[]): PanelItem[]
   const cursors = new Map<string, number>();
   const out = base.slice();
   for (const item of prior) {
-    if (item.kind !== 'user' || !item.attachments || item.attachments.length === 0) continue;
+    if (item.kind !== 'user') continue;
     const ordinal = cursors.get(item.content) ?? 0;
     cursors.set(item.content, ordinal + 1);
+    if (!item.attachments || item.attachments.length === 0) continue;
     const at = indices.get(item.content)?.[ordinal];
     if (at === undefined) continue;
     out[at] = { ...(out[at] as UserItem), attachments: item.attachments };

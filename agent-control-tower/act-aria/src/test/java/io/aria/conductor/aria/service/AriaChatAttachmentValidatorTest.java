@@ -83,6 +83,37 @@ class AriaChatAttachmentValidatorTest {
                 HttpStatus.PAYLOAD_TOO_LARGE);
     }
 
+    @Test
+    void anOversizedRequestBodyIsRefusedBeforeDecoding() {
+        AriaChatRequest.Attachment broken = attachment("image/jpeg", "x.jpg", bytes(10));
+        broken.setDataBase64("not base64 !!");
+
+        AriaChatAttachmentValidator.Result result = AriaChatAttachmentValidator.validate(
+                List.of(broken), AriaChatAttachmentValidator.MAX_REQUEST_BYTES + 1);
+
+        assertThat(result.rejection().status()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+    }
+
+    @Test
+    void aBodyAtTheCapIsStillValidatedNormally() {
+        AriaChatRequest.Attachment broken = attachment("image/jpeg", "x.jpg", bytes(10));
+        broken.setDataBase64("not base64 !!");
+
+        AriaChatAttachmentValidator.Result result = AriaChatAttachmentValidator.validate(
+                List.of(broken), AriaChatAttachmentValidator.MAX_REQUEST_BYTES);
+
+        assertThat(result.rejection().status()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void theDtoToStringNeverPrintsTheBase64Payload() {
+        String base64 = Base64.getEncoder().encodeToString("secret-payload".getBytes());
+
+        assertThat(attachment("image/png", "p.png", "secret-payload".getBytes()).toString())
+                .doesNotContain(base64)
+                .doesNotContain("secret-payload");
+    }
+
     private static void assertRejected(List<AriaChatRequest.Attachment> attachments, HttpStatus status) {
         AriaChatAttachmentValidator.Result result = AriaChatAttachmentValidator.validate(attachments);
         assertThat(result.rejection()).isNotNull();

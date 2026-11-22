@@ -19,23 +19,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 })
 class McpEndpointIntegrationTest {
 
-    /** The run-stream pieces the ar_render frame path needs; the slim bootstrap does not scan them. */
+    /** The token service the worker-bearer test needs; the stream beans come from the bootstrap. */
     @org.springframework.boot.test.context.TestConfiguration
     static class SignalBeans {
         @org.springframework.context.annotation.Bean
         io.aria.conductor.execution.security.ActorTokenService actorTokenService() {
             return new io.aria.conductor.execution.security.ActorTokenService();
-        }
-
-        @org.springframework.context.annotation.Bean
-        io.aria.conductor.execution.engine.RunStreamRegistry runStreamRegistry() {
-            return new io.aria.conductor.execution.engine.RunStreamRegistry();
-        }
-
-        @org.springframework.context.annotation.Bean
-        io.aria.conductor.execution.engine.ArRenderSignals arRenderSignals(
-                io.aria.conductor.execution.engine.RunStreamRegistry runStreamRegistry) {
-            return new io.aria.conductor.execution.engine.ArRenderSignals(runStreamRegistry);
         }
     }
 

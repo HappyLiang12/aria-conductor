@@ -167,7 +167,10 @@ async function openPanel() {
 }
 
 function lastOptions(call: number) {
-  return mockStream.mock.calls[call][5] as { skillId?: string } | undefined;
+  return mockStream.mock.calls[call][5] as {
+    skillId?: string;
+    attachments?: Array<{ filename: string }>;
+  } | undefined;
 }
 
 beforeEach(() => {
@@ -2694,5 +2697,66 @@ describe('AriaPanel image attachments', () => {
     expect((input as HTMLTextAreaElement).value).toBe('see this');
     // The image is back in the composer, not stranded in a bubble the server refused.
     expect(screen.getByAltText('p.png')).toBeInTheDocument();
+  });
+
+  // A refusal answers before any stream opens, so the turn is over: the client
+  // timer that reports an unverifiable run must not stay armed behind it. Ten
+  // minutes later it would abort whatever controller the ref holds then and
+  // plant a run-uncertain bubble in the conversation on screen at that moment.
+  it('a refused turn does not leave the client timeout armed', async () => {
+    vi.useFakeTimers();
+    try {
+      mockStream.mockImplementation(async (...args: StreamArgs) => {
+        // The real client answers the refusal after `fetch` resolves — i.e. after
+        // sendStreamed armed its timer — so the mock defers a microtask too.
+        await Promise.resolve();
+        args[3]?.onRejected?.(415, 'Attachments must be image/jpeg, image/png or image/webp');
+      });
+      renderPanel();
+      await act(async () => {}); // flush the conversation load
+      fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+      fireEvent.change(textarea(), { target: { value: 'see this' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      await act(async () => {});
+
+      expect(screen.getByText('Attachments must be image/jpeg, image/png or image/webp')).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600_000); // CLIENT_TIMEOUT_MS, module-private
+      });
+      await act(async () => {}); // let a (wrongly) armed report's state update land
+
+      // The timeout's unreachable-run report never arrives for a refused turn.
+      expect(screen.queryByText(/no approval is pending/)).toBeNull();
+      expect(screen.queryByText(/may be waiting for your approval/)).toBeNull();
+      expect((textarea() as HTMLTextAreaElement).value).toBe('see this');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A retry must not drop an image attached after the failure: the composer's
+  // images are the ones on screen and take precedence; the failed turn's
+  // attachments are only the fallback for a composer that holds none.
+  it('retries with an image attached after the failed turn', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await openPanel();
+    fireEvent.change(input, { target: { value: 'does this hold?' } });
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onError?.('boom');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    // The legacy error path reconciles against the queue before offering Retry.
+    await screen.findByText(/no approval is pending/, undefined, { timeout: 3000 });
+
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(fileInput as HTMLInputElement, new File([new Uint8Array([1, 2, 3])], 'q.png', { type: 'image/png' }));
+    await screen.findByText('q.png');
+
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
+    expect(mockStream.mock.calls[1][1]).toBe('does this hold?');
+    expect(lastOptions(1)?.attachments).toEqual([expect.objectContaining({ filename: 'q.png' })]);
   });
 });

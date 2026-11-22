@@ -1168,6 +1168,11 @@ export function AriaPanel() {
           },
           onRejected: (status, message) => {
             if (staleTurn()) return;
+            // The refusal answers before any stream opens, so the turn is over:
+            // the client timer must not stay armed and later abort whatever
+            // controller the ref holds then, or report a run that never existed.
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
             // The refusal is answered before any stream opens, so the turn never
             // became a run: take back the bubble that announced it and restore
             // the draft and the images with the server's reason.
@@ -1316,9 +1321,12 @@ export function AriaPanel() {
     if (!retryText) return;
     sendStreamed(retryText, {
       skillId: lastSentSkillIdRef.current,
-      attachments: lastAttachmentsRef.current,
+      // The images on screen win: the operator may have attached one after the
+      // failure, and sendStreamed empties the composer. The failed turn's images
+      // are the fallback for a composer that holds none.
+      attachments: pendingImages.length > 0 ? pendingImages : lastAttachmentsRef.current,
     });
-  }, [busy, gated, tail, lastSentMessage, sendStreamed]);
+  }, [busy, gated, tail, lastSentMessage, pendingImages, sendStreamed]);
 
   /** Settles the asks of a run that can no longer decide them (a cancelled run). */
   const settleRunAsks = useCallback((runId: string, reason: string) => {

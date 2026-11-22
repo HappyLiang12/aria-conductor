@@ -89,7 +89,7 @@ class AriaStreamServiceFailureTest {
 
     private void failEngineWith(String message) throws Exception {
         doThrow(new RuntimeException(message))
-                .when(agentLoopEngine).startRunStream(any(), any(), anyList(), anyString());
+                .when(agentLoopEngine).startRunStream(any(), any(), anyList(), anyString(), anyList());
     }
 
     // ==================== behavioural: the failure path through streamChat ====================

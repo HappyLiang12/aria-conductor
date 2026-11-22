@@ -64,6 +64,12 @@ public class AriaStreamService {
     }
 
     public void streamChat(AriaChatRequest request, SseEmitter emitter) {
+        streamChat(request, new AriaChatAttachmentValidator.Validated(List.of(), ""), emitter);
+    }
+
+    public void streamChat(AriaChatRequest request,
+                           AriaChatAttachmentValidator.Validated attachments,
+                           SseEmitter emitter) {
         emitter.onTimeout(() -> {
             log.warn("Aria SSE stream timed out");
             sendErrorSilent(emitter, errorPayloadJson("stream timed out", null, null));
@@ -88,7 +94,7 @@ public class AriaStreamService {
 
             run = Run.builder()
                     .agentId(ARIA_AGENT_ID)
-                    .promptSeed(request.getMessage())
+                    .promptSeed(seed(request.getMessage(), attachments.summary()))
                     .maxIterations(maxIterations)
                     .status(RunStatus.PENDING)
                     .conversationId(conversationId)
@@ -97,7 +103,7 @@ public class AriaStreamService {
 
             List<LlmMessage> contextMessages = buildPriorContext(request);
 
-            agentLoopEngine.startRunStream(run.getId(), emitter, contextMessages, intent);
+            agentLoopEngine.startRunStream(run.getId(), emitter, contextMessages, intent, attachments.parts());
 
         } catch (Exception ex) {
             log.warn("Aria stream chat failed to start: {}", ex.getMessage(), ex);
@@ -208,5 +214,10 @@ public class AriaStreamService {
         } catch (Exception ignored) {
             // best-effort
         }
+    }
+
+    /** The operator's text plus the attachment summary; the summary is the only persisted trace. */
+    private static String seed(String message, String summary) {
+        return summary == null || summary.isBlank() ? message : message + "\n\n" + summary;
     }
 }

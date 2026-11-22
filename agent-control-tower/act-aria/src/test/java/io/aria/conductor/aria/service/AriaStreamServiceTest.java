@@ -95,7 +95,7 @@ class AriaStreamServiceTest {
         // maxToolCallRounds comes from the agent config JSON
         assertThat(saved.getMaxIterations()).isEqualTo(7);
 
-        verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), anyList(), eq("general"));
+        verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), anyList(), eq("general"), eq(List.of()));
     }
 
     @Test
@@ -180,7 +180,7 @@ class AriaStreamServiceTest {
 
         streamService.streamChat(request("hi"), emitter);
 
-        verify(agentLoopEngine, never()).startRunStream(any(), any(), anyList(), anyString());
+        verify(agentLoopEngine, never()).startRunStream(any(), any(), anyList(), anyString(), anyList());
         verify(runRepository, never()).save(any(Run.class));
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
@@ -189,7 +189,7 @@ class AriaStreamServiceTest {
     @Test
     void streamChat_engineFailureMarksRunFailedAndEmitsError() throws Exception {
         org.mockito.Mockito.doThrow(new RuntimeException("boom"))
-                .when(agentLoopEngine).startRunStream(any(), any(), anyList(), anyString());
+                .when(agentLoopEngine).startRunStream(any(), any(), anyList(), anyString(), anyList());
 
         streamService.streamChat(request("hi"), emitter);
 
@@ -203,6 +203,32 @@ class AriaStreamServiceTest {
     }
 
     @Test
+    void aTurnWithImagesCarriesThemAndSummarizesThemInTheSeed() {
+        Run saved = Run.builder().id(RUN_ID).status(RunStatus.RUNNING).build();
+        when(runRepository.save(any(Run.class))).thenReturn(saved);
+        AriaChatRequest request = AriaChatRequest.builder()
+                .conversationId("conv-1")
+                .message("what is this?")
+                .build();
+        var validated = AriaChatAttachmentValidator.validate(List.of(
+                AriaChatRequest.Attachment.builder()
+                        .mimeType("image/jpeg").filename("photo.jpg")
+                        .dataBase64(java.util.Base64.getEncoder().encodeToString(new byte[]{1, 2, 3}))
+                        .build()));
+
+        streamService.streamChat(request, validated.validated(), emitter);
+
+        ArgumentCaptor<Run> run = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(run.capture());
+        assertThat(run.getValue().getPromptSeed())
+                .startsWith("what is this?")
+                .contains("[attached images: photo.jpg (image/jpeg,")
+                .doesNotContain(java.util.Base64.getEncoder().encodeToString(new byte[]{1, 2, 3}));
+        verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), anyList(), eq("general"),
+                eq(validated.validated().parts()));
+    }
+
+    @Test
     void streamChat_registersTimeoutAndErrorCallbacks() {
         streamService.streamChat(request("hi"), emitter);
 
@@ -213,7 +239,7 @@ class AriaStreamServiceTest {
     private List<LlmMessage> capturedContext() {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<LlmMessage>> captor = ArgumentCaptor.forClass(List.class);
-        verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), captor.capture(), anyString());
+        verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), captor.capture(), anyString(), eq(List.of()));
         return captor.getValue();
     }
 

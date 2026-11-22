@@ -63,6 +63,10 @@ public class AriaService {
     }
 
     public AriaChatResponse chat(AriaChatRequest request) {
+        return chat(request, new AriaChatAttachmentValidator.Validated(List.of(), ""));
+    }
+
+    public AriaChatResponse chat(AriaChatRequest request, AriaChatAttachmentValidator.Validated attachments) {
         String conversationId = request.getConversationId() != null ? request.getConversationId()
                 : (request.getSessionId() != null ? request.getSessionId() : UUID.randomUUID().toString());
         String intent = intentClassifier.classify(request.getMessage());
@@ -75,7 +79,7 @@ public class AriaService {
         // Build a Run — AgentLoopEngine will handle LLM calls and tool execution
         Run run = Run.builder()
                 .agentId(AriaConstants.ARIA_AGENT_ID)
-                .promptSeed(request.getMessage())
+                .promptSeed(seed(request.getMessage(), attachments.summary()))
                 .maxIterations(parseMaxIterationsFromConfig(aria, 0))
                 .status(RunStatus.PENDING)
                 .conversationId(conversationId)
@@ -84,7 +88,7 @@ public class AriaService {
 
         // History has one owner: the engine loads it server-side from the run's
         // conversation id (P5). The sync adapter delegates with no client messages.
-        agentLoopEngine.startRun(run.getId(), List.of());
+        agentLoopEngine.startRun(run.getId(), List.of(), attachments.parts());
 
         // Wait for the run without holding a request transaction or DB connection
         // (F6): every read is its own short transaction, the sleep is outside one.
@@ -255,6 +259,11 @@ public class AriaService {
             log.warn("Failed to build actionsTaken: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /** The operator's text plus the attachment summary; the summary is the only persisted trace. */
+    private static String seed(String message, String summary) {
+        return summary == null || summary.isBlank() ? message : message + "\n\n" + summary;
     }
 
 }

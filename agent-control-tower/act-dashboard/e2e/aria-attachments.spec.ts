@@ -52,7 +52,18 @@ test('an attached image is shown as a thumbnail and sent with the turn', async (
 
   const textarea = page.locator('.ai-panel .ai-compose-input');
   await textarea.fill('Describe the attached image');
+  // The request body is the proof that the image left the composer: the
+  // thumbnail below is drawn from the client's own object URL before anything
+  // is sent, so it alone would pass for a turn that dropped the attachment.
+  const sent = page.waitForRequest((candidate) =>
+    candidate.url().includes('/api/v1/aria/chat/stream') && candidate.method() === 'POST');
   await textarea.press('Enter');
+  const body = (await sent).postDataJSON() as {
+    attachments?: Array<{ filename: string; mimeType: string }>;
+  };
+  expect(body.attachments).toEqual([
+    expect.objectContaining({ filename: 'probe.png', mimeType: 'image/png' }),
+  ]);
 
   await expect(page.locator('.ai-panel .ai-msg-user .ai-msg-attachments img')).toHaveCount(1, {
     timeout: 10_000,

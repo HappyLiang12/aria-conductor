@@ -26,6 +26,15 @@ import AriaApprovalCard from './AriaApprovalCard';
 import AriaClarificationCard from './AriaClarificationCard';
 import AriaProposalCard, { OperatorSessionNotice, PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
 import SlashCommandMenu from './SlashCommandMenu';
+import {
+  MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES,
+  MAX_TOTAL_BYTES,
+  prepareImage,
+  rejectionFor,
+  toPayload,
+  type PendingImage,
+} from './ariaAttachments';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
 // PANEL_OPEN_KEY retained for UI toggle only (not data).
@@ -331,6 +340,20 @@ export function AriaPanel() {
   const [busy, setBusy] = useState(false);
   const [lastSentMessage, setLastSentMessage] = useState<string | null>(null);
   const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
+  // The images waiting for the next turn, and the ones the last turn carried —
+  // a retry re-attaches what the failed turn was sent with.
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastAttachmentsRef = useRef<PendingImage[]>([]);
+  // The composer's images the panel has not yet handed to a turn, read across
+  // the await in `addFiles` (a paste and a pick can overlap).
+  const pendingImagesRef = useRef<PendingImage[]>([]);
+  pendingImagesRef.current = pendingImages;
+  // Every object URL this panel created for a preview. It is a ref, not state:
+  // the sent bubble and a pre-stream rollback both keep pointing at these URLs,
+  // so they are revoked on removal and on unmount — never at send time.
+  const previewUrlsRef = useRef<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   // T49 (N-T48-4): Clear now waits for the server's destructive DELETE, which
@@ -669,6 +692,16 @@ export function AriaPanel() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
 
+  // The last owner of the preview object URLs is the panel itself: every one it
+  // created is revoked here, and here only — a removed chip revokes its own in
+  // place. Never on send: the sent bubble's thumbnails point at these URLs until
+  // the panel goes away, and a pre-stream refusal puts the images back in the
+  // composer under the very same URLs.
+  useEffect(() => () => {
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current.clear();
+  }, []);
+
   /**
    * The WebSocket plane — the panel's first subscription (spec A3). A decision
    * taken in the Review Queue or in another tab settles the card here, and a
@@ -997,8 +1030,9 @@ export function AriaPanel() {
   );
 
   const sendStreamed = useCallback(
-    (rawText: string, skillIdOverride?: string | undefined) => {
+    (rawText: string, options?: { skillId?: string; attachments?: PendingImage[] }) => {
       const text = rawText.trim();
+      const images = options?.attachments ?? [];
       // An unanswered decision owns the turn: a second prompt would pile another
       // turn onto a parked conversation. A Clear in flight owns the conversation:
       // its DELETE reads the runs, drives the verified stops and then detaches by
@@ -1006,7 +1040,7 @@ export function AriaPanel() {
       // conversation the operator is clearing (T50 F-2).
       if (!text || busy || gated || clearingRef.current) return;
 
-      const skillId = skillIdOverride ?? pendingSkillId;
+      const skillId = options?.skillId ?? pendingSkillId;
 
       // Abort any prior in-flight stream defensively.
       abortRef.current?.abort();      cancelledRef.current = false; // M1: reset per-request cancel state
@@ -1019,16 +1053,31 @@ export function AriaPanel() {
       const history = items.flatMap((item) => (item.kind === 'user' || item.kind === 'assistant'
         ? [{ role: item.kind, content: item.content }]
         : []));
+      const userId = crypto.randomUUID();
+      // The optimistic bubble's thumbnails are the client's own object URLs; the
+      // previews are carried over a reconcile (see `restore`) and are never
+      // revoked at send time — a refusal puts the same images back below.
+      const attachmentPreviews = images.map((image) => ({
+        filename: image.filename,
+        mimeType: image.mimeType,
+        previewUrl: image.previewUrl,
+      }));
       dispatch({
         type: 'userSent',
-        id: crypto.randomUUID(),
+        id: userId,
         content: text,
         timestamp: new Date().toISOString(),
+        ...(attachmentPreviews.length > 0 ? { attachments: attachmentPreviews } : {}),
       });
       // The previous turn is no longer the transcript's trailing one, so a
       // queued pill naming its run would be stale until the next reconcile.
       dispatch({ type: 'queuedRuns', runIds: [] });
       setInput('');
+      setPendingImages([]);
+      // A refusal's reason was about the turn just sent; the next send answers
+      // it, and a second refusal states its own.
+      setAttachmentError(null);
+      lastAttachmentsRef.current = images;
       setBusy(true);
       setLastSentMessage(text);
       lastSentSkillIdRef.current = skillId;
@@ -1117,6 +1166,17 @@ export function AriaPanel() {
             if (proposal === null) return;
             dispatch({ type: 'proposalCreated', proposal });
           },
+          onRejected: (status, message) => {
+            if (staleTurn()) return;
+            // The refusal is answered before any stream opens, so the turn never
+            // became a run: take back the bubble that announced it and restore
+            // the draft and the images with the server's reason.
+            dispatch({ type: 'userSendFailed', id: userId });
+            setInput(text);
+            setPendingImages(images);
+            setAttachmentError(message);
+            setBusy(false);
+          },
           onDone: (data) => {
             if (staleTurn()) return;
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -1135,7 +1195,7 @@ export function AriaPanel() {
           },
         },
         ctrl.signal,
-        { isCancelled: () => cancelledRef.current, skillId },
+        { isCancelled: () => cancelledRef.current, skillId, attachments: toPayload(images) },
       );
 
       // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort the stream
@@ -1163,16 +1223,88 @@ export function AriaPanel() {
         // Residual (accepted, no queue): while a turn is already in flight
         // sendStreamed drops the composed prompt — the now-visible panel shows
         // the busy state instead of the click doing nothing on a closed one.
-        sendStreamed(prompt);
+        // The composer's waiting images ride with it: every send path that
+        // carries no images of its own must not silently discard them.
+        sendStreamed(prompt, { attachments: pendingImagesRef.current });
       }
     };
     window.addEventListener('aria:compose', handler);
     return () => window.removeEventListener('aria:compose', handler);
   }, [sendStreamed]);
 
+  /**
+   * Add picked, pasted or dropped files to the composer. The helper screens one
+   * batch on its own; the count and the byte budgets are CUMULATIVE, because the
+   * images already waiting belong to the same turn. The helper's pre-downscale
+   * sizes are not what the request will carry either, so the prepared sizes are
+   * checked again — and a refusal adds nothing and keeps no URL behind.
+   */
+  const addFiles = useCallback(async (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    const rejection = rejectionFor(list);
+    if (rejection) {
+      setAttachmentError(rejection);
+      return;
+    }
+    if (pendingImagesRef.current.length + list.length > MAX_ATTACHMENTS) {
+      setAttachmentError(`At most ${MAX_ATTACHMENTS} images per turn.`);
+      return;
+    }
+
+    // `allSettled`, not `all`: a batch where one file fails must not leak the
+    // preview URLs the others already created.
+    const outcomes = await Promise.allSettled(list.map((file) => prepareImage(file)));
+    const prepared = outcomes.flatMap((outcome) => (outcome.status === 'fulfilled' ? [outcome.value] : []));
+    prepared.forEach((image) => previewUrlsRef.current.add(image.previewUrl));
+    const discardPrepared = () => {
+      prepared.forEach((image) => {
+        URL.revokeObjectURL(image.previewUrl);
+        previewUrlsRef.current.delete(image.previewUrl);
+      });
+    };
+    if (prepared.length !== list.length) {
+      discardPrepared();
+      setAttachmentError('That image could not be read. Try another file.');
+      return;
+    }
+
+    // Re-read the composer: a paste may have landed while these were prepared.
+    const waiting = pendingImagesRef.current;
+    if (waiting.length + prepared.length > MAX_ATTACHMENTS) {
+      discardPrepared();
+      setAttachmentError(`At most ${MAX_ATTACHMENTS} images per turn.`);
+      return;
+    }
+    if (prepared.some((image) => image.bytes > MAX_IMAGE_BYTES)) {
+      discardPrepared();
+      setAttachmentError('Each image must be at most 4 MB.');
+      return;
+    }
+    const totalBytes = waiting.reduce((sum, image) => sum + image.bytes, 0)
+      + prepared.reduce((sum, image) => sum + image.bytes, 0);
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      discardPrepared();
+      setAttachmentError('Attachments must total at most 10 MB.');
+      return;
+    }
+
+    setPendingImages((images) => [...images, ...prepared]);
+    setAttachmentError(null);
+  }, []);
+
+  const removeImage = useCallback((id: string) => {
+    const target = pendingImagesRef.current.find((image) => image.id === id);
+    if (!target) return;
+    // Nothing else points at an unsent image's preview, so its URL ends here.
+    URL.revokeObjectURL(target.previewUrl);
+    previewUrlsRef.current.delete(target.previewUrl);
+    setPendingImages((images) => images.filter((image) => image.id !== id));
+  }, []);
+
   const handleSend = useCallback(() => {
-    sendStreamed(input);
-  }, [input, sendStreamed]);
+    sendStreamed(input, { attachments: pendingImages });
+  }, [input, pendingImages, sendStreamed]);
 
   const tail = items[items.length - 1];
 
@@ -1182,7 +1314,10 @@ export function AriaPanel() {
     // resends the prompt this tab last sent.
     const retryText = (tail?.kind === 'assistant' ? tail.retryText : undefined) ?? lastSentMessage;
     if (!retryText) return;
-    sendStreamed(retryText, lastSentSkillIdRef.current);
+    sendStreamed(retryText, {
+      skillId: lastSentSkillIdRef.current,
+      attachments: lastAttachmentsRef.current,
+    });
   }, [busy, gated, tail, lastSentMessage, sendStreamed]);
 
   /** Settles the asks of a run that can no longer decide them (a cancelled run). */
@@ -1540,6 +1675,21 @@ export function AriaPanel() {
                   </div>
                   <div className="ai-msg-body">
                     <div className={`ai-msg-bubble ${item.kind === 'assistant' && item.error ? 'ai-msg-bubble-error' : ''}`}>
+                      {item.kind === 'user' && item.attachments && item.attachments.length > 0 && (
+                        // The turn's images, drawn from the client's own object
+                        // URLs: nothing about the bytes is ever persisted or
+                        // restored, so a re-read transcript shows text only.
+                        <div className="ai-msg-attachments">
+                          {item.attachments.map((attachment) => (
+                            <img
+                              key={attachment.previewUrl}
+                              src={attachment.previewUrl}
+                              alt={attachment.filename}
+                              className="ai-msg-attachment-thumb"
+                            />
+                          ))}
+                        </div>
+                      )}
                       {item.kind === 'assistant' && item.error === true && remedy !== null && (
                         // T54 F3: a failure whose server text names no fix leads
                         // with the cause and the action, then keeps the original
@@ -1607,7 +1757,7 @@ export function AriaPanel() {
                     key={s}
                     type="button"
                     className="ai-sg"
-                    onClick={() => sendStreamed(s)}
+                    onClick={() => sendStreamed(s, { attachments: pendingImages })}
                     disabled={busy || gated || clearing}
                   >
                     {s}
@@ -1626,7 +1776,44 @@ export function AriaPanel() {
             </div>
           )}
 
-          <div className="ai-compose">
+          <div
+            className="ai-compose"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files);
+            }}
+          >
+            {pendingImages.length > 0 && (
+              <div className="ai-compose-attachments">
+                {pendingImages.map((image) => (
+                  <span key={image.id} className="ai-attachment-chip">
+                    <img src={image.previewUrl} alt={image.filename} className="ai-attachment-thumb" />
+                    <span className="ai-attachment-name">{image.filename}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeImage(image.id)}
+                      aria-label={`Remove ${image.filename}`}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {attachmentError && <div className="ai-attachment-error" role="alert">{attachmentError}</div>}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              className="ai-attach-input"
+              data-testid="aria-attachment-input"
+              onChange={(event) => {
+                if (event.target.files) void addFiles(event.target.files);
+                event.target.value = '';
+              }}
+            />
             {slash.open && (
               <SlashCommandMenu
                 items={slash.items}
@@ -1650,12 +1837,31 @@ export function AriaPanel() {
                 slash.onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length);
               }}
               onKeyDown={handleKeyDown}
+              onPaste={(event) => {
+                const pasted = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+                if (pasted.length > 0) {
+                  // An image on the clipboard is an attachment, not text: keep
+                  // the composer's text as it is and let the chip report it.
+                  event.preventDefault();
+                  void addFiles(pasted);
+                }
+              }}
               placeholder="Ask Aria anything…  (type / for skills)"
               rows={2}
               disabled={busy || gated || clearing}
               aria-controls={slash.open ? 'slash-command-listbox' : undefined}
               aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
             />
+            <button
+              type="button"
+              className="ai-attach-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || gated || clearing}
+              aria-label="Attach images"
+              title="Attach images (JPEG, PNG or WebP; up to 5, 4 MB each)"
+            >
+              <span aria-hidden="true">📎</span>
+            </button>
             {busy ? (
               <button
                 type="button"

@@ -9,7 +9,30 @@ import type { Approval } from '../../types';
 // jsdom does not implement element scrolling — the auto-scroll effect needs it.
 beforeAll(() => {
   Element.prototype.scrollTo = () => {};
+  // …and it owns no object URLs. The panel tracks one preview URL per attached
+  // image and revokes them on removal and on unmount; in a browser those are
+  // `blob:` URLs, here they only ever come from this file's mocked helper.
+  URL.createObjectURL = () => 'blob:stub';
+  URL.revokeObjectURL = () => {};
 });
+
+// jsdom neither decodes an image (no canvas, no `createImageBitmap`) nor owns
+// object URLs, so the composer's attachment helper is replaced: the panel's
+// wiring — the picker, the chips, the payload and the rollback — is what these
+// tests drive, and the helper's own rules are pinned in `ariaAttachments.test.ts`.
+vi.mock('../ariaAttachments', () => ({
+  ALLOWED_MIME: ['image/jpeg', 'image/png', 'image/webp'],
+  MAX_ATTACHMENTS: 5,
+  MAX_IMAGE_BYTES: 4 * 1024 * 1024,
+  MAX_TOTAL_BYTES: 10 * 1024 * 1024,
+  rejectionFor: () => null,
+  prepareImage: vi.fn(async (file: File) => ({
+    id: 'img-1', filename: file.name, mimeType: file.type, dataBase64: 'AAEC',
+    width: 640, height: 480, previewUrl: 'blob:img-1', bytes: 3,
+  })),
+  toPayload: (images: Array<{ mimeType: string; filename: string; dataBase64: string; width: number; height: number }>) =>
+    images.map(({ mimeType, filename, dataBase64, width, height }) => ({ mimeType, filename, dataBase64, width, height })),
+}));
 
 // The panel subscribes to /topic/events for the first time (spec A3). The
 // socket is a live connection in the browser and an unconnectable one under
@@ -2620,5 +2643,56 @@ describe('AriaPanel Clear refusal (T48 Item 1)', () => {
     // that wording is pinned by the two tests above, which is its positive control.
     expect(bubble).not.toHaveTextContent(/nothing was cleared/i);
     expect(screen.getByRole('button', { name: 'Clear and start new conversation' })).toBeEnabled();
+  });
+});
+
+describe('AriaPanel image attachments', () => {
+  it('sends picked images with the turn and shows a thumbnail in the bubble', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await openPanel();
+    fireEvent.change(input, { target: { value: 'what is this?' } });
+
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await user.upload(fileInput as HTMLInputElement, new File([new Uint8Array([1, 2, 3])], 'p.png', { type: 'image/png' }));
+    await screen.findByText('p.png');
+
+    mockStream.mockImplementation(async (_c, _m, _h, callbacks) => {
+      callbacks.onDone?.({ runId: 'r1', conversationId: 'c1', intent: 'chat' });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => {
+      expect(mockStream).toHaveBeenCalledWith(
+        expect.any(String), 'what is this?', expect.any(Array), expect.any(Object), expect.anything(),
+        expect.objectContaining({ attachments: [expect.objectContaining({ filename: 'p.png' })] }),
+      );
+    });
+    expect(await screen.findByAltText('p.png')).toBeInTheDocument();
+  });
+
+  // The optimistic bubble announced a message the server refused before any
+  // stream opened: the turn never became a run, so the bubble is taken back and
+  // the draft and the picked image return to the composer with the reason.
+  it('keeps the draft and shows the reason when the server refuses an attachment', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await openPanel();
+    fireEvent.change(input, { target: { value: 'see this' } });
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(fileInput as HTMLInputElement, new File([new Uint8Array([1, 2, 3])], 'p.png', { type: 'image/png' }));
+    await screen.findByText('p.png');
+
+    mockStream.mockImplementation(async (_c, _m, _h, callbacks) => {
+      callbacks.onRejected?.(415, 'Attachments must be image/jpeg, image/png or image/webp');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await screen.findByText('Attachments must be image/jpeg, image/png or image/webp');
+    expect((input as HTMLTextAreaElement).value).toBe('see this');
+    // The image is back in the composer, not stranded in a bubble the server refused.
+    expect(screen.getByAltText('p.png')).toBeInTheDocument();
   });
 });

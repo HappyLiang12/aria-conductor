@@ -523,6 +523,24 @@ describe('panelReducer restore merge', () => {
     expect(next.items.map((entry) => entry.id)).toEqual(['a1']);
   });
 
+  it('keeps the live previews when the same turn is re-delivered by a restore', () => {
+    const sent = panelReducer(base, {
+      type: 'userSent', id: 'u1', content: 'look', timestamp: '2026-11-22T10:00:00.000Z',
+      attachments: [{ filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' }],
+    });
+
+    const next = panelReducer(sent, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [{ role: 'user', content: 'look', timestamp: 't', runId: 'r1' }],
+      approvals: [], proposals: [],
+    });
+
+    const item = next.items.find((entry) => entry.kind === 'user' && entry.content === 'look');
+    expect(item?.kind === 'user' && item.attachments).toEqual([
+      { filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' },
+    ]);
+  });
+
   it('keeps a live settled tool when the snapshot only holds its call row', () => {
     let s = panelReducer(base, { type: 'toolCall', turnId: 'r1', name: 'recall_memory', now: 1_000 });
     s = panelReducer(s, { type: 'toolResult', turnId: 'r1', name: 'recall_memory', result: '{"hits":1}', ok: true, now: 1_250 });

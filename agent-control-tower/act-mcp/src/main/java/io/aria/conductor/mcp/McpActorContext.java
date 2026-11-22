@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.mcp.McpToolUtils;
 
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Transport-owned MCP actor identity (spec §6.2). Identity is read ONLY from the
@@ -52,6 +53,21 @@ public final class McpActorContext {
             throw unauthenticated();
         }
         return actor;
+    }
+
+    /**
+     * The transport-authenticated actor, or empty when the call carried none.
+     * Tools that work without authority (a read that must also serve an
+     * unauthenticated caller) use this instead of {@link #require(ToolContext)}.
+     */
+    public static Optional<ActorPrincipal> find(ToolContext context) {
+        if (context == null) {
+            return Optional.empty();
+        }
+        return McpToolUtils.getMcpExchange(context)
+                .map(exchange -> exchange.transportContext().get(ACTOR_KEY))
+                .filter(ActorPrincipal.class::isInstance)
+                .map(ActorPrincipal.class::cast);
     }
 
     /**

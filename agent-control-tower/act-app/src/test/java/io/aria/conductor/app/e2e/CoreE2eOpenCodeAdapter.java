@@ -79,18 +79,22 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
     static final String FIXTURE_MODEL = "efficient";
     /** Reviewed pinned core version of the committed peer. */
     static final String FIXTURE_VERSION = "1.14.31";
+    /** The scenario whose peer invokes the real ar_render tool over the platform MCP endpoint. */
+    static final String AR_RENDER_SCENARIO = "ar-render";
 
     private final CoreE2eScenarios scenarios;
     private final CoreE2eProcessBackend.State peers;
     private final String nodeExecutable;
     private final Path peerScript;
+    private final RunMcpWiring runMcp;
 
     CoreE2eOpenCodeAdapter(CoreE2eScenarios scenarios, CoreE2eProcessBackend.State peers,
-            String nodeExecutable, Path peerScript) {
+            String nodeExecutable, Path peerScript, RunMcpWiring runMcp) {
         this.scenarios = Objects.requireNonNull(scenarios, "scenarios");
         this.peers = Objects.requireNonNull(peers, "peers");
         this.nodeExecutable = Objects.requireNonNull(nodeExecutable, "nodeExecutable");
         this.peerScript = Objects.requireNonNull(peerScript, "peerScript");
+        this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
     }
 
     @Override
@@ -130,7 +134,20 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
                 "serve",
                 "--port", String.valueOf(environment.endpoint().getPort()),
                 "--hostname", environment.endpoint().getHost()));
-        return new LaunchProfile(argv, peerEnvironment(scenario, workingDirectory), workingDirectory.toString());
+        Map<String, String> env = peerEnvironment(scenario, workingDirectory);
+        if (AR_RENDER_SCENARIO.equals(scenario)) {
+            // The peer must invoke the real tool over the same run-scoped MCP endpoint
+            // opencode would use; a launch without it would make the scenario prove
+            // nothing, so it is refused rather than degraded.
+            RunMcpWiring.Endpoint endpoint = runMcp.forRun(spec, environment)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "The ar-render harness scenario needs the platform MCP endpoint: enable"
+                                    + " aria.mcp, keep auth-mode other than token, and give a SANDBOX"
+                                    + " placement aria.mcp.sandbox-host-address"));
+            env.put("ARIA_PEER_MCP_URL", endpoint.url());
+            env.put("ARIA_PEER_MCP_TOKEN", endpoint.token());
+        }
+        return new LaunchProfile(argv, env, workingDirectory.toString());
     }
 
     @Override

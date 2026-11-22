@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.util.List;
 
@@ -45,6 +46,9 @@ public class AriaChatRequest {
      */
     private String skillId;
 
+    /** Optional images for this turn; bytes are run context only. */
+    private List<Attachment> attachments;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -52,5 +56,18 @@ public class AriaChatRequest {
     public static class ChatMessage {
         private String role;
         private String content;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Attachment {
+        private String mimeType;
+        private String filename;
+        @ToString.Exclude
+        private String dataBase64;
+        private Integer width;
+        private Integer height;
     }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ALLOWED_MIME, MAX_ATTACHMENTS, rejectionFor } from '../ariaAttachments';
+import { ALLOWED_MIME, MAX_ATTACHMENTS, redrawTarget, rejectionFor } from '../ariaAttachments';
 
 function file(name: string, type: string, size = 1024): File {
   return new File([new Uint8Array(size)], name, { type });
@@ -24,5 +24,19 @@ describe('ariaAttachments', () => {
   it('rejects an image over four mebibytes before downscaling', () => {
     expect(rejectionFor([file('big.jpg', 'image/jpeg', 4 * 1024 * 1024 + 1)]))
       .toBe('Each image must be at most 4 MB.');
+  });
+
+  it('shrinks only the over-2048 edge', () => {
+    expect(redrawTarget(4096, 1024, 1024)).toEqual({ redraw: true, width: 2048, height: 512 });
+  });
+
+  it('re-encodes a heavy small image without upscaling it', () => {
+    expect(redrawTarget(1500, 1000, 2 * 1024 * 1024)).toEqual({
+      redraw: true, width: 1500, height: 1000,
+    });
+  });
+
+  it('keeps a light in-range image untouched', () => {
+    expect(redrawTarget(1200, 800, 1024)).toEqual({ redraw: false, width: 1200, height: 800 });
   });
 });

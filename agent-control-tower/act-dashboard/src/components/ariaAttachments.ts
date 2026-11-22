@@ -46,18 +46,33 @@ async function loadBitmap(file: File): Promise<{ source: CanvasImageSource; widt
   return { source: bitmap, width: bitmap.width, height: bitmap.height };
 }
 
+/** The redraw target: never upscale; only the over-2048 edge shrinks. */
+export function redrawTarget(
+  width: number,
+  height: number,
+  encodedBytes: number,
+): { redraw: boolean; width: number; height: number } {
+  const longest = Math.max(width, height);
+  const redraw = longest > DOWNSCALE_EDGE || encodedBytes > DOWNSCALE_BYTES;
+  if (!redraw) return { redraw, width, height };
+  const scale = Math.min(1, DOWNSCALE_EDGE / longest);
+  return {
+    redraw,
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
 export async function prepareImage(file: File): Promise<PendingImage> {
   const image = await loadBitmap(file);
-  const needsDownscale =
-    Math.max(image.width, image.height) > DOWNSCALE_EDGE || file.size > DOWNSCALE_BYTES;
+  const target = redrawTarget(image.width, image.height, file.size);
   let blob: Blob = file;
   let width = image.width;
   let height = image.height;
   let mimeType = file.type;
-  if (needsDownscale) {
-    const scale = DOWNSCALE_EDGE / Math.max(image.width, image.height);
-    width = Math.round(image.width * scale);
-    height = Math.round(image.height * scale);
+  if (target.redraw) {
+    width = target.width;
+    height = target.height;
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -72,7 +87,7 @@ export async function prepareImage(file: File): Promise<PendingImage> {
   if ('close' in image.source && typeof image.source.close === 'function') image.source.close();
   return {
     id: crypto.randomUUID(),
-    filename: needsDownscale ? file.name.replace(/\.[^.]+$/, '') + '.jpg' : file.name,
+    filename: target.redraw ? file.name.replace(/\.[^.]+$/, '') + '.jpg' : file.name,
     mimeType,
     dataBase64: await readBase64(blob),
     width,

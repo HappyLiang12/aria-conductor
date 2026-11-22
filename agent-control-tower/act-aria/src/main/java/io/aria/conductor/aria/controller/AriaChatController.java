@@ -6,6 +6,7 @@ import io.aria.conductor.aria.dto.AriaChatResponse;
 import io.aria.conductor.aria.service.AriaChatAttachmentValidator;
 import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.aria.service.AriaStreamService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -31,8 +32,9 @@ public class AriaChatController {
     }
 
     @PostMapping("/chat")
-    public ResponseEntity<AriaChatResponse> chat(@Valid @RequestBody AriaChatRequest request) {
-        return ResponseEntity.ok(ariaService.chat(request, validated(request)));
+    public ResponseEntity<AriaChatResponse> chat(@Valid @RequestBody AriaChatRequest request,
+                                                 HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(ariaService.chat(request, validated(request, httpRequest.getContentLengthLong())));
     }
 
     /**
@@ -47,17 +49,19 @@ public class AriaChatController {
      * SSE frame, on both endpoints.
      */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> chatStream(@Valid @RequestBody AriaChatRequest request) {
-        AriaChatAttachmentValidator.Validated attachments = validated(request);
+    public ResponseEntity<SseEmitter> chatStream(@Valid @RequestBody AriaChatRequest request,
+                                                 HttpServletRequest httpRequest) {
+        AriaChatAttachmentValidator.Validated attachments =
+                validated(request, httpRequest.getContentLengthLong());
         long sseTimeoutMs = systemConfigService.getLong("aria.sse.timeout.ms", 600_000L, 30_000L, 3_600_000L);
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
         ariaStreamService.streamChat(request, attachments, emitter);
         return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(emitter);
     }
 
-    private static AriaChatAttachmentValidator.Validated validated(AriaChatRequest request) {
+    private static AriaChatAttachmentValidator.Validated validated(AriaChatRequest request, long contentLength) {
         AriaChatAttachmentValidator.Result result =
-                AriaChatAttachmentValidator.validate(request.getAttachments());
+                AriaChatAttachmentValidator.validate(request.getAttachments(), contentLength);
         if (result.rejection() != null) {
             throw new AttachmentRejection(result.rejection());
         }

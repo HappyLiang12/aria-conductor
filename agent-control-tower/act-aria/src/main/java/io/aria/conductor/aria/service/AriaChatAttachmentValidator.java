@@ -19,6 +19,12 @@ public final class AriaChatAttachmentValidator {
     public static final int MAX_ATTACHMENTS = 5;
     public static final int MAX_IMAGE_BYTES = 4 * 1024 * 1024;
     public static final int MAX_TOTAL_BYTES = 10 * 1024 * 1024;
+    /**
+     * The body's ceiling, checked against {@code Content-Length} before anything is
+     * decoded: the decoded limits below are only knowable after the whole base64 has
+     * been read, and base64 inflates the bytes by a third beyond the 10 MiB total.
+     */
+    public static final long MAX_REQUEST_BYTES = 14_000_000;
     private static final Set<String> ALLOWED_MIME = Set.of("image/jpeg", "image/png", "image/webp");
 
     public record Rejection(HttpStatus status, String message) {}
@@ -26,6 +32,20 @@ public final class AriaChatAttachmentValidator {
     public record Result(Rejection rejection, Validated validated) {}
 
     private AriaChatAttachmentValidator() {
+    }
+
+    /**
+     * The body-guarded pass: a body larger than {@link #MAX_REQUEST_BYTES} is
+     * refused on its declared length, before its attachments are decoded. A
+     * negative length means the request carried none (a chunked body); the
+     * decoded limits below still apply.
+     */
+    public static Result validate(List<AriaChatRequest.Attachment> attachments, long contentLength) {
+        if (contentLength > MAX_REQUEST_BYTES) {
+            return reject(HttpStatus.PAYLOAD_TOO_LARGE,
+                    "Attachments must total at most " + MAX_TOTAL_BYTES + " bytes");
+        }
+        return validate(attachments);
     }
 
     public static Result validate(List<AriaChatRequest.Attachment> attachments) {

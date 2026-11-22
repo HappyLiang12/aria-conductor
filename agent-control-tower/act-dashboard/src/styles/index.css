@@ -1186,7 +1186,7 @@ body.light .ai-decision-error{color:#c2273a}
 .ai-sg:disabled{opacity:0.4;cursor:not-allowed}
 
 /* Compose */
-.ai-compose{display:flex;align-items:flex-end;gap:0.6rem;padding:0.7rem 0.85rem 0.5rem;border-top:1px solid var(--ai-edge);background:rgba(0,0,0,0.18);position:relative;z-index:1}
+.ai-compose{display:flex;flex-wrap:wrap;align-items:flex-end;gap:0.6rem;padding:0.7rem 0.85rem 0.5rem;border-top:1px solid var(--ai-edge);background:rgba(0,0,0,0.18);position:relative;z-index:1}
 .ai-compose-input{flex:1;min-height:54px;max-height:140px;padding:0.6rem 0.75rem;background:rgba(255,255,255,0.04);border:1px solid var(--ai-edge);border-radius:10px;color:var(--text);font-family:inherit;font-size:0.88rem;line-height:1.45;resize:none;transition:border-color 0.15s,box-shadow 0.15s}
 .ai-compose-input:focus{outline:none;border-color:rgba(129,140,248,0.55);box-shadow:0 0 0 3px rgba(129,140,248,0.15)}
 .ai-compose-input:disabled{opacity:0.6}
@@ -1196,6 +1196,21 @@ body.light .ai-decision-error{color:#c2273a}
 .ai-action-btn:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none}
 .ai-action-glyph{font-size:0.95rem;letter-spacing:0}
 .ai-hint{padding:0.35rem 1rem 0.65rem;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.6rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);text-align:center;position:relative;z-index:1;background:rgba(0,0,0,0.18);border-top:1px dashed var(--ai-edge)}
+
+/* Attachments — the composer's waiting images and a sent turn's thumbnails.
+   The chip strip and the refusal take a full row of the composer's flex line. */
+.ai-compose-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;flex-basis:100%}
+.ai-attachment-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px;border:1px solid var(--line-2);border-radius:8px;background:rgba(0,0,0,.20);font-size:11px}
+body.light .ai-attachment-chip{background:#f6f6f9}
+.ai-attachment-thumb{width:28px;height:28px;object-fit:cover;border-radius:5px}
+.ai-attachment-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-attachment-chip button{background:none;border:0;color:var(--text-mute);cursor:pointer}
+.ai-attachment-error{color:#ff8a8a;font-size:11px;margin-bottom:6px;flex-basis:100%}
+.ai-attach-input{display:none}
+.ai-attach-btn{background:none;border:0;color:var(--text-mute);font-size:16px;cursor:pointer;padding:4px}
+.ai-attach-btn:disabled{opacity:0.45;cursor:not-allowed}
+.ai-msg-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.ai-msg-attachment-thumb{max-width:160px;max-height:120px;border-radius:8px;border:1px solid var(--line-2)}
 
 /* Slash-command autocomplete menu ------------------------------------------ */
 .ai-slash{position:absolute;bottom:calc(100% - 4px);left:0.85rem;right:0.85rem;max-height:280px;overflow-y:auto;background:var(--surface,#0f172a);border:1px solid var(--ai-edge,#334155);border-radius:10px;box-shadow:0 -8px 32px rgba(0,0,0,0.45);z-index:100;padding:4px 0}

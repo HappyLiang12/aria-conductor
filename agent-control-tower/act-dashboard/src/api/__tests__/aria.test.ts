@@ -318,4 +318,25 @@ describe('aria streamMessage attachments and pre-stream refusals', () => {
     expect(onRejected).toHaveBeenCalledWith(415, 'Attachments must be image/jpeg, image/png or image/webp');
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('falls back to the legacy onError string when no onRejected is supplied', async () => {
+    // Callers written before `onRejected` existed must still learn the refusal:
+    // without the callback the old `Stream request failed: <reason>` string is
+    // the only channel left, and it must carry the server's own reason.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 415,
+      statusText: 'Unsupported Media Type',
+      text: async () => '{"error":"Attachments must be image/jpeg, image/png or image/webp"}',
+    });
+    const onError = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onError });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const surfaced = onError.mock.calls[0][0];
+    expect(typeof surfaced).toBe('string');
+    expect(surfaced).toMatch(/^Stream request failed: /);
+    expect(surfaced).toContain('Attachments must be image/jpeg, image/png or image/webp');
+  });
 });

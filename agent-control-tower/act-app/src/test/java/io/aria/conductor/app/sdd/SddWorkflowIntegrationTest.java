@@ -37,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
 
 /**
@@ -122,7 +123,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         openCodeProperties.setRepoUrl("");
         // Deterministic credential for the {repoUrl} templates: a usable git credential
         // must be declared rather than resolved from the ambient environment.
-        when(gitBranchService.isAvailable()).thenReturn(true);
+        doReturn(true).when(gitBranchService).isAvailable();
         baAgentId = createAgent("BA-Agent-" + shortUuid());
         devAgentId = createAgent("DEV-Agent-" + shortUuid());
         qaAgentId = createAgent("QA-Agent-" + shortUuid());

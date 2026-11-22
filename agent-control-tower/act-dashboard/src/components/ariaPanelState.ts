@@ -124,6 +124,7 @@ export type PanelEvent =
 export type MemoryProposalSummary = { id: string; subjectType: 'FACT' | 'ENTITY' | 'RELATION'; entityId?: string; factKey?: string; valueText?: string; sensitivity?: string };
 
 type RestoreEvent = Extract<PanelEvent, { type: 'restore' }>;
+type UserItem = Extract<PanelItem, { kind: 'user' }>;
 type ActivityItem = Extract<PanelItem, { kind: 'activity' }>;
 type ApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
 type ClarificationItem = Extract<PanelItem, { kind: 'clarification' }>;
@@ -531,6 +532,33 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
 // === restore ===
 
 /**
+ * The snapshot re-delivers the operator's own message as text only; the live
+ * turn's previews are client-side and would otherwise vanish on the first
+ * reconcile. Match same-content occurrences in order and carry the previews.
+ */
+function withCarriedPreviews(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
+  const indices = new Map<string, number[]>();
+  base.forEach((item, index) => {
+    if (item.kind !== 'user') return;
+    const list = indices.get(item.content) ?? [];
+    list.push(index);
+    indices.set(item.content, list);
+  });
+  if (indices.size === 0) return base;
+  const cursors = new Map<string, number>();
+  const out = base.slice();
+  for (const item of prior) {
+    if (item.kind !== 'user' || !item.attachments || item.attachments.length === 0) continue;
+    const ordinal = cursors.get(item.content) ?? 0;
+    cursors.set(item.content, ordinal + 1);
+    const at = indices.get(item.content)?.[ordinal];
+    if (at === undefined) continue;
+    out[at] = { ...(out[at] as UserItem), attachments: item.attachments };
+  }
+  return out;
+}
+
+/**
  * Reconcile against a REST snapshot. The snapshot is the durable record, but it
  * is taken at a different instant than the live planes, so it is merged rather
  * than assigned: a frame that arrived while the snapshot was in flight survives
@@ -539,7 +567,8 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
 function restore(state: PanelState, event: RestoreEvent): PanelState {
   const fromTimeline = itemsFromTimeline(event.timeline);
   const prior = state.conversationId === event.conversationId ? state.items : [];
-  const items = mergeCarriedStrips(fromTimeline, carryOver(prior, fromTimeline));
+  const restored = withCarriedPreviews(prior, fromTimeline);
+  const items = mergeCarriedStrips(restored, carryOver(prior, restored));
   const runIds = new Set(event.timeline.map((entry) => entry.runId).filter((runId) => !!runId));
   const askIds = new Set(
     items.flatMap((item) => (item.kind === 'approval' || item.kind === 'clarification' ? [item.approvalId] : [])),

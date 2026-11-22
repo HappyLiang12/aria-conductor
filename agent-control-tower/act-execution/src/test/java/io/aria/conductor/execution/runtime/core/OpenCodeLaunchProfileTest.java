@@ -71,7 +71,10 @@ class OpenCodeLaunchProfileTest {
                     "baseURL": "https://api.deepseek.com/v1"
                   },
                   "models": {
-                    "deepseek-chat": {}
+                    "deepseek-chat": {
+                      "attachment": true,
+                      "modalities": { "input": ["text", "image"], "output": ["text"] }
+                    }
                   }
                 }
               }

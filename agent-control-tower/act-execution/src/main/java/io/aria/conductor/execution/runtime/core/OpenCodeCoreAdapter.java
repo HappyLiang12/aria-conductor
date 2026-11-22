@@ -149,7 +149,10 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                     "baseURL": "%s"
                   },
                   "models": {
-                    "%s": {}
+                    "%s": {
+                      "attachment": true,
+                      "modalities": { "input": ["text", "image"], "output": ["text"] }
+                    }
                   }
                 }
               }
@@ -211,7 +214,10 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                     "baseURL": "%s"
                   },
                   "models": {
-                    "%s": {}
+                    "%s": {
+                      "attachment": true,
+                      "modalities": { "input": ["text", "image"], "output": ["text"] }
+                    }
                   }
                 }
               }

@@ -305,7 +305,12 @@ class OpenCodeCoreAdapterTest {
                 .contains("\"npm\": \"@ai-sdk/openai-compatible\"")
                 .contains("\"apiKey\": \"{env:LLM_API_KEY}\"")
                 .contains("\"baseURL\": \"https://gw.example.com/v1\"")
-                .contains("\"acme-flash\": {}");
+                .contains("\"acme-flash\": {")
+                // The model declares image attachment: opencode defaults a custom
+                // provider model to no attachment/vision, which silently drops the
+                // observe frame's image before the model ever sees it.
+                .contains("\"attachment\": true")
+                .contains("\"modalities\": { \"input\": [\"text\", \"image\"], \"output\": [\"text\"] }");
         // The permission policy is unchanged: pointing at a provider never widens it.
         assertThat(document)
                 .contains("\"*\": \"deny\"")

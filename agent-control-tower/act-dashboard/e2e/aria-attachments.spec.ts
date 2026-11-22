@@ -90,14 +90,16 @@ test('a large image is redrawn to JPEG before it is sent', async ({ page }) => {
     canvas.height = 2100;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('no 2d context');
-    const gradient = ctx.createLinearGradient(0, 0, 2100, 2100);
-    gradient.addColorStop(0, '#123456');
-    gradient.addColorStop(1, '#fedcba');
-    ctx.fillStyle = gradient;
+    // A solid fill keeps the encoded PNG tiny on every browser's encoder; the
+    // >2048 px edge is what must trigger the redraw, not the byte threshold.
+    ctx.fillStyle = '#123456';
     ctx.fillRect(0, 0, 2100, 2100);
     const blob = await new Promise<Blob>((resolve) => {
       canvas.toBlob((value) => resolve(value as Blob), 'image/png');
     });
+    if (blob.size > 4 * 1024 * 1024) {
+      throw new Error(`generated image too large for the phase-1 cap: ${blob.size}`);
+    }
     const file = new File([blob], 'big.png', { type: 'image/png' });
     const data = new DataTransfer();
     data.items.add(file);

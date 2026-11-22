@@ -162,7 +162,8 @@ Identical names and payloads to `chat/stream` (`act-dashboard/src/api/aria.ts` i
 | Frame | Payload | Glasses use |
 |-------|---------|-------------|
 | `thinking` | `{runId}` | status indicator |
-| `tool_call` | `{runId, name, toolCallId, args}` | `name == "ar_render"` → parse `args`, apply the primitive |
+| `ar_render` | `{runId, renderId, render:{…args…}}` | **the device delivery path**: apply `render`, the same object the tool was called with |
+| `tool_call` | `{runId, name, toolCallId, args}` | optional fallback; on the opencode core no tool calls reach this stream, on the qoder core they do |
 | `tool_result` | `{runId, name, result, ok}` | optional status |
 | `message` | `{content}` | HUD card and TTS |
 | `done` | `{runId, conversationId, intent}` | end of turn; `intent` is `observe` |
@@ -170,6 +171,9 @@ Identical names and payloads to `chat/stream` (`act-dashboard/src/api/aria.ts` i
 | `approval_required` | `{runId, approvalId, toolName, riskTier, toolPolicy, optionsJson, expiresAt}` | decision card (Section 5.4) |
 | `waiting_input` | `{runId, approvalId, question}` | question card (Section 5.4); unreachable on opencode, see below |
 
+- `ar_render` is emitted once per successful tool call, on the invoking run's live stream, before the tool returns its ack. It is not ordered against `tool_call`/`tool_result` (which the opencode core does not emit); it is always before the turn's `message` and `done` because the tool runs inside the turn. Several calls arrive in call order, and `clear` is a normal frame like any other. The `render` object is exactly the validated call's args with absent optional members omitted.
+- Delivery is best-effort: a run with no live stream (a sync turn, a closed client) gets no frame, and the tool ack says `delivered:false`. The tool-call audit row remains the durable record either way.
+- Only the invoking run's worker actor can address a stream: the run id comes from the transport-resolved actor, never from a tool argument. An operator or anonymous call is acknowledged with `delivered:false` and emits nothing.
 - Multiple `ar_render` calls may arrive in one turn. Apply them in arrival order.
 - A mid-run failure ends the turn with `done` followed by `error` carrying only `{"message": …}`; the enriched `{message, turnFailed, runId, reason}` shape is produced only by the pre-stream/startup failure path, where a run exists but no turn ran. A client must therefore treat the absent `turnFailed` as "transport/turn ended", not as a success.
 - `args` is a redacted JSON string. Redaction only replaces token-shaped values and named secret keys, so the string remains valid JSON; the client must still `try/catch` the parse and drop a malformed render rather than crash.
@@ -199,7 +203,9 @@ Registered in `act-mcp` as one more `McpTool` bean, with one `ToolCatalog` entry
 - `durationS` applies to `timer` and to any primitive that should auto-clear; for non-timer primitives, `0` or absent means "until replaced or cleared".
 - `clear` ignores `target` and removes the current overlay.
 - Argument names are camelCase because Spring AI 1.0.9 names JSON arguments from Java parameters. A wrapper record would add an extra level to the payload, so the tool takes individual parameters.
-- Return the shared envelope `{"ok":true,"data":{"ack":true,"primitive":"…"}}` via `ToolResponses.ok`. A validation failure returns the standard `VALIDATION` error envelope so Aria can correct itself in the same turn.
+- Return the shared envelope `{"ok":true,"data":{"ack":true,"primitive":"…","delivered":true|false}}` via `ToolResponses.ok`, where `delivered` is the stream registry's own answer. A validation failure returns the standard `VALIDATION` error envelope so Aria can correct itself in the same turn.
+- The tool emits the device frame itself through `ArRenderSignals`: event `ar_render`, payload `{runId, renderId, render}`. This is the one delivery path a client may depend on; the opencode core never emits a `tool_call` frame for it.
+- Deterministic proof without a model: `ArRenderSignalsTest` (payload shape, event name, absent stream), `ArRenderToolsTest` (a worker actor's run receives the call's args; an anonymous call is acknowledged with `delivered:false`; a validation failure emits nothing) and `McpEndpointIntegrationTest.arRenderEmitsTheFrameOnTheWorkersRunStream` (a real MCP session authenticating with a minted worker bearer, writing to that run's registered stream). The harness's mock peer does not invoke tools, so a run-level harness E2E of this frame needs a peer scenario; that remains a follow-up.
 - Policy: `WORKER_READ`, auto-approve true. It changes no platform state; the audit row is the existing tool-call record.
 - Target resolution priority is the phone's: `trackId`, then `objectId`, then `label`, then `bbox`.
 

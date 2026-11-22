@@ -19,8 +19,14 @@ import type { Approval } from '../types';
  */
 
 export type ToolActivity = { name: string; status: 'running' | 'ok' | 'error'; startedAt: number; durationMs?: number; args?: string; result?: string; toolCallId?: string };
+/**
+ * An image the operator attached to a chat turn. `previewUrl` is a client-side
+ * object URL for the optimistic bubble's thumbnail; it is never persisted or
+ * logged, and the turn it belongs to is what the server actually carries.
+ */
+export type AriaMessageAttachment = { filename: string; mimeType: string; previewUrl: string };
 export type PanelItem =
-  | { kind: 'user'; id: string; content: string; timestamp: string }
+  | { kind: 'user'; id: string; content: string; timestamp: string; attachments?: AriaMessageAttachment[] }
   | { kind: 'assistant'; id: string; content: string; timestamp: string; error?: boolean; retryText?: string; noRetry?: boolean }
   | { kind: 'activity'; id: string; turnId: string; tools: ToolActivity[]; collapsed: boolean }
   | {
@@ -58,7 +64,13 @@ export type PanelItem =
 export type PanelState = { items: PanelItem[]; conversationId: string };
 export type PanelEvent =
   | { type: 'restore'; conversationId: string; timeline: TimelineEntry[]; approvals: Approval[]; proposals: MemoryProposalSummary[] }
-  | { type: 'userSent'; id: string; content: string; timestamp: string }
+  | { type: 'userSent'; id: string; content: string; timestamp: string; attachments?: AriaMessageAttachment[] }
+  /**
+   * The server refused the send before any stream began, so the optimistic user
+   * turn never became a run. It is removed by its own id; every other item keeps
+   * its order and identity.
+   */
+  | { type: 'userSendFailed'; id: string }
   /**
    * `turnId` IS the run id — the only turn identity a restored timeline carries.
    * A caller must pass the run id (the `thinking` event's active run id), not a
@@ -153,7 +165,15 @@ export function panelReducer(state: PanelState, event: PanelEvent): PanelState {
     case 'restore':
       return restore(state, event);
     case 'userSent':
-      return appendMessage(state, { kind: 'user', id: event.id, content: event.content, timestamp: event.timestamp });
+      return appendMessage(state, {
+        kind: 'user',
+        id: event.id,
+        content: event.content,
+        timestamp: event.timestamp,
+        ...(event.attachments !== undefined ? { attachments: event.attachments } : {}),
+      });
+    case 'userSendFailed':
+      return { items: state.items.filter((item) => item.id !== event.id), conversationId: state.conversationId };
     case 'assistantMessage':
       return appendMessage(state, { kind: 'assistant', id: event.id, content: event.content, timestamp: event.timestamp });
     case 'turnFailed':

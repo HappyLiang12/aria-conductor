@@ -246,7 +246,7 @@ public class ToolCatalog implements ToolCatalogProvider {
             write("cancel_scheduled_job",
                     "Cancel (delete) a scheduled job by id so it never fires again."),
             read("ar_render",
-                    "Render one AR primitive on the paired glasses display. primitive is one of track, arrow_to, highlight, label, indicator, step, timer, clear. target carries trackId/objectId/label/bbox; prefer the observation's trackId and never invent one. directionDeg is clockwise from the screen centre when anchor=screen, relative to magnetic north when anchor=heading. Confirm the ack before describing the overlay in prose. It renders on the device and changes no platform state.",
+                    "Render one AR primitive on the paired glasses display. A successful call emits one ar_render frame on the run's live stream. primitive is one of track, arrow_to, highlight, label, indicator, step, timer, clear. target carries trackId/objectId/label/bbox; prefer the observation's trackId and never invent one. directionDeg is clockwise from the screen centre when anchor=screen, relative to magnetic north when anchor=heading. Confirm the ack before describing the overlay in prose. It renders on the device and changes no platform state.",
                     true),
             read("get_latest_conversation",
                     "Return the most recent Aria conversation (conversationId, lastMessageAt, runCount). data is null when no conversation exists yet.",

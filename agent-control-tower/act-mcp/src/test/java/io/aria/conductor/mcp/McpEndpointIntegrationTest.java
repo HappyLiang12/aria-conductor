@@ -12,11 +12,38 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(classes = McpTestBootstrap.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+@SpringBootTest(classes = {McpTestBootstrap.class, McpEndpointIntegrationTest.SignalBeans.class},
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "aria.mcp.enabled=true",
         "aria.mcp.auth-mode=none"
 })
 class McpEndpointIntegrationTest {
+
+    /** The run-stream pieces the ar_render frame path needs; the slim bootstrap does not scan them. */
+    @org.springframework.boot.test.context.TestConfiguration
+    static class SignalBeans {
+        @org.springframework.context.annotation.Bean
+        io.aria.conductor.execution.security.ActorTokenService actorTokenService() {
+            return new io.aria.conductor.execution.security.ActorTokenService();
+        }
+
+        @org.springframework.context.annotation.Bean
+        io.aria.conductor.execution.engine.RunStreamRegistry runStreamRegistry() {
+            return new io.aria.conductor.execution.engine.RunStreamRegistry();
+        }
+
+        @org.springframework.context.annotation.Bean
+        io.aria.conductor.execution.engine.ArRenderSignals arRenderSignals(
+                io.aria.conductor.execution.engine.RunStreamRegistry runStreamRegistry) {
+            return new io.aria.conductor.execution.engine.ArRenderSignals(runStreamRegistry);
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    io.aria.conductor.execution.security.ActorTokenService actorTokens;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    io.aria.conductor.execution.engine.RunStreamRegistry runStreams;
 
     @LocalServerPort
     int port;
@@ -116,6 +143,57 @@ class McpEndpointIntegrationTest {
             assertThat(((McpSchema.TextContent) result.content().get(0)).text())
                     .contains("\"ok\":true")
                     .contains("\"primitive\":\"track\"");
+        }
+    }
+
+    /**
+     * The deterministic, model-free proof of the device delivery path: a real MCP
+     * session authenticates as the run's worker, the tool executes, and the frame is
+     * written to that run's live stream. The ack's {@code delivered:true} is the
+     * registry's own answer, so a frame that never reached a stream cannot pass.
+     */
+    @Test
+    void arRenderEmitsTheFrameOnTheWorkersRunStream() {
+        java.util.UUID runId = java.util.UUID.randomUUID();
+        String workerToken = actorTokens.issueWorker(runId, java.time.Instant.now().plusSeconds(120));
+        runStreams.register(runId, new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(60_000L));
+
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port)
+                        .customizeRequest(builder -> builder.header("Authorization", "Bearer " + workerToken))
+                        .build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest("ar_render",
+                    java.util.Map.of(
+                            "primitive", "track",
+                            "target", java.util.Map.of("trackId", 7),
+                            "text", "TV remote")));
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().get(0)).text())
+                    .contains("\"ok\":true")
+                    .contains("\"delivered\":true");
+            assertThat(runStreams.hasStream(runId)).isTrue();
+        }
+    }
+
+    /** No credential means no run to address: the ack is returned, nothing is emitted. */
+    @Test
+    void arRenderWithoutACredentialIsAcknowledgedButNotDelivered() {
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest("ar_render",
+                    java.util.Map.of("primitive", "clear")));
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().get(0)).text())
+                    .contains("\"ok\":true")
+                    .contains("\"delivered\":false");
         }
     }
 }

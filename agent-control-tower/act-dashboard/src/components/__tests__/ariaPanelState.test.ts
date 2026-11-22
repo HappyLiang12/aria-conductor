@@ -494,6 +494,35 @@ describe('panelReducer restore merge', () => {
     expect(s.items.filter((i) => i.kind === 'user')).toHaveLength(1);
   });
 
+  it('keeps the sent attachments on the user item', () => {
+    const next = panelReducer(base, {
+      type: 'userSent',
+      id: 'u1',
+      content: 'look',
+      timestamp: '2026-11-22T10:00:00.000Z',
+      attachments: [{ filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' }],
+    });
+
+    const item = next.items.find((entry) => entry.id === 'u1');
+    expect(item?.kind).toBe('user');
+    if (item?.kind === 'user') {
+      expect(item.attachments).toEqual([{ filename: 'p.jpg', mimeType: 'image/jpeg', previewUrl: 'blob:1' }]);
+    }
+  });
+
+  it('removes a rejected optimistic user item and keeps the rest', () => {
+    const sent = panelReducer(base, {
+      type: 'userSent', id: 'u1', content: 'look', timestamp: '2026-11-22T10:00:00.000Z',
+    });
+    const withAssistant = panelReducer(sent, {
+      type: 'assistantMessage', id: 'a1', content: 'ok', timestamp: '2026-11-22T10:00:01.000Z',
+    });
+
+    const next = panelReducer(withAssistant, { type: 'userSendFailed', id: 'u1' });
+
+    expect(next.items.map((entry) => entry.id)).toEqual(['a1']);
+  });
+
   it('keeps a live settled tool when the snapshot only holds its call row', () => {
     let s = panelReducer(base, { type: 'toolCall', turnId: 'r1', name: 'recall_memory', now: 1_000 });
     s = panelReducer(s, { type: 'toolResult', turnId: 'r1', name: 'recall_memory', result: '{"hits":1}', ok: true, now: 1_250 });

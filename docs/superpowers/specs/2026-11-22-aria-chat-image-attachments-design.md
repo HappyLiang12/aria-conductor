@@ -95,7 +95,7 @@ Rules:
 - The UI enforces the same limits: type, at most 5, per-image and total size after downscaling. A rejected drop or paste shows an inline message; PDF and other types say "phase 1 supports images only".
 - On send, the request body carries the attachments; the user bubble renders the thumbnails from the client's object URLs (the transcript is client-side for this turn).
 - A retry resends the last turn's attachments, which stay in memory until the next successful send.
-- A pre-stream 400/413/415/422 is shown as the specific reason. The composer clears only once the server has accepted the request (a 2xx response); on a rejection the draft and pending images stay so the operator can fix them. The stream client reads the JSON error body instead of only `statusText`.
+- A pre-stream 400/413/415/422 removes the optimistic user message and restores the draft and pending images, with the specific reason shown, so the operator can fix them. The stream client reads the JSON error body instead of only `statusText`.
 - Object URLs are revoked when an image is removed and when the panel unmounts.
 
 `api/aria.ts` gains `AriaAttachmentPayload`, and `streamMessage`/`sendMessage` accept the attachments and forward them in the JSON body.

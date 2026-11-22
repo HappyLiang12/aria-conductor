@@ -268,8 +268,10 @@ public class CoreE2eConfiguration {
     @Bean
     public io.aria.conductor.execution.runtime.CoreAdapter coreE2eOpenCodeAdapter(
             CoreE2eScenarios scenarios, CoreE2eProcessBackend.State peers, CoreE2eSettings settings,
+            io.aria.conductor.execution.mcp.RunMcpWiring runMcp,
             @Value("${e2e.node-executable:node}") String nodeExecutable) {
-        return new CoreE2eOpenCodeAdapter(scenarios, peers, nodeExecutable, settings.opencodePeerScript());
+        return new CoreE2eOpenCodeAdapter(scenarios, peers, nodeExecutable,
+                settings.opencodePeerScript(), runMcp);
     }
 
     /**

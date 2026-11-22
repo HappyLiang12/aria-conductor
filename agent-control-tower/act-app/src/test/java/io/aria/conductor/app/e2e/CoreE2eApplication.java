@@ -66,7 +66,11 @@ public final class CoreE2eApplication {
                 StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
                 new MapPropertySource("coreE2eAdmissionDefaults", Map.of(
                         "aria.runs.max-active", "0",
-                        "aria.runs.aria-reserved", "0")));
+                        "aria.runs.aria-reserved", "0",
+                        // The harness's SANDBOX placement is a same-host process peer, so the
+                        // platform MCP endpoint is reachable on loopback. An explicit
+                        // environment/CLI value still wins.
+                        "aria.mcp.sandbox-host-address", "127.0.0.1")));
     }
 
     private CoreE2eApplication() {

@@ -322,6 +322,98 @@ async function streamParts() {
  * message. The writer scenarios hold the same way and keep the recorded `DONE`
  * completion for a genuine grant.
  */
+/**
+ * The ar-render scenario's real platform call. The harness's "core" is still a
+ * mock peer, so it invokes the tool itself over the same run-scoped streamable
+ * MCP endpoint opencode would use (URL and worker bearer come from the launch
+ * environment). The ack must report delivery, or the turn fails instead of
+ * passing on a frame that never reached the run's stream.
+ */
+async function callArRenderTool() {
+  const url = process.env.ARIA_PEER_MCP_URL;
+  const token = process.env.ARIA_PEER_MCP_TOKEN;
+  if (typeof url !== 'string' || url.length === 0 || typeof token !== 'string' || token.length === 0) {
+    throw new Error('ar-render scenario requires ARIA_PEER_MCP_URL and ARIA_PEER_MCP_TOKEN');
+  }
+  const baseHeaders = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${token}`,
+  };
+  const initialize = await fetch(url, {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'aria-harness-peer', version: '1' },
+      },
+    }),
+  });
+  const sessionId = initialize.headers.get('mcp-session-id');
+  await initialize.text();
+  if (!initialize.ok || !sessionId) {
+    throw new Error(`MCP initialize failed: ${initialize.status}`);
+  }
+  const sessionHeaders = {
+    ...baseHeaders,
+    'mcp-session-id': sessionId,
+    'mcp-protocol-version': '2025-03-26',
+  };
+  const initialized = await fetch(url, {
+    method: 'POST',
+    headers: sessionHeaders,
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+  });
+  await initialized.text();
+  if (initialized.status >= 400) {
+    throw new Error(`MCP initialized failed: ${initialized.status}`);
+  }
+  const call = await fetch(url, {
+    method: 'POST',
+    headers: sessionHeaders,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'ar_render',
+        arguments: {
+          primitive: 'track',
+          target: { trackId: 7 },
+          text: 'TV remote',
+          anchor: 'screen',
+        },
+      },
+    }),
+  });
+  const body = await call.text();
+  if (!call.ok) {
+    throw new Error(`MCP tools/call failed: ${call.status}`);
+  }
+  const dataLine = body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .find((line) => line.length > 0);
+  let payload = null;
+  try {
+    payload = dataLine ? JSON.parse(dataLine) : JSON.parse(body);
+  } catch (ignored) {
+    payload = null;
+  }
+  const toolText = payload?.result?.content?.[0]?.text ?? '';
+  if (!toolText.includes('"delivered":true')) {
+    throw new Error(`ar_render ack did not report delivery: ${toolText}`);
+  }
+  record('peer.mcp_ar_render', { delivered: true });
+}
+
 async function startDecisionFlow(body) {
   switch (SCENARIO) {
     case 'quota-usage':
@@ -588,6 +680,11 @@ const server = createServer(async (request, response) => {
         messages.push(message);
         json(response, 200, message);
         return;
+      }
+      // The real tool call the run's SSE must carry, made through the platform MCP
+      // endpoint with this run's worker bearer before the completion is served.
+      if (SCENARIO === 'ar-render') {
+        await callArRenderTool();
       }
       // A decision-gated scenario holds the message response until its decision
       // resolves (startDecisionFlow), so the run really blocks on the gate.

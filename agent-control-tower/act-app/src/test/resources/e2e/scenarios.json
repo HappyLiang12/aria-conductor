@@ -460,6 +460,22 @@
         "escalation": "the harness must terminate the owned tree"
       },
       "expected": ["the peer and the writer survive the cooperative cancel", "terminating the tree kills both and freezes the bytes"]
+    },
+    {
+      "id": "ar-render",
+      "title": "The peer calls the platform ar_render tool once during a turn",
+      "prompt": "Call ar_render for the tracked remote, then reply",
+      "peers": ["opencode"],
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message", "GET /session/:id/message"],
+        "writes": 0,
+        "model": "efficient",
+        "mcp": "initialize + notifications/initialized + tools/call ar_render(track, trackId 7) before the completion"
+      },
+      "expected": [
+        "the peer calls ar_render over the run-scoped MCP endpoint and sees delivered:true",
+        "the run's SSE carries one ar_render frame before the message and done frames"
+      ]
     }
   ]
 }

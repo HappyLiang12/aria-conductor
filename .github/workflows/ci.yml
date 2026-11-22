@@ -256,6 +256,8 @@ jobs:
           echo "All smoke tests passed."
       - name: Observe API E2E (deterministic harness)
         run: node e2e/observe/observe-smoke.mjs
+      - name: ar_render frame E2E (deterministic harness)
+        run: node e2e/aria/ar-render-smoke.mjs
       - name: Dump backend log tail (diagnose)
         if: failure()
         run: tail -n 300 backend.log || true

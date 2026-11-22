@@ -2759,4 +2759,39 @@ describe('AriaPanel image attachments', () => {
     expect(mockStream.mock.calls[1][1]).toBe('does this hold?');
     expect(lastOptions(1)?.attachments).toEqual([expect.objectContaining({ filename: 'q.png' })]);
   });
+
+  // The send that failed emptied the composer, so there is no image on screen to
+  // retry with: the failed turn's images are the fallback. Only the second call
+  // is asserted — the first carries the image for the ordinary reason, and a
+  // regression that dropped the fallback would resend an image turn as text
+  // with nothing on screen to say so.
+  it('retries with the failed turn\'s images when the composer is empty', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await openPanel();
+    fireEvent.change(input, { target: { value: 'does this still hold?' } });
+
+    const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(fileInput as HTMLInputElement, new File([new Uint8Array([1, 2, 3])], 'p.png', { type: 'image/png' }));
+    await screen.findByText('p.png');
+
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onError?.('boom');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    // The legacy error path reconciles against the queue before offering Retry.
+    await screen.findByText(/no approval is pending/, undefined, { timeout: 3000 });
+
+    // The failed send took the draft and the image with it: nothing is left in
+    // the composer for Retry to draw its attachments from.
+    expect((textarea() as HTMLTextAreaElement).value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Remove p.png' })).toBeNull();
+
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
+
+    const retried = mockStream.mock.calls.length - 1;
+    expect(mockStream.mock.calls[retried][1]).toBe('does this still hold?');
+    expect(lastOptions(retried)?.attachments).toEqual([expect.objectContaining({ filename: 'p.png' })]);
+  });
 });

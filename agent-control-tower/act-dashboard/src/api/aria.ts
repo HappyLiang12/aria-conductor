@@ -88,15 +88,41 @@ export function buildSyncChatContent(response: AriaChatResponse): string {
   ].filter(Boolean).join('\n\n');
 }
 
+/**
+ * One image travelling with a chat turn. The base64 payload is turn input only:
+ * it is never logged, never put on the stream, and never persisted — the
+ * transcript keeps a names/sizes summary the backend writes into the seed.
+ */
+export interface AriaAttachmentPayload {
+  mimeType: string;
+  filename: string;
+  dataBase64: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * Attachments ride in the turn's JSON body, so `sendMessage` and `streamMessage`
+ * share this: an absent or empty array adds no `attachments` key at all (the
+ * backend then treats the turn as text-only).
+ */
+function attachmentBody(
+  attachments: AriaAttachmentPayload[] | undefined,
+): Record<string, unknown> {
+  return attachments && attachments.length > 0 ? { attachments } : {};
+}
+
 export async function sendMessage(
   conversationId: string,
   message: string,
-  history: Array<{ role: string; content: string }> = []
+  history: Array<{ role: string; content: string }> = [],
+  attachments: AriaAttachmentPayload[] = []
 ): Promise<AriaMessage> {
   const { data } = await client.post<AriaChatResponse>('/api/v1/aria/chat', {
     message,
     history,
     conversationId,
+    ...attachmentBody(attachments),
   });
   return {
     id: crypto.randomUUID(),
@@ -171,6 +197,14 @@ export interface StreamCallbacks {
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
   onError?: (error: StreamError) => void;
+  /**
+   * A refusal answered before the stream opens: a non-2xx response whose JSON
+   * body names the reason (`{"error": "..."}`), e.g. an unsupported attachment
+   * type (415) or an oversized image (413). Supplying it leaves `onError` for
+   * post-stream failures only. Without it, the legacy
+   * `Stream request failed: ...` string still reaches `onError`.
+   */
+  onRejected?: (status: number, message: string) => void;
   onApprovalRequired?: (ask: ApprovalRequiredSignal) => void;
   onWaitingInput?: (ask: WaitingInputSignal) => void;
   onMemoryProposal?: (proposal: MemoryProposalSignal) => void;
@@ -208,7 +242,11 @@ export async function streamMessage(
   history: Array<{ role: string; content: string }>,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  options?: { isCancelled?: () => boolean; skillId?: string },
+  options?: {
+    isCancelled?: () => boolean;
+    skillId?: string;
+    attachments?: AriaAttachmentPayload[];
+  },
 ): Promise<void> {
   const response = await fetch('/api/v1/aria/chat/stream', {
     method: 'POST',
@@ -221,13 +259,28 @@ export async function streamMessage(
       message,
       history,
       ...(options?.skillId ? { skillId: options.skillId } : {}),
+      ...attachmentBody(options?.attachments),
     }),
     signal,
   });
 
-  if (!response.ok || !response.body) {
-    const detail = response.statusText || `HTTP ${response.status}`;
-    callbacks.onError?.(`Stream request failed: ${detail}`);
+  if (!response.ok) {
+    // The refusal is JSON (`{"error": "..."}`) and carries no attachment payload,
+    // so it is safe to surface verbatim; a non-JSON body keeps the status text.
+    let reason = response.statusText || `HTTP ${response.status}`;
+    try {
+      const text = await response.text();
+      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      reason = parsed.error || parsed.message || reason;
+    } catch {
+      // non-JSON body: keep the status text
+    }
+    if (callbacks.onRejected) callbacks.onRejected(response.status, reason);
+    else callbacks.onError?.(`Stream request failed: ${reason}`);
+    return;
+  }
+  if (!response.body) {
+    callbacks.onError?.('Stream request failed: empty response body');
     return;
   }
 

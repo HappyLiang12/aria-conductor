@@ -273,3 +273,49 @@ describe('aria streamMessage tool result success flag', () => {
     expect(onToolResult).toHaveBeenNthCalledWith(3, 'list_runs', '[]', true);
   });
 });
+
+describe('aria streamMessage attachments and pre-stream refusals', () => {
+  // Attachments travel in the same JSON body as the turn; a refusal arrives
+  // before the stream opens, as JSON with the reason the operator must see.
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends attachments in the request body', async () => {
+    fetchMock.mockResolvedValue(sseResponse([
+      'event: done\ndata: {"runId":"r1","conversationId":"c1","intent":"chat"}\n\n',
+    ]));
+
+    await streamMessage('c1', 'hi', [], {}, undefined, {
+      attachments: [{ mimeType: 'image/jpeg', filename: 'p.jpg', dataBase64: 'AAEC' }],
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body.attachments).toEqual([
+      { mimeType: 'image/jpeg', filename: 'p.jpg', dataBase64: 'AAEC' },
+    ]);
+  });
+
+  it('reports a pre-stream rejection as status plus the JSON error', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 415,
+      statusText: 'Unsupported Media Type',
+      text: async () => '{"error":"Attachments must be image/jpeg, image/png or image/webp"}',
+    });
+    const onRejected = vi.fn();
+    const onError = vi.fn();
+
+    await streamMessage('c1', 'hi', [], { onRejected, onError });
+
+    expect(onRejected).toHaveBeenCalledWith(415, 'Attachments must be image/jpeg, image/png or image/webp');
+    expect(onError).not.toHaveBeenCalled();
+  });
+});

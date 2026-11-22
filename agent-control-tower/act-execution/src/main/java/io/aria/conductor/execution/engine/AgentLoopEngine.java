@@ -213,6 +213,15 @@ public class AgentLoopEngine {
     }
 
     /**
+     * The attachment-carrying form of {@link #startRun(UUID, List)}: binary parts
+     * travel with this turn only and reach the core task as-is.
+     */
+    public void startRun(UUID runId, List<LlmMessage> initialContext, List<CoreAttachment> attachments) {
+        startRunInternal(runId, null, initialContext != null ? initialContext : List.of(), null,
+                attachments != null ? attachments : List.of());
+    }
+
+    /**
      * Start a streaming run — same as {@link #startRun} but bridges SSE events
      * to the provided emitter. The caller (AriaStreamService) is responsible for
      * emitter lifecycle management (timeout, error, completion).

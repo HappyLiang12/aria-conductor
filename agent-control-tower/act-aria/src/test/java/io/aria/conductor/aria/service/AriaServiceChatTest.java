@@ -208,7 +208,7 @@ class AriaServiceChatTest {
     void chat_delegatesExecutionToAgentLoopEngine() {
         ariaService.chat(request("hello"));
 
-        verify(agentLoopEngine).startRun(eq(RUN_ID), anyList());
+        verify(agentLoopEngine).startRun(eq(RUN_ID), anyList(), eq(List.of()));
     }
 
     /**
@@ -220,9 +220,30 @@ class AriaServiceChatTest {
     void chat_handsNoHistoryToTheEngineAndNeverLoadsItsOwn() {
         ariaService.chat(request("hello"));
 
-        verify(agentLoopEngine).startRun(RUN_ID, List.of());
+        verify(agentLoopEngine).startRun(RUN_ID, List.of(), List.of());
         verify(runRepository, never()).findByConversationIdOrderByCreatedAtAsc(anyString());
         verify(trajectoryRepository, never()).findByRunIdInOrderByTurnNumberAsc(any());
+    }
+
+    @Test
+    void theSyncPathAppendsTheSummaryAndStartsWithTheParts() {
+        Run saved = Run.builder().id(RUN_ID).status(RunStatus.RUNNING).build();
+        when(runRepository.save(any(Run.class))).thenReturn(saved);
+        AriaChatRequest request = AriaChatRequest.builder().message("describe").build();
+        var validated = AriaChatAttachmentValidator.validate(List.of(
+                AriaChatRequest.Attachment.builder()
+                        .mimeType("image/png").filename("shot.png")
+                        .dataBase64(java.util.Base64.getEncoder().encodeToString(new byte[]{9, 9}))
+                        .build()));
+
+        ariaService.chat(request, validated.validated());
+
+        ArgumentCaptor<Run> run = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(run.capture());
+        assertThat(run.getValue().getPromptSeed())
+                .startsWith("describe")
+                .contains("[attached images: shot.png (image/png,");
+        verify(agentLoopEngine).startRun(eq(RUN_ID), eq(List.of()), eq(validated.validated().parts()));
     }
 
     @Test

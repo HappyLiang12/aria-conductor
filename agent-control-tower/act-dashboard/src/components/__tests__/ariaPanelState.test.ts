@@ -541,6 +541,27 @@ describe('panelReducer restore merge', () => {
     ]);
   });
 
+  it('does not duplicate an image turn when the snapshot re-delivers its seed', () => {
+    const sent = panelReducer(base, {
+      type: 'userSent', id: 'u1', content: 'what is this?', timestamp: '2026-11-22T10:00:00.000Z',
+      attachments: [{ filename: 'p.png', mimeType: 'image/png', previewUrl: 'blob:1' }],
+    });
+
+    const next = panelReducer(sent, {
+      type: 'restore', conversationId: 'conv-1',
+      timeline: [
+        { role: 'user', content: 'what is this?\n\n[attached images: p.png (image/png, 1 KB)]', timestamp: 't1', runId: 'r1' },
+        { role: 'assistant', content: 'a photo', timestamp: 't2', runId: 'r1' },
+      ],
+      approvals: [], proposals: [],
+    });
+
+    const users = next.items.filter((entry) => entry.kind === 'user');
+    expect(users).toHaveLength(1);
+    expect(users[0].kind === 'user' && users[0].attachments?.[0]?.filename).toBe('p.png');
+    expect(next.items.map((entry) => entry.kind)).toEqual(['user', 'assistant']);
+  });
+
   it('attributes a repeated message preview to its own occurrence', () => {
     const withHistory = panelReducer(base, {
       type: 'restore', conversationId: 'conv-1',

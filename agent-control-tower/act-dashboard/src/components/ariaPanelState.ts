@@ -140,6 +140,17 @@ const ORPHAN_TOOL_NAME = '(tool output)';
 const ORPHAN_SUFFIX = '#orphan-';
 /** The single queued indicator is keyed by its kind, not by a run. */
 const QUEUED_ID = 'queued';
+/**
+ * The summary the backend appends to the persisted user row for a turn that
+ * carried images (`AriaChatAttachmentValidator`), which the live bubble the
+ * panel dispatched never had.
+ */
+const ATTACHMENT_SUMMARY = /\n\n\[attached images: [^\]]*\]$/;
+
+/** The persisted seed appends a summary line the live bubble never had. */
+function withoutAttachmentSummary(content: string): string {
+  return content.replace(ATTACHMENT_SUMMARY, '');
+}
 
 export function emptyState(conversationId: string): PanelState {
   return { items: [], conversationId };
@@ -536,6 +547,11 @@ function setQueued(state: PanelState, runIds: string[]): PanelState {
  * turn's previews are client-side and would otherwise vanish on the first
  * reconcile. Match same-content occurrences in order and carry the previews.
  *
+ * Content is matched WITHOUT the attachment-summary line: an image turn's
+ * persisted row is `text + summary` while the live bubble is the bare `text`,
+ * so an exact comparison would never meet and the previews would strand on a
+ * duplicate bubble. The row keeps its full content for display.
+ *
  * Every prior user row advances its content's cursor, not only the rows that
  * carry previews: the snapshot row a prior occurrence stands for is the nth
  * occurrence whatever the prior row holds, so skipping an attachment-less row
@@ -545,19 +561,21 @@ function withCarriedPreviews(prior: PanelItem[], base: PanelItem[]): PanelItem[]
   const indices = new Map<string, number[]>();
   base.forEach((item, index) => {
     if (item.kind !== 'user') return;
-    const list = indices.get(item.content) ?? [];
+    const key = withoutAttachmentSummary(item.content);
+    const list = indices.get(key) ?? [];
     list.push(index);
-    indices.set(item.content, list);
+    indices.set(key, list);
   });
   if (indices.size === 0) return base;
   const cursors = new Map<string, number>();
   const out = base.slice();
   for (const item of prior) {
     if (item.kind !== 'user') continue;
-    const ordinal = cursors.get(item.content) ?? 0;
-    cursors.set(item.content, ordinal + 1);
+    const key = withoutAttachmentSummary(item.content);
+    const ordinal = cursors.get(key) ?? 0;
+    cursors.set(key, ordinal + 1);
     if (!item.attachments || item.attachments.length === 0) continue;
-    const at = indices.get(item.content)?.[ordinal];
+    const at = indices.get(key)?.[ordinal];
     if (at === undefined) continue;
     out[at] = { ...(out[at] as UserItem), attachments: item.attachments };
   }
@@ -703,7 +721,7 @@ function carryOver(prior: PanelItem[], base: PanelItem[]): PanelItem[] {
 
 function messageKey(item: Extract<PanelItem, { kind: 'user' | 'assistant' }>): string {
   if (item.kind === 'assistant') return `assistant\u0000${item.error === true ? 'error' : 'ok'}\u0000${item.content}`;
-  return `user\u0000${item.content}`;
+  return `user\u0000${withoutAttachmentSummary(item.content)}`;
 }
 
 /**

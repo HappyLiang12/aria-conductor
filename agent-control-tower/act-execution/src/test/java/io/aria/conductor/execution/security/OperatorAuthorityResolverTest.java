@@ -142,6 +142,39 @@ class OperatorAuthorityResolverTest {
         assertThat(resolver("").resolveOperator(request, false)).isNotNull();
     }
 
+    // Transport-neutral decision (aria live websocket): the same credential/loopback
+    // precedence, expressed without an HttpServletRequest.
+
+    @Test
+    void authorizeTransportOperatorBearerWinsFromAnyAddress() {
+        ActorPrincipal principal = resolver("").authorizeTransport("Bearer " + OPERATOR_BEARER, "192.168.0.5");
+
+        assertThat(principal.role()).isEqualTo(ActorPrincipal.Role.OPERATOR);
+    }
+
+    @Test
+    void authorizeTransportAnonymousRemoteIsUnauthorized() {
+        assertThatThrownBy(() -> resolver("").authorizeTransport(null, "192.168.0.5"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessage("Operator session required");
+    }
+
+    @Test
+    void authorizeTransportWorkerBearerIsForbiddenFromAnyAddress() {
+        workerTokenResolves();
+
+        assertThatThrownBy(() -> resolver("").authorizeTransport("Bearer " + WORKER_BEARER, "192.168.0.5"))
+                .isInstanceOf(OperatorSessionService.ForbiddenMutationException.class)
+                .hasMessage("Operator authority required");
+    }
+
+    @Test
+    void authorizeTransportAnonymousLoopbackIsOperator() {
+        ActorPrincipal principal = resolver("").authorizeTransport(null, "127.0.0.1");
+
+        assertThat(principal.role()).isEqualTo(ActorPrincipal.Role.OPERATOR);
+    }
+
     @Test
     void requestHelperReturnsClientAddressHonoringTrustedProxyOnly() {
         MockHttpServletRequest trusted = new MockHttpServletRequest();

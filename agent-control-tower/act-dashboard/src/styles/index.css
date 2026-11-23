@@ -1393,6 +1393,8 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
   padding: 14px 10px; box-sizing: border-box;
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(20,28,55,.45), rgba(13,20,38,.25));
+  /* The destination list outgrew a short viewport; every entry must stay reachable. */
+  overflow-y: auto; overscroll-behavior: contain;
   z-index: 40;
 }
 .rail-btn {

@@ -161,9 +161,11 @@ class LiveEndpointIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
-    void anOfferTheServerCanHonourStaysOpen() throws Exception {
+    void anOfferTheServerCanHonourIsNotAProtocolRefusal() throws Exception {
         // "aria-live.v1, x" is one offer the server accepts on aria-live.v1; only
-        // the accepted protocol decides the 4002, never the raw header.
+        // the accepted protocol decides the 4002, never the raw header. This context
+        // leaves the live path disabled, so the bridge closes 1011 after ready — the
+        // point here is that the close is not the 4002 the protocol rule would send.
         Recorder recorder = new Recorder();
         WebSocket socket = operatorSocket(recorder, "aria-live.v1", "x").get(5, TimeUnit.SECONDS);
 
@@ -171,8 +173,28 @@ class LiveEndpointIntegrationTest extends BaseH2IntegrationTest {
 
         JsonNode ready = mapper.readTree(recorder.texts.poll(1, TimeUnit.SECONDS));
         assertThat(ready.path("type").asText()).isEqualTo("ready");
-        assertThat(recorder.closes.poll(500, TimeUnit.MILLISECONDS)).isNull();
-        socket.abort();
+        assertThat(recorder.closes.poll(5, TimeUnit.SECONDS)).isEqualTo(1011);
+    }
+
+    @Test
+    void aDisabledBridgeSaysWhyThenCloses1011() throws Exception {
+        // Carry from the Task 1 review: when aria.live.enabled is false the socket is
+        // still told ready (the handshake never waits for a provider), then the missing
+        // bridge is named and close 1011 follows.
+        Recorder recorder = new Recorder();
+        WebSocket socket = operatorSocket(recorder, PROTOCOL).get(5, TimeUnit.SECONDS);
+
+        socket.sendText(HELLO, true).get(5, TimeUnit.SECONDS);
+
+        assertThat(mapper.readTree(recorder.texts.poll(1, TimeUnit.SECONDS)).path("type").asText())
+                .isEqualTo("ready");
+        JsonNode error = mapper.readTree(recorder.texts.poll(2, TimeUnit.SECONDS));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("bridge_internal");
+        assertThat(error.path("retryable").asBoolean()).isTrue();
+        assertThat(error.path("message").asText()).isEqualTo("live bridge unavailable");
+        assertThat(recorder.closes.poll(5, TimeUnit.SECONDS)).isEqualTo(1011);
     }
 
     @Test

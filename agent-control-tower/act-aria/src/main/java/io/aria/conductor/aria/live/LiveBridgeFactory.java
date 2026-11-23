@@ -1,15 +1,17 @@
 package io.aria.conductor.aria.live;
 
 /**
- * Creates the bridge for one live socket. Task 1 wires a no-op implementation;
- * Task 2 supplies the stdio child process without changing the handler.
+ * Creates the bridge for one live socket (spec §"Bridge process"): one child per socket,
+ * spawned after {@code ready} so the 1 s handshake never waits for a provider.
  */
 @FunctionalInterface
 public interface LiveBridgeFactory {
 
     /**
-     * @param sessionId      Aria's per-socket id (never a Qwen id)
-     * @param conversationId the conversation the socket bound itself to
+     * @param session  the socket's state; its {@code id} is Aria's per-socket id, never a Qwen id
+     * @param listener where the child's output goes
+     * @return a live bridge; throws {@link LiveBridgeUnavailableException} when the bridge
+     *         cannot be started (disabled, credentials missing, script missing)
      */
-    LiveBridge open(String sessionId, String conversationId);
+    LiveBridge open(LiveSession session, LiveBridgeListener listener);
 }

@@ -40,6 +40,15 @@ public interface LiveBridgeListener {
     default void onTurnDone() {
     }
 
+    /**
+     * The child cannot continue ({@code {"type":"fatal","code":…}}, spec X9). The code is the
+     * WebSocket close code the phone must see — 4001 auth, 4002 protocol, 4012 session
+     * expired, 1011 bridge internal. The socket owner decides what error frame precedes it,
+     * because only it knows whether the bridge already sent one.
+     */
+    default void onFatal(int code) {
+    }
+
     /** The child exited with {@code code} without being asked to (a phone close is not an exit). */
     void onExit(int code);
 }

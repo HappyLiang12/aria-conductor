@@ -81,7 +81,9 @@ class LiveSessionLimitTest {
         JsonNode error = lastPhoneFrame(session);
         assertThat(error.path("type").asText()).isEqualTo("error");
         assertThat(error.path("code").asText()).isEqualTo("frame_too_large");
-        assertThat(error.path("retryable").asBoolean()).isTrue();
+        // Contract error table: the same frame is never retried, so the retryable flag is
+        // false on the validator path exactly as it is on the envelope path below.
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
         assertThat(bridge.sent).hasSize(1); // no image line left for the bridge
         verify(session, never()).close(any());
     }

@@ -7,7 +7,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -21,9 +20,4 @@ public interface PromptCallRepository extends JpaRepository<PromptCall, Long> {
     @Query("DELETE FROM PromptCall p WHERE p.runId IN :ids")
     int deleteByRunIdInBulk(@Param("ids") List<UUID> ids);
     long countByAgentId(UUID agentId);
-
-    @Query("SELECT p.agentId, SUM(p.inputTokens + p.outputTokens), COUNT(p) " +
-           "FROM PromptCall p WHERE p.createdAt >= :since " +
-           "GROUP BY p.agentId")
-    List<Object[]> aggregateByAgentSince(@Param("since") Instant since);
 }

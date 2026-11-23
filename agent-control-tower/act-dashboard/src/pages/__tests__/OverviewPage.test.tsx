@@ -129,7 +129,7 @@ describe('OverviewPage decision-first layout', () => {
 
     const queue = screen.getByTestId('decision-queue');
     expect(queue).toHaveAttribute('data-collapsed', 'false');
-    expect(within(queue).getByText(/2 completed runs awaiting review/i)).toBeInTheDocument();
+    expect(within(queue).getByText(/2 runs awaiting review/i)).toBeInTheDocument();
     fireEvent.click(within(queue).getByRole('button', { name: /open review board/i }));
     expect(scrollIntoView).toHaveBeenCalled();
   });

@@ -87,4 +87,29 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
         assertThat(repository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.DENIED);
         assertThat(repository.findById(acp.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.PENDING);
     }
+
+    @Test
+    void expirePendingAsksByKanbanItemIdSweepsOnlyTheMatchingLegacyReviewAsk() {
+        Approval review = saveAsk("item-expire", Approval.AskType.REVIEW_REQUEST);
+        Approval question = saveAsk("item-expire", Approval.AskType.QUESTION);
+        Approval otherCard = saveAsk("item-other", Approval.AskType.REVIEW_REQUEST);
+        Approval acpReview = saveAcpAsk("item-expire", Approval.AskType.REVIEW_REQUEST);
+
+        int expired = repository.expirePendingAsksByKanbanItemId(
+                "item-expire", Approval.AskType.REVIEW_REQUEST, "left REVIEW", java.time.Instant.now());
+
+        assertThat(expired).isEqualTo(1);
+        flushAndClear();
+        Approval settled = repository.findById(review.getId()).orElseThrow();
+        assertThat(settled.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(settled.getReason()).contains("left REVIEW");
+        assertThat(settled.getDecidedAt()).isNotNull();
+        assertThat(repository.findById(question.getId()).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+        assertThat(repository.findById(otherCard.getId()).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+        // A non-legacy review ask stays with its owner.
+        assertThat(repository.findById(acpReview.getId()).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+    }
 }

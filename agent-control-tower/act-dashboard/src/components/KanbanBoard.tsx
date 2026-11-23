@@ -385,7 +385,7 @@ export default function KanbanBoard() {
     : [];
 
   return (
-    <section className="panel" style={{ position: 'relative' }}>
+    <section className="panel" data-testid="kanban-board" style={{ position: 'relative' }}>
       <h2>
         <span>Kanban Board</span>
         <span className="accent">· Governed Flow</span>

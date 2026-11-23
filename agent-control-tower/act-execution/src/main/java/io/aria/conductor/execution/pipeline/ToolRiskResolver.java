@@ -67,6 +67,7 @@ public class ToolRiskResolver {
             "bash", RiskTier.DESTRUCTIVE,
             "write", RiskTier.PUSH,
             "edit", RiskTier.PUSH,
+            "patch", RiskTier.PUSH,
             "read", RiskTier.READ,
             "glob", RiskTier.READ,
             "grep", RiskTier.READ,

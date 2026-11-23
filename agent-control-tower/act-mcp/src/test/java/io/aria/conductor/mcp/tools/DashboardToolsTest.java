@@ -2,24 +2,18 @@ package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
-import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -28,7 +22,6 @@ class DashboardToolsTest {
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
     @Mock ApprovalRepository approvalRepository;
-    @Mock PromptCallRepository promptCallRepository;
     McpProperties mcpProperties;
     DashboardTools tools;
 
@@ -36,7 +29,7 @@ class DashboardToolsTest {
     void setUp() {
         mcpProperties = new McpProperties();
         tools = new DashboardTools(agentRepository, runRepository, approvalRepository,
-                promptCallRepository, mcpProperties);
+                mcpProperties);
     }
 
     @Test
@@ -44,8 +37,9 @@ class DashboardToolsTest {
         when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(3L);
         when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(1L);
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(2L);
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING))
-                .thenReturn(List.of(new Approval(), new Approval()));
+        when(runRepository.countByStatus(RunStatus.WAITING_INPUT)).thenReturn(1L);
+        when(approvalRepository.countByStatusAndAskTypeNot(ApprovalStatus.PENDING,
+                Approval.AskType.REVIEW_REQUEST)).thenReturn(2L);
         when(runRepository.sumReportedUsage()).thenReturn(200L);
         when(runRepository.countWithoutReportedUsage()).thenReturn(4L);
 
@@ -55,7 +49,7 @@ class DashboardToolsTest {
                 .contains("\"activeAgents\":3")
                 .contains("\"healthyAgents\":3")
                 .contains("\"degradedAgents\":1")
-                .contains("\"runningRuns\":2")
+                .contains("\"runningRuns\":3")
                 .contains("\"pendingApprovals\":2")
                 .contains("\"totalTokensBurned\":200")
                 .contains("\"runsWithoutUsage\":4");
@@ -68,7 +62,6 @@ class DashboardToolsTest {
         when(runRepository.countWithoutReportedUsage()).thenReturn(1L);
         String json = tools.getDashboardSummary();
         assertThat(json).contains("\"totalTokensBurned\":120").contains("\"runsWithoutUsage\":1");
-        verify(promptCallRepository, never()).findAll();
     }
 
     @Test

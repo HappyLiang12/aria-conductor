@@ -30,11 +30,10 @@ interface FlowStep {
   desc: string;
 }
 const FLOW_STEPS: FlowStep[] = [
-  { num: '01', ttl: 'Agent Draft',     desc: 'Agent captures a new skill, prompt or script as a draft artifact.' },
-  { num: '02', ttl: 'Peer Review',     desc: 'Sibling agents validate logic, security and reuse signals.' },
-  { num: '03', ttl: 'Human Approval',  desc: 'Governance lead signs off on policy, risk and access scope.' },
-  { num: '04', ttl: 'Validated',       desc: 'Item is versioned, signed and access-scoped to consumers.' },
-  { num: '05', ttl: 'Unified Library', desc: 'Indexed in the shared knowledge fabric; reusable everywhere.' },
+  { num: '01', ttl: 'Draft',            desc: 'An agent or operator records a skill, prompt, script or template.' },
+  { num: '02', ttl: 'Pending review',   desc: 'Stored items wait for a human decision; agents cannot use them yet.' },
+  { num: '03', ttl: 'Approved / Rejected', desc: 'A human decides; only approved items reach prompts and query_knowledge.' },
+  { num: '04', ttl: 'Retired',          desc: 'An approved item can be withdrawn and stops reaching agents.' },
 ];
 
 // ---------- helpers ---------- //
@@ -330,7 +329,7 @@ export function KnowledgePage() {
         <div>
           <h1>Knowledge Governance</h1>
           <div className="sub">
-            Lifecycle of every skill, prompt, script and template — from agent draft to unified library.
+            Status lifecycle for every skill, prompt, script and template — draft to retirement.
           </div>
         </div>
         <div className="actions">
@@ -840,7 +839,7 @@ export function KnowledgePage() {
             >
               <strong style={{ fontSize: 13, letterSpacing: '.6px' }}>Submit New Knowledge</strong>
               <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)' }}>
-                Enters governance at <em>Stage 02 · Peer Review</em>
+                Stored as <em>Pending</em> — a human must approve it before agents can use it.
               </span>
               <button className="btn" onClick={() => setShowSubmit(false)} style={{ marginLeft: 6 }}>
                 ✕

@@ -276,7 +276,9 @@ export default function OpsPage() {
   }, [briefing, now]);
 
   /* ---------- Render ---------- */
-  const pending = pendingQ.data ?? [];
+  // Post-run reviews are board work, not blocking approvals: Ops and the KPI
+  // agree on the same blocking-only set.
+  const pending = (pendingQ.data ?? []).filter((a) => a.askType !== 'REVIEW_REQUEST');
   const runs = (runsQ.data ?? []).slice().sort((a, b) =>
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   ).slice(0, 14);

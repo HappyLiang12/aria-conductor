@@ -77,7 +77,10 @@ describe('useDecisionQueue', () => {
   });
 
   it('reports partial data and a null count when the board join fails', async () => {
-    vi.mocked(listApprovals).mockResolvedValue([approval()] as never);
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval(),
+      approval({ id: 'a-review', askType: 'REVIEW_REQUEST' }),
+    ] as never);
     vi.mocked(listKanbanItems).mockRejectedValue(new Error('board unavailable'));
 
     const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
@@ -85,6 +88,8 @@ describe('useDecisionQueue', () => {
     expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].taskId).toBeNull();
     expect(result.current.count).toBeNull();
+    // A partial load cannot render a fresh review count either.
+    expect(result.current.reviewCount).toBeNull();
   });
 
   // T51: the same sparse payload that blanked the Review Queue reaches this
@@ -127,9 +132,10 @@ describe('useDecisionQueue', () => {
     expect(result.current.reviewCount).toBe(1);
   });
 
-  it('sorts dangerous asks before pushes and the rest, then by age', async () => {
+  it('sorts dangerous asks before pushes, local writes and reads, then by age', async () => {
     vi.mocked(listApprovals).mockResolvedValue([
       approval({ id: 'a-read', riskTier: 'READ', requestedAt: '2026-10-27T08:00:00Z' }),
+      approval({ id: 'a-local', riskTier: 'WRITE_LOCAL', toolName: 'write_file', requestedAt: '2026-10-27T07:00:00Z' }),
       approval({ id: 'a-push', riskTier: 'PUSH', toolName: 'Edit', requestedAt: '2026-10-27T09:00:00Z' }),
       approval({ id: 'a-danger', riskTier: 'DESTRUCTIVE', toolName: 'Bash', requestedAt: '2026-10-27T10:00:00Z' }),
     ] as never);
@@ -137,7 +143,7 @@ describe('useDecisionQueue', () => {
 
     const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
     await waitFor(() => expect(result.current.phase).toBe('success'));
-    expect(result.current.rows.map((r) => r.id)).toEqual(['a-danger', 'a-push', 'a-read']);
+    expect(result.current.rows.map((r) => r.id)).toEqual(['a-danger', 'a-push', 'a-local', 'a-read']);
     expect(result.current.rows[0]).toMatchObject({ riskTier: 'DESTRUCTIVE', toolName: 'Bash' });
   });
 
@@ -155,6 +161,17 @@ describe('useDecisionQueue', () => {
     await waitFor(() => expect(result.current.phase).toBe('success'));
     expect(result.current.rows[0].reason).not.toContain('\n');
     expect(result.current.rows[0].reason.length).toBeLessThanOrEqual(160);
+  });
+
+  it('falls back to a decision prompt when the content summarizes to nothing', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval({ reason: null, content: '```\n\n```' }),
+    ] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows[0].reason).toBe('Decision requested');
   });
 
   it('marks a clarification as holding a run slot', async () => {

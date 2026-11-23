@@ -599,19 +599,8 @@ export function AgentDrawer() {
                   </div>
                   <div className="meta">
                     <span className="pill dev">{activeRun.status}</span>
-                    <span>
-                      Iter {activeRun.iterationCount} / {activeRun.maxIterations}
-                    </span>
+                    <span>{activeRun.iterationCount} turns</span>
                     <span style={{ marginLeft: 'auto' }}>{runtimeMin}m elapsed</span>
-                  </div>
-                  <div className="progress shimmer">
-                    <i
-                      style={{
-                        width: `${clampPercent(
-                          (activeRun.iterationCount / Math.max(activeRun.maxIterations, 1)) * 100
-                        )}%`,
-                      }}
-                    />
                   </div>
                 </div>
               ) : (

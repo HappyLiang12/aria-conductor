@@ -74,6 +74,7 @@ describe('DecisionQueue', () => {
     };
     const askRow: DecisionRow = {
       ...decideRow, id: 'ap-3', approvalId: 'ap-3', askType: 'QUESTION', source: 'CLARIFICATION', reason: 'Which environment?',
+      blocksRunSlot: true,
     };
     renderQueue({ rows: [decideRow, askRow], count: 2, onDecide, onAnswer });
 
@@ -166,7 +167,7 @@ describe('DecisionQueue', () => {
   it('surfaces post-run reviews as a count, not decision rows', async () => {
     const onOpenReviews = vi.fn();
     renderQueue({ rows: [], count: 0, reviewCount: 3, onOpenReviews });
-    expect(screen.getByText(/3 completed runs awaiting review/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 runs awaiting review/i)).toBeInTheDocument();
     expect(screen.queryAllByTestId(/^decision-row-/)).toHaveLength(0);
     await userEvent.click(screen.getByRole('button', { name: /open review board/i }));
     expect(onOpenReviews).toHaveBeenCalled();
@@ -185,5 +186,19 @@ describe('DecisionQueue', () => {
     };
     renderQueue({ rows: [clarification], count: 1 });
     expect(screen.getByText(/holds a run slot/i)).toBeInTheDocument();
+  });
+
+  it('keeps the run-slot warning on a card-linked clarification too', () => {
+    const clarification: DecisionRow = {
+      ...row,
+      id: 'ap-card-clar',
+      approvalId: 'ap-card-clar',
+      taskId: 'k-1',
+      source: 'CLARIFICATION',
+      askType: 'QUESTION',
+      blocksRunSlot: true,
+    };
+    renderQueue({ rows: [clarification], count: 1 });
+    expect(screen.getByText(/holds a run slot — open the card to answer/i)).toBeInTheDocument();
   });
 });

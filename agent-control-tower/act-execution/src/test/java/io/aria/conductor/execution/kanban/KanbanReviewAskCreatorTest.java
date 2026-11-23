@@ -119,7 +119,17 @@ class KanbanReviewAskCreatorTest {
     @Test
     void skipsNonReviewTransitions() {
         creator.onKanbanItemTransitioned(event("TODO", "IN_PROGRESS"));
-        creator.onKanbanItemTransitioned(event("REVIEW", "DONE"));
+        creator.onKanbanItemTransitioned(event("REVIEW", "REVIEW"));
+        verify(approvalRepository, never()).expirePendingAsksByKanbanItemId(any(), any(), any(), any());
+        verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
+    void leavingReviewForBacklogSweepsTheReviewAsk() {
+        creator.onKanbanItemTransitioned(event("REVIEW", "BACKLOG"));
+
+        verify(approvalRepository).expirePendingAsksByKanbanItemId(
+                eq("c1"), eq(Approval.AskType.REVIEW_REQUEST), any(), any());
         verify(approvalRepository, never()).save(any());
     }
 

@@ -82,7 +82,7 @@ const PERMISSION_APPROVAL = {
   approvalType: 'TOOL_CALL',
   askType: 'APPROVAL',
   source: 'ACP_PERMISSION',
-  riskTier: 'PUSH',
+  riskTier: 'WRITE_LOCAL',
   toolName: 'write_file',
 };
 
@@ -186,7 +186,7 @@ test.describe('decision-first overview', () => {
     // The post-run REVIEW_REQUEST blocks nothing: it is a review count, not a row.
     await expect(page.locator('.decision-queue__count')).toHaveText('3');
     await expect(page.locator('.decision-row')).toHaveCount(3);
-    await expect(page.getByTestId('decision-reviews')).toContainText('1 completed run awaiting review');
+    await expect(page.getByTestId('decision-reviews')).toContainText('1 run awaiting review');
 
     // The board claims 2 pending asks on one card; the queue counts approvals.
     const queueBox = await queue.boundingBox();
@@ -204,7 +204,7 @@ test.describe('decision-first overview', () => {
     // A native permission ask shows its risk and tool, and is decided by review.
     const permissionRow = page.getByTestId('decision-row-a-perm');
     await expect(permissionRow.getByRole('button', { name: 'Review permission' })).toBeVisible();
-    await expect(permissionRow).toContainText('Writes');
+    await expect(permissionRow).toContainText('Writes locally');
     await expect(permissionRow).toContainText('write_file');
     await expect(permissionRow.getByRole('button', { name: /approve all/i })).toHaveCount(0);
 
@@ -291,7 +291,9 @@ test.describe('decision-first overview', () => {
     await expect(queue).toHaveAttribute('data-collapsed', 'false');
     await expect(page.locator('.decision-queue__count')).toHaveText('0');
     await expect(page.locator('.decision-row')).toHaveCount(0);
-    await expect(page.getByTestId('decision-reviews')).toContainText('1 completed run awaiting review');
+    await expect(page.getByTestId('decision-reviews')).toContainText('1 run awaiting review');
+    await page.getByRole('button', { name: /open review board/i }).click();
+    await expect(page.getByTestId('lane-REVIEW')).toBeInViewport();
   });
 
   test('both queues collapse to their all-clear lines only on zero/zero authoritative data', async ({ page }) => {

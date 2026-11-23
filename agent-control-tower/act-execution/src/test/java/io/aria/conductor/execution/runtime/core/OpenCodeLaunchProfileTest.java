@@ -335,6 +335,27 @@ class OpenCodeLaunchProfileTest {
     }
 
     /**
+     * GATED is the operator-gate posture: the HOST document keeps the shipped
+     * refusals (the ask is what the operator decides), so no workspace tool is
+     * opened in the core itself.
+     */
+    @Test
+    void hostRunWithGatedFileAccessKeepsTheReadOnlyDocument() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.GATED)));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(permission.path(tool).asText())
+                    .as("GATED keeps %s refused in the core; the operator decides the ask", tool)
+                    .isEqualTo("deny");
+        }
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+        assertThat(permission.path("*").asText()).isEqualTo("deny");
+    }
+
+    /**
      * The opt-in FULL policy is the only way a HOST run receives the workspace
      * tools, because no run-owned container bounds it: a HOST worker may edit,
      * write, patch, run a shell and leave the workspace directory, while the

@@ -250,8 +250,10 @@ public class PermissionCoordinator {
      * {@code FULL} auto-approves it exactly like a manual allow-once decision,
      * {@code READ_ONLY} auto-denies it unless the read-only allowlist already
      * covers it, so the deny list is an enforcement boundary rather than a
-     * prompt an operator could wave through. A {@code PLATFORM_MCP} ask is never
-     * settled by this policy; platform tool governance keeps its own allowlist.
+     * prompt an operator could wave through, and {@code GATED} keeps the
+     * operator-facing gate — the ask is surfaced and stays PENDING. A
+     * {@code PLATFORM_MCP} ask is never settled by this policy; platform tool
+     * governance keeps its own allowlist.
      */
     @Transactional
     public UUID register(NativePermission request, ExecutionMode placement) {
@@ -276,7 +278,7 @@ public class PermissionCoordinator {
         boolean fullAllow = windowOpen && hostNative && hostFiles.fullAccess()
                 && singleAllowOnceOptionId(request.options()).isPresent();
         boolean autoApproved = windowOpen && readListed;
-        boolean autoDenied = windowOpen && hostNative && !hostFiles.fullAccess() && !readListed
+        boolean autoDenied = windowOpen && hostNative && hostFiles.deniesNativeAsks() && !readListed
                 && singleOptionId(request.options(), PermissionChoice.DENY).isPresent();
         String settleReason = autoApproved ? AUTO_APPROVE_REASON
                 : fullAllow ? HOST_FULL_ACCESS_REASON

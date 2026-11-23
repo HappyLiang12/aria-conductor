@@ -120,13 +120,13 @@ public class LiveToolCallHandler implements LiveToolCallSink {
             if (toolName.isBlank()) {
                 // No run and no slot: a nameless call is not a tool-using turn.
                 frames.toBridge(session, LiveFrames.toolResult(callId, false, UNKNOWN_TOOL));
-                frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
+                frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
                 return;
             }
             JsonNode arguments = call.get("arguments");
             runId = runs.findOrCreateForToolTurn(session, toolName);
-            frames.toPhone(session, LiveFrames.runEvent(runId, "started"));
-            frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "running"));
+            frames.toPhone(session, LiveFrames.runEvent(runId, "started", LiveFrames.toolSummary(toolName)));
+            frames.toPhone(session, LiveFrames.toolStatus(toolName, "running"));
 
             LiveToolExecutor.ToolOutcome outcome = tools.execute(toolName, arguments);
             if (outcome instanceof LiveToolExecutor.ToolOutcome.PendingApproval pending) {
@@ -137,11 +137,11 @@ public class LiveToolCallHandler implements LiveToolCallSink {
                         pending.riskTier(), callId, arguments);
             } else if (outcome instanceof LiveToolExecutor.ToolOutcome.Value value) {
                 frames.toBridge(session, LiveFrames.toolResult(callId, true, value.json()));
-                frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
-                frames.toPhone(session, LiveFrames.runEvent(runId, "progress"));
+                frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
+                frames.toPhone(session, LiveFrames.runEvent(runId, "progress", LiveFrames.toolSummary(toolName)));
             } else if (outcome instanceof LiveToolExecutor.ToolOutcome.Failure failure) {
                 frames.toBridge(session, LiveFrames.toolResult(callId, false, failure.message()));
-                frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
+                frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
             }
         } catch (JsonProcessingException e) {
             log.debug("aria live tool call unreadable: chars={}", line == null ? 0 : line.length());
@@ -152,7 +152,7 @@ public class LiveToolCallHandler implements LiveToolCallSink {
             if (runId != null) {
                 // The turn's row must not stay RUNNING against a call that never completed.
                 runs.settle(session, runId, RunStatus.FAILED, FAILED);
-                frames.toPhone(session, LiveFrames.runEvent(runId, "failed"));
+                frames.toPhone(session, LiveFrames.runEvent(runId, "failed", LiveFrames.failureSummary(FAILED)));
             }
         }
     }
@@ -170,7 +170,7 @@ public class LiveToolCallHandler implements LiveToolCallSink {
     /** The answer to a call that never produced an outcome; the chip still names its tool. */
     private void answerFailure(LiveSession session, String callId, String toolName, String message) {
         frames.toBridge(session, LiveFrames.toolResult(callId, false, message));
-        frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
+        frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
     }
 
     /** The id and name of a line that was refused before a worker could read it. */

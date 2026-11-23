@@ -71,14 +71,20 @@ class LiveToolCallHandlerTest {
 
         List<JsonNode> phone = phone();
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("run_event")
+                && frame.path("v").asInt() == 1
                 && frame.path("runId").asText().equals(runId.toString())
-                && frame.path("state").asText().equals("started"));
+                && frame.path("state").asText().equals("started")
+                && frame.path("summary").asText().equals("tool: get_time"));
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("tool_status")
-                && frame.path("status").asText().equals("running"));
+                && frame.path("v").asInt() == 1
+                && frame.path("name").asText().equals("get_time")
+                && frame.path("state").asText().equals("running"));
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("tool_status")
-                && frame.path("status").asText().equals("done"));
+                && frame.path("name").asText().equals("get_time")
+                && frame.path("state").asText().equals("done"));
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("run_event")
-                && frame.path("state").asText().equals("progress"));
+                && frame.path("state").asText().equals("progress")
+                && frame.path("summary").asText().equals("tool: get_time"));
         assertThat(bridge.sent).singleElement().asString()
                 .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
                 .contains("\"ok\":true").contains("{\\\"now\\\":\\\"t\\\"}");
@@ -145,8 +151,33 @@ class LiveToolCallHandlerTest {
         assertThat(phone()).noneMatch(frame -> frame.toString().contains("db is down"));
         // The chip still names the tool it was about: a nameless "done" chip is unreadable.
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("tool_status")
-                && frame.path("id").asText().equals("c1")
-                && frame.path("toolName").asText().equals("get_time"));
+                && frame.path("name").asText().equals("get_time")
+                && frame.path("state").asText().equals("done"));
+        assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: " + LiveToolCallHandler.FAILED));
+    }
+
+    /**
+     * The phone contract's exact fields (spec X4/X8): the chip is {@code name}/{@code state}
+     * and the run line is {@code runId}/{@code state}/{@code summary}, both carrying
+     * {@code v}. The bridge-side ids stay on the bridge side.
+     */
+    @Test
+    void thePhoneFramesCarryExactlyTheContractFields() {
+        when(runs.findOrCreateForToolTurn(session, "get_time")).thenReturn(runId);
+        when(tools.execute(eq("get_time"), any())).thenReturn(new LiveToolExecutor.ToolOutcome.Value("{\"now\":\"t\"}"));
+
+        handler.onToolCall(session, CALL);
+
+        List<JsonNode> phone = phone();
+        assertThat(phone).filteredOn(frame -> "tool_status".equals(frame.path("type").asText()))
+                .isNotEmpty()
+                .allSatisfy(frame -> assertThat(fieldNames(frame)).containsExactly("type", "v", "name", "state"));
+        assertThat(phone).filteredOn(frame -> "run_event".equals(frame.path("type").asText()))
+                .isNotEmpty()
+                .allSatisfy(frame -> assertThat(fieldNames(frame))
+                        .containsExactly("type", "v", "runId", "state", "summary"));
     }
 
     /**
@@ -223,6 +254,12 @@ class LiveToolCallHandlerTest {
     }
 
     // --- harness ---------------------------------------------------------------------------
+
+    private static List<String> fieldNames(JsonNode frame) {
+        List<String> names = new ArrayList<>();
+        frame.fieldNames().forEachRemaining(names::add);
+        return names;
+    }
 
     private List<JsonNode> phone() {
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);

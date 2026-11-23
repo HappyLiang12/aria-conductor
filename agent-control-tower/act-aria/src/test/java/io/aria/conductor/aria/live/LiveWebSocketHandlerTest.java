@@ -423,6 +423,58 @@ class LiveWebSocketHandlerTest {
         verify(session).close(argThat(status -> status.getCode() == 1011));
     }
 
+    /**
+     * A failed reopen sends {@code session_expired} itself and then {@code fatal{4012}}: the
+     * fatal repeats the error the phone already heard, so no second one is owed.
+     */
+    @Test
+    void aFatalThatRepeatsTheLastErrorSendsNoSecondOne() throws Exception {
+        WebSocketSession session = opened();
+
+        bridge.listener.onControl(error("session_expired", true));
+        bridge.listener.onFatal(LiveWebSocketHandler.CLOSE_SESSION_EXPIRED);
+
+        List<String> payloads = allTexts(session);
+        assertThat(payloads).as("ready and the bridge's own error, no duplicate").hasSize(2);
+        assertThat(json.readTree(payloads.get(1)).path("code").asText()).isEqualTo("session_expired");
+        verify(session).close(argThat(status -> status.getCode() == 4012));
+    }
+
+    /**
+     * One error per failure, not one per socket: an earlier forwarded error says nothing
+     * about a later hard fatal, which still owes the phone its own reason.
+     */
+    @Test
+    void aFatalThatNamesADifferentFailureStillSendsItsOwnError() throws Exception {
+        WebSocketSession session = opened();
+
+        bridge.listener.onControl(error("provider_unavailable", true));
+        bridge.listener.onFatal(LiveWebSocketHandler.CLOSE_AUTH);
+
+        List<String> payloads = allTexts(session);
+        assertThat(payloads).as("ready, the earlier error, then the fatal's own").hasSize(3);
+        JsonNode fatal = json.readTree(payloads.get(2));
+        assertThat(fatal.path("type").asText()).isEqualTo("error");
+        assertThat(fatal.path("v").asInt()).isEqualTo(1);
+        assertThat(fatal.path("code").asText()).isEqualTo("auth_failed");
+        assertThat(fatal.path("retryable").asBoolean(true)).isFalse();
+        verify(session).close(argThat(status -> status.getCode() == 4001));
+    }
+
+    /** A non-error control is not an error and must not latch anything. */
+    @Test
+    void aControlThatIsNotAnErrorDoesNotLatch() throws Exception {
+        WebSocketSession session = opened();
+
+        bridge.listener.onControl("{\"type\":\"speech_end\",\"tMs\":1}");
+        bridge.listener.onFatal(LiveWebSocketHandler.CLOSE_BRIDGE);
+
+        List<String> payloads = allTexts(session);
+        assertThat(payloads).hasSize(3);
+        assertThat(json.readTree(payloads.get(2)).path("code").asText()).isEqualTo("bridge_internal");
+        verify(session).close(argThat(status -> status.getCode() == 1011));
+    }
+
     @Test
     void aBridgeExitAfterThePhoneClosedIsSilent() throws Exception {
         WebSocketSession session = opened();
@@ -578,6 +630,15 @@ class LiveWebSocketHandlerTest {
     }
 
     // --- harness -------------------------------------------------------------------------
+
+    /**
+     * A bridge {@code control} event, unwrapped exactly as {@code QwenLiveBridgeProcess}
+     * hands it to the listener: the inner {@code event} object, never the stdio envelope.
+     */
+    private static String error(String code, boolean retryable) {
+        return "{\"type\":\"error\",\"v\":1,\"code\":\"" + code
+                + "\",\"retryable\":" + retryable + ",\"message\":\"stable sentence\"}";
+    }
 
     private WebSocketSession opened() {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);

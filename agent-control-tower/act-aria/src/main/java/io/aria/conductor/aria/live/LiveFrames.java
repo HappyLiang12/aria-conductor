@@ -33,6 +33,12 @@ public class LiveFrames {
     static final String TYPE_TOOL_RESULT = "tool_result";
     static final String TYPE_TOWER = "tower";
 
+    /** The wire version every phone frame (and the hello/ready handshake) carries. */
+    static final int VERSION = 1;
+
+    /** The summary a run line carries when a turn finished cleanly. */
+    static final String SUMMARY_FINISHED = "finished";
+
     private static final Logger log = LoggerFactory.getLogger(LiveFrames.class);
 
     private final ObjectMapper json;
@@ -81,24 +87,48 @@ public class LiveFrames {
         }
     }
 
-    /** The lazy live run's progress for the phone: {@code started|progress|finished|failed}. */
-    static Map<String, Object> runEvent(UUID runId, String state) {
+    /**
+     * The lazy live run's progress for the phone:
+     * {@code {"type":"run_event","v":1,"runId":…,"state":…,"summary":…}}, where
+     * {@code state} is {@code started|progress|finished|failed}. The summary is a short,
+     * stable sentence the phone shows as the run's line — {@code tool: get_time},
+     * {@code finished}, {@code failed: <stable reason>} — never a payload or an exception's
+     * text; a caller with nothing to say gets the state itself rather than a blank row.
+     */
+    static Map<String, Object> runEvent(UUID runId, String state, String summary) {
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("type", TYPE_RUN_EVENT);
+        event.put("v", VERSION);
         if (runId != null) {
             event.put("runId", runId.toString());
         }
         event.put("state", state);
+        event.put("summary", summary == null || summary.isBlank() ? state : summary);
         return event;
     }
 
-    /** The phone's tool chip: {@code running} before execution, {@code approval} parked, {@code done}. */
-    static Map<String, Object> toolStatus(String callId, String toolName, String status) {
+    /** The run line's summary for a tool-using turn: {@code tool: <name>}. */
+    static String toolSummary(String toolName) {
+        return "tool: " + (toolName == null ? "" : toolName);
+    }
+
+    /** The run line's summary for a run that stopped: {@code failed: <stable reason>}. */
+    static String failureSummary(String reason) {
+        return "failed: " + reason;
+    }
+
+    /**
+     * The phone's tool chip: {@code {"type":"tool_status","v":1,"name":…,"state":…}}, where
+     * {@code state} is {@code running} before execution, {@code approval} parked and
+     * {@code done} once the result returns. The bridge's function-call id is not part of
+     * this frame — the chip is about the tool, not the call.
+     */
+    static Map<String, Object> toolStatus(String toolName, String state) {
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("type", TYPE_TOOL_STATUS);
-        event.put("id", callId == null ? "" : callId);
-        event.put("toolName", toolName == null ? "" : toolName);
-        event.put("status", status);
+        event.put("v", VERSION);
+        event.put("name", toolName == null ? "" : toolName);
+        event.put("state", state);
         return event;
     }
 
@@ -106,6 +136,7 @@ public class LiveFrames {
     static Map<String, Object> approvalRequired(UUID runId, UUID approvalId, String toolName, String riskTier) {
         Map<String, Object> ask = new LinkedHashMap<>();
         ask.put("type", TYPE_APPROVAL_REQUIRED);
+        ask.put("v", VERSION);
         ask.put("runId", runId.toString());
         ask.put("approvalId", approvalId.toString());
         ask.put("toolName", toolName);

@@ -33,8 +33,9 @@ import java.util.Map;
  * environment value always wins): the approval gate window is shortened to
  * {@value #DEFAULT_APPROVALS_TIMEOUT_MS} ms so the SDD resubmit case can
  * observe exactly {@code EXPIRED} within a spec's budget (the production
- * default is 30 minutes), the run admission limit is disabled (see below),
- * and the mock-peer control token is left to the environment
+ * default is 30 minutes), the HOST file-access policy is {@code GATED} so the
+ * native-ask gate stays operator-decidable, the run admission limit is disabled
+ * (see below), and the mock-peer control token is left to the environment
  * ({@code ARIA_PEER_CONTROL_TOKEN}, required by the harness configuration and
  * by the peers themselves). The admission limit needs a different mechanism
  * than default properties: {@code application.yml} defines
@@ -60,8 +61,16 @@ public final class CoreE2eApplication {
      * Paused-holder saturation guard: specs across the suite leave PAUSED runs
      * behind (kanban pause/approval journeys) and each holds a slot by design;
      * the production cap would starve later specs in a serial shard.
+     *
+     * <p>The HOST file-access policy is pinned to {@code GATED} for the same
+     * reason the suite exists: the approval-gate specs (kanban HITL,
+     * core-permissions, pause/resume) need a core-raised native ask to stay
+     * PENDING until the operator decides. The production default
+     * ({@code READ_ONLY}) settles that ask itself, which would remove the gate
+     * the specs assert; {@code FULL} would settle it the other way. An explicit
+     * environment or CLI value still wins over this source.
      */
-    static void disableRunAdmissionLimit(ConfigurableEnvironment environment) {
+    static void installHarnessDefaults(ConfigurableEnvironment environment) {
         environment.getPropertySources().addAfter(
                 StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
                 new MapPropertySource("coreE2eAdmissionDefaults", Map.of(
@@ -70,7 +79,9 @@ public final class CoreE2eApplication {
                         // The harness's SANDBOX placement is a same-host process peer, so the
                         // platform MCP endpoint is reachable on loopback. An explicit
                         // environment/CLI value still wins.
-                        "aria.mcp.sandbox-host-address", "127.0.0.1")));
+                        "aria.mcp.sandbox-host-address", "127.0.0.1",
+                        // Keep the HOST native-ask gate operator-decidable in the harness.
+                        "aria.host.files", "GATED")));
     }
 
     private CoreE2eApplication() {
@@ -84,7 +95,7 @@ public final class CoreE2eApplication {
                 // specs seed qoder/HOST against opencode/SANDBOX built-ins), so the
                 // fleet uniformity contract is explicitly off in this harness only.
                 .properties("aria.runtime.enforce-uniformity=false")
-                .initializers(ctx -> disableRunAdmissionLimit(ctx.getEnvironment()))
+                .initializers(ctx -> installHarnessDefaults(ctx.getEnvironment()))
                 .run(args);
     }
 }

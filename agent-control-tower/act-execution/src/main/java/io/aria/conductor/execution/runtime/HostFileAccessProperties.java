@@ -36,6 +36,11 @@ public class HostFileAccessProperties {
         return files == HostFileAccess.FULL;
     }
 
+    /** True when a HOST native ask off the read allowlist is denied without an operator. */
+    public boolean deniesNativeAsks() {
+        return files == HostFileAccess.READ_ONLY;
+    }
+
     @PostConstruct
     void logEffectivePolicy() {
         log.info("HOST file access policy: aria.host.files={} (HOST placement only; SANDBOX runs are unchanged)",

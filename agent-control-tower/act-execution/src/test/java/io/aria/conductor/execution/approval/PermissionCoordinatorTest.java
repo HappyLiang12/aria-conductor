@@ -638,6 +638,29 @@ class PermissionCoordinatorTest {
     }
 
     /**
+     * GATED is the explicit operator-gate posture: the core keeps the read-only
+     * workspace policy, but its native ask is surfaced and stays PENDING until an
+     * operator decides — neither auto-approved nor auto-denied.
+     */
+    @Test
+    void aHostNativeWriteAskStaysPendingWhenHostFileAccessIsGated() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add, new McpProperties(), hostFileAccess(HostFileAccess.GATED));
+
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL), ExecutionMode.HOST);
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approval.getReason()).isEqualTo(
+                "Native permission request 0 from session ses_fixture_1 for tool write_file (NATIVE_TOOL)");
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(row.getSelectedOptionId()).isNull();
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(delivered).isEmpty();
+    }
+
+    /**
      * The host file-access policy never reaches a platform MCP ask: platform tool
      * governance stays on its own allowlist, so a mutating platform call keeps the
      * operator card even when the host filesystem is fully open.

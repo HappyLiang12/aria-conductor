@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -515,16 +515,26 @@ function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8', stdio: 'pipe' }).trim();
 }
 
+/** A path identity that also collapses symlinked ancestors (macOS /var -> /private/var). */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(resolve(path)).toLowerCase();
+  } catch {
+    return resolve(path).toLowerCase();
+  }
+}
+
 /** The run's worktree path, discovered from the source repository's worktree list. */
 function runWorktreeOf(sourceRepo: string): string {
   const entries = git(['worktree', 'list', '--porcelain'], sourceRepo)
     .split('\n')
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.slice('worktree '.length).trim());
-  // git reports its own separators; compare normalised paths so the source's
-  // own worktree entry is excluded on every platform.
-  const sourceCanonical = resolve(sourceRepo).toLowerCase();
-  const worktrees = entries.filter((p) => resolve(p).toLowerCase() !== sourceCanonical);
+  // git reports its own separators and may resolve a symlinked temp root to its
+  // real path (macOS /var -> /private/var), so compare real paths rather than
+  // the spelling each tool happened to receive.
+  const sourceCanonical = canonicalPath(sourceRepo);
+  const worktrees = entries.filter((p) => canonicalPath(p) !== sourceCanonical);
   expect(worktrees, `expected a run worktree beside ${sourceRepo}: ${entries.join(', ')}`).toHaveLength(1);
   return worktrees[0];
 }

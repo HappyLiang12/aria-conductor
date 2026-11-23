@@ -72,6 +72,23 @@ public final class LiveSession {
         this.runId = runId;
     }
 
+    /**
+     * Forgets the run slot when it still holds {@code runId}, so the next turn's first
+     * tool call starts its own row. Conditional on the id: a settle for an older turn's
+     * run must not drop the row the current turn already created.
+     *
+     * @return true when this call cleared the slot
+     */
+    boolean clearRunSlot(UUID runId) {
+        synchronized (this) {
+            if (runId != null && runId.equals(this.runId)) {
+                this.runId = null;
+                return true;
+            }
+            return false;
+        }
+    }
+
     public LiveBridge bridge() {
         return bridge;
     }

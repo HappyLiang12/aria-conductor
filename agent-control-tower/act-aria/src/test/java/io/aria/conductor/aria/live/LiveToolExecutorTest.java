@@ -39,6 +39,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -181,6 +183,56 @@ class LiveToolExecutorTest {
         LiveToolExecutor.ToolOutcome outcome = executor.execute("get_latest_conversation", null);
 
         assertThat(((LiveToolExecutor.ToolOutcome.Value) outcome).json()).isEqualTo("null");
+    }
+
+    /**
+     * Live rows are internal plumbing: the in-flight live run (created for this very
+     * tool turn) and every earlier live turn must not be counted as the operator's
+     * conversation, or the model would report a conversation that only talk-to-Aria
+     * plumbing wrote.
+     */
+    @Test
+    void getLatestConversationIgnoresLiveSeededRunsSoTheCountAndTimeAreTheOperators() throws Exception {
+        Instant oldest = Instant.parse("2026-11-20T08:00:00Z");
+        Instant realLatest = NOW.minusSeconds(60);
+        UUID inFlight = UUID.randomUUID();
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any()))
+                .thenReturn(List.of("conv-9", "conv-9", "conv-9", "conv-9"));
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-9")).thenReturn(List.of(
+                operatorRun("conv-9", oldest),
+                liveRun(UUID.randomUUID(), "conv-9", NOW.minusSeconds(120)),
+                operatorRun("conv-9", realLatest),
+                liveRun(inFlight, "conv-9", NOW)));
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value)
+                executor.execute("get_latest_conversation", null)).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.path("conversationId").asText()).isEqualTo("conv-9");
+        assertThat(value.path("runCount").asInt()).isEqualTo(2);
+        assertThat(Instant.parse(value.path("lastMessageAt").asText())).isEqualTo(realLatest);
+        assertThat(raw).doesNotContain(inFlight.toString());
+        verify(runRepository, times(1)).findByConversationIdOrderByCreatedAtAsc("conv-9");
+    }
+
+    /** A conversation that only holds live rows describes no operator conversation. */
+    @Test
+    void getLatestConversationSkipsAConversationThatOnlyHoldsLiveRuns() throws Exception {
+        Instant real = NOW.minusSeconds(3600);
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any()))
+                .thenReturn(List.of("conv-live", "conv-live", "conv-real"));
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-live"))
+                .thenReturn(List.of(liveRun(UUID.randomUUID(), "conv-live", NOW)));
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-real")).thenReturn(List.of(
+                operatorRun("conv-real", real),
+                liveRun(UUID.randomUUID(), "conv-real", real.plusSeconds(10))));
+
+        JsonNode value = value(executor.execute("get_latest_conversation", null));
+
+        assertThat(value.path("conversationId").asText()).isEqualTo("conv-real");
+        assertThat(value.path("runCount").asInt()).isEqualTo(1);
+        assertThat(Instant.parse(value.path("lastMessageAt").asText())).isEqualTo(real);
+        verify(runRepository, times(1)).findByConversationIdOrderByCreatedAtAsc("conv-live");
     }
 
     @Test
@@ -352,5 +404,18 @@ class LiveToolExecutorTest {
         assertThat(outcome).as("a read-only tool returns a value, never a failure: %s", outcome)
                 .isInstanceOf(LiveToolExecutor.ToolOutcome.Value.class);
         return json.readTree(((LiveToolExecutor.ToolOutcome.Value) outcome).json());
+    }
+
+    private static Run operatorRun(String conversationId, Instant createdAt) {
+        return Run.builder().id(UUID.randomUUID()).agentId(AriaConstants.ARIA_AGENT_ID)
+                .conversationId(conversationId).promptSeed("what is on my board?")
+                .status(RunStatus.COMPLETED).createdAt(createdAt).build();
+    }
+
+    private static Run liveRun(UUID id, String conversationId, Instant createdAt) {
+        return Run.builder().id(id).agentId(AriaConstants.ARIA_AGENT_ID)
+                .conversationId(conversationId)
+                .promptSeed(LiveRunService.LIVE_SEED_PREFIX + "tool: get_run")
+                .status(RunStatus.RUNNING).createdAt(createdAt).build();
     }
 }

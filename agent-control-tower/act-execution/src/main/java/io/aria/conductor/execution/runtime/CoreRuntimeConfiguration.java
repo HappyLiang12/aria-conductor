@@ -247,13 +247,13 @@ public class CoreRuntimeConfiguration {
 
     @Bean
     public OpenCodeCoreAdapter openCodeCoreAdapter(RunMcpWiring runMcp, OpenCodeProperties openCodeProperties,
-            LlmProviderRepository llmProviders,
+            LlmProviderRepository llmProviders, HostFileAccessProperties hostFiles,
             @Value("${aria.cores.opencode.executable:opencode}") String executable,
             @Value("${aria.cores.opencode.version:1.14.31}") String version,
             @Value("${aria.cores.opencode.model:gpt-4o}") String model) {
         return new OpenCodeCoreAdapter(new OpenCodeCoreAdapter.OpenCodeProfile(executable, List.of(),
                 openCodeModelProviderEnvironment(openCodeProperties.getSandboxEnv()), version, model),
-                runMcp, () -> openCodeModelProvider(llmProviders));
+                runMcp, () -> openCodeModelProvider(llmProviders), hostFiles);
     }
 
     /**

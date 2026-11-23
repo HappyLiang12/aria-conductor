@@ -751,7 +751,7 @@ class CoreExecutionServiceTest {
                 "{\"requestId\":7,\"toolName\":\"write_file\",\"options\":"
                         + "[{\"optionId\":\"proceed_once\",\"kind\":\"allow_once\"},"
                         + "{\"optionId\":\"cancel\",\"kind\":\"reject_once\"}]}"));
-        when(permissions.register(any())).thenReturn(APPROVAL);
+        when(permissions.register(any(), any())).thenReturn(APPROVAL);
         // While manually paused the decision is recorded, not delivered: only resume releases it.
         when(permissions.deliverPending(APPROVAL)).thenReturn(Optional.empty());
         PermissionReply heldReply = new PermissionReply(RUN, "session-1", "7", "proceed_once");
@@ -1595,7 +1595,7 @@ class CoreExecutionServiceTest {
         // approval path owns the permission event; only tool.call may create the audit row.
         RunTelemetryService telemetry = mock(RunTelemetryService.class);
         service.attachTelemetry(new CoreEventTelemetry(telemetry));
-        when(permissions.register(any())).thenReturn(APPROVAL);
+        when(permissions.register(any(), any())).thenReturn(APPROVAL);
         session.events.add(new CoreEvent("permission.request", RUN, "session-1", "7",
                 "{\"requestId\":7,\"toolCallId\":\"tc-1\",\"toolName\":\"Bash\",\"input\":"
                         + "{\"command\":\"git status\"},\"options\":"
@@ -1607,7 +1607,7 @@ class CoreExecutionServiceTest {
 
         service.execute(spec(), adapter, task());
 
-        verify(permissions).register(any());
+        verify(permissions).register(any(), any());
         verify(telemetry, times(1)).recordToolCall(RUN, new RunTelemetryService.ToolCallEvent(
                 "tc-1", "Bash", "{\"command\":\"git status\"}", false));
     }
@@ -1733,12 +1733,16 @@ class CoreExecutionServiceTest {
                 "{\"requestId\":7,\"toolName\":\"write_file\",\"options\":"
                         + "[{\"optionId\":\"proceed_once\",\"kind\":\"allow_once\"},"
                         + "{\"optionId\":\"cancel\",\"kind\":\"reject_once\"}]}"));
-        when(permissions.register(any())).thenReturn(APPROVAL);
+        when(permissions.register(any(), any())).thenReturn(APPROVAL);
 
         service.execute(spec(), adapter, task());
 
         ArgumentCaptor<NativePermission> ask = ArgumentCaptor.forClass(NativePermission.class);
-        verify(permissions).register(ask.capture());
+        ArgumentCaptor<ExecutionMode> placement = ArgumentCaptor.forClass(ExecutionMode.class);
+        verify(permissions).register(ask.capture(), placement.capture());
+        assertThat(placement.getValue())
+                .as("the ask is registered with the run's own placement")
+                .isEqualTo(ExecutionMode.HOST);
         assertThat(ask.getValue().runId()).isEqualTo(RUN);
         assertThat(ask.getValue().requestId()).isEqualTo("7");
         assertThat(ask.getValue().toolName()).isEqualTo("write_file");

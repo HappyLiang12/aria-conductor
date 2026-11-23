@@ -11,6 +11,7 @@ import io.aria.conductor.execution.runtime.CoreCapabilities;
 import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
+import io.aria.conductor.execution.runtime.HostFileAccessProperties;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
@@ -53,16 +54,18 @@ import java.util.Set;
  * denied rather than auto-approved, only the classified read-only tools and the
  * governed web research tools are automatic, and every side-effecting tool --
  * file edits, shell execution, sub-agents, questions and directories outside
- * the workspace -- is refused in the core itself. The one governed exception is
- * a SANDBOX worker run ({@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}): its
- * write and shell tools are allowed because the run-owned container is the real
- * boundary, and {@code external_directory}, {@code task} and {@code question}
- * stay denied. Aria stays read-only in every placement, a HOST run stays
- * read-only because no run-owned container bounds it, and a worker run still
- * receives no platform MCP ({@code RunMcpWiring} stays Aria-only). A run-bound
- * approve-once decision is delivered by the run policy and the permission
- * coordinator (task 12) and is never implemented by relaxing this file back into
- * allow-all.
+ * the workspace -- is refused in the core itself. There are two governed
+ * exceptions. A SANDBOX worker run
+ * ({@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}) receives its write and shell
+ * tools because the run-owned container is the real boundary, and
+ * {@code external_directory}, {@code task} and {@code question} stay denied. A
+ * HOST run receives them only under the operator's opt-in
+ * {@code aria.host.files=FULL} ({@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}),
+ * because no container bounds it and the core runs as the backend user. Aria
+ * stays read-only in a SANDBOX placement, and a worker run still receives no
+ * platform MCP ({@code RunMcpWiring} stays Aria-only). A run-bound approve-once
+ * decision is delivered by the run policy and the permission coordinator
+ * (task 12) and is never implemented by relaxing this file back into allow-all.
  *
  * <p>Capabilities come from the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}): both recorded
@@ -89,13 +92,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     /**
      * The governed permission policy plus the operator's model provider: the
-     * filesystem stays read-only, the two web research tools are allowed, and
-     * the run serves with the provider the operator activated (never opencode's
-     * own default, whose free tier refuses this consumer). Deny by default,
-     * explicit read-only allowances, explicit refusals for every remaining
-     * side-effecting surface. Tool names follow the reviewed core's tool ids; an
-     * unknown tool is covered by the wildcard refusal and can therefore never be
-     * auto-approved.
+     * filesystem stays read-only unless the placement renders
+     * {@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE} or the operator opted into
+     * {@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}, the two web research
+     * tools are allowed, and the run serves with the provider the operator
+     * activated (never opencode's own default, whose free tier refuses this
+     * consumer). Deny by default, explicit read-only allowances, explicit
+     * refusals for every remaining side-effecting surface. Tool names follow the
+     * reviewed core's tool ids; an unknown tool is covered by the wildcard
+     * refusal and can therefore never be auto-approved.
      *
      * <p>{@code webfetch} and {@code websearch} are allowed (operator decision
      * 2026-10-03): sandboxed research runs must be able to verify current facts,
@@ -181,9 +186,11 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * refusals. What the launch keeps out of a worker's reach is the platform MCP
      * block: the launch hands a worker none at all.
      *
-     * <p>Aria stays read-only in every placement and every HOST run stays read-only
-     * in both roles, because neither is bounded by a run-owned container: only a
-     * SANDBOX worker renders this document.
+     * <p>Aria never renders this document, and a HOST run never renders it: only
+     * a SANDBOX non-Aria worker is bounded by a run-owned container. A HOST run
+     * is governed by the operator's file-access policy instead
+     * ({@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE} when it is {@code FULL},
+     * the shipped read-only document otherwise).
      */
     private static final String SANDBOX_WORKER_CONFIGURATION_TEMPLATE = """
             {
@@ -218,6 +225,51 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                       "attachment": true,
                       "modalities": { "input": ["text", "image"], "output": ["text"] }
                     }
+                  }
+                }
+              }
+            }
+            """;
+
+    /**
+     * The governed policy of a HOST run when the operator opted into
+     * {@code aria.host.files=FULL}: {@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}'s
+     * workspace tools plus {@code external_directory}, because a HOST run has no
+     * run-owned container to keep the core inside its workspace. The core runs as
+     * the backend user, so this is a full-filesystem grant: the operator's
+     * opt-in is the boundary, and every other refusal the shipped document
+     * carries ({@code *}, {@code task}, {@code question}) stays refused.
+     */
+    private static final String HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE = """
+            {
+              "$schema": "https://opencode.ai/config.json",
+              "permission": {
+                "*": "deny",
+                "read": "allow",
+                "list": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "edit": "allow",
+                "write": "allow",
+                "patch": "allow",
+                "bash": "allow",
+                "task": "deny",
+                "question": "deny",
+                "external_directory": "allow",
+                "aria-conductor*": "allow"
+              }%s,
+              "model": "%s/%s",
+              "provider": {
+                "%s": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "%s"
+                  },
+                  "models": {
+                    "%s": {}
                   }
                 }
               }
@@ -266,29 +318,54 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     private final ModelProviderResolver modelProviders;
     private final Duration serveReadyBudget;
     private final Duration serveReadyPoll;
+    /** The operator's HOST file-access policy; only a HOST placement consults it. */
+    private final HostFileAccessProperties hostFiles;
 
     public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp) {
-        this(profile, runMcp, ModelProviderResolver.fallback(), SERVE_READY_BUDGET, SERVE_READY_POLL);
+        this(profile, runMcp, ModelProviderResolver.fallback(), SERVE_READY_BUDGET, SERVE_READY_POLL,
+                new HostFileAccessProperties());
+    }
+
+    /** A launch under the operator's HOST file-access policy (aria.host.files). */
+    public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            HostFileAccessProperties hostFiles) {
+        this(profile, runMcp, ModelProviderResolver.fallback(), SERVE_READY_BUDGET, SERVE_READY_POLL,
+                hostFiles);
     }
 
     /** A launch against an explicit provider resolution (production reads the operator's row). */
     public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
             ModelProviderResolver modelProviders) {
-        this(profile, runMcp, modelProviders, SERVE_READY_BUDGET, SERVE_READY_POLL);
+        this(profile, runMcp, modelProviders, SERVE_READY_BUDGET, SERVE_READY_POLL,
+                new HostFileAccessProperties());
+    }
+
+    /** Production wiring: the resolved provider and the operator's HOST file-access policy. */
+    public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            ModelProviderResolver modelProviders, HostFileAccessProperties hostFiles) {
+        this(profile, runMcp, modelProviders, SERVE_READY_BUDGET, SERVE_READY_POLL, hostFiles);
     }
 
     OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
             Duration serveReadyBudget, Duration serveReadyPoll) {
-        this(profile, runMcp, ModelProviderResolver.fallback(), serveReadyBudget, serveReadyPoll);
+        this(profile, runMcp, ModelProviderResolver.fallback(), serveReadyBudget, serveReadyPoll,
+                new HostFileAccessProperties());
     }
 
     OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp, ModelProviderResolver modelProviders,
             Duration serveReadyBudget, Duration serveReadyPoll) {
+        this(profile, runMcp, modelProviders, serveReadyBudget, serveReadyPoll,
+                new HostFileAccessProperties());
+    }
+
+    OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp, ModelProviderResolver modelProviders,
+            Duration serveReadyBudget, Duration serveReadyPoll, HostFileAccessProperties hostFiles) {
         this.profile = Objects.requireNonNull(profile, "profile");
         this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
         this.modelProviders = Objects.requireNonNull(modelProviders, "modelProviders");
         this.serveReadyBudget = Objects.requireNonNull(serveReadyBudget, "serveReadyBudget");
         this.serveReadyPoll = Objects.requireNonNull(serveReadyPoll, "serveReadyPoll");
+        this.hostFiles = Objects.requireNonNull(hostFiles, "hostFiles");
     }
 
     /**
@@ -456,10 +533,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         Optional<RunMcpWiring.Endpoint> workerMcp = runMcp.forRun(spec, environment);
         // The ruled worker policy: only a SANDBOX placement is bounded by a container the
         // run owns, so only there does a non-Aria agent receive the write and shell tools.
-        // Aria stays read-only in every placement and HOST stays read-only in both roles.
-        boolean sandboxWorker = SandboxBind.isSandboxProxy(environment)
-                && !AriaConstants.ARIA_AGENT_ID.equals(spec.agentId());
-        writeGovernedConfiguration(configurationRoot, workerMcp, sandboxWorker);
+        // Aria stays read-only in a SANDBOX placement, and a HOST placement only receives
+        // the workspace tools when the operator opts into aria.host.files=FULL.
+        boolean sandboxPlacement = SandboxBind.isSandboxProxy(environment);
+        boolean sandboxWorker = sandboxPlacement && !AriaConstants.ARIA_AGENT_ID.equals(spec.agentId());
+        boolean hostFullAccess = !sandboxPlacement && hostFiles.fullAccess();
+        writeGovernedConfiguration(configurationRoot, workerMcp, sandboxWorker, hostFullAccess);
         // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
         // /workspace) and must not be host-absolutized: on Windows that turns it into
         // C:workspace, which the launch manifest rightly refuses.
@@ -664,7 +743,7 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     /** The governed configuration a launch pointing at {@code provider} writes. */
     public static String governedConfigurationJson(ModelProvider provider) {
         Objects.requireNonNull(provider, "provider");
-        return governedConfiguration(provider, "", false);
+        return governedConfiguration(provider, "", false, false);
     }
 
     /** The governed configuration of the documented fallback provider. */
@@ -672,11 +751,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         return governedConfigurationJson(ModelProvider.deepseekFallback());
     }
 
-    private static String governedConfiguration(ModelProvider provider, String mcpBlock, boolean sandboxWorker) {
+    private static String governedConfiguration(ModelProvider provider, String mcpBlock, boolean sandboxWorker,
+            boolean hostFull) {
         String providerKey = governedProviderKey(provider.providerId());
         String template = sandboxWorker
                 ? SANDBOX_WORKER_CONFIGURATION_TEMPLATE
-                : GOVERNED_CONFIGURATION_TEMPLATE;
+                : hostFull ? HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE : GOVERNED_CONFIGURATION_TEMPLATE;
         return template.formatted(mcpBlock,
                 providerKey, provider.model(),
                 providerKey, provider.baseUrl(), provider.model());
@@ -695,12 +775,13 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp,
-            boolean sandboxWorker) {
+            boolean sandboxWorker, boolean hostFullAccess) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
         ModelProvider provider = modelProviders.resolve();
         String document = workerMcp
-                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint), sandboxWorker))
-                .orElseGet(() -> governedConfiguration(provider, "", sandboxWorker));
+                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint), sandboxWorker,
+                        hostFullAccess))
+                .orElseGet(() -> governedConfiguration(provider, "", sandboxWorker, hostFullAccess));
         try {
             Files.createDirectories(target.getParent());
             Files.writeString(target, document, StandardCharsets.UTF_8);

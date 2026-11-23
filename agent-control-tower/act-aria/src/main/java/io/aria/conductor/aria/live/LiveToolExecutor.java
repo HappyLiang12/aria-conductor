@@ -31,6 +31,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -74,6 +75,10 @@ public class LiveToolExecutor {
     static final int PREVIEW_CHARS = 400;
     /** Step output previews are the bulk of a chain; shorter than a run's own preview. */
     static final int STEP_PREVIEW_CHARS = 160;
+    /** How many distinct conversations the latest-conversation scan may open. */
+    static final int MAX_LATEST_CONVERSATIONS = 5;
+    /** The id page read once; live rows repeat ids, so the window is wider than the scan. */
+    static final int LATEST_CONVERSATION_PAGE = 20;
 
     /** The preview kept when a value still exceeds {@link #MAX_OUTPUT_CHARS}. */
     private static final int TRUNCATED_PREVIEW_CHARS = 512;
@@ -185,24 +190,43 @@ public class LiveToolExecutor {
     /**
      * The newest conversation Aria itself ran in. Scoped to the Aria agent id so a
      * socket can never adopt some other agent's run as "the latest conversation"; the
-     * database picks the id newest-first, so no full run table is read to compare.
+     * database picks the ids newest-first, so no full run table is read to compare.
+     *
+     * <p>Live rows are internal plumbing, not the operator's chat: the in-flight live
+     * run (which carries {@link LiveRunService#LIVE_SEED_PREFIX}) and every earlier live
+     * turn are filtered out, so {@code lastMessageAt}/{@code runCount} describe what the
+     * operator actually said. A conversation that only holds live rows is skipped
+     * rather than reported as empty; the scan is bounded to a few conversations.
      */
     private Map<String, Object> latestConversationView() {
-        List<String> latest = runRepository.findLatestConversationIds(
-                AriaConstants.ARIA_AGENT_ID, PageRequest.of(0, 1));
-        if (latest.isEmpty()) {
-            return null;
+        List<String> candidates = runRepository.findLatestConversationIds(
+                AriaConstants.ARIA_AGENT_ID, PageRequest.of(0, LATEST_CONVERSATION_PAGE));
+        Set<String> examined = new LinkedHashSet<>();
+        for (String conversationId : candidates) {
+            if (conversationId == null || !examined.add(conversationId)) {
+                continue;
+            }
+            if (examined.size() > MAX_LATEST_CONVERSATIONS) {
+                break;
+            }
+            List<Run> operatorRuns = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId)
+                    .stream().filter(LiveToolExecutor::isOperatorRun).toList();
+            if (operatorRuns.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> view = new LinkedHashMap<>();
+            view.put("conversationId", conversationId);
+            view.put("lastMessageAt", operatorRuns.get(operatorRuns.size() - 1).getCreatedAt());
+            view.put("runCount", operatorRuns.size());
+            return view;
         }
-        String conversationId = latest.get(0);
-        List<Run> runs = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
-        if (runs.isEmpty()) {
-            return null;
-        }
-        Map<String, Object> view = new LinkedHashMap<>();
-        view.put("conversationId", conversationId);
-        view.put("lastMessageAt", runs.get(runs.size() - 1).getCreatedAt());
-        view.put("runCount", runs.size());
-        return view;
+        return null;
+    }
+
+    /** A live turn's row; never part of the operator's conversation history. */
+    private static boolean isOperatorRun(Run run) {
+        String seed = run.getPromptSeed();
+        return seed == null || !seed.startsWith(LiveRunService.LIVE_SEED_PREFIX);
     }
 
     private List<Map<String, Object>> approvalsView(ApprovalStatus status) {

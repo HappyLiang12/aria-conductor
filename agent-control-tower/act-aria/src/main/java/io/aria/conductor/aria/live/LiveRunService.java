@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -26,15 +28,23 @@ import java.util.UUID;
  * written with {@link RunRepository#save} only: {@code RunService.createRun} publishes
  * a {@code RunStartedEvent} that dispatches the execution engine, which would launch a
  * subprocess for a prompt seed no model would ever answer. The audit event is published
- * by hand for the same reason.
+ * by hand for the same reason. Once created, every later write is one of the
+ * repository's conditional statements, never a read-then-save.
  *
- * <p>The run id lives on the {@link LiveSession} until the turn ends; the caller that
- * settles the turn clears it ({@code session.runId(null)}), so the next turn's first
- * tool call gets a fresh row.
+ * <p>The run id lives on the {@link LiveSession} until the turn ends; {@link #settle}
+ * clears that slot itself, so idempotency does not depend on a caller remembering to.
+ * A slot that holds a row which is no longer live (settled, cancelled, or gone) is
+ * never reused: the next tool call inserts a fresh row.
  */
 @Slf4j
 @Service
 public class LiveRunService {
+
+    /**
+     * The prompt seed prefix of every live-created row. Internal plumbing, not the
+     * operator's conversation: tools that summarize runs filter on it.
+     */
+    public static final String LIVE_SEED_PREFIX = "[live] ";
 
     /**
      * A live tool turn never loops — it has no model of its own — so the honest cap is
@@ -44,6 +54,17 @@ public class LiveRunService {
 
     private static final Set<RunStatus> TERMINAL_STATUSES =
             EnumSet.of(RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
+
+    /** The same set as the repository's {@code terminal} parameter; EnumSet order is stable. */
+    private static final List<RunStatus> TERMINAL_STATUS_LIST = List.copyOf(TERMINAL_STATUSES);
+
+    /**
+     * The only committed states in which a turn's row can still take tool calls. A row
+     * that left this set has finished (or was cancelled by an operator) and must not be
+     * reused as the next turn's row.
+     */
+    private static final Set<RunStatus> LIVE_STATUSES =
+            EnumSet.of(RunStatus.RUNNING, RunStatus.WAITING_INPUT);
 
     private final RunRepository runRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -62,25 +83,30 @@ public class LiveRunService {
     }
 
     /**
-     * The run of the current tool turn: the one the session already owns, or a newly
-     * inserted {@code RUNNING} row on the turn's first tool call. Idempotent per turn;
-     * the double-checked lock keeps two near-simultaneous calls from inserting two rows.
+     * The run of the current tool turn: the one the session already owns while it is
+     * still live, or a newly inserted {@code RUNNING} row on the turn's first tool call.
+     * Idempotent per turn; the double-checked lock keeps two near-simultaneous calls
+     * from inserting two rows.
+     *
+     * <p>The slot is re-validated against the committed status on every call: an
+     * operator cancel (or a settle whose slot clear was skipped) leaves a terminal id
+     * behind, and reusing it would attach this turn's tools to a dead run.
      */
     @Transactional
     public UUID findOrCreateForToolTurn(LiveSession session, String toolName) {
-        UUID existing = session.runId();
+        UUID existing = liveRunId(session.runId());
         if (existing != null) {
             return existing;
         }
         synchronized (session) {
-            existing = session.runId();
+            existing = liveRunId(session.runId());
             if (existing != null) {
                 return existing;
             }
             Run run = Run.builder()
                     .agentId(AriaConstants.ARIA_AGENT_ID)
                     .conversationId(session.conversationId())
-                    .promptSeed("[live] tool: " + toolName)
+                    .promptSeed(LIVE_SEED_PREFIX + "tool: " + toolName)
                     .status(RunStatus.RUNNING)
                     .maxIterations(LIVE_MAX_ITERATIONS)
                     .createdAt(Instant.now(clock))
@@ -97,35 +123,74 @@ public class LiveRunService {
 
     /**
      * Writes the turn's terminal state (or the parked {@code WAITING_INPUT} state Task 4
-     * uses while an approval is pending). A run that is already terminal is left alone:
-     * a late bridge event must not resurrect a finished run, and an unknown id is logged
-     * and ignored rather than thrown at the socket.
+     * uses while an approval is pending) with the repository's single-statement
+     * conditional writers, and clears the session's run slot. A concurrent writer — an
+     * operator cancel above all — is evaluated by the database against the committed
+     * row, so this call can never resurrect a run that finished or was cancelled after
+     * it read the row; when it loses, it claims nothing and reports the committed state.
      *
      * <p>No completion event is published here — the live event router (Task 4) owns the
      * bridge-facing {@code run_event} and the settled-turn cleanup.
+     *
+     * @param session the socket that owns the turn; its slot is cleared when it still
+     *                holds {@code runId} (may be null for a run with no live session)
+     * @return the run's committed status after the attempt, or null when the id is
+     *         unknown or no status was supplied
      */
     @Transactional
-    public void settle(UUID runId, RunStatus status, String reason) {
+    public RunStatus settle(LiveSession session, UUID runId, RunStatus status, String reason) {
         if (runId == null || status == null) {
-            return;
+            return null;
         }
-        Run run = runRepository.findById(runId).orElse(null);
-        if (run == null) {
+        if (session != null) {
+            session.clearRunSlot(runId);
+        }
+        Instant now = Instant.now(clock);
+        int written;
+        if (status == RunStatus.WAITING_INPUT) {
+            // Parked, not finished: no completion time, and only a RUNNING row may park.
+            written = runRepository.updateStatusIfCurrentIn(runId, status, null, now,
+                    List.of(RunStatus.RUNNING));
+        } else if (TERMINAL_STATUSES.contains(status)) {
+            written = runRepository.completeIfNotTerminal(runId, status, 0, 0L, now, null,
+                    failureReason(status, reason), null, null, now, TERMINAL_STATUS_LIST);
+        } else {
+            log.warn("live run settle ignored: {} is not a settleable live status", status);
+            return committedStatus(runId);
+        }
+        RunStatus committed = committedStatus(runId);
+        if (committed == null) {
             log.warn("live run settle ignored: unknown run {}", runId);
-            return;
+        } else if (written == 0) {
+            log.debug("live run settle lost for {}: committed status {} stays", runId, committed);
+        } else {
+            log.debug("live run settled: id={} status={}", runId, committed);
         }
-        if (TERMINAL_STATUSES.contains(run.getStatus())) {
-            log.debug("live run settle ignored: run {} already {}", runId, run.getStatus());
-            return;
+        return committed;
+    }
+
+    /**
+     * The slot's run when it can still take this turn's calls. Read as a projection so
+     * a persistence-context snapshot cannot answer with a status another transaction
+     * already replaced.
+     */
+    private UUID liveRunId(UUID runId) {
+        if (runId == null) {
+            return null;
         }
-        run.setStatus(status);
-        if (TERMINAL_STATUSES.contains(status)) {
-            run.setCompletedAt(Instant.now(clock));
+        Optional<RunStatus> status = runRepository.findStateById(runId)
+                .map(state -> state.getStatus());
+        return status.filter(LIVE_STATUSES::contains).map(ignored -> runId).orElse(null);
+    }
+
+    private RunStatus committedStatus(UUID runId) {
+        return runRepository.findStateById(runId).map(state -> state.getStatus()).orElse(null);
+    }
+
+    private static String failureReason(RunStatus status, String reason) {
+        if (status != RunStatus.FAILED || reason == null || reason.isBlank()) {
+            return null;
         }
-        if (status == RunStatus.FAILED && reason != null && !reason.isBlank()) {
-            run.setErrorMessage(reason);
-        }
-        runRepository.save(run);
-        log.debug("live run settled: id={} status={}", runId, status);
+        return reason;
     }
 }

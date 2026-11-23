@@ -76,6 +76,7 @@ class McpAppContextIntegrationTest {
                             "list_llm_providers", "activate_llm_provider",
                             "list_notifications", "get_unread_notification_count",
                             "list_scheduled_jobs", "cancel_scheduled_job",
+                            "get_time",
                             "get_latest_conversation", "get_conversation_timeline");
         }
     }

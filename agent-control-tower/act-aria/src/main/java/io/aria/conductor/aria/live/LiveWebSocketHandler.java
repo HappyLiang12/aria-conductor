@@ -27,6 +27,7 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The phone-facing end of the live socket (spec X1 / §"Endpoint and handshake", §"Bridge
@@ -68,10 +69,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
     /** Protocol/version refusal (spec close codes). */
     static final int CLOSE_PROTOCOL = 4002;
+    /** Bridge authentication refusal (spec close codes). */
+    static final int CLOSE_AUTH = 4001;
+    /** A failed 120-minute reopen (spec close codes). */
+    static final int CLOSE_SESSION_EXPIRED = 4012;
     /** Bridge failure or unexpected child exit (spec close codes). */
     static final int CLOSE_BRIDGE = 1011;
 
+    static final String ERROR_AUTH_FAILED = "auth_failed";
     static final String ERROR_CAPABILITY_MISMATCH = "capability_mismatch";
+    static final String ERROR_SESSION_EXPIRED = "session_expired";
     static final String ERROR_BRIDGE_INTERNAL = "bridge_internal";
     static final String ERROR_FRAME_TOO_LARGE = "frame_too_large";
     static final String ERROR_FRAME_INVALID = "frame_invalid";
@@ -79,6 +86,9 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     static final String ERROR_MESSAGE_HELLO_REJECTED = "hello rejected";
     static final String ERROR_MESSAGE_HELLO_DEADLINE = "hello deadline exceeded";
     static final String ERROR_MESSAGE_BRIDGE_UNAVAILABLE = "live bridge unavailable";
+    static final String ERROR_MESSAGE_AUTH_FAILED = "Qwen rejected the bridge credentials";
+    static final String ERROR_MESSAGE_SESSION_EXPIRED = "Qwen session expired";
+    static final String ERROR_MESSAGE_CAPABILITY = "live bridge capability mismatch";
     static final String ERROR_MESSAGE_FRAME_TOO_LARGE = "frame too large";
     static final String ERROR_MESSAGE_FRAME_ENVELOPE = "frame exceeds 256 KiB base64";
     static final String ERROR_MESSAGE_FRAME_INVALID = "frame invalid";
@@ -357,7 +367,9 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         LiveFrameValidator.Result result = LiveFrameValidator.validate(
                 frame.path("mime").asText(null), frame.path("dataBase64").asText(null));
         if (result.failure() == LiveFrameValidator.Failure.TOO_LARGE) {
-            sendError(live, ERROR_FRAME_TOO_LARGE, true, ERROR_MESSAGE_FRAME_TOO_LARGE);
+            // Not retryable: the phone must shrink the frame, never resend the same bytes
+            // (contract error table). The envelope refusal above answers identically.
+            sendError(live, ERROR_FRAME_TOO_LARGE, false, ERROR_MESSAGE_FRAME_TOO_LARGE);
             return;
         }
         if (!result.accepted()) {
@@ -401,14 +413,23 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private final class BridgeListener implements LiveBridgeListener {
 
         private final LiveSession live;
+        /**
+         * Whether an {@code error} event already crossed this socket. A failed reopen sends
+         * {@code session_expired} and then {@code fatal{4012}}: the phone hears the reason
+         * once and only the close code follows it.
+         */
+        private final AtomicBoolean errorSent = new AtomicBoolean();
 
         BridgeListener(LiveSession live) {
             this.live = live;
         }
 
         @Override
-        public void onControl(String json) {
-            sendRaw(live, json);
+        public void onControl(String payload) {
+            if (isErrorEvent(payload)) {
+                errorSent.set(true);
+            }
+            sendRaw(live, payload);
         }
 
         @Override
@@ -435,11 +456,28 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         }
 
         @Override
+        public void onFatal(int code) {
+            log.debug("aria live bridge fatal: code={}", code);
+            // getAndSet: a second fatal on the same socket never sends a second error.
+            fatal(live, code, errorSent.getAndSet(true));
+        }
+
+        @Override
         public void onExit(int code) {
             log.debug("aria live bridge exited: code={}", code);
             if (!live.closed()) {
                 // The child died under an open socket: say why, then 1011 (spec close codes).
                 bridgeUnavailable(live);
+            }
+        }
+
+        /** @return whether this bridge control is a phone {@code error} event */
+        private boolean isErrorEvent(String payload) {
+            try {
+                JsonNode event = json.readTree(payload == null ? "" : payload);
+                return event != null && "error".equals(event.path("type").asText(""));
+            } catch (IOException e) {
+                return false;
             }
         }
     }
@@ -481,6 +519,36 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private void bridgeUnavailable(LiveSession live) {
         sendError(live, ERROR_BRIDGE_INTERNAL, true, ERROR_MESSAGE_BRIDGE_UNAVAILABLE);
         close(live, CLOSE_BRIDGE, ERROR_BRIDGE_INTERNAL);
+    }
+
+    /**
+     * A bridge {@code fatal} (spec X9): the code names both the close the phone sees and the
+     * error frame that explains it. The error is sent only when the bridge has not already
+     * sent one — a failed reopen emits {@code session_expired} itself, then {@code fatal{4012}},
+     * and the contract forbids a second error for one failure.
+     */
+    private void fatal(LiveSession live, int code, boolean errorAlreadySent) {
+        Fatal fatal = Fatal.of(code);
+        if (!errorAlreadySent) {
+            sendError(live, fatal.errorCode(), fatal.retryable(), fatal.message());
+        }
+        close(live, fatal.closeCode(), fatal.errorCode());
+    }
+
+    /** The fatal close codes the bridge contract names, mapped to the phone's error set. */
+    record Fatal(int closeCode, String errorCode, boolean retryable, String message) {
+
+        static Fatal of(int code) {
+            return switch (code) {
+                case CLOSE_AUTH -> new Fatal(CLOSE_AUTH, ERROR_AUTH_FAILED, false, ERROR_MESSAGE_AUTH_FAILED);
+                case CLOSE_PROTOCOL ->
+                        new Fatal(CLOSE_PROTOCOL, ERROR_CAPABILITY_MISMATCH, false, ERROR_MESSAGE_CAPABILITY);
+                case CLOSE_SESSION_EXPIRED ->
+                        new Fatal(CLOSE_SESSION_EXPIRED, ERROR_SESSION_EXPIRED, true, ERROR_MESSAGE_SESSION_EXPIRED);
+                // 1011 and anything a bridge should not have sent: the retryable internal failure.
+                default -> new Fatal(CLOSE_BRIDGE, ERROR_BRIDGE_INTERNAL, true, ERROR_MESSAGE_BRIDGE_UNAVAILABLE);
+            };
+        }
     }
 
     /** {@code capability_mismatch} then 4002: the hello-side refusal. */

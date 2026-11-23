@@ -196,6 +196,18 @@ class QwenLiveBridgeProcessTest {
     }
 
     @Test
+    void aFatalLineReachesTheListenerWithItsCloseCode() throws Exception {
+        // The mode's replay starts on the Java hello, like the real child's session.
+        bridge = spawn(credentials(), Map.of(
+                "FAKE_BRIDGE_MODE", "fatal", "FAKE_BRIDGE_FATAL_CODE", "4012"));
+        awaitEnvReport();
+
+        bridge.send("{\"type\":\"hello\",\"v\":1,\"conversationId\":\"conv-fatal\"}");
+
+        assertThat(listener.fatalCodes.poll(10, TimeUnit.SECONDS)).isEqualTo(4012);
+    }
+
+    @Test
     void nullAndEmptyOutboundFramesAreIgnored() throws Exception {
         bridge = spawn(credentials(), Map.of());
         awaitEnvReport();
@@ -281,6 +293,7 @@ class QwenLiveBridgeProcessTest {
         final BlockingQueue<byte[]> audio = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> exits = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> turnEnds = new LinkedBlockingQueue<>();
+        final BlockingQueue<Integer> fatalCodes = new LinkedBlockingQueue<>();
 
         @Override
         public void onControl(String json) {
@@ -295,6 +308,11 @@ class QwenLiveBridgeProcessTest {
         @Override
         public void onTurnDone() {
             turnEnds.add(1);
+        }
+
+        @Override
+        public void onFatal(int code) {
+            fatalCodes.add(code);
         }
 
         @Override

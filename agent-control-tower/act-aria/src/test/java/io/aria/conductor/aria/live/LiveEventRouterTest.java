@@ -10,6 +10,10 @@ import io.aria.conductor.common.port.LiveRunPark;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.transaction.event.TransactionalEventListenerFactory;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -134,6 +138,109 @@ class LiveEventRouterTest {
     }
 
     @Test
+    void aDeniedToolAnswersTheFunctionCallBeforeTheTowerInjection() {
+        park();
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.FAILED), eq("denied by operator")))
+                .thenReturn(RunStatus.FAILED);
+
+        router.onApprovalDecided(decided(ApprovalStatus.DENIED));
+
+        int result = indexOfBridge("\"type\":\"tool_result\"");
+        int tower = indexOfBridge("\"type\":\"tower\"");
+        assertThat(result).as("the refused call is answered, not left waiting").isNotNegative();
+        assertThat(tower).isGreaterThan(result);
+        assertThat(bridge.lines().get(result))
+                .contains("\"id\":\"c1\"").contains("\"ok\":false").contains("denied by operator");
+    }
+
+    /**
+     * The decision arrives in the operator's transaction ({@code ApprovalGate} publishes
+     * inside it), so the listener must run only once that transaction committed: a settle
+     * or a write that failed here could otherwise roll the operator's decision back after
+     * the bridge already saw a result.
+     */
+    @Test
+    void anApprovedCallActsOnlyAfterTheDecisionTransactionCommits() {
+        park();
+        when(tools.execute(eq("get_run"), eq(arguments)))
+                .thenReturn(new LiveToolExecutor.ToolOutcome.Value("{\"id\":\"r1\"}"));
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull()))
+                .thenReturn(RunStatus.COMPLETED);
+
+        try (AnnotationConfigApplicationContext context = routerContext()) {
+            inDecisionTransaction(() -> {
+                context.publishEvent(decided(ApprovalStatus.APPROVED));
+
+                verifyNoInteractions(tools);
+                assertThat(bridge.lines()).isEmpty();
+                assertThat(park.parked(runId)).isTrue();
+            });
+
+            verify(tools).execute(eq("get_run"), eq(arguments));
+            assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
+                    && line.contains("\"ok\":true"));
+            assertThat(park.parked(runId)).isFalse();
+        }
+    }
+
+    /** A decision that never committed is no decision: nothing runs and the park stays. */
+    @Test
+    void aRolledBackDecisionIsNotActedOn() {
+        park();
+
+        try (AnnotationConfigApplicationContext context = routerContext()) {
+            inDecisionTransaction(TransactionSynchronization.STATUS_ROLLED_BACK,
+                    () -> context.publishEvent(decided(ApprovalStatus.APPROVED)));
+        }
+
+        verifyNoInteractions(tools);
+        assertThat(bridge.lines()).isEmpty();
+        assertThat(park.parked(runId)).isTrue();
+    }
+
+    /**
+     * The interleaving the claim exists for: the finalize thread released the park and is
+     * running its callback while the decision is being applied. The decision loses, and no
+     * second tower may reach the model.
+     */
+    @Test
+    void aFinalizeThatWinsTheRaceLeavesExactlyOneTower() {
+        FinalizeWinsPark racing = new FinalizeWinsPark();
+        LiveEventRouter racingRouter = new LiveEventRouter(runs, tools, registry, frames, racing);
+        session.runId(runId);
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.WAITING_INPUT), eq("approval pending")))
+                .thenReturn(RunStatus.WAITING_INPUT);
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.FINALIZE_REASON))).thenReturn(RunStatus.ABORTED);
+        racingRouter.parkForApproval(session, runId, approvalId, "get_run", "READ", "c1", arguments);
+
+        racingRouter.onApprovalDecided(decided(ApprovalStatus.APPROVED));
+
+        verifyNoInteractions(tools);
+        assertThat(bridge.lines()).noneMatch(line -> line.contains("\"type\":\"tool_result\""));
+        assertThat(bridge.lines()).filteredOn(line -> line.contains("\"type\":\"tower\""))
+                .singleElement().asString().contains(LiveEventRouter.TOWER_FINALIZED);
+        verify(runs, times(1)).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.FINALIZE_REASON));
+        assertThat(racing.parked(runId)).isFalse();
+    }
+
+    /** A park that cannot be taken must still answer the function call Qwen is waiting on. */
+    @Test
+    void aParkThatCannotBeTakenAnswersTheBridgeAndCreatesNoPark() {
+        session.runId(runId);
+        when(runs.settle(session, runId, RunStatus.WAITING_INPUT, "approval pending"))
+                .thenReturn(RunStatus.CANCELLED);
+
+        router.parkForApproval(session, runId, approvalId, "get_run", "READ", "c1", arguments);
+
+        assertThat(park.parked(runId)).isFalse();
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+    }
+
+    @Test
     void anApprovalEventForAnotherRunIsIgnored() {
         router.onApprovalDecided(new ApprovalDecidedEvent(this, UUID.randomUUID(), ApprovalStatus.APPROVED));
 
@@ -143,16 +250,36 @@ class LiveEventRouterTest {
         assertThat(phone()).isEmpty();
     }
 
+    /**
+     * A parked run whose socket is gone has no decision route and no finalize route left.
+     * Releasing the park is not enough: the row would sit WAITING_INPUT forever, so the
+     * close path settles it ABORTED with a stable reason.
+     */
     @Test
-    void aSocketCloseUnparksTheParkedRun() {
+    void aSocketCloseAbortsTheParkedRun() {
         park();
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.SESSION_CLOSED_REASON))).thenReturn(RunStatus.ABORTED);
 
         router.socketClosed(session);
 
         assertThat(park.parked(runId)).isFalse();
-        // The park's own WAITING_INPUT write is the only settle: closing settles nothing.
-        verify(runs, times(1)).settle(any(), any(), any(), any());
+        verify(runs).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq("Live session closed while waiting for an approval"));
         verifyNoInteractions(tools);
+    }
+
+    /** The close path runs twice on a real socket; the second release must settle nothing. */
+    @Test
+    void aSecondSocketCloseSettlesNothing() {
+        park();
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.SESSION_CLOSED_REASON))).thenReturn(RunStatus.ABORTED);
+
+        router.socketClosed(session);
+        router.socketClosed(session);
+
+        verify(runs, times(2)).settle(any(), any(), any(), any()); // the park's, then one abort
     }
 
     @Test
@@ -259,9 +386,94 @@ class LiveEventRouterTest {
         return frames;
     }
 
+    /** @return the index of the first bridge line containing {@code fragment}, or -1 */
+    private int indexOfBridge(String fragment) {
+        List<String> lines = bridge.lines();
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains(fragment)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The router as the production container sees it: only a registered bean gets its
+     * {@code @TransactionalEventListener} turned into a transaction-bound listener, so the
+     * commit boundary can be observed at all.
+     */
+    private AnnotationConfigApplicationContext routerContext() {
+        AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+        context.registerBean(LiveRunService.class, () -> runs);
+        context.registerBean(LiveToolExecutor.class, () -> tools);
+        context.registerBean(LiveSessionRegistry.class, () -> registry);
+        context.registerBean(LiveFrames.class, () -> frames);
+        context.registerBean(LiveRunPark.class, () -> park);
+        // What Boot's transaction auto-configuration supplies: without it every
+        // @TransactionalEventListener becomes a plain synchronous listener.
+        context.registerBean(TransactionalEventListenerFactory.class);
+        context.registerBean(LiveEventRouter.class);
+        context.refresh();
+        return context;
+    }
+
+    /**
+     * Runs {@code decision} the way {@code ApprovalGate} does — with a transaction active —
+     * and then completes it, firing the synchronizations a transactional listener is bound
+     * to. Spring delivers an AFTER_COMMIT listener from {@code afterCompletion}, so both
+     * callbacks of a real commit are fired here, in the container's order.
+     */
+    private static void inDecisionTransaction(int completionStatus, Runnable decision) {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        TransactionSynchronizationManager.initSynchronization();
+        List<TransactionSynchronization> callbacks;
+        try {
+            decision.run();
+            callbacks = List.copyOf(TransactionSynchronizationManager.getSynchronizations());
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+        for (TransactionSynchronization synchronization : callbacks) {
+            synchronization.afterCommit();
+            synchronization.afterCompletion(completionStatus);
+        }
+    }
+
+    private static void inDecisionTransaction(Runnable decision) {
+        inDecisionTransaction(TransactionSynchronization.STATUS_COMMITTED, decision);
+    }
+
+    /**
+     * The finalize thread claimed the park a moment before the approval did: the callback
+     * is already running and the port has nothing left to give the decision.
+     */
+    private static final class FinalizeWinsPark implements LiveRunPark {
+
+        private final Map<UUID, Runnable> parks = new ConcurrentHashMap<>();
+
+        @Override
+        public void park(UUID runId, Runnable onFinalize) {
+            parks.put(runId, onFinalize);
+        }
+
+        @Override
+        public boolean unpark(UUID runId) {
+            Runnable finalize = parks.remove(runId);
+            if (finalize == null) {
+                return false;
+            }
+            finalize.run();
+            return false;
+        }
+
+        @Override
+        public boolean parked(UUID runId) {
+            return parks.containsKey(runId);
+        }
+    }
+
     /** The in-process park seam: the callback runs when the test finalizes the run. */
     private static final class FakePark implements LiveRunPark {
-
         private final Map<UUID, Runnable> parks = new ConcurrentHashMap<>();
 
         @Override

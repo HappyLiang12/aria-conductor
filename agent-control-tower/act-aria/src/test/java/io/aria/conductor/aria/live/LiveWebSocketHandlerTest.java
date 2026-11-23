@@ -455,7 +455,8 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void aLegal256KibFrameReachesTheBridgeBeforeItsCommit() throws Exception {        WebSocketSession session = opened();
+    void aLegal256KibFrameReachesTheBridgeBeforeItsCommit() throws Exception {
+        WebSocketSession session = opened();
         // 196608 bytes of base64 is exactly the 262144-character limit the validator allows.
         String base64 = Base64.getEncoder().encodeToString(new byte[196_608]);
         assertThat(base64).hasSize(LiveFrameValidator.MAX_BASE64_LENGTH);

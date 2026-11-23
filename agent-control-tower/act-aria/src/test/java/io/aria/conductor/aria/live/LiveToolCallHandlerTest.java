@@ -13,8 +13,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -40,7 +47,9 @@ class LiveToolCallHandlerTest {
     private final LiveRunService runs = mock(LiveRunService.class);
     private final LiveToolExecutor tools = mock(LiveToolExecutor.class);
     private final LiveEventRouter router = mock(LiveEventRouter.class);
-    private final LiveToolCallHandler handler = new LiveToolCallHandler(runs, tools, frames, json, router);
+    /** Direct executor: the tests below assert the frames of one call synchronously. */
+    private final LiveToolCallHandler handler =
+            new LiveToolCallHandler(runs, tools, frames, json, router, Runnable::run);
 
     private final WebSocketSession ws = mock(WebSocketSession.class);
     private final RecordingBridge bridge = new RecordingBridge();
@@ -134,6 +143,73 @@ class LiveToolCallHandlerTest {
                 .contains("\"ok\":false").contains(LiveToolCallHandler.FAILED);
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.FAILED), eq(LiveToolCallHandler.FAILED));
         assertThat(phone()).noneMatch(frame -> frame.toString().contains("db is down"));
+        // The chip still names the tool it was about: a nameless "done" chip is unreadable.
+        assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("tool_status")
+                && frame.path("id").asText().equals("c1")
+                && frame.path("toolName").asText().equals("get_time"));
+    }
+
+    /**
+     * The call runs off the bridge reader thread (spec L4: a voice turn has a sub-second
+     * budget). The reader must return while the tool is still running, and the bridge's
+     * answer must arrive once, from the tool's own completion.
+     */
+    @Test
+    void aToolCallLeavesTheReaderFreeWhileTheToolRuns() throws Exception {
+        ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "aria-live-tool-test");
+            thread.setDaemon(true);
+            return thread;
+        });
+        LiveToolCallHandler offloaded =
+                new LiveToolCallHandler(runs, tools, frames, json, router, worker);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(runs.findOrCreateForToolTurn(session, "get_time")).thenReturn(runId);
+        when(tools.execute(eq("get_time"), any())).thenAnswer(invocation -> {
+            started.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return new LiveToolExecutor.ToolOutcome.Value("{\"now\":\"t\"}");
+        });
+
+        try {
+            CountDownLatch returned = new CountDownLatch(1);
+            Thread reader = new Thread(() -> {
+                offloaded.onToolCall(session, CALL);
+                returned.countDown();
+            }, "bridge-reader");
+            reader.start();
+
+            assertThat(returned.await(2, TimeUnit.SECONDS))
+                    .as("the reader must not wait for the tool").isTrue();
+            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(bridge.sent).as("no answer before the tool finished").isEmpty();
+
+            release.countDown();
+            await().atMost(2, TimeUnit.SECONDS).until(() -> !bridge.sent.isEmpty());
+            assertThat(bridge.sent).singleElement().asString()
+                    .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                    .contains("\"ok\":true");
+        } finally {
+            release.countDown();
+            worker.shutdownNow();
+        }
+    }
+
+    /** A full queue still answers the function call: Qwen is never left waiting on it. */
+    @Test
+    void aFullToolQueueStillAnswersTheCall() {
+        LiveToolCallHandler refused = new LiveToolCallHandler(runs, tools, frames, json, router,
+                command -> {
+                    throw new RejectedExecutionException("full");
+                });
+
+        refused.onToolCall(session, CALL);
+
+        assertThat(bridge.sent).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveToolCallHandler.BUSY);
+        verifyNoInteractions(tools);
     }
 
     @Test
@@ -168,7 +244,7 @@ class LiveToolCallHandlerTest {
 
     private static final class RecordingBridge implements LiveBridge {
 
-        private final List<String> sent = new ArrayList<>();
+        private final List<String> sent = new CopyOnWriteArrayList<>();
 
         @Override
         public void send(String json) {

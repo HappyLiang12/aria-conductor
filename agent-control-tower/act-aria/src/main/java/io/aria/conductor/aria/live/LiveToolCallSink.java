@@ -19,7 +19,11 @@ public interface LiveToolCallSink {
      */
     void onToolCall(LiveSession session, String json);
 
-    /** The bridge says the turn is over: its run, if any, is settled now. */
+    /**
+     * The bridge says the turn is over: its run, if any, is settled now. The bridge must
+     * send this only after every {@code tool_result} of the turn, because a tool call is
+     * executed off the reader thread and its answer is what makes the turn's row final.
+     */
     default void onTurnDone(LiveSession session) {
     }
 

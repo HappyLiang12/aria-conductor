@@ -4,11 +4,19 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.model.RunStatus;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The bridge's {@code tool_call} turned into a governed call on the turn's live run (spec
@@ -21,8 +29,11 @@ import java.util.UUID;
  * {@code tool_result}, or the model waits on a function call that can never complete.
  * Failures carry the executor's stable sentence, never an exception's text or stack.
  *
- * <p>Executed on the bridge reader thread; the run writes are the repository's conditional
- * statements and the frames take the socket's own lock, so no answer parks this thread.
+ * <p>Execution is off the stdout reader thread: that thread carries every other line of the
+ * socket (audio, control), so it hands the call to a small bounded pool and returns. Each
+ * call is answered by the worker that ran it, so a call's result can never overtake its
+ * own execution; different calls may interleave. A queue that is full refuses the call —
+ * the reader is never made to wait for a worker, and the refused call is still answered.
  */
 @Slf4j
 @Component
@@ -34,25 +45,71 @@ public class LiveToolCallHandler implements LiveToolCallSink {
     static final String FAILED = "Tool call failed";
     /** Answered for a call that names no tool. */
     static final String UNKNOWN_TOOL = "Unknown live tool";
+    /** Answered when the execution queue is full: refused, never left open. */
+    static final String BUSY = "Tool execution is busy";
+
+    /** Two workers: one turn rarely issues two calls, and the pool is shared by sockets. */
+    static final int WORKERS = 2;
+    /** Calls beyond this are refused instead of queued without limit. */
+    static final int QUEUE_CAPACITY = 8;
 
     private final LiveRunService runs;
     private final LiveToolExecutor tools;
     private final LiveFrames frames;
     private final ObjectMapper json;
     private final LiveEventRouter router;
+    private final Executor executor;
 
     @Autowired
     public LiveToolCallHandler(LiveRunService runs, LiveToolExecutor tools, LiveFrames frames,
                                ObjectMapper json, LiveEventRouter router) {
+        this(runs, tools, frames, json, router, boundedPool());
+    }
+
+    LiveToolCallHandler(LiveRunService runs, LiveToolExecutor tools, LiveFrames frames,
+                        ObjectMapper json, LiveEventRouter router, Executor executor) {
         this.runs = runs;
         this.tools = tools;
         this.frames = frames;
         this.json = json;
         this.router = router;
+        this.executor = executor;
+    }
+
+    /**
+     * The production pool: daemon threads (a live socket must never keep the JVM alive) and
+     * a bounded queue whose overflow is refused rather than absorbed.
+     */
+    private static ExecutorService boundedPool() {
+        AtomicInteger seq = new AtomicInteger();
+        return new ThreadPoolExecutor(WORKERS, WORKERS, 30L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(QUEUE_CAPACITY), runnable -> {
+                    Thread thread = new Thread(runnable, "aria-live-tool-" + seq.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    @PreDestroy
+    void shutdown() {
+        if (executor instanceof ExecutorService service) {
+            service.shutdownNow();
+        }
     }
 
     @Override
     public void onToolCall(LiveSession session, String line) {
+        try {
+            executor.execute(() -> handle(session, line));
+        } catch (RejectedExecutionException e) {
+            log.debug("aria live tool call refused: queue full");
+            Call call = read(line);
+            answerFailure(session, call.id(), call.name(), BUSY);
+        }
+    }
+
+    /** What the reader handed to a worker: the whole call, executed and answered there. */
+    private void handle(LiveSession session, String line) {
         String callId = "";
         String toolName = "";
         UUID runId = null;
@@ -88,10 +145,10 @@ public class LiveToolCallHandler implements LiveToolCallSink {
             }
         } catch (JsonProcessingException e) {
             log.debug("aria live tool call unreadable: chars={}", line == null ? 0 : line.length());
-            answerFailure(session, callId, UNREADABLE);
+            answerFailure(session, callId, toolName, UNREADABLE);
         } catch (RuntimeException e) {
             log.warn("live tool call failed: tool={} reason={}", toolName, e.getClass().getSimpleName());
-            answerFailure(session, callId, FAILED);
+            answerFailure(session, callId, toolName, FAILED);
             if (runId != null) {
                 // The turn's row must not stay RUNNING against a call that never completed.
                 runs.settle(session, runId, RunStatus.FAILED, FAILED);
@@ -110,8 +167,26 @@ public class LiveToolCallHandler implements LiveToolCallSink {
         router.socketClosed(session);
     }
 
-    private void answerFailure(LiveSession session, String callId, String message) {
+    /** The answer to a call that never produced an outcome; the chip still names its tool. */
+    private void answerFailure(LiveSession session, String callId, String toolName, String message) {
         frames.toBridge(session, LiveFrames.toolResult(callId, false, message));
-        frames.toPhone(session, LiveFrames.toolStatus(callId, "", "done"));
+        frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
+    }
+
+    /** The id and name of a line that was refused before a worker could read it. */
+    private Call read(String line) {
+        try {
+            JsonNode call = json.readTree(line);
+            if (call == null) {
+                return Call.NONE;
+            }
+            return new Call(call.path("id").asText(""), call.path("name").asText(""));
+        } catch (JsonProcessingException | RuntimeException e) {
+            return Call.NONE;
+        }
+    }
+
+    private record Call(String id, String name) {
+        static final Call NONE = new Call("", "");
     }
 }

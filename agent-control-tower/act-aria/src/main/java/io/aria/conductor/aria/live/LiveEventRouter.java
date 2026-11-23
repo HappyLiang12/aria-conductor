@@ -11,6 +11,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.List;
 import java.util.UUID;
@@ -36,6 +38,11 @@ import java.util.UUID;
  * <p>Every event is filtered by the live run before anything is forwarded: a decision or a
  * completion for any other run is not this class's business, and the run store stays the
  * authority for them. Nothing here logs a payload — ids, states and class names only.
+ *
+ * <p>Two rules keep the seam honest. A decision is applied only after its transaction
+ * committed, so nothing written here can roll the operator's own decision back. And a park
+ * is the claim on a pending call: whoever releases it (the finalize, a close, the decision)
+ * owns the outcome, so a call reaches the model exactly once.
  */
 @Slf4j
 @Component
@@ -49,6 +56,10 @@ public class LiveEventRouter {
     public static final String TOWER_DENIED = "[tower] denied by operator";
     /** The run's own failure reason for a denied call; stable, no tool output in it. */
     static final String DENIED_REASON = "denied by operator";
+    /** Answered to the bridge when the run could not take the park at all. */
+    static final String APPROVAL_UNAVAILABLE = "approval unavailable";
+    /** The ABORTED reason a parked run records when its socket is gone. */
+    static final String SESSION_CLOSED_REASON = "Live session closed while waiting for an approval";
     /** Payload status of a parked call; mirrors {@link LiveRunService}'s WAITING_INPUT. */
     static final String PARK_REASON = "approval pending";
     /** Reported when a gated tool answers its own approval with another ask. */
@@ -90,6 +101,9 @@ public class LiveEventRouter {
                                 String riskTier, String callId, JsonNode arguments) {
         RunStatus parked = runs.settle(session, runId, RunStatus.WAITING_INPUT, PARK_REASON);
         if (parked != RunStatus.WAITING_INPUT) {
+            // The call is answered before anything else: Qwen is waiting on this function
+            // call, and a park that was refused must not become a hung turn.
+            frames.toBridge(session, LiveFrames.toolResult(callId, false, APPROVAL_UNAVAILABLE));
             frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
             frames.toPhone(session, LiveFrames.runEvent(runId, state(parked)));
             log.debug("live run could not park: id={} state={}", runId, state(parked));
@@ -122,23 +136,36 @@ public class LiveEventRouter {
      * The operator's answer to a gated call the socket holds. A decision for any other
      * approval — another run's, another deployment's, an ask already answered — is
      * ignored: this class only forwards, it never adjudicates.
+     *
+     * <p>Bound to the commit ({@code ApprovalGate} publishes inside the decision
+     * transaction): executing the tool and writing the run there would let a failure here
+     * roll the operator's decision back after the bridge already saw a result. A
+     * publication with no transaction around it (a test, a future caller) is still served,
+     * because the decision is the only signal this route has.
      */
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onApprovalDecided(ApprovalDecidedEvent event) {
         if (event.getApprovalId() == null) {
             return;
         }
         for (LiveSession session : List.copyOf(sessions.all())) {
             LivePendingToolCall call = session.takePendingCall(event.getApprovalId());
-            if (call != null) {
-                park.unpark(call.runId());
-                if (event.getDecision() == ApprovalStatus.APPROVED) {
-                    approve(session, call);
-                } else {
-                    deny(session, call);
-                }
+            if (call == null) {
+                continue;
+            }
+            // The park is the claim on this call: a finalize that released it already settled
+            // the run and injected its own tower, so the decision must neither execute nor
+            // inject a second one.
+            if (!park.unpark(call.runId())) {
+                log.debug("live approval arrived after its park was released: id={}", call.runId());
                 return;
             }
+            if (event.getDecision() == ApprovalStatus.APPROVED) {
+                approve(session, call);
+            } else {
+                deny(session, call);
+            }
+            return;
         }
     }
 
@@ -185,18 +212,32 @@ public class LiveEventRouter {
 
     /**
      * The socket is gone. Nothing may stay parked for a socket no one can answer on, so
-     * every park and pending call is released — the run row itself is left as it stands
-     * (finalize stays the only live ABORTED settle).
+     * every park and pending call is released and the parked run is settled ABORTED: a
+     * released park alone would leave a WAITING_INPUT row that no route can reach again
+     * (finalize answers 409, the approval has no recipient). The phone frame is
+     * best-effort — the socket that would render it is usually already closed.
+     *
+     * <p>Idempotent: the release returns false the second time, so a close reported twice
+     * settles once.
      */
     public void socketClosed(LiveSession session) {
         if (session == null) {
             return;
         }
-        UUID runId = session.runId();
-        if (runId != null) {
-            park.unpark(runId);
+        UUID parkedRun = session.runId();
+        boolean released = parkedRun != null && park.unpark(parkedRun);
+        for (LivePendingToolCall call : session.takePendingCalls()) {
+            if (park.unpark(call.runId())) {
+                released = true;
+                parkedRun = call.runId();
+            }
         }
-        session.takePendingCalls().forEach(call -> park.unpark(call.runId()));
+        if (!released) {
+            return;
+        }
+        RunStatus settled = runs.settle(session, parkedRun, RunStatus.ABORTED, SESSION_CLOSED_REASON);
+        frames.toPhone(session, LiveFrames.runEvent(parkedRun, state(settled)));
+        log.debug("live run aborted on socket close: id={} state={}", parkedRun, state(settled));
     }
 
     // --- outcomes -------------------------------------------------------------------------
@@ -223,10 +264,14 @@ public class LiveEventRouter {
         log.debug("live approval executed: id={} ok={}", call.runId(), ok);
     }
 
-    /** The refused call never runs; the model is told, and the run fails with a stable reason. */
+    /**
+     * The refused call never runs; the bridge is answered first (every function call gets
+     * a result) and the model is then told, and the run fails with a stable reason.
+     */
     private void deny(LiveSession session, LivePendingToolCall call) {
-        frames.toPhone(session, LiveFrames.toolStatus(call.callId(), call.toolName(), "done"));
+        frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, DENIED_REASON));
         frames.toBridge(session, LiveFrames.tower(TOWER_DENIED));
+        frames.toPhone(session, LiveFrames.toolStatus(call.callId(), call.toolName(), "done"));
         RunStatus settled = runs.settle(session, call.runId(), RunStatus.FAILED, DENIED_REASON);
         frames.toPhone(session, LiveFrames.runEvent(call.runId(), state(settled)));
         log.debug("live approval denied: id={}", call.runId());

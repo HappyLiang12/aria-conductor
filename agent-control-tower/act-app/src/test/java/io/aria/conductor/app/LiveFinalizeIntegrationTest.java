@@ -106,6 +106,27 @@ class LiveFinalizeIntegrationTest extends BaseH2IntegrationTest {
         assertThat(committedStatus(runId)).isEqualTo(RunStatus.RUNNING);
     }
 
+    /**
+     * A parked run whose socket is gone has no route left that could settle it: the
+     * close path must settle it ABORTED itself, or the row sits WAITING_INPUT forever
+     * with every finalize answering 409.
+     */
+    @Test
+    void aClosedSocketAbortsTheParkedLiveRun() {
+        LiveSession session = new LiveSession("it-" + UUID.randomUUID(), "conv-it-closed", null, null);
+        UUID runId = runs.findOrCreateForToolTurn(session, "get_run");
+        router.parkForApproval(session, runId, UUID.randomUUID(), "get_run", "WRITE", "call-2", null);
+        assertThat(committedStatus(runId)).isEqualTo(RunStatus.WAITING_INPUT);
+
+        router.socketClosed(session);
+
+        assertThat(committedStatus(runId)).isEqualTo(RunStatus.ABORTED);
+        ResponseEntity<String> finalize = restTemplate.postForEntity(
+                "/api/v1/runs/{id}/finalize", null, String.class, runId);
+        assertThat(finalize.getStatusCode().value()).as("the park is released, not left half-open")
+                .isEqualTo(409);
+    }
+
     private RunStatus committedStatus(UUID runId) {
         return runRepository.findStateById(runId).map(RunRepository.RunStateView::getStatus).orElse(null);
     }

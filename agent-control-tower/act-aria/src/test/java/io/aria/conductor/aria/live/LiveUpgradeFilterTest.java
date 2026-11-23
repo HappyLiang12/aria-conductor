@@ -50,6 +50,20 @@ class LiveUpgradeFilterTest {
     }
 
     @Test
+    void aPostOnTheLivePathIsNotAnsweredWith426() throws Exception {
+        // The contract's plain-request case is a GET; any other method belongs to
+        // the application (404/405), not to this filter.
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", LiveUpgradeFilter.PATH);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(response.getStatus()).isNotEqualTo(426);
+    }
+
+    @Test
     void otherPathsAreUntouched() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/aria/live/extra");
         MockFilterChain chain = new MockFilterChain();

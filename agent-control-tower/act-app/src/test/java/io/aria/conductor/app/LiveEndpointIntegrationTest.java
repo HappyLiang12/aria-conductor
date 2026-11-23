@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -41,8 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * handshake"): a non-upgrade GET answers 426, the upgrade is operator-only
  * (401 without a credential, 403 for a worker credential), a valid {@code hello}
  * is answered with {@code ready} immediately, the offered subprotocol is echoed
- * and a wrong offer closes 4002 after {@code ready}, and a socket that never
- * says hello closes 4002 at the deadline.
+ * and only an offer the server could not honour closes 4002 after {@code ready},
+ * and a socket that never says hello says why and closes 4002 at the deadline.
  * <p>
  * The harness connects over loopback, which is the local operator by design, so
  * the 401 case routes its client address through the trusted-proxy rule
@@ -85,6 +86,14 @@ class LiveEndpointIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
+    void aPostToTheLivePathIsNotAnUpgradeError() {
+        // The 426 contract is for a plain GET; other methods belong to the app.
+        ResponseEntity<String> response = restTemplate.postForEntity(PATH, null, String.class);
+
+        assertThat(response.getStatusCode().value()).isNotEqualTo(426);
+    }
+
+    @Test
     void upgradeWithoutOperatorBearerIsUnauthorized() {
         Throwable failure = handshakeFailure(builder -> builder.header("X-Forwarded-For", "203.0.113.7"));
 
@@ -111,6 +120,7 @@ class LiveEndpointIntegrationTest extends BaseH2IntegrationTest {
         assertThat(ready.path("type").asText()).isEqualTo("ready");
         assertThat(ready.path("v").asInt()).isEqualTo(1);
         assertThat(ready.path("sessionId").asText()).isNotBlank();
+        assertThat(ready.path("model").asText()).isEqualTo("qwen3.8-omni-flash-realtime");
         assertThat(ready.path("maxSessionSec").asInt()).isEqualTo(7200);
         assertThat(ready.path("modalities").size()).isEqualTo(2);
         socket.abort();
@@ -151,19 +161,40 @@ class LiveEndpointIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
-    void socketWithoutHelloClosesAtTheDeadline() throws Exception {
+    void anOfferTheServerCanHonourStaysOpen() throws Exception {
+        // "aria-live.v1, x" is one offer the server accepts on aria-live.v1; only
+        // the accepted protocol decides the 4002, never the raw header.
+        Recorder recorder = new Recorder();
+        WebSocket socket = operatorSocket(recorder, "aria-live.v1", "x").get(5, TimeUnit.SECONDS);
+
+        socket.sendText(HELLO, true).get(5, TimeUnit.SECONDS);
+
+        JsonNode ready = mapper.readTree(recorder.texts.poll(1, TimeUnit.SECONDS));
+        assertThat(ready.path("type").asText()).isEqualTo("ready");
+        assertThat(recorder.closes.poll(500, TimeUnit.MILLISECONDS)).isNull();
+        socket.abort();
+    }
+
+    @Test
+    void socketWithoutHelloSaysWhyThenClosesAtTheDeadline() throws Exception {
         Recorder recorder = new Recorder();
         operatorSocket(recorder, PROTOCOL).get(5, TimeUnit.SECONDS);
 
         assertThat(recorder.closes.poll(5, TimeUnit.SECONDS)).isEqualTo(4002);
+        JsonNode error = mapper.readTree(recorder.texts.poll(1, TimeUnit.SECONDS));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("capability_mismatch");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("hello deadline exceeded");
     }
 
     // --- harness ---------------------------------------------------------------------------
 
-    private CompletableFuture<WebSocket> operatorSocket(Recorder recorder, String protocol) {
+    private CompletableFuture<WebSocket> operatorSocket(Recorder recorder, String... protocols) {
         return client().newWebSocketBuilder()
                 .header("Authorization", "Bearer " + OPERATOR_CREDENTIAL)
-                .subprotocols(protocol)
+                .subprotocols(protocols[0], Arrays.copyOfRange(protocols, 1, protocols.length))
                 .buildAsync(uri(), recorder);
     }
 

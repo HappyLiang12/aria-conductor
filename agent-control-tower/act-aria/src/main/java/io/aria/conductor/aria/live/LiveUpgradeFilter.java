@@ -13,12 +13,13 @@ import java.io.IOException;
 import java.util.Locale;
 
 /**
- * Answers a plain request to the live path with 426 Upgrade Required (spec X1).
+ * Answers a plain {@code GET} to the live path with 426 Upgrade Required (spec X1).
  *
  * <p>It is a filter and not an MVC mapping on purpose: the WebSocket handler
  * mapping already owns this exact path, and an MVC mapping would shadow it and
- * take the upgrade away. The filter only rejects requests that carry no
- * {@code Upgrade: websocket}, so handshakes reach the handler untouched.
+ * take the upgrade away. The filter only rejects GETs that carry no
+ * {@code Upgrade: websocket}, so handshakes reach the handler untouched and a
+ * non-GET method is left to the application.
  */
 @Component
 public class LiveUpgradeFilter extends OncePerRequestFilter {
@@ -29,14 +30,20 @@ public class LiveUpgradeFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        if (isLivePath(request) && !isWebSocketUpgrade(request)) {
-            // Any method, not just GET: this resource only exists as an upgrade,
-            // and every other method would otherwise fall through to 404/405.
+        if (isPlainGet(request)) {
+            // Only the contract's plain GET is answered here; any other method is
+            // the application's to answer (404/405), never this filter's.
             response.setStatus(HttpStatus.UPGRADE_REQUIRED.value());
             response.setHeader(HttpHeaders.UPGRADE, "websocket");
             return;
         }
         chain.doFilter(request, response);
+    }
+
+    private static boolean isPlainGet(HttpServletRequest request) {
+        return "GET".equalsIgnoreCase(request.getMethod())
+                && isLivePath(request)
+                && !isWebSocketUpgrade(request);
     }
 
     private static boolean isLivePath(HttpServletRequest request) {

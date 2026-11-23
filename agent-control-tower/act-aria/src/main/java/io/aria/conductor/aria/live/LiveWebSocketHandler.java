@@ -28,11 +28,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The phone-facing end of the live socket (spec X1 / "Endpoint and handshake").
  *
  * <p>Task 1 owns the opening act only: {@code hello} validates, {@code ready} is
- * sent immediately (it must not wait for any provider connection), the offered
- * subprotocol is enforced, and a socket that stays silent past the deadline
- * closes 4002. Everything a {@code hello} unlocks (bridge, tools, frames,
- * approvals) arrives in Tasks 2-4; that is why the bridge seam is a no-op
- * factory here.
+ * sent immediately (it must not wait for any provider connection), the subprotocol
+ * Spring accepted is enforced, and a socket that stays silent past the deadline
+ * gets a {@code capability_mismatch} error and closes 4002. Everything a
+ * {@code hello} unlocks (bridge, tools, frames, approvals) arrives in Tasks 2-4;
+ * that is why the bridge seam is a no-op factory here.
  *
  * <p>Logs are metadata only (spec L6): event types, refusals and close codes,
  * never payloads, bearer values or ids beyond a debug line.
@@ -45,12 +45,13 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     /** The wire header the client offers {@link #PROTOCOL} on. */
     static final String PROTOCOL_HEADER = "Sec-WebSocket-Protocol";
     /** Advertised in {@code ready}; the bridge, not this class, talks to Qwen. */
-    static final String MODEL = "qwen3-omni-flash-realtime";
+    static final String MODEL = "qwen3.8-omni-flash-realtime";
 
     /** Protocol/version refusal (spec close codes). */
     static final int CLOSE_PROTOCOL = 4002;
     static final String ERROR_CAPABILITY_MISMATCH = "capability_mismatch";
     static final String ERROR_MESSAGE_HELLO_REJECTED = "hello rejected";
+    static final String ERROR_MESSAGE_HELLO_DEADLINE = "hello deadline exceeded";
 
     private static final int MAX_CONVERSATION_ID_LENGTH = 36;
     private static final int HELLO_VERSION = 1;
@@ -115,9 +116,11 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         send(socket, ready(socket.sessionId));
         socket.bridge = bridges.open(socket.sessionId, frame.path("conversationId").asText());
         log.debug("aria live hello accepted");
-        if (socket.offeredProtocol != null && !PROTOCOL.equals(socket.offeredProtocol)) {
-            // Accepted for the handshake, refused for the contract (spec L3): the
-            // phone gets its ready frame and then a clean 4002.
+        if (socket.offeredProtocol != null && !PROTOCOL.equals(socket.session.getAcceptedProtocol())) {
+            // Refused by what Spring actually accepted, not by the raw header: a
+            // client offering "aria-live.v1, x" was served aria-live.v1 and stays
+            // open (spec L3), while an offer the server could not honour gets its
+            // ready frame and then a clean 4002.
             close(socket, ERROR_CAPABILITY_MISMATCH);
         }
     }
@@ -179,12 +182,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
     /** {@code capability_mismatch} then 4002: the one refusal this task emits. */
     private void reject(LiveSocket socket) {
+        refuse(socket, ERROR_MESSAGE_HELLO_REJECTED);
+    }
+
+    private void refuse(LiveSocket socket, String message) {
         Map<String, Object> error = new LinkedHashMap<>();
         error.put("type", "error");
         error.put("v", HELLO_VERSION);
         error.put("code", ERROR_CAPABILITY_MISMATCH);
         error.put("retryable", false);
-        error.put("message", ERROR_MESSAGE_HELLO_REJECTED);
+        error.put("message", message);
         send(socket, error);
         close(socket, ERROR_CAPABILITY_MISMATCH);
     }
@@ -226,6 +233,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
         final WebSocketSession session;
         final String sessionId;
+        /** The raw offer, or null; the refusal itself reads the accepted protocol. */
         final String offeredProtocol;
         final AtomicBoolean closed = new AtomicBoolean();
         volatile ScheduledFuture<?> deadline;
@@ -257,7 +265,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         void expireHello() {
             if (!closed.get()) {
                 log.debug("aria live hello deadline missed");
-                close(this, ERROR_CAPABILITY_MISMATCH);
+                // Same shape as the invalid-hello refusal: say why, then close.
+                refuse(this, ERROR_MESSAGE_HELLO_DEADLINE);
             }
         }
     }

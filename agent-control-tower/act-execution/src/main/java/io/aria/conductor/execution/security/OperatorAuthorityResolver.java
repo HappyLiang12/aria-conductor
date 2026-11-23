@@ -60,6 +60,9 @@ public class OperatorAuthorityResolver {
             return principal;
         }
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+        // Checked here first, exactly as before, so a bearer outranks a session
+        // cookie; authorizeTransport re-checks it (constant time) because it is
+        // the one transport-neutral rule.
         if (operatorSessions.verifyOperatorCredential(authorization)) {
             return ActorPrincipal.operator(null);
         }
@@ -74,10 +77,11 @@ public class OperatorAuthorityResolver {
             }
             return ActorPrincipal.operator(session.expiresAt());
         }
-        if (actorTokens.resolveBearer(authorization).isPresent()) {
-            throw new OperatorSessionService.ForbiddenMutationException("Operator authority required");
-        }
-        if (isLoopbackClient(request)) {
+        // Only the credential/loopback tail is left. The mutation Origin rule
+        // guards exactly the loopback branch, which is the only branch that can
+        // still return here.
+        ActorPrincipal principal = authorizeTransport(authorization, clientAddress(request));
+        if (mutation) {
             // Loopback auto-authority for a MUTATION must still refuse a
             // browser-driven cross-site request: every browser POST carries an
             // Origin header, while local tools (curl, SDKs, the CLI) send none.
@@ -87,9 +91,31 @@ public class OperatorAuthorityResolver {
             // request was forged by a web page the operator had open: refuse it.
             // Authenticated identities above are already validated (session
             // mutations re-check CSRF/Origin; bearer holders are not web pages).
-            if (mutation) {
-                operatorSessions.rejectCrossSiteOrigin(request.getHeader(HttpHeaders.ORIGIN));
-            }
+            operatorSessions.rejectCrossSiteOrigin(request.getHeader(HttpHeaders.ORIGIN));
+        }
+        return principal;
+    }
+
+    /**
+     * The same operator decision without a servlet request, for transports that
+     * do not have one (the aria live WebSocket upgrade). Precedence is the one
+     * documented on the class: operator credential, then a worker credential is
+     * 403 (never promoted, not even from loopback), then loopback is the local
+     * operator, then 401.
+     *
+     * @param authorization the raw {@code Authorization} header value, may be null
+     * @param remoteAddress the already-resolved client address (trusted-proxy aware)
+     * @throws OperatorSessionService.ForbiddenMutationException worker credential (403)
+     * @throws SecurityException nothing verifiable and not loopback (401)
+     */
+    public ActorPrincipal authorizeTransport(String authorization, String remoteAddress) {
+        if (operatorSessions.verifyOperatorCredential(authorization)) {
+            return ActorPrincipal.operator(null);
+        }
+        if (actorTokens.resolveBearer(authorization).isPresent()) {
+            throw new OperatorSessionService.ForbiddenMutationException("Operator authority required");
+        }
+        if (isLoopback(remoteAddress)) {
             return ActorPrincipal.operator(null);
         }
         throw new SecurityException("Operator session required");
@@ -102,12 +128,18 @@ public class OperatorAuthorityResolver {
      * other peer is attacker-controlled and ignored.
      */
     public String clientAddress(HttpServletRequest request) {
-        String peer = request.getRemoteAddr();
+        return clientAddress(request.getRemoteAddr(), request.getHeader("X-Forwarded-For"));
+    }
+
+    /**
+     * The trusted-proxy rule without a servlet request, so a WebSocket upgrade
+     * derives the client address the same way an HTTP call does.
+     */
+    public String clientAddress(String peer, String forwardedFor) {
         if (peer != null && trustedProxies.contains(peer)) {
-            String forwarded = request.getHeader("X-Forwarded-For");
-            if (forwarded != null && !forwarded.isBlank()) {
-                int comma = forwarded.lastIndexOf(',');
-                String client = (comma >= 0 ? forwarded.substring(comma + 1) : forwarded).trim();
+            if (forwardedFor != null && !forwardedFor.isBlank()) {
+                int comma = forwardedFor.lastIndexOf(',');
+                String client = (comma >= 0 ? forwardedFor.substring(comma + 1) : forwardedFor).trim();
                 if (!client.isEmpty()) {
                     return client;
                 }
@@ -116,10 +148,9 @@ public class OperatorAuthorityResolver {
         return peer;
     }
 
-    private boolean isLoopbackClient(HttpServletRequest request) {
-        String client = clientAddress(request);
-        return "127.0.0.1".equals(client) || "::1".equals(client)
-                || "0:0:0:0:0:0:0:1".equals(client);
+    private boolean isLoopback(String address) {
+        return "127.0.0.1".equals(address) || "::1".equals(address)
+                || "0:0:0:0:0:0:0:1".equals(address);
     }
 
     private static String sessionCookie(HttpServletRequest request) {

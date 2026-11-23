@@ -1,5 +1,6 @@
 package io.aria.conductor.aria.live;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -8,9 +9,13 @@ import org.springframework.web.socket.WebSocketSession;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -29,7 +34,7 @@ class QwenLiveBridgeFactoryTest {
     @Test
     void aFullyConfiguredPathStartsTheChild() {
         LiveProperties properties = new LiveProperties(true, FAKE_BRIDGE.toString(),
-                credentials().toString(), 0, 0);
+                credentials().toString(), "", 0, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 
@@ -43,9 +48,28 @@ class QwenLiveBridgeFactoryTest {
     }
 
     @Test
+    void theConfiguredRealtimeUrlReachesTheChild() throws Exception {
+        String url = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
+        LiveProperties properties = new LiveProperties(true, FAKE_BRIDGE.toString(),
+                credentials().toString(), url, 0, 0);
+        QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
+                properties, new LiveCredentials(properties), new ObjectMapper());
+        EnvListener listener = new EnvListener();
+
+        LiveBridge bridge = factory.open(session(), listener);
+        try {
+            JsonNode env = listener.awaitEnvReport();
+            assertThat(env.path("realtimeUrlPresent").asBoolean()).isTrue();
+            assertThat(env.path("realtimeUrlLength").asInt()).isEqualTo(url.length());
+        } finally {
+            bridge.close();
+        }
+    }
+
+    @Test
     void aMissingScriptIsUnavailable() {
         LiveProperties properties = new LiveProperties(true, dir.resolve("no-such-bridge.js").toString(),
-                credentials().toString(), 0, 0);
+                credentials().toString(), "", 0, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 
@@ -81,10 +105,49 @@ class QwenLiveBridgeFactoryTest {
         try {
             Path file = Files.createTempFile(dir, "qwen-live", ".env");
             Files.writeString(file, "DASHSCOPE_API_KEY=sk-live-factory-test\nDASHSCOPE_WORKSPACE=ws\n");
-            Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
+            try {
+                Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException e) {
+                // A Windows volume has no POSIX mode: the loader skips the check there too.
+            }
             return file;
         } catch (Exception e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** Keeps the fake's environment report, the only control this test reads. */
+    private static final class EnvListener implements LiveBridgeListener {
+
+        private final BlockingQueue<String> controls = new LinkedBlockingQueue<>();
+        private final ObjectMapper json = new ObjectMapper();
+
+        @Override
+        public void onControl(String payload) {
+            controls.add(payload);
+        }
+
+        @Override
+        public void onAudio(byte[] pcm) {
+        }
+
+        @Override
+        public void onExit(int code) {
+        }
+
+        private JsonNode awaitEnvReport() throws Exception {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (System.nanoTime() < deadline) {
+                String control = controls.poll(50, TimeUnit.MILLISECONDS);
+                if (control == null) {
+                    continue;
+                }
+                JsonNode node = json.readTree(control);
+                if ("env".equals(node.path("type").asText())) {
+                    return node;
+                }
+            }
+            return fail("the child never reported its environment");
         }
     }
 

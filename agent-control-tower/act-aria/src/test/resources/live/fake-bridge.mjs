@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline';
 
 const key = process.env.DASHSCOPE_API_KEY || '';
 const workspace = process.env.DASHSCOPE_WORKSPACE || '';
+const realtimeUrl = process.env.QWEN_REALTIME_URL || '';
 const argv = process.argv.join(' ');
 
 const write = (object) => {
@@ -30,6 +31,12 @@ write({
     workspaceLength: workspace.length,
     argvLeaks: key !== '' && argv.includes(key),
     liveSessionIdPresent: (process.env.LIVE_SESSION_ID || '') !== '',
+    realtimeUrlPresent: realtimeUrl !== '',
+    realtimeUrlLength: realtimeUrl.length,
+    // The parent environment must not be inherited: HOME is the simplest witness, and
+    // the key count is the exact size of what the Java side chose to hand over.
+    homePresent: (process.env.HOME || '') !== '',
+    envKeyCount: Object.keys(process.env).length,
   },
 });
 

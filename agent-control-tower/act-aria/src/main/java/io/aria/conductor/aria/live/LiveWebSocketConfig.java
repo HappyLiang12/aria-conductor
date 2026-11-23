@@ -48,8 +48,13 @@ public class LiveWebSocketConfig implements WebSocketConfigurer {
      * The container has to admit what the handler itself judges: a legal image frame is
      * 256 KiB of base64, far past the container's 8 KiB default, and a 33 KiB audio frame
      * must reach the handler so it can be dropped there rather than tear the socket down
-     * with 1009. The handler's own caps (64 KiB text, 32 KiB binary, 320 KiB frame) are
-     * the effective limits; these only give it the message to measure.
+     * with 1009. The handler's own caps (64 KiB text, 32 KiB binary, 320 KiB frame
+     * envelope) are the effective limits; these only give it the message to measure.
+     *
+     * <p>512 KiB is the ceiling of that arrangement, not a protocol limit: a text frame
+     * larger than it is refused by the container with 1009 before the handler runs. The
+     * buffer is container-wide, so the STOMP endpoint co-tenant ({@code /ws/events}) gets
+     * the same headroom; its frames were never near 8 KiB and nothing else changes.
      */
     @Bean
     public ServletServerContainerFactoryBean webSocketContainer() {

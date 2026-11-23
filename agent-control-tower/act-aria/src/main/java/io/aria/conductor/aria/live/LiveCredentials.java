@@ -20,7 +20,8 @@ import java.util.Set;
  * <p>The file is {@code KEY=value} lines with mode 0600. A file any other local user could
  * read is refused outright, and the refusal names the path and the reason only — never a
  * value. The child receives these two keys through its environment and nothing else; they
- * never touch argv, a log line or a frame.
+ * never touch argv, a log line or a frame. On a volume without POSIX attributes (Windows)
+ * the mode cannot be read at all, so that check is skipped and the reason is logged.
  *
  * <p>Read per {@code hello} rather than cached, so a rotated file is picked up by the next
  * socket without a restart.
@@ -89,7 +90,13 @@ public class LiveCredentials {
         Set<PosixFilePermission> permissions;
         try {
             permissions = Files.getPosixFilePermissions(file);
-        } catch (UnsupportedOperationException | IOException e) {
+        } catch (UnsupportedOperationException e) {
+            // A volume without POSIX attributes (Windows) cannot answer the question, and
+            // refusing every credential there would only hide the key behind a log line.
+            // Say why the check did not run; never say what the file holds.
+            log.warn("qwen live credentials mode unverifiable: path={} reason=posix_unsupported", file);
+            return true;
+        } catch (IOException e) {
             // A mode that cannot be verified is not a mode that was verified.
             return false;
         }

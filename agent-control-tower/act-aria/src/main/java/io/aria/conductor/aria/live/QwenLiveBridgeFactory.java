@@ -48,7 +48,8 @@ public class QwenLiveBridgeFactory implements LiveBridgeFactory {
             log.warn("qwen live bridge script missing: path={}", properties.bridgeScript());
             throw new LiveBridgeUnavailableException("bridge script missing");
         }
-        return QwenLiveBridgeProcess.spawn(session.id(), script, environment, json, listener, null);
+        return QwenLiveBridgeProcess.spawn(session.id(), script, environment,
+                properties.realtimeUrl(), json, listener, null);
     }
 
     /** @return the script if it exists, else null; an absolute path is taken as given */

@@ -26,14 +26,17 @@ import java.util.function.Consumer;
  *
  * <p>Credentials arrive only through the child's environment: the environment is cleared
  * first, so the child has no inherited key, and only the two provided values (plus
- * {@code LIVE_SESSION_ID} and {@code PATH}) reach it. Nothing the phone sends or the
- * provider returns is ever written to a log line: stdout is dispatch metadata, stderr
- * goes through {@link LiveLogRedactor} before it is surfaced.
+ * {@code LIVE_SESSION_ID}, {@code PATH} and — when the deployment configured one —
+ * {@code QWEN_REALTIME_URL}) reach it. Nothing the phone sends or the provider returns is
+ * ever written to a log line: stdout is dispatch metadata, stderr goes through
+ * {@link LiveLogRedactor} before it is surfaced.
  */
 public final class QwenLiveBridgeProcess implements LiveBridge {
 
     static final String NODE_EXECUTABLE = "node";
     static final String SESSION_ENV = "LIVE_SESSION_ID";
+    /** The child's Qwen endpoint; absent means the child derives it (Task 5). Not a secret. */
+    static final String REALTIME_URL_ENV = "QWEN_REALTIME_URL";
     static final String CLOSE_FRAME = "{\"type\":\"close\"}";
 
     private static final Logger log = LoggerFactory.getLogger(QwenLiveBridgeProcess.class);
@@ -56,6 +59,17 @@ public final class QwenLiveBridgeProcess implements LiveBridge {
      */
     static QwenLiveBridgeProcess spawn(String sessionId, Path script, Map<String, String> credentials,
             ObjectMapper json, LiveBridgeListener listener, Consumer<String> stderrSink) {
+        return spawn(sessionId, script, credentials, null, json, listener, stderrSink);
+    }
+
+    /**
+     * As {@link #spawn(String, Path, Map, ObjectMapper, LiveBridgeListener, Consumer)}, plus
+     * the Qwen endpoint: a non-blank {@code realtimeUrl} becomes {@code QWEN_REALTIME_URL},
+     * a blank one leaves the child to derive it. It is not a credential, so it is not one
+     * of the redactor's secrets.
+     */
+    static QwenLiveBridgeProcess spawn(String sessionId, Path script, Map<String, String> credentials,
+            String realtimeUrl, ObjectMapper json, LiveBridgeListener listener, Consumer<String> stderrSink) {
         Map<String, String> env = new LinkedHashMap<>();
         String path = System.getenv(PATH_ENV);
         if (path != null) {
@@ -63,6 +77,9 @@ public final class QwenLiveBridgeProcess implements LiveBridge {
         }
         if (credentials != null) {
             env.putAll(credentials);
+        }
+        if (realtimeUrl != null && !realtimeUrl.isBlank()) {
+            env.put(REALTIME_URL_ENV, realtimeUrl.trim());
         }
         if (sessionId != null && !sessionId.isBlank()) {
             env.put(SESSION_ENV, sessionId);

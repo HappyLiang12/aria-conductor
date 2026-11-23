@@ -28,7 +28,17 @@ class QwenLiveBridgeProcessTest {
 
     private static final String KEY = "sk-live-test-0123456789abcdef";
     private static final String WORKSPACE = "ws-test-singapore";
+    private static final String REALTIME_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
     private static final Path SCRIPT = Path.of("src/test/resources/live/fake-bridge.mjs").toAbsolutePath();
+
+    /**
+     * macOS injects {@code __CF_USER_TEXT_ENCODING} into every child it execs, even with an
+     * empty environment ({@code env -i PATH=… node} shows it too), so it is the one key that
+     * can appear without the Java side putting it there. Everything else is chosen: PATH,
+     * the two credentials and LIVE_SESSION_ID.
+     */
+    private static final int EXPECTED_ENV_KEYS =
+            4 + (System.getenv("__CF_USER_TEXT_ENCODING") == null ? 0 : 1);
 
     private final ObjectMapper json = new ObjectMapper();
     private final RecordingListener listener = new RecordingListener();
@@ -55,6 +65,14 @@ class QwenLiveBridgeProcessTest {
         assertThat(env.path("workspaceLength").asInt()).isEqualTo(WORKSPACE.length());
         assertThat(env.path("liveSessionIdPresent").asBoolean()).isTrue();
         assertThat(env.path("argvLeaks").asBoolean()).isFalse();
+        // The parent environment is cleared, not filtered: HOME is gone and the child
+        // holds exactly PATH, the two credentials and LIVE_SESSION_ID.
+        assertThat(env.path("homePresent").asBoolean())
+                .as("the parent environment must not reach the child").isFalse();
+        assertThat(env.path("envKeyCount").asInt())
+                .as("PATH + DASHSCOPE_API_KEY + DASHSCOPE_WORKSPACE + LIVE_SESSION_ID")
+                .isEqualTo(EXPECTED_ENV_KEYS);
+        assertThat(env.path("realtimeUrlPresent").asBoolean()).isFalse();
     }
 
     @Test
@@ -115,6 +133,30 @@ class QwenLiveBridgeProcessTest {
         Integer code = listener.exits.poll(10, TimeUnit.SECONDS);
 
         assertThat(code).isEqualTo(2);
+    }
+
+    @Test
+    void theConfiguredRealtimeUrlIsTheOnlyExtraVariable() throws Exception {
+        bridge = QwenLiveBridgeProcess.spawn("session-under-test", SCRIPT, credentials(),
+                REALTIME_URL, json, listener, stderrLines::add);
+
+        JsonNode env = awaitEnvReport();
+
+        assertThat(env.path("realtimeUrlPresent").asBoolean()).isTrue();
+        assertThat(env.path("realtimeUrlLength").asInt()).isEqualTo(REALTIME_URL.length());
+        assertThat(env.path("envKeyCount").asInt()).isEqualTo(EXPECTED_ENV_KEYS + 1);
+        assertThat(env.path("homePresent").asBoolean()).isFalse();
+    }
+
+    @Test
+    void aBlankRealtimeUrlAddsNoVariable() throws Exception {
+        bridge = QwenLiveBridgeProcess.spawn("session-under-test", SCRIPT, credentials(),
+                "  ", json, listener, stderrLines::add);
+
+        JsonNode env = awaitEnvReport();
+
+        assertThat(env.path("realtimeUrlPresent").asBoolean()).isFalse();
+        assertThat(env.path("envKeyCount").asInt()).isEqualTo(EXPECTED_ENV_KEYS);
     }
 
     @Test

@@ -4,6 +4,7 @@ import { WebSocketProvider, Layout } from './components/Layout';
 import OverviewPage from './pages/OverviewPage';
 import CrewPage from './pages/CrewPage';
 import ChatPage from './pages/ChatPage';
+import MainChatPage from './pages/MainChatPage';
 import OpsPage from './pages/OpsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { MemoryPage } from './pages/MemoryPage';
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/memory" element={<MemoryPage />} />
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/aria" element={<MainChatPage />} />
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/workflows" element={<WorkflowsPage />} />
               <Route path="/ops" element={<OpsPage />} />

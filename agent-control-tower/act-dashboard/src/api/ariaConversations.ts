@@ -7,6 +7,20 @@ export interface ConversationSummary {
   runCount: number;
 }
 
+/** One row of the conversation switcher (GET /api/v1/aria/conversations). */
+export interface ConversationListItem {
+  conversationId: string;
+  title: string;
+  lastMessageAt: string;
+  runCount: number;
+}
+
+export async function listConversations(limit = 50): Promise<ConversationListItem[]> {
+  const res = await fetch(`/api/v1/aria/conversations?limit=${encodeURIComponent(String(limit))}`);
+  if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.statusText}`);
+  return res.json();
+}
+
 export interface TimelineEntry {
   role: string;
   content: string;

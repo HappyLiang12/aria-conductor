@@ -140,11 +140,7 @@ export function errorActionFor(text: string): ErrorAction | undefined {
       || normalized.includes('unsupported execution mode')) {
     return RUNTIME_ACTION;
   }
-  if (normalized.includes('circuit.breaker.')
-      || normalized.includes('token budget exceeded')
-      || normalized.includes('max iterations reached')
-      || normalized.includes('error rate')
-      || normalized.includes('run deadline')) {
+  if (normalized.includes('run deadline')) {
     return CONFIG_ACTION;
   }
   if (normalized.includes('workspace settings in crew')

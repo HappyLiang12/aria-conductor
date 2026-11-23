@@ -237,7 +237,7 @@ export interface DashboardSummary {
 export interface AgentTelemetry {
   agentId: string;
   totalTokensToday: number;
-  callCountToday: number;
+  runCountToday: number;
 }
 
 export interface ActivityEvent {

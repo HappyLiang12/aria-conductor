@@ -17,10 +17,12 @@ export interface DecisionQueueProps {
   phase: QueryPhase;
   partial: boolean;
   count: number | null;
+  reviewCount: number | null;
   retry: () => void;
   onActivate: (row: DecisionRow) => void;
   onDecide: (row: DecisionRow, approved: boolean) => void;
   onAnswer: (row: DecisionRow, answer: string) => void;
+  onOpenReviews?: () => void;
   busyIds?: ReadonlySet<string>;
   actionError?: DecisionActionError | null;
   collapsed: boolean;
@@ -37,6 +39,31 @@ function waited(iso: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `waiting ${hours}h`;
   return `waiting ${Math.floor(hours / 24)}d`;
+}
+
+function expiryLabel(iso: string | null): string | null {
+  if (!iso) return null;
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return null;
+  const minutes = Math.ceil((then - Date.now()) / 60000);
+  if (minutes <= 0) return 'expiring';
+  if (minutes < 60) return `expires in ${minutes}m`;
+  return `expires in ${Math.ceil(minutes / 60)}h`;
+}
+
+function riskOf(row: DecisionRow): { label: string; className: string } {
+  switch (row.riskTier) {
+    case 'DESTRUCTIVE':
+      return { label: 'Dangerous', className: 'danger' };
+    case 'PUSH':
+      return { label: 'Writes', className: 'warn' };
+    case 'READ':
+      return { label: 'Read', className: 'dim' };
+    default:
+      if (row.approvalType === 'SPEC_REVIEW') return { label: 'Spec review', className: 'accent' };
+      if (row.source === 'CLARIFICATION') return { label: 'Question', className: 'accent' };
+      return { label: 'Approval', className: 'dim' };
+  }
 }
 
 function actionLabel(row: DecisionRow): string {
@@ -58,21 +85,27 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
   const [draft, setDraft] = useState('');
   const taskless = row.taskId === null;
   const clarification = taskless && row.source === 'CLARIFICATION';
+  const risk = riskOf(row);
+  const expiry = expiryLabel(row.expiresAt);
 
   return (
-    <li className="decision-row" data-testid={`decision-row-${row.id}`}>
+    <li className="decision-row" data-risk={row.riskTier ?? undefined} data-testid={`decision-row-${row.id}`}>
       <div className="decision-row__head">
         <strong className="decision-row__title">{row.title}</strong>
-        <span className="pill warn">{row.askType}</span>
-        <span className="pill dim">{row.state}</span>
+        <span className={`pill ${risk.className}`}>{risk.label}</span>
+        {row.toolName && <span className="decision-row__tool">{row.toolName}</span>}
       </div>
       <p className="decision-row__reason">{row.reason}</p>
       <div className="decision-row__meta">
         <span>{waited(row.requestedAt)}</span>
-        {taskless && (
+        {expiry && <span>{expiry}</span>}
+        {clarification && (
           <span className="decision-row__note">
-            {clarification ? 'Task details unavailable — answer here.' : 'Task details unavailable — decide here.'}
+            Holds a run slot — task details unavailable — answer here.
           </span>
+        )}
+        {taskless && !clarification && (
+          <span className="decision-row__note">Task details unavailable — decide here.</span>
         )}
       </div>
       <div className="decision-row__actions">
@@ -134,29 +167,32 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
 }
 
 /**
- * One row per pending approval. A task-backed row opens the review/answer
- * surface; a taskless row stays actionable in place instead of rendering a
- * permanently disabled control.
+ * The operator's decision surface. Rows are only asks that block work, ordered
+ * dangerous-first; post-run REVIEW_REQUEST asks block nothing and collapse to a
+ * single count that links to the board's REVIEW column.
  */
 export function DecisionQueue({
   rows,
   phase,
   partial,
   count,
+  reviewCount,
   retry,
   onActivate,
   onDecide,
   onAnswer,
+  onOpenReviews,
   busyIds = EMPTY_BUSY_IDS,
   actionError = null,
   collapsed,
 }: DecisionQueueProps): ReactElement {
   const titleId = useId();
+  const reviews = reviewCount ?? 0;
 
   if (collapsed) {
     return (
       <section className="decision-queue" data-testid="decision-queue" data-collapsed="true" aria-labelledby={titleId}>
-        <h2 id={titleId} className="decision-queue__collapsed">Waiting on you · No decisions waiting</h2>
+        <h2 id={titleId} className="decision-queue__collapsed">Needs your decision · No decisions waiting</h2>
       </section>
     );
   }
@@ -164,7 +200,7 @@ export function DecisionQueue({
   return (
     <section className="decision-queue" data-testid="decision-queue" data-collapsed="false" aria-labelledby={titleId}>
       <header className="decision-queue__head">
-        <h2 id={titleId}>Waiting on you <span className="accent">· decisions</span></h2>
+        <h2 id={titleId}>Needs your decision</h2>
         <span className="decision-queue__count" aria-label={`${count ?? 'unknown'} decisions waiting`}>
           {count ?? '—'}
         </span>
@@ -188,7 +224,7 @@ export function DecisionQueue({
           onAction={retry}
         />
       )}
-      {phase === 'success' && !partial && rows.length === 0 && (
+      {phase === 'success' && !partial && rows.length === 0 && reviews === 0 && (
         <StateNotice kind="empty" title="No decisions waiting" />
       )}
 
@@ -206,6 +242,19 @@ export function DecisionQueue({
             />
           ))}
         </ul>
+      )}
+
+      {reviewCount !== null && reviewCount > 0 && (
+        <div className="decision-queue__reviews" data-testid="decision-reviews">
+          <span>
+            {reviewCount} completed run{reviewCount === 1 ? '' : 's'} awaiting review
+          </span>
+          {onOpenReviews && (
+            <button type="button" className="btn" onClick={onOpenReviews}>
+              Open review board
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

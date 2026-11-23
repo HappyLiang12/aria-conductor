@@ -10,7 +10,7 @@
  *
  * Approvals no longer have a dedicated page (kanban HITL redesign, spec D4):
  * `approval.requested` routes to the overview, where the kanban Review column
- * is the single HITL surface and the "Waiting on you" summary card opens the
+ * is the single HITL surface and the decision-queue summary card opens the
  * first review card. The bell does not know kanban ids, so it navigates to the
  * overview only.
  *

@@ -53,6 +53,14 @@ public class KanbanReviewAskCreator {
     @EventListener
     @Transactional
     public void onKanbanItemTransitioned(KanbanItemTransitionedEvent event) {
+        // A card leaving REVIEW supersedes the display-only post-run ask: it
+        // blocked nothing, and leaving it PENDING left the decision queue dirty
+        // forever. Scope the sweep to REVIEW_REQUEST so a permission ask owned by
+        // the permission coordinator is never rewritten here.
+        if ("REVIEW".equals(event.getFromStatus()) && !"REVIEW".equals(event.getToStatus())) {
+            expireReviewRequest(event.getItemId());
+            return;
+        }
         if (!"IN_PROGRESS".equals(event.getFromStatus()) || !"REVIEW".equals(event.getToStatus())) {
             return;
         }
@@ -131,6 +139,21 @@ public class KanbanReviewAskCreator {
             });
         } catch (Exception e) {
             log.warn("Auto REVIEW_REQUEST ask failed for {}: {}", event.getItemId(), e.getMessage());
+        }
+    }
+
+    private static final String SUPERSEDED_REASON = "Superseded: the card left REVIEW";
+
+    private void expireReviewRequest(String itemId) {
+        try {
+            int expired = approvalRepository.expirePendingAsksByKanbanItemId(
+                    itemId, Approval.AskType.REVIEW_REQUEST, SUPERSEDED_REASON,
+                    java.time.Instant.now());
+            if (expired > 0) {
+                log.info("Expired {} review ask(s) for card {} after it left REVIEW", expired, itemId);
+            }
+        } catch (Exception e) {
+            log.warn("Review ask expiry failed for {}: {}", itemId, e.getMessage());
         }
     }
 

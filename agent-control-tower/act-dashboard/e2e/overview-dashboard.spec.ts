@@ -19,7 +19,7 @@ test.describe('Overview dashboard', () => {
     }
     // The approval surface is the decision queue; the Review Queue panel now
     // lives inside the review workspace, not on the Overview.
-    await expect(page.getByTestId('decision-queue')).toContainText('Waiting on you');
+    await expect(page.getByTestId('decision-queue')).toContainText('Needs your decision');
     await expect(page.getByTestId('attention-queue')).toBeVisible();
     // Panels nest, so the section.panel+hasText filter also matches the outer
     // wrapper; assert the board heading at page level instead.

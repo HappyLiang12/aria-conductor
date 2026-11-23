@@ -135,7 +135,14 @@ export default function OverviewPage() {
     && !attention.partial
     && allAuthoritative([decision.phase, attention.phase])
     && decision.count === 0
+    && decision.reviewCount === 0
     && attention.count === 0;
+
+  const openReviewBoard = () => {
+    document
+      .querySelector('[data-testid="kanban-board"]')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const handleActivate = (row: DecisionRow) => {
     if (!row.taskId) return;
@@ -168,10 +175,12 @@ export default function OverviewPage() {
                   phase={decision.phase}
                   partial={decision.partial}
                   count={decision.count}
+                  reviewCount={decision.reviewCount}
                   retry={decision.retry}
                   onActivate={handleActivate}
                   onDecide={runDecision}
                   onAnswer={runAnswer}
+                  onOpenReviews={openReviewBoard}
                   busyIds={decisionBusyIds}
                   actionError={decisionError}
                   collapsed={allClear}

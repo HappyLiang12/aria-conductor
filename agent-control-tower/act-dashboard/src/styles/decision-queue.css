@@ -16,8 +16,16 @@
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.02);
 }
+.decision-row[data-risk="DESTRUCTIVE"] { border-color: rgba(239, 68, 68, 0.55); }
 .decision-row__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .decision-row__title { font-size: 13px; overflow-wrap: anywhere; }
+.decision-row__tool {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-mute);
+}
+.decision-row .pill.danger { color: #fecaca; border-color: rgba(239, 68, 68, 0.55); }
+.decision-row .pill.accent { color: var(--text); border-color: var(--line-2); }
 .decision-row__reason {
   margin: 6px 0 4px;
   color: var(--text-dim);
@@ -46,6 +54,17 @@
   resize: vertical;
 }
 .decision-row__answer .btn { align-self: flex-start; }
+.decision-queue__reviews {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.decision-queue__reviews .btn { margin-left: auto; }
 @media (max-width: 900px) {
   .decision-row__actions > .btn { width: 100%; }
   .decision-row__actions { flex-direction: column; align-items: stretch; }

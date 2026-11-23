@@ -10,17 +10,17 @@ After opening `http://localhost:3000`, you'll see:
 
 | Area | What it does |
 |------|-------------|
-| **TopBar** | Live KPIs: Active Agents, Running Runs, Approvals Pending, Tokens Today |
+| **TopBar** | Live KPIs: Active Agents, Running Runs, Approvals Pending, Recorded tokens |
 | **RailNav** (left sidebar) | 10 navigation buttons + Settings gear |
 | **Main panel** | Content area for the selected view |
 | **Aria FAB** (bottom-right) | Opens the Aria AI assistant panel |
 
 ### Navigation
 
-The sidebar provides: **Overview · Crew · Runs · Knowledge · Reports · Chat · Workflows · Approvals · Ops · Jobs**
+The sidebar provides: **Overview · Crew · Providers · Runs · Knowledge · Reports · Chat · Workflows · Ops · Jobs**, plus Configure.
 
 - **Runs**: Start, monitor, pause, resume, cancel agent executions
-- **Approvals**: Review and decide on pending actions
+- **Decisions**: approvals that block work appear on **Overview → Needs your decision**; there is no separate Approvals page
 
 ---
 
@@ -36,13 +36,13 @@ Click the floating button to open a slide-over panel. Type natural language comm
 - "Check pending approvals"
 
 ### 2. Chat Page (sidebar → Chat)
-Full conversation view with:
+This page shows **agent↔agent conversations** from runs, not the human↔Aria chat:
 - Thread list (left) — each run creates a conversation thread
 - Message timeline with **handoff markers** showing agent-to-agent delegation
 - **AUDITED** badge confirming the conversation is logged
-- **Inject message** box at the bottom — type a correction and click Send to inject a human message into any thread
+- **Inject message** box at the bottom — for a finished run this appends an audit note; it does not reopen the run
 
-**Tip:** Injected messages appear as "Operator" in the thread and persist in the audit trail.
+Use the **Aria FAB** for the interactive human↔Aria conversation.
 
 ---
 
@@ -61,8 +61,9 @@ Each agent shows a health badge:
 
 ### Agent Capabilities
 An agent's tools come from its core (`opencode` or `qoder`) and, for platform operations,
-from the run-scoped Aria Conductor MCP endpoint. There is no per-agent tool assignment;
-the core's native permission asks surface through the approval gate.
+from the run-scoped Aria Conductor MCP endpoint. There is no per-agent tool assignment.
+In **HOST** mode an opencode agent is read-only (`edit`/`write`/`patch`/`bash` are refused, with no
+approval prompt); write tools are available to a **SANDBOX** worker inside its container.
 
 ---
 
@@ -73,12 +74,14 @@ Navigate to `http://localhost:3000/runs`.
 ### Start a Run
 1. Click **+ Start Run**
 2. Select a healthy agent from the dropdown
-3. Set **Max Iterations** (safety limit on execution loops)
-4. Write a **Prompt Seed** (the task instruction)
-5. Click **Start Run**
+3. Write a **Prompt Seed** (the task instruction)
+4. Click **Start Run**
+
+The run is bounded by the wall-clock deadline (45 minutes by default). There is no
+iteration cap or token cap.
 
 ### Monitor Progress
-The runs table shows: ID, Agent, Status, Iterations (current/max), Tokens used, Duration.
+The runs table shows: ID, Agent, Status, Observed iterations, Tokens reported by the run, Duration.
 
 Click **Details** to expand:
 - **Status & Info** — current state, tokens, error message (if failed)
@@ -104,16 +107,20 @@ With pause: `RUNNING → PAUSED → RUNNING → ...`
 
 Navigate to **Knowledge** in the sidebar.
 
-### Lifecycle (5 stages)
-```
-Agent Draft → Peer Review → Human Approval → Validated → Unified Library
-```
+### Status
+
+`DRAFT → PENDING → APPROVED / REJECTED`; an APPROVED item can be `RETIRED`.
 
 ### Key Concepts
 - **Per-Agent Spaces**: Each agent has its own knowledge area
 - **Submitted for Review**: Items awaiting human approval (PENDING status)
-- **Unified Knowledge Space**: All APPROVED items, searchable and reusable
-- **Access Control Matrix**: Defines who can EDIT / USE / VIEW / NONE per knowledge area
+- **Unified Knowledge Space**: All APPROVED items, searchable through `query_knowledge`
+
+### What the runtime actually uses
+- Every prompt receives the **newest five APPROVED items** by update time, and only their
+  description (up to 500 characters). There is no relevance ranking in the automatic injection.
+- `query_knowledge` is a case-insensitive substring search over name, description and current
+  version content, and an agent must call it explicitly.
 
 ### Approve/Reject
 1. Go to "Submitted for Review" section
@@ -122,17 +129,31 @@ Agent Draft → Peer Review → Human Approval → Validated → Unified Library
 
 **Important:** Newly stored knowledge is always PENDING. Agents cannot use it until a human approves it. This prevents "memory poisoning" — where one agent's hallucination becomes shared "fact."
 
+## Memory
+
+Memory recall is deterministic and is injected into Aria and worker prompts as context.
+It is **operator-fed**: facts enter through operator/MCP writes, and a worker's
+`remember_fact` becomes a PENDING proposal an operator must approve. Memory MCP reads also
+require an operator approval, so unattended workers cannot query memory as a tool. There is
+no memory dashboard page yet.
+
 ---
 
-## Approvals
+## Decisions and approvals
 
-Navigate to `http://localhost:3000/approvals`.
+There is no standalone approvals page. Blocking asks appear on **Overview → Needs your decision**:
 
-When an agent performs a gated action (e.g., executing a sensitive tool), it creates a **pending approval**:
-- **Approve** — allows the action to proceed
-- **Deny** — blocks it (provide a reason)
+- **Native tool permission** — a core asked to run a tool. The row shows the risk tier
+  (`Dangerous` for bash, `Writes` for edit/write) and the tool name; open it to review the
+  arguments and diff before deciding.
+- **Clarification** — the run is parked in `WAITING_INPUT` and **holds an admission slot** until
+  you answer or finalize. It has no timeout.
+- **Spec review** — a workflow chain waits at a governance gate. It expires after 30 minutes.
 
-Approvals have a countdown timer. If not decided in time, they may auto-expire.
+Approve, deny, or answer from the row (unlinked asks are decidable inline). A native ask also
+carries the core's own expiry. Post-run **review requests** block nothing: they appear as a
+single "completed runs awaiting review" count that links to the board's REVIEW column, not as
+decision rows.
 
 ---
 
@@ -169,7 +190,8 @@ Navigate to **Reports** in the sidebar.
 | Tip | Detail |
 |-----|--------|
 | **Model inheritance** | If an agent has no `model` set, it uses the active LLM provider's `defaultModel` |
-| **Run deadline** | Runs are bounded by the configured wall-clock deadline; exceeding it finalizes the run as FAILED. There is no per-run token budget |
+| **Run deadline** | Runs are bounded by the configured wall-clock deadline; exceeding it settles the run as `CANCELLED` with `RUN_DEADLINE_REACHED`. There is no per-run token or cost cap |
+| **Recorded tokens** | The token KPI sums usage runs actually reported. A timed-out or failed run may contribute no usage, so treat it as a floor, not a bill |
 | **WebSocket updates** | TopBar KPIs update in real-time via WebSocket. If WS disconnects, data may appear stale — refresh the page |
 | **Theme toggle** | TopBar right — switch between dark and light mode |
 | **Notifications bell** | Shows unread system events (run completed, approval needed, etc.) |
@@ -199,11 +221,11 @@ Full API docs: `http://localhost:8080/swagger-ui.html`
 
 ## Example Session (5 minutes)
 
-1. Open `http://localhost:3000` → see Overview with agent fleet status
+1. Open the dashboard URL printed by your start script (local dev: `http://localhost:5173`)
 2. Click **Aria FAB** → type "List all agents" → see your fleet
 3. Go to `/runs` → **+ Start Run** → select Aria → prompt: "Give me a dashboard summary" → Start
-4. Watch the run progress in the table (status, iterations, tokens)
+4. Watch the run progress in the table (status, observed iterations, recorded tokens)
 5. Click **Details** when done → see the full trajectory
-6. Go to **Chat** → find the thread → see the conversation with handoff markers
-7. Inject a message: "Next time, include token costs in the summary" → Send
-8. Go to **Knowledge** → browse the Unified Library → see approved skills and knowledge
+6. Go to **Chat** → find the agent thread → see the conversation with handoff markers
+7. Inject an audit note: "Next time, include token costs in the summary" → Send
+8. Go to **Knowledge** → browse the Unified Library (newest five approved items feed prompts)

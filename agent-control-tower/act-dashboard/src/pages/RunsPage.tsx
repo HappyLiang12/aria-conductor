@@ -22,7 +22,7 @@ export function RunsPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<PresentedError | null>(null);
 
-  const [form, setForm] = useState<CreateRunRequest>({ agentId: '', promptSeed: '', maxIterations: 10 });
+  const [form, setForm] = useState<CreateRunRequest>({ agentId: '', promptSeed: '' });
 
   const { data: runs, isLoading, error } = useQuery({
     queryKey: ['runs'],
@@ -39,7 +39,7 @@ export function RunsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
       setShowForm(false);
-      setForm({ agentId: '', promptSeed: '', maxIterations: 10 });
+      setForm({ agentId: '', promptSeed: '' });
       setFormErrors({});
       setActionError(null);
     },
@@ -171,16 +171,6 @@ export function RunsPage() {
               </select>
               {formErrors.agentId && <span className="error-text">{formErrors.agentId}</span>}
             </div>
-            <div className="form-field">
-              <label>Max Iterations</label>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={form.maxIterations}
-                onChange={(e) => setForm({ ...form, maxIterations: parseInt(e.target.value) || 10 })}
-              />
-            </div>
             <div className={`form-field full-width ${formErrors.promptSeed ? 'field-error' : ''}`}>
               <label>Prompt Seed *</label>
               <textarea
@@ -234,7 +224,7 @@ export function RunsPage() {
                     <td>{agentMap.get(run.agentId)?.name ?? run.agentId.slice(0, 8)}</td>
                     <td><RuntimeBadge core={run.coreId} mode={run.executionMode} /></td>
                     <td><StatusBadge status={run.status} /></td>
-                    <td>{run.iterationCount}/{run.maxIterations}</td>
+                    <td>{run.iterationCount}</td>
                     <td>{tokenUsageCell(run.totalTokensUsed)}</td>
                     <td>{formatTimestamp(run.createdAt)}</td>
                     <td>{getDuration(run)}</td>

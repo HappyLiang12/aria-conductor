@@ -22,6 +22,8 @@ import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.servlet.MockMvc;
@@ -578,6 +580,99 @@ class AriaConversationControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(ariaService, never()).composeSynthesisPrompt(any(), any());
+    }
+
+    @Test
+    void list_returnsEmptyListWhenNoConversationExists() throws Exception {
+        when(runRepository.findConversationAggregates(any(Pageable.class))).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("[]"));
+
+        verify(runRepository, never()).findByConversationIdInOrderByCreatedAtAsc(any());
+    }
+
+    @Test
+    void list_mapsEachAggregateWithTheFirstNonBlankPromptAsTitle() throws Exception {
+        Instant newest = Instant.parse("2026-11-20T10:00:00Z");
+        Instant older = Instant.parse("2026-11-19T10:00:00Z");
+        RunRepository.ConversationAggregate first = aggregate("conv-a", newest, 3L);
+        RunRepository.ConversationAggregate second = aggregate("conv-b", older, 1L);
+        when(runRepository.findConversationAggregates(any(Pageable.class))).thenReturn(List.of(first, second));
+        when(runRepository.findByConversationIdInOrderByCreatedAtAsc(List.of("conv-a", "conv-b")))
+                .thenReturn(List.of(
+                        runWithSeed("conv-a", null, older),
+                        runWithSeed("conv-a", "Deploy the crew\nthen verify the runs", newest),
+                        runWithSeed("conv-b", "  ", older)));
+
+        mockMvc.perform(get("/api/v1/aria/conversations"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].conversationId").value("conv-a"))
+                .andExpect(jsonPath("$[0].title").value("Deploy the crew"))
+                .andExpect(jsonPath("$[0].runCount").value(3))
+                .andExpect(jsonPath("$[0].lastMessageAt").value(newest.getEpochSecond()))
+                .andExpect(jsonPath("$[1].conversationId").value("conv-b"))
+                .andExpect(jsonPath("$[1].title").value("Untitled"));
+    }
+
+    @Test
+    void list_clipsALongTitleAtSixtyCharacters() throws Exception {
+        Instant now = Instant.parse("2026-11-21T10:00:00Z");
+        String longSeed = "x".repeat(80);
+        when(runRepository.findConversationAggregates(any(Pageable.class)))
+                .thenReturn(List.of(aggregate("conv-long", now, 1L)));
+        when(runRepository.findByConversationIdInOrderByCreatedAtAsc(List.of("conv-long")))
+                .thenReturn(List.of(runWithSeed("conv-long", longSeed, now)));
+
+        mockMvc.perform(get("/api/v1/aria/conversations"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].title").value("x".repeat(60) + "…"));
+    }
+
+    @Test
+    void list_clampsTheLimitIntoTheSupportedRange() throws Exception {
+        when(runRepository.findConversationAggregates(any(Pageable.class))).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations").param("limit", "1000"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/aria/conversations").param("limit", "0"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(runRepository, org.mockito.Mockito.times(2)).findConversationAggregates(pageable.capture());
+        assertThat(pageable.getAllValues().get(0).getPageSize()).isEqualTo(100);
+        assertThat(pageable.getAllValues().get(1).getPageSize()).isEqualTo(1);
+    }
+
+    private RunRepository.ConversationAggregate aggregate(String conversationId, Instant lastMessageAt, long runCount) {
+        return new RunRepository.ConversationAggregate() {
+            @Override
+            public String getConversationId() {
+                return conversationId;
+            }
+
+            @Override
+            public Instant getLastMessageAt() {
+                return lastMessageAt;
+            }
+
+            @Override
+            public long getRunCount() {
+                return runCount;
+            }
+        };
+    }
+
+    private Run runWithSeed(String conversationId, String promptSeed, Instant createdAt) {
+        return Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId(conversationId)
+                .promptSeed(promptSeed)
+                .status(RunStatus.COMPLETED)
+                .createdAt(createdAt)
+                .build();
     }
 
     private SessionTrajectory trajectory(UUID runId, int turn, String role, String content) {

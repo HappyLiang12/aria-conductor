@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -137,12 +138,20 @@ public class LiveRunService {
      * <p>No completion event is published here — the live event router owns the
      * bridge-facing {@code run_event} and the settled-turn cleanup.
      *
+     * <p>The write commits in a transaction of its own ({@link Propagation#REQUIRES_NEW}).
+     * The decision that settles a parked run is delivered by an {@code AFTER_COMMIT}
+     * listener, which runs on the thread of the operator's transaction while its
+     * resources are still bound: a write that joined it would be applied to an
+     * already-committed transaction and never committed. Suspending that transaction also
+     * makes the conditional statements re-evaluate against the committed row, which is
+     * the whole point of the claim.
+     *
      * @param session the socket that owns the turn; its slot is cleared when it still
      *                holds {@code runId} (may be null for a run with no live session)
      * @return the run's committed status after the attempt, or null when the id is
      *         unknown or no status was supplied
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunStatus settle(LiveSession session, UUID runId, RunStatus status, String reason) {
         if (runId == null || status == null) {
             return null;

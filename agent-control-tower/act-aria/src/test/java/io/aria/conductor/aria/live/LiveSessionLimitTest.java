@@ -101,6 +101,39 @@ class LiveSessionLimitTest {
     }
 
     @Test
+    void aFrameEnvelopeAboveTheHandlerCeilingIsRefusedAndKeepsTheSocket() throws Exception {
+        WebSocketSession session = opened();
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
+                + "\"dataBase64\":\"" + "A".repeat(400 * 1024) + "\"}"));
+
+        // Too large for the envelope, so it never reaches the validator: the phone is
+        // told to shrink it instead of being left waiting for a reply that never comes.
+        JsonNode error = lastPhoneFrame(session);
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("frame_too_large");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("frame exceeds 256 KiB base64");
+        assertThat(bridge.sent).hasSize(1); // no image line left for the bridge
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void aDuplicateTypeKeyCannotSmuggleAnOversizedMessagePastTheTextCap() throws Exception {
+        WebSocketSession session = opened();
+
+        // The streaming probe reads the first "type" key, Jackson keeps the last, so a
+        // message that claims frame first and text last is judged by what the parse yields.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"type\":\"text\","
+                + "\"text\":\"" + "a".repeat(300 * 1024) + "\"}"));
+
+        assertThat(bridge.sent).hasSize(1); // the bridge hello only
+        assertThat(lastPhoneFrame(session).path("type").asText()).isEqualTo("ready");
+        verify(session, never()).close(any());
+    }
+
+    @Test
     void aSecondHelloCloses4002() throws Exception {
         WebSocketSession session = opened();
 
@@ -124,7 +157,7 @@ class LiveSessionLimitTest {
             return bridge;
         };
         handler = new LiveWebSocketHandler(
-                new LiveProperties(false, null, null, readyDeadlineMs, 7200), factory, json);
+                new LiveProperties(false, null, null, "", readyDeadlineMs, 7200), factory, json);
         return handler;
     }
 

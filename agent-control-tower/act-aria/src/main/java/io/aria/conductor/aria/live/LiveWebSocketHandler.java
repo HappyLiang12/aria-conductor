@@ -44,7 +44,14 @@ import java.util.concurrent.TimeUnit;
  * 32 KiB is dropped, and an image frame is validated by {@link LiveFrameValidator} and
  * refused with {@code frame_too_large}/{@code frame_invalid} while the socket stays open.
  * A {@code frame} message may legally be larger than 64 KiB (its own limit is 256 KiB of
- * base64), so it alone is read past that cap.
+ * base64), so it alone is read past that cap; one whose envelope exceeds
+ * {@link #MAX_FRAME_MESSAGE_BYTES} is answered {@code frame_too_large} and the socket kept,
+ * because a silent drop would leave the phone waiting for a reply forever.
+ *
+ * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
+ * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
+ * message larger than that never reaches this class and the container closes 1009 on it.
+ * Everything between {@link #MAX_FRAME_MESSAGE_BYTES} and that buffer is refused here.
  *
  * <p>Logs are metadata only (spec L6): event types, byte counts and close codes, never a
  * payload, a bearer, a key, a workspace or an id beyond a debug phase.
@@ -73,6 +80,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     static final String ERROR_MESSAGE_HELLO_DEADLINE = "hello deadline exceeded";
     static final String ERROR_MESSAGE_BRIDGE_UNAVAILABLE = "live bridge unavailable";
     static final String ERROR_MESSAGE_FRAME_TOO_LARGE = "frame too large";
+    static final String ERROR_MESSAGE_FRAME_ENVELOPE = "frame exceeds 256 KiB base64";
     static final String ERROR_MESSAGE_FRAME_INVALID = "frame invalid";
 
     /** A phone control frame may not exceed 64 KiB. */
@@ -149,11 +157,19 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         }
         String payload = message.getPayload();
         int bytes = payload.getBytes(StandardCharsets.UTF_8).length;
-        if (bytes > MAX_TEXT_FRAME_BYTES
-                && (bytes > MAX_FRAME_MESSAGE_BYTES || !"frame".equals(probeType(payload)))) {
-            // Metadata only: a dropped frame is a byte count, never its content.
-            log.debug("aria live text frame dropped: bytes={}", bytes);
-            return;
+        if (bytes > MAX_TEXT_FRAME_BYTES) {
+            if (!"frame".equals(probeType(payload))) {
+                // Metadata only: a dropped frame is a byte count, never its content.
+                log.debug("aria live text frame dropped: bytes={}", bytes);
+                return;
+            }
+            if (bytes > MAX_FRAME_MESSAGE_BYTES) {
+                // Past the envelope 256 KiB of base64 can occupy, so it is refused before
+                // any parse and the socket stays open for the next (legal) frame.
+                log.debug("aria live frame envelope refused: bytes={}", bytes);
+                sendError(live, ERROR_FRAME_TOO_LARGE, false, ERROR_MESSAGE_FRAME_ENVELOPE);
+                return;
+            }
         }
         JsonNode frame;
         try {
@@ -167,6 +183,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         String type = frame.path("type").asText("");
+        if (bytes > MAX_TEXT_FRAME_BYTES && !"frame".equals(type)) {
+            // The probe reads the first "type" key while Jackson keeps the last, so the
+            // 64 KiB cap is enforced again on the message that was actually parsed.
+            log.debug("aria live text frame dropped: bytes={}", bytes);
+            return;
+        }
         if (!live.helloSeen()) {
             if (!"hello".equals(type) || !live.claimHello() || !validHello(frame)) {
                 reject(live);
@@ -527,7 +549,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     /**
      * The cheap type probe an oversized text frame gets: it reads only up to {@code type},
      * so a 300 KiB blob is classified without materialising its base64 value. A frame the
-     * probe cannot read is not a {@code frame}.
+     * probe cannot read is not a {@code frame}. It reads the first {@code type} key while
+     * Jackson keeps the last, so the caller re-checks the parsed type before trusting it.
      */
     private String probeType(String payload) {
         try (JsonParser parser = json.getFactory().createParser(payload)) {

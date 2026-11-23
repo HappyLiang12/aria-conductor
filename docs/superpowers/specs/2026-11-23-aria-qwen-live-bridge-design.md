@@ -121,7 +121,7 @@ Only these Qwen events cross to Java/phone. Everything else is counted and dropp
 
 ## Deployment (LAN, same backend as the phone)
 
-- Config: `aria.live.enabled` (default false), `aria.live.bridge-script` (default `packages/qwen-live-bridge/dist/index.js` relative to the repo), `aria.live.credentials-file` (default `~/.aria-conductor/qwen-live.env`).
+- Config: `aria.live.enabled` (default false), `aria.live.bridge-script` (default `packages/qwen-live-bridge/dist/index.js` relative to the repo), `aria.live.credentials-file` (default `~/.aria-conductor/qwen-live.env`), `aria.live.realtime-url` (default empty: the child derives the SG WSS endpoint from the workspace region; when set it is passed as `QWEN_REALTIME_URL`, and it is not a secret).
 - The credentials file is copied from `~/.config/live-spike/key` and `~/.config/live-spike/workspace` into `DASHSCOPE_API_KEY` / `DASHSCOPE_WORKSPACE` with mode 0600; values are never printed or committed.
 - Smoke command from the LAN (phone can run it): connect with the operator bearer, send `hello`, expect `ready` with `v:1` within 1 s, then close. A committed script `packages/qwen-live-bridge/scripts/smoke.mjs` implements exactly that.
 - Controlled outage for L3: kill only the bridge children (`pkill -f qwen-live-bridge/dist/index.js`), leave the backend up; the phone should see close 1011 or `provider_unavailable`, then fall back to SSE. Restore by reconnecting (the next socket spawns a fresh bridge); if the backend itself is stopped, expect connection refused and restore with the documented `scripts/start-backend.sh` sequence.

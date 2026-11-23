@@ -48,8 +48,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The harness connects over loopback, which is the local operator by design, so
  * the 401 case routes its client address through the trusted-proxy rule
  * ({@code X-Forwarded-For}, the same seam ApprovalFlowIntegrationTest uses).
- * There is no Qwen bridge in this task: the handler is wired to the no-op
- * factory, which is exactly what {@code ready} must not wait for.
+ * This context leaves the live path disabled (no credentials file, no bridge
+ * script), so the child is never spawned: {@code ready} is sent before the
+ * factory is asked, which is exactly what the handshake must not wait for.
  */
 @Import(NoopLlmTestConfig.class)
 @TestPropertySource(properties = {

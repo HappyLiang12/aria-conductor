@@ -90,7 +90,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource context = conversationId -> List.of(
                 new LiveContextSource.Entry("user", "earlier question"),
                 new LiveContextSource.Entry("assistant", "earlier answer"));
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200), bridges, json, context);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200), bridges, json, context);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -116,7 +116,7 @@ class LiveWebSocketHandlerTest {
             }
             return LiveBridge.NOOP;
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200), recording, json);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200), recording, json);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -127,7 +127,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void anUnavailableBridgeSaysWhyThenCloses1011() throws Exception {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
                 (live, listener) -> {
                     throw new LiveBridgeUnavailableException("live bridge disabled");
                 }, json);
@@ -149,7 +149,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aFactoryThatThrowsUnexpectedlyIsStillABridgeInternalClose() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
                 (live, listener) -> {
                     throw new IllegalStateException("process blew up");
                 }, json);
@@ -417,13 +417,38 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void aFrameMessageAboveTheEnvelopeCeilingIsDropped() throws Exception {
+    void aLegal256KibFrameReachesTheBridgeBeforeItsCommit() throws Exception {
+        WebSocketSession session = opened();
+        // 196608 bytes of base64 is exactly the 262144-character limit the validator allows.
+        String base64 = Base64.getEncoder().encodeToString(new byte[196_608]);
+        assertThat(base64).hasSize(LiveFrameValidator.MAX_BASE64_LENGTH);
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
+                + "\"dataBase64\":\"" + base64 + "\",\"capturedAtMs\":1}"));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+
+        assertThat(bridge.sent).hasSize(3);
+        assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("image");
+        assertThat(json.readTree(bridge.sent.get(1)).path("dataBase64").asText()).isEqualTo(base64);
+        assertThat(json.readTree(bridge.sent.get(2)).path("type").asText()).isEqualTo("commit");
+        assertThat(json.readTree(bridge.sent.get(2)).path("image").asBoolean()).isTrue();
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void aFrameMessageAboveTheEnvelopeCeilingIsRefusedWithFrameTooLarge() throws Exception {
         WebSocketSession session = opened();
 
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
                 + "\"dataBase64\":\"" + "A".repeat(400 * 1024) + "\"}"));
 
-        // Dropped before the validator: no error frame, no image line, no close.
+        // Refused before the validator, but answered: no image line, no close, and an
+        // error the phone can act on instead of a silent drop.
+        JsonNode error = json.readTree(allTexts(session).get(allTexts(session).size() - 1));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("code").asText()).isEqualTo("frame_too_large");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("frame exceeds 256 KiB base64");
         assertThat(bridge.sent).hasSize(1);
         verify(session, never()).close(any());
     }
@@ -434,7 +459,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource failing = conversationId -> {
             throw new IllegalStateException("no database");
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
                 bridges, json, failing);
         handler.afterConnectionEstablished(session);
 
@@ -448,7 +473,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aContextSourceThatAnswersNullSeedsAnEmptyContext() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
                 bridges, json, conversationId -> null);
         handler.afterConnectionEstablished(session);
 
@@ -482,7 +507,7 @@ class LiveWebSocketHandlerTest {
         // gone, so the child must not outlive it.
         WebSocketSession session = session("s1", null, null);
         RecordingBridge late = new RecordingBridge();
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
                 (live, listener) -> {
                     live.markClosed();
                     return late;
@@ -524,7 +549,7 @@ class LiveWebSocketHandlerTest {
     }
 
     private LiveWebSocketHandler handler(long readyDeadlineMs) {
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, readyDeadlineMs, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200),
                 bridges, json, conversationId -> List.of(), new LiveSessionRegistry(),
                 (live, toolCall) -> toolCalls.add(toolCall));
         return handler;

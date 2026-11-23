@@ -8,11 +8,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>{@code enabled} is off by default: the endpoint exists, but no bridge child
  * is spawned until a deployment turns the live path on. {@code bridge-script} is
  * repo-relative and {@code credentials-file} is the 0600 env file the bridge
- * reads its provider key from; neither value is ever logged.
+ * reads its provider key from; neither value is ever logged. {@code realtime-url}
+ * is the child's Qwen endpoint and is not a secret either; empty (the default)
+ * means the child derives it from the workspace region (Task 5).
  *
  * @param enabled           whether the live bridge may be started
  * @param bridgeScript      path to the Node bridge entry point
  * @param credentialsFile   env file holding DASHSCOPE_API_KEY / DASHSCOPE_WORKSPACE
+ * @param realtimeUrl       child's Qwen realtime WSS endpoint; empty → the child derives it
  * @param readyDeadlineMs   how long a socket may stay silent before {@code hello}, closing 4002
  * @param maxSessionSeconds the {@code ready.maxSessionSec} the socket advertises
  */
@@ -21,6 +24,7 @@ public record LiveProperties(
         boolean enabled,
         String bridgeScript,
         String credentialsFile,
+        String realtimeUrl,
         long readyDeadlineMs,
         int maxSessionSeconds) {
 
@@ -32,6 +36,7 @@ public record LiveProperties(
     public LiveProperties {
         bridgeScript = blank(bridgeScript) ? DEFAULT_BRIDGE_SCRIPT : bridgeScript.trim();
         credentialsFile = blank(credentialsFile) ? DEFAULT_CREDENTIALS_FILE : credentialsFile.trim();
+        realtimeUrl = blank(realtimeUrl) ? "" : realtimeUrl.trim();
         readyDeadlineMs = readyDeadlineMs <= 0 ? DEFAULT_READY_DEADLINE_MS : readyDeadlineMs;
         maxSessionSeconds = maxSessionSeconds <= 0 ? DEFAULT_MAX_SESSION_SECONDS : maxSessionSeconds;
     }

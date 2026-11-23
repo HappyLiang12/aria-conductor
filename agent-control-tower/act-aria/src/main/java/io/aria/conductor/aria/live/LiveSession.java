@@ -2,7 +2,11 @@ package io.aria.conductor.aria.live;
 
 import org.springframework.web.socket.WebSocketSession;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -32,6 +36,11 @@ public final class LiveSession {
     private volatile boolean micOn = true;
     private volatile String pendingFrameBase64;
     private volatile ScheduledFuture<?> helloDeadline;
+    /**
+     * Gated tool calls waiting for the operator, by approval id. Remove-and-get is atomic,
+     * so an approval decided twice re-executes nothing.
+     */
+    private final Map<UUID, LivePendingToolCall> pendingCalls = new ConcurrentHashMap<>();
 
     public LiveSession(String id, String conversationId, WebSocketSession ws, String offerSubprotocol) {
         this.id = id;
@@ -95,6 +104,33 @@ public final class LiveSession {
 
     public void bridge(LiveBridge bridge) {
         this.bridge = bridge;
+    }
+
+    /** Holds the gated call until the operator's decision arrives. */
+    void pendingCall(LivePendingToolCall call) {
+        if (call != null && call.approvalId() != null) {
+            pendingCalls.put(call.approvalId(), call);
+        }
+    }
+
+    /**
+     * Takes the call for this approval, if this socket holds it. Atomic by design: an
+     * approval decided twice — a replayed event, two listeners — executes the tool once.
+     */
+    LivePendingToolCall takePendingCall(UUID approvalId) {
+        return approvalId == null ? null : pendingCalls.remove(approvalId);
+    }
+
+    /** Drops every call this socket holds, returning them so their parks can be released. */
+    List<LivePendingToolCall> takePendingCalls() {
+        List<LivePendingToolCall> calls = new ArrayList<>();
+        for (UUID approvalId : List.copyOf(pendingCalls.keySet())) {
+            LivePendingToolCall call = pendingCalls.remove(approvalId);
+            if (call != null) {
+                calls.add(call);
+            }
+        }
+        return calls;
     }
 
     /** @return true for the first {@code hello} of this socket only */

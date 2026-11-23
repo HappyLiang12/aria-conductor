@@ -186,6 +186,16 @@ class QwenLiveBridgeProcessTest {
     }
 
     @Test
+    void theTurnDoneLineReachesTheListenerAsTheTurnEnd() throws Exception {
+        bridge = spawn(credentials(), Map.of());
+        awaitEnvReport();
+
+        bridge.send("{\"type\":\"turn\"}");
+
+        assertThat(listener.turnEnds.poll(10, TimeUnit.SECONDS)).isEqualTo(1);
+    }
+
+    @Test
     void nullAndEmptyOutboundFramesAreIgnored() throws Exception {
         bridge = spawn(credentials(), Map.of());
         awaitEnvReport();
@@ -270,6 +280,7 @@ class QwenLiveBridgeProcessTest {
         final BlockingQueue<String> controls = new LinkedBlockingQueue<>();
         final BlockingQueue<byte[]> audio = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> exits = new LinkedBlockingQueue<>();
+        final BlockingQueue<Integer> turnEnds = new LinkedBlockingQueue<>();
 
         @Override
         public void onControl(String json) {
@@ -279,6 +290,11 @@ class QwenLiveBridgeProcessTest {
         @Override
         public void onAudio(byte[] pcm) {
             audio.add(pcm);
+        }
+
+        @Override
+        public void onTurnDone() {
+            turnEnds.add(1);
         }
 
         @Override

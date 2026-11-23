@@ -18,6 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * run that is somehow already parked replaces the parked future — the loop
  * never stacks two waiters for one run, and the superseded future simply
  * never completes.
+ *
+ * <p>A <em>live</em> run (2026-11-23 live bridge spec §"Tools, approvals, live
+ * run") has no engine thread to park: its row is owned by a phone socket, so the
+ * park is a callback plus the finalize signal. {@link #requestFinalize} consults
+ * that map before the future, so the one route serves both kinds of park.
  */
 @Service
 public class RunInputCoordinator {
@@ -49,6 +54,13 @@ public class RunInputCoordinator {
      * without a reason for an operator cancel, so an absent entry is expected.
      */
     private final Map<UUID, TerminationFailure> terminationFailures = new ConcurrentHashMap<>();
+
+    /**
+     * The live parks: a run owned by a phone socket instead of an engine thread. The
+     * callback is what finalize runs (settle ABORTED, inject {@code [tower] finalized},
+     * tell the phone) — there is no future to complete and no waiter to wake.
+     */
+    private final Map<UUID, Runnable> liveParks = new ConcurrentHashMap<>();
 
     /** Operator-facing termination reason plus the stable repair surface, when one exists. */
     public record TerminationFailure(String message, String code, String surface) {
@@ -96,6 +108,14 @@ public class RunInputCoordinator {
 
     /** Wakes the parked run with the finalize signal; false when the run is not waiting. */
     public boolean requestFinalize(UUID runId) {
+        // The live park is consulted first: its run is only ever parked here, and its
+        // callback is the finalize. Remove-and-run is atomic, so a second request — or a
+        // concurrent one — finds nothing and answers the honest false.
+        Runnable live = liveParks.remove(runId);
+        if (live != null) {
+            live.run();
+            return true;
+        }
         PendingInput waiting = pending.get(runId);
         if (waiting == null) {
             return false;
@@ -103,6 +123,28 @@ public class RunInputCoordinator {
         waiting.future().complete(new OperatorInput(null, true));
         pending.remove(runId, waiting);
         return true;
+    }
+
+    /**
+     * Parks a live run: the callback runs when (and only when) finalize reaches it, in
+     * place of any previously registered one. Registering is not a form of waiting — a
+     * live run has no engine thread, so nothing here publishes a waiting event.
+     */
+    public void parkLive(UUID runId, Runnable onFinalize) {
+        if (runId == null || onFinalize == null) {
+            return;
+        }
+        liveParks.put(runId, onFinalize);
+    }
+
+    /** @return true when a live park was standing and is now removed, so it never runs */
+    public boolean unparkLive(UUID runId) {
+        return runId != null && liveParks.remove(runId) != null;
+    }
+
+    /** @return true while {@link #requestFinalize} would reach this run's live callback */
+    public boolean liveParked(UUID runId) {
+        return runId != null && liveParks.containsKey(runId);
     }
 
     /**

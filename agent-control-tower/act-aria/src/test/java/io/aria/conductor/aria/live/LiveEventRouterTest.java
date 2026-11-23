@@ -92,13 +92,21 @@ class LiveEventRouterTest {
         assertThat(park.parked(runId)).isTrue();
         List<JsonNode> phone = phone();
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("tool_status")
-                && frame.path("status").asText().equals("approval")
-                && frame.path("toolName").asText().equals("get_run"));
+                && frame.path("v").asInt() == 1
+                && frame.path("state").asText().equals("approval")
+                && frame.path("name").asText().equals("get_run"));
         assertThat(phone).anyMatch(frame -> frame.path("type").asText().equals("approval_required")
+                && frame.path("v").asInt() == 1
                 && frame.path("runId").asText().equals(runId.toString())
                 && frame.path("approvalId").asText().equals(approvalId.toString())
                 && frame.path("toolName").asText().equals("get_run")
                 && frame.path("riskTier").asText().equals("READ"));
+        // The chip and the run line carry the contract's fields and nothing else.
+        assertThat(phone).filteredOn(frame -> "tool_status".equals(frame.path("type").asText()))
+                .allSatisfy(frame -> assertThat(fieldNames(frame)).containsExactly("type", "v", "name", "state"));
+        assertThat(phone).filteredOn(frame -> "run_event".equals(frame.path("type").asText()))
+                .allSatisfy(frame -> assertThat(fieldNames(frame))
+                        .containsExactly("type", "v", "runId", "state", "summary"));
     }
 
     @Test
@@ -119,7 +127,8 @@ class LiveEventRouterTest {
         assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
                 && line.contains("[tower] {\\\"id\\\":\\\"r1\\\"}"));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
-                && frame.path("state").asText().equals("finished"));
+                && frame.path("state").asText().equals("finished")
+                && frame.path("summary").asText().equals("finished"));
         assertThat(park.parked(runId)).isFalse();
     }
 
@@ -136,7 +145,8 @@ class LiveEventRouterTest {
         assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
                 && line.contains("[tower] denied by operator"));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
-                && frame.path("state").asText().equals("failed"));
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: denied by operator"));
     }
 
     @Test
@@ -296,6 +306,9 @@ class LiveEventRouterTest {
         assertThat(park.parked(runId)).isFalse();
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq("Live session closed while waiting for an approval"));
+        assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: " + LiveEventRouter.SESSION_CLOSED_REASON));
         verifyNoInteractions(tools);
     }
 
@@ -325,7 +338,8 @@ class LiveEventRouterTest {
         assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
                 && line.contains("[tower] finalized"));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
-                && frame.path("state").asText().equals("failed"));
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: " + LiveEventRouter.FINALIZE_REASON));
         assertThat(park.parked(runId)).isFalse();
         assertThat(park.finalize(runId)).isFalse();
     }
@@ -370,7 +384,8 @@ class LiveEventRouterTest {
 
         assertThat(park.parked(runId)).isFalse();
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
-                && frame.path("state").asText().equals("failed"));
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: cancelled"));
         // Only the park's own WAITING_INPUT write: the run was settled elsewhere.
         verify(runs, times(1)).settle(any(), any(), any(), any());
     }
@@ -384,6 +399,12 @@ class LiveEventRouterTest {
     }
 
     // --- harness ---------------------------------------------------------------------------
+
+    private static List<String> fieldNames(JsonNode frame) {
+        List<String> names = new ArrayList<>();
+        frame.fieldNames().forEachRemaining(names::add);
+        return names;
+    }
 
     /** A parked run for the current turn: settled WAITING_INPUT and registered for finalize. */
     private void park() {

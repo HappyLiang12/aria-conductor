@@ -39,6 +39,8 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,8 +84,19 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     private static final String PATH = "/api/v1/aria/live";
     private static final String PROTOCOL = "aria-live.v1";
     private static final String CALL_ID = "call-scripted-1";
+    /**
+     * A unique ASCII sentinel at the head of the frame's bytes: a leak can then be named
+     * exactly, in the clear and in base64, instead of being guessed from a repeated filler.
+     * 33 bytes, so its base64 is a whole prefix of the frame's (no padding shift).
+     */
+    static final String FRAME_SENTINEL = "LIVE-E2E-PRIVACY-SENTINEL-9F3C2A-";
+    /** Decoded byte count whose base64 is exactly the validator's 200 KiB legal payload. */
+    private static final int IMAGE_BYTES_200_KIB = (200 * 1024) / 4 * 3;
     /** A legal 200 KiB base64 payload (decodes cleanly; never a real JPEG). */
-    private static final String IMAGE_200_KIB = "QUFB".repeat((200 * 1024) / 4);
+    private static final String IMAGE_200_KIB = frameBase64();
+    /** The sentinel's own encoding: the first 44 characters of {@link #IMAGE_200_KIB}. */
+    private static final String SENTINEL_BASE64 = Base64.getEncoder()
+            .encodeToString(FRAME_SENTINEL.getBytes(StandardCharsets.UTF_8));
     /** 300 KiB of base64: past the 256 KiB validator limit, inside the 320 KiB envelope. */
     private static final String IMAGE_300_KIB = "QUFB".repeat((300 * 1024) / 4);
     private static final int AUDIO_FILL_A = 0x11;
@@ -132,9 +145,11 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
                     .provider("openai").config("{}").healthStatus(HealthStatus.HEALTHY)
                     .createdAt(Instant.now()).build());
         }
-        liveLogger = (Logger) LoggerFactory.getLogger("io.aria.conductor.aria.live");
+        // The whole backend's tree, not only the live package: a payload that leaks from a
+        // service the live path calls is exactly what the scan must still catch. Debug, so
+        // the child's redacted stderr (logged at debug) is in scope too.
+        liveLogger = (Logger) LoggerFactory.getLogger("io.aria.conductor");
         previousLevel = liveLogger.getLevel();
-        // The child's stderr reaches this logger at debug, so the scan must see debug lines.
         liveLogger.setLevel(Level.DEBUG);
         liveLines = new LineCapture();
         liveLines.start();
@@ -310,22 +325,46 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     }
 
     private void assertToolAndRunEvents(Recorder recorder) {
+        List<Frame> frames = List.copyOf(recorder.frames);
+        int running = frameIndex(frames, "tool_status", event -> "running".equals(event.path("state").asText()));
+        int done = frameIndex(frames, "tool_status", event -> "done".equals(event.path("state").asText()));
+        int started = frameIndex(frames, "run_event", event -> "started".equals(event.path("state").asText()));
+        int progress = frameIndex(frames, "run_event", event -> "progress".equals(event.path("state").asText()));
+        int finished = frameIndex(frames, "run_event", event -> "finished".equals(event.path("state").asText()));
+
+        assertThat(running).as("the chip lights before the tool runs").isGreaterThanOrEqualTo(0);
+        assertThat(done).as("the chip settles after the tool answered").isGreaterThan(running);
+        assertThat(started).as("the lazy run is announced before the tool runs").isGreaterThanOrEqualTo(0);
+        assertThat(progress).as("the answered tool moves the run on").isGreaterThan(started);
+        assertThat(finished).as("the turn end settles the run as finished").isGreaterThan(progress);
+
         List<JsonNode> statuses = events(recorder, "tool_status");
-        assertThat(statuses).anyMatch(event -> CALL_ID.equals(event.path("id").asText())
-                && "get_time".equals(event.path("toolName").asText())
-                && "running".equals(event.path("status").asText()));
-        assertThat(statuses).anyMatch(event -> CALL_ID.equals(event.path("id").asText())
-                && "done".equals(event.path("status").asText()));
+        assertThat(statuses).isNotEmpty().allSatisfy(event -> {
+            assertThat(event.path("v").asInt()).isEqualTo(1);
+            assertThat(event.path("name").asText()).as("the chip names its tool").isEqualTo("get_time");
+            assertThat(event.path("state").asText()).isIn("running", "done", "approval");
+            // The contract field is `name`/`state`: the id and the old names never reach the phone.
+            assertThat(event.has("id") || event.has("toolName") || event.has("status")).isFalse();
+            assertThat(event.toString()).as("the bridge's call id stays on the bridge side")
+                    .doesNotContain(CALL_ID);
+        });
 
         List<JsonNode> runEvents = events(recorder, "run_event");
-        JsonNode started = runEvents.stream()
-                .filter(event -> "started".equals(event.path("state").asText())).findFirst().orElse(null);
-        JsonNode finished = runEvents.stream()
-                .filter(event -> "finished".equals(event.path("state").asText())).findFirst().orElse(null);
-        assertThat(started).as("the lazy run is announced before the tool runs").isNotNull();
-        assertThat(finished).as("the turn end settles the run as finished").isNotNull();
-        assertThat(started.path("runId").asText()).isNotBlank();
-        assertThat(finished.path("runId").asText()).isEqualTo(started.path("runId").asText());
+        assertThat(runEvents).isNotEmpty();
+        String runId = runEvents.get(0).path("runId").asText();
+        assertThat(runId).as("every run line names the one lazy run").isNotBlank();
+        assertThat(runEvents).allSatisfy(event -> {
+            assertThat(event.path("v").asInt()).isEqualTo(1);
+            assertThat(event.path("runId").asText()).isEqualTo(runId);
+            assertThat(event.path("state").asText()).isIn("started", "progress", "finished", "failed");
+            assertThat(event.path("summary").asText()).as("no blank run line").isNotBlank();
+            assertThat(event.has("id") || event.has("status")).isFalse();
+        });
+        assertThat(runEvents).filteredOn(event -> !"finished".equals(event.path("state").asText())
+                        && !"failed".equals(event.path("state").asText()))
+                .allSatisfy(event -> assertThat(event.path("summary").asText()).isEqualTo("tool: get_time"));
+        assertThat(runEvents.stream().filter(event -> "finished".equals(event.path("state").asText()))
+                .findFirst().orElseThrow().path("summary").asText()).isEqualTo("finished");
         // The turn end is consumed by Aria, so the phone must not see the bridge literal.
         assertThat(events(recorder, "turn_done")).isEmpty();
     }
@@ -395,12 +434,19 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     }
 
     private void assertNoSecrets(List<String> lines) {
-        assertThat(lines).as("the live logger is actually captured").isNotEmpty();
+        assertThat(lines).as("the backend's log tree is actually captured").isNotEmpty();
+        // The guard proves itself: the sentinel really is inside the frame the turn uploaded,
+        // so its absence from every log line and from the receipt is evidence, not luck.
+        assertThat(IMAGE_200_KIB).as("the sentinel is embedded in the frame").startsWith(SENTINEL_BASE64);
+        assertThat(SENTINEL_BASE64).hasSize(44);
         String joined = String.join("\n", lines);
         assertThat(joined).doesNotContain("dataBase64");
         assertThat(joined).doesNotContain(OPERATOR_CREDENTIAL);
         assertThat(joined).doesNotContain(BRIDGE_KEY);
         assertThat(joined).doesNotContain(BRIDGE_WORKSPACE);
+        // The frame's own sentinel, in the clear and in base64 (44 chars, then any 64-char prefix).
+        assertThat(joined).doesNotContain(FRAME_SENTINEL);
+        assertThat(joined).doesNotContain(SENTINEL_BASE64);
         assertThat(joined).doesNotContain(IMAGE_200_KIB.substring(0, 64));
     }
 
@@ -410,7 +456,21 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
         assertThat(text).doesNotContain(OPERATOR_CREDENTIAL);
         assertThat(text).doesNotContain(BRIDGE_KEY);
         assertThat(text).doesNotContain(BRIDGE_WORKSPACE);
+        assertThat(text).doesNotContain(FRAME_SENTINEL);
+        assertThat(text).doesNotContain(SENTINEL_BASE64);
         assertThat(text).doesNotContain(IMAGE_200_KIB.substring(0, 64));
+    }
+
+    /**
+     * The frame the test uploads: the sentinel's ASCII bytes at the head, filler behind it,
+     * base64-encoded whole. Nothing in it is a JPEG, only its MIME is.
+     */
+    private static String frameBase64() {
+        byte[] bytes = new byte[IMAGE_BYTES_200_KIB];
+        byte[] sentinel = FRAME_SENTINEL.getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(sentinel, 0, bytes, 0, sentinel.length);
+        Arrays.fill(bytes, sentinel.length, bytes.length, (byte) 'A');
+        return Base64.getEncoder().encodeToString(bytes);
     }
 
     // --- harness ------------------------------------------------------------------------------
@@ -500,6 +560,14 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
             }
         }
         return -1;
+    }
+
+    /** The index of the first received frame of {@code type} whose event also matches. */
+    private static int frameIndex(List<Frame> frames, String type, Predicate<JsonNode> test) {
+        return indexOfTyped(frames, frame -> {
+            JsonNode event = frame.event();
+            return event != null && type.equals(event.path("type").asText()) && test.test(event);
+        });
     }
 
     /** The label a receipt entry contributes: its phone-event type, else its line type. */

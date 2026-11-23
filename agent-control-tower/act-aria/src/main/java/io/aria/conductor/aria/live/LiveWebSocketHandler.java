@@ -27,7 +27,7 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The phone-facing end of the live socket (spec X1 / §"Endpoint and handshake", §"Bridge
@@ -101,7 +101,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     static final int MAX_BINARY_FRAME_BYTES = 32 * 1024;
 
     private static final int MAX_CONVERSATION_ID_LENGTH = 36;
-    private static final int HELLO_VERSION = 1;
+    private static final int HELLO_VERSION = LiveFrames.VERSION;
     private static final int IN_RATE = 16000;
     private static final int OUT_RATE = 24000;
     private static final int CHANNELS = 1;
@@ -414,11 +414,13 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
         private final LiveSession live;
         /**
-         * Whether an {@code error} event already crossed this socket. A failed reopen sends
-         * {@code session_expired} and then {@code fatal{4012}}: the phone hears the reason
-         * once and only the close code follows it.
+         * The code of the last {@code error} event that crossed this socket; null before
+         * the first. A failed reopen sends {@code session_expired} and then
+         * {@code fatal{4012}}: the fatal repeats an error the phone already heard, so only
+         * that repetition is suppressed. A fatal that names a *different* failure still
+         * owes the phone its own reason — a stale error is not the current one.
          */
-        private final AtomicBoolean errorSent = new AtomicBoolean();
+        private final AtomicReference<String> lastErrorCode = new AtomicReference<>();
 
         BridgeListener(LiveSession live) {
             this.live = live;
@@ -426,8 +428,9 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
         @Override
         public void onControl(String payload) {
-            if (isErrorEvent(payload)) {
-                errorSent.set(true);
+            String code = errorCode(payload);
+            if (code != null) {
+                lastErrorCode.set(code);
             }
             sendRaw(live, payload);
         }
@@ -458,8 +461,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         @Override
         public void onFatal(int code) {
             log.debug("aria live bridge fatal: code={}", code);
-            // getAndSet: a second fatal on the same socket never sends a second error.
-            fatal(live, code, errorSent.getAndSet(true));
+            Fatal fatal = Fatal.of(code);
+            // Exactly one error per failure: the fatal's own code is the only error it may
+            // consider already delivered, and the compare-and-set keeps two concurrent
+            // fatals from both sending.
+            String previous = lastErrorCode.getAndSet(fatal.errorCode());
+            fatal(live, fatal, !fatal.errorCode().equals(previous));
         }
 
         @Override
@@ -471,13 +478,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             }
         }
 
-        /** @return whether this bridge control is a phone {@code error} event */
-        private boolean isErrorEvent(String payload) {
+        /** @return the code of a phone {@code error} event, or null when this is not one */
+        private String errorCode(String payload) {
             try {
                 JsonNode event = json.readTree(payload == null ? "" : payload);
-                return event != null && "error".equals(event.path("type").asText(""));
+                if (event == null || !"error".equals(event.path("type").asText(""))) {
+                    return null;
+                }
+                return event.path("code").asText("");
             } catch (IOException e) {
-                return false;
+                return null;
             }
         }
     }
@@ -523,13 +533,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
     /**
      * A bridge {@code fatal} (spec X9): the code names both the close the phone sees and the
-     * error frame that explains it. The error is sent only when the bridge has not already
-     * sent one — a failed reopen emits {@code session_expired} itself, then {@code fatal{4012}},
-     * and the contract forbids a second error for one failure.
+     * error frame that explains it. The error is sent unless the same error already crossed
+     * this socket — a failed reopen emits {@code session_expired} itself, then
+     * {@code fatal{4012}}, and the contract forbids a second error for one failure.
      */
-    private void fatal(LiveSession live, int code, boolean errorAlreadySent) {
-        Fatal fatal = Fatal.of(code);
-        if (!errorAlreadySent) {
+    private void fatal(LiveSession live, Fatal fatal, boolean errorOwed) {
+        if (errorOwed) {
             sendError(live, fatal.errorCode(), fatal.retryable(), fatal.message());
         }
         close(live, fatal.closeCode(), fatal.errorCode());

@@ -15,6 +15,8 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -64,6 +66,8 @@ public class LiveEventRouter {
     static final String PARK_REASON = "approval pending";
     /** Reported when a gated tool answers its own approval with another ask. */
     static final String ASKED_AGAIN = "Tool is still gated";
+    /** The phone's summary reason when an approved call ran and failed; no output in it. */
+    static final String TOOL_FAILED_REASON = "tool call failed";
 
     private final LiveRunService runs;
     private final LiveToolExecutor tools;
@@ -108,8 +112,8 @@ public class LiveEventRouter {
             // The call is answered before anything else: Qwen is waiting on this function
             // call, and a park that was refused must not become a hung turn.
             frames.toBridge(session, LiveFrames.toolResult(callId, false, APPROVAL_UNAVAILABLE));
-            frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "done"));
-            frames.toPhone(session, LiveFrames.runEvent(runId, state(parked)));
+            frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
+            frames.toPhone(session, runEvent(runId, parked, APPROVAL_UNAVAILABLE));
             log.debug("live run could not park: id={} state={}", runId, state(parked));
             return;
         }
@@ -117,7 +121,7 @@ public class LiveEventRouter {
                 callId, arguments);
         park.park(runId, () -> onFinalize(session, call));
         session.pendingCall(call);
-        frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "approval"));
+        frames.toPhone(session, LiveFrames.toolStatus(toolName, "approval"));
         frames.toPhone(session, LiveFrames.approvalRequired(runId, approvalId, toolName, riskTier));
         log.debug("live run parked on approval: id={}", runId);
     }
@@ -129,7 +133,7 @@ public class LiveEventRouter {
     private void onFinalize(LiveSession session, LivePendingToolCall call) {
         session.takePendingCall(call.approvalId());
         runs.settle(session, call.runId(), RunStatus.ABORTED, FINALIZE_REASON);
-        frames.toPhone(session, LiveFrames.runEvent(call.runId(), state(RunStatus.ABORTED)));
+        frames.toPhone(session, runEvent(call.runId(), RunStatus.ABORTED, FINALIZE_REASON));
         frames.toBridge(session, LiveFrames.tower(TOWER_FINALIZED));
         log.debug("live run finalized by the operator: id={}", call.runId());
     }
@@ -187,7 +191,7 @@ public class LiveEventRouter {
             park.unpark(owned);
             session.takePendingCalls().forEach(call -> park.unpark(call.runId()));
             session.clearRunSlot(owned);
-            frames.toPhone(session, LiveFrames.runEvent(owned, state(event.getStatus())));
+            frames.toPhone(session, runEvent(owned, event.getStatus(), statusReason(event.getStatus())));
             log.debug("live run completed elsewhere: id={} state={}", owned, state(event.getStatus()));
             return;
         }
@@ -210,7 +214,7 @@ public class LiveEventRouter {
         }
         RunStatus settled = runs.settle(session, runId, RunStatus.COMPLETED, null);
         session.takePendingCalls().forEach(call -> park.unpark(call.runId()));
-        frames.toPhone(session, LiveFrames.runEvent(runId, state(settled)));
+        frames.toPhone(session, runEvent(runId, settled, null));
         log.debug("live turn finished: id={} state={}", runId, state(settled));
     }
 
@@ -240,7 +244,7 @@ public class LiveEventRouter {
             return;
         }
         RunStatus settled = runs.settle(session, parkedRun, RunStatus.ABORTED, SESSION_CLOSED_REASON);
-        frames.toPhone(session, LiveFrames.runEvent(parkedRun, state(settled)));
+        frames.toPhone(session, runEvent(parkedRun, settled, SESSION_CLOSED_REASON));
         log.debug("live run aborted on socket close: id={} state={}", parkedRun, state(settled));
     }
 
@@ -258,13 +262,13 @@ public class LiveEventRouter {
             case LiveToolExecutor.ToolOutcome.PendingApproval ignored -> ASKED_AGAIN;
         };
         frames.toBridge(session, LiveFrames.toolResult(call.callId(), ok, output));
-        frames.toPhone(session, LiveFrames.toolStatus(call.callId(), call.toolName(), "done"));
+        frames.toPhone(session, LiveFrames.toolStatus(call.toolName(), "done"));
         if (ok) {
             frames.toBridge(session, LiveFrames.tower("[tower] " + output));
         }
         RunStatus settled = runs.settle(session, call.runId(), ok ? RunStatus.COMPLETED : RunStatus.FAILED,
                 ok ? null : output);
-        frames.toPhone(session, LiveFrames.runEvent(call.runId(), state(settled)));
+        frames.toPhone(session, runEvent(call.runId(), settled, ok ? null : TOOL_FAILED_REASON));
         log.debug("live approval executed: id={} ok={}", call.runId(), ok);
     }
 
@@ -275,9 +279,9 @@ public class LiveEventRouter {
     private void deny(LiveSession session, LivePendingToolCall call) {
         frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, DENIED_REASON));
         frames.toBridge(session, LiveFrames.tower(TOWER_DENIED));
-        frames.toPhone(session, LiveFrames.toolStatus(call.callId(), call.toolName(), "done"));
+        frames.toPhone(session, LiveFrames.toolStatus(call.toolName(), "done"));
         RunStatus settled = runs.settle(session, call.runId(), RunStatus.FAILED, DENIED_REASON);
-        frames.toPhone(session, LiveFrames.runEvent(call.runId(), state(settled)));
+        frames.toPhone(session, runEvent(call.runId(), settled, DENIED_REASON));
         log.debug("live approval denied: id={}", call.runId());
     }
 
@@ -287,5 +291,24 @@ public class LiveEventRouter {
      */
     private static String state(RunStatus status) {
         return status == RunStatus.COMPLETED ? "finished" : "failed";
+    }
+
+    /**
+     * The phone's run line for a committed status, with the summary a stopped run carries.
+     * Only a stable reason may travel here: the row's own sentence, a phrase like
+     * {@code denied by operator}. A tool's output never does — it can hold a payload — so
+     * the approved-but-failed path names the failure instead of repeating the value.
+     */
+    private static Map<String, Object> runEvent(UUID runId, RunStatus settled, String reason) {
+        if (settled == RunStatus.COMPLETED) {
+            return LiveFrames.runEvent(runId, "finished", LiveFrames.SUMMARY_FINISHED);
+        }
+        return LiveFrames.runEvent(runId, "failed",
+                reason == null ? null : LiveFrames.failureSummary(reason));
+    }
+
+    /** A status as the phone's summary reason: {@code cancelled}, {@code aborted}, … */
+    private static String statusReason(RunStatus status) {
+        return status == null ? null : status.name().toLowerCase(Locale.ROOT);
     }
 }

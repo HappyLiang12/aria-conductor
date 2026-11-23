@@ -5,9 +5,10 @@
 // endpoint.
 //
 // The process owns the phone-side state machine that the session cannot: phone audio
-// that arrives before Qwen's `session.updated` is queued (and dropped past its cap),
-// every action becomes one stdout line, `close` shuts the provider socket down and exits
-// 0, and a fatal writes `fatal{code}` before exiting non-zero.
+// that arrives before Qwen's first `session.updated` is queued (and dropped past its
+// cap); a later reopen is the session's own bounded queue. Every action becomes one
+// stdout line, `close` shuts the provider socket down and exits 0, and a fatal writes
+// `fatal{code}` before exiting non-zero.
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { MODEL } from './protocol.js';
@@ -95,6 +96,11 @@ async function main(): Promise<void> {
     // The parent may keep its end open; this child must still be able to exit.
     process.stdin.pause();
     process.stdin.destroy();
+    // A refused send is a frame the phone lost: one metadata line, never silent.
+    const refused = session?.stats().refusedSends ?? 0;
+    if (refused > 0) {
+      meter.record('send_refused', refused, 0, 0);
+    }
     meter.flush('session');
     if (session !== null) {
       await session.close();
@@ -243,7 +249,8 @@ async function main(): Promise<void> {
         void shutdown(0);
         return;
       default:
-        meter.dropped(String((line as { type?: unknown }).type ?? 'other'));
+        // A fixed label only: the meter's one string field never carries phone text.
+        meter.dropped('unknown');
     }
   };
 

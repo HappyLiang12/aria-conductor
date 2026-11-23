@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingHttpHeaders } from 'node:http';
-import { startSession, type SessionAction } from '../src/session.js';
+import { MAX_PENDING_AUDIO, startSession, type SessionAction } from '../src/session.js';
 
 const KEY = 'synthetic-dashscope-key';
 const WORKSPACE = 'synthetic-workspace';
@@ -53,7 +53,13 @@ function createRecorder() {
  * `session.updated`, records everything, and lets a test script extra events per
  * connection.
  */
-async function fakeQwen(script: { onConnection?: (connection: Connection, index: number) => void } = {}) {
+async function fakeQwen(
+  script: {
+    onConnection?: (connection: Connection, index: number) => void;
+    /** Default true; a test returning false answers `session.update` by hand. */
+    respondToUpdate?: (index: number) => boolean;
+  } = {},
+) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   const connections: Connection[] = [];
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
@@ -65,7 +71,7 @@ async function fakeQwen(script: { onConnection?: (connection: Connection, index:
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString()) as Received;
       connection.messages.push(message);
-      if (message.type === 'session.update') {
+      if (message.type === 'session.update' && (script.respondToUpdate?.(index) ?? true)) {
         socket.send(JSON.stringify({ type: 'session.updated', session: {} }));
       }
     });
@@ -284,6 +290,64 @@ describe('session: phone input', () => {
   });
 });
 
+describe('session: one response per commit', () => {
+  const typesOf = (index: number, fake: Awaited<ReturnType<typeof fakeQwen>>) =>
+    fake.connections[index]!.messages.map((message) => message.type);
+
+  it('does not ask for a second response when speech_stopped already did', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+    // `semantic_vad_ec` already made the provider answer when the user stopped talking.
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped' });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+
+    session.commit();
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'commit');
+    expect(typesOf(0, fake).filter((type) => type === 'response.create')).toEqual([]);
+    await session.close();
+  });
+
+  it('asks for the response when no speech_stopped arrived since the previous commit', async () => {
+    const fake = await fakeQwen();
+    const { session } = await open(fake);
+    session.commit();
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'first commit');
+    // The flag is per commit: the next commit without a speech_stopped asks again.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'response.create').length === 2,
+      'second commit',
+    );
+    const types = typesOf(0, fake);
+    expect(types.slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
+    await session.close();
+  });
+
+  it('asks for the response on an image commit even after speech_stopped', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+    session.attachImage('IMAGEBASE64');
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped' });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+
+    session.commit({ image: true });
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'image commit');
+    const types = typesOf(0, fake);
+    const image = types.indexOf('input_image_buffer.append');
+    const commit = types.indexOf('input_audio_buffer.commit');
+    expect(commit).toBe(image + 1);
+    expect(types.slice(commit)).toEqual([
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    await session.close();
+  });
+});
+
 describe('session: tools and TOWER', () => {
   it('turns a function call into a tool_call and answers it with function_call_output', async () => {
     const fake = await fakeQwen();
@@ -318,6 +382,96 @@ describe('session: tools and TOWER', () => {
       },
     });
     expect(messages.at(-1)).toEqual({ type: 'response.create' });
+    await session.close();
+  });
+
+  it('answers two calls in one response with one response.create, injected in call order', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+    fake.send(0, {
+      type: 'response.function_call_arguments.done',
+      call_id: 'call_1',
+      name: 'get_time',
+      arguments: '{}',
+    });
+    fake.send(0, {
+      type: 'response.function_call_arguments.done',
+      call_id: 'call_2',
+      name: 'list_agents',
+      arguments: '{}',
+    });
+    await waitUntil(
+      () => recorder.actions.filter((action) => action.kind === 'tool_call').length === 2,
+      'two calls',
+    );
+    const messages = fake.connections[0]!.messages;
+    const injected = () =>
+      messages
+        .filter((message) => message.type === 'conversation.item.create')
+        .map((message) => (message.item as { call_id: string }).call_id);
+
+    // Java answers the second call first: its queue is not the model's order.
+    session.toolResult('call_2', true, 'agents');
+    // Round-trip a provider frame: by the time it is translated, sends have drained.
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped' });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+    expect(injected()).toEqual([]);
+    expect(messages.some((message) => message.type === 'response.create')).toBe(false);
+
+    session.toolResult('call_1', true, 'time');
+    await waitUntil(
+      () => messages.some((message) => message.type === 'response.create'),
+      'continuation',
+    );
+    expect(injected()).toEqual(['call_1', 'call_2']);
+    expect(messages.filter((message) => message.type === 'response.create')).toHaveLength(1);
+    expect(messages.at(-1)).toEqual({ type: 'response.create' });
+    await session.close();
+  });
+
+  it('drops a tool_result this session never issued and never forwards it', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+    const messages = fake.connections[0]!.messages;
+
+    session.toolResult('call_ghost', true, 'nope');
+    // Sync point: once the session has translated a provider frame, its sends are drained.
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped' });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+    expect(messages.some((message) => message.type === 'conversation.item.create')).toBe(false);
+    expect(messages.some((message) => message.type === 'response.create')).toBe(false);
+    expect(session.stats().droppedToolResults).toBe(1);
+
+    // A real call still works after the drop, and a duplicate answer is dropped too.
+    fake.send(0, {
+      type: 'response.function_call_arguments.done',
+      call_id: 'call_9',
+      name: 'get_time',
+      arguments: '{}',
+    });
+    await recorder.waitFor(
+      (action) => action.kind === 'tool_call' && action.id === 'call_9',
+    );
+    session.toolResult('call_9', true, 'once');
+    session.toolResult('call_9', true, 'twice');
+    await waitUntil(
+      () => messages.some((message) => message.type === 'response.create'),
+      'continuation',
+    );
+    expect(
+      messages.filter((message) => message.type === 'conversation.item.create'),
+    ).toEqual([
+      {
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: 'call_9', output: 'once' },
+      },
+    ]);
+    expect(messages.filter((message) => message.type === 'response.create')).toHaveLength(1);
+    expect(session.stats().droppedToolResults).toBe(2);
     await session.close();
   });
 
@@ -406,6 +560,98 @@ describe('session: lifecycle', () => {
     ]);
     expect(reopened.some((message) => message.type === 'response.create')).toBe(false);
     expect(fatal).toEqual([]);
+    await session.close();
+  });
+
+  it('queues sends while the session reconfigures and replays them after session.updated', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    // The second socket does not answer `session.update`: the test decides when it does.
+    const fake = await fakeQwen({ respondToUpdate: (index) => index === 0 });
+    const { session } = await open(fake);
+
+    await vi.advanceTimersByTimeAsync(REOPEN_MS);
+    await waitUntil(() => fake.connections.length === 2, 'reopen socket');
+    vi.useRealTimers();
+    const reopened = fake.connections[1]!;
+    await waitUntil(
+      () => reopened.messages.some((message) => message.type === 'session.update'),
+      'session.update on the new socket',
+    );
+
+    session.appendAudio('QUEUED');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // A dead socket is never written to while the session is reconfiguring.
+    expect(reopened.messages.filter((message) => message.type === 'input_audio_buffer.append')).toEqual(
+      [],
+    );
+
+    fake.send(1, { type: 'session.updated', session: {} });
+    await waitUntil(
+      () => reopened.messages.some((message) => message.type === 'input_audio_buffer.append'),
+      'replayed audio',
+    );
+    expect(reopened.messages.filter((message) => message.type === 'input_audio_buffer.append')).toEqual(
+      [{ type: 'input_audio_buffer.append', audio: 'QUEUED' }],
+    );
+    expect(session.stats().refusedSends).toBe(0);
+    await session.close();
+  });
+
+  it('bounds the queue while reconfiguring and counts what it refused', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const fake = await fakeQwen({ respondToUpdate: (index) => index === 0 });
+    const { session } = await open(fake);
+    await vi.advanceTimersByTimeAsync(REOPEN_MS);
+    await waitUntil(() => fake.connections.length === 2, 'reopen socket');
+    const reopened = fake.connections[1]!;
+    await waitUntil(
+      () => reopened.messages.some((message) => message.type === 'session.update'),
+      'session.update on the new socket',
+    );
+
+    for (let index = 0; index < MAX_PENDING_AUDIO + 1; index += 1) {
+      session.appendAudio('AAAA');
+    }
+    fake.send(1, { type: 'session.updated', session: {} });
+    await waitUntil(
+      () =>
+        reopened.messages.filter((message) => message.type === 'input_audio_buffer.append')
+          .length === MAX_PENDING_AUDIO,
+      'replayed audio',
+    );
+    expect(session.stats().refusedSends).toBe(1);
+    await session.close();
+  });
+
+  it('ignores a provider frame that is literal null and keeps working', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder, fatal } = await open(fake);
+    fake.connections[0]!.socket.send('null');
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped' });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+    expect(fatal).toEqual([]);
+    await session.close();
+  });
+
+  it('forgets a held image when the session reopens', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const fake = await fakeQwen();
+    const { session } = await open(fake);
+    session.attachImage('IMAGEBASE64');
+
+    await vi.advanceTimersByTimeAsync(REOPEN_MS);
+    await waitUntil(() => fake.connections.length === 2, 'reopen socket');
+    const reopened = fake.connections[1]!;
+    session.commit({ image: true });
+    await waitUntil(
+      () => reopened.messages.some((message) => message.type === 'input_audio_buffer.commit'),
+      'commit',
+    );
+    expect(reopened.messages.some((message) => message.type === 'input_image_buffer.append')).toBe(
+      false,
+    );
     await session.close();
   });
 

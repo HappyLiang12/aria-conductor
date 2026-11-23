@@ -43,10 +43,16 @@ export interface LiveSession {
   toolResult(id: string, ok: boolean, output: string): void;
   tower(text: string): void;
   close(): Promise<void>;
+  /** Metadata only: frames refused while reconfiguring, results for unknown calls. */
+  stats(): { refusedSends: number; droppedToolResults: number };
 }
 
 /** The provider's cap is 120 minutes; the bridge leaves a minute to reopen (spec X9). */
 export const DEFAULT_REOPEN_MS = 119 * 60 * 1000;
+/** Audio held while the session (re)configures: ~4 s of 20 ms phone chunks. */
+export const MAX_PENDING_AUDIO = 200;
+/** Non-audio operations held while the session (re)configures (a commit, a result, a tower). */
+const MAX_PENDING_OPS = 200;
 /** A provider that neither creates nor updates a session in this window is unusable. */
 export const READY_TIMEOUT_MS = 15_000;
 /** How long a close frame may take before the socket is torn down. */
@@ -164,6 +170,18 @@ export function startSession(options: SessionOptions): LiveSession {
   let firstOpenedAt: number | null = null;
   let reopenTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingImage: string | null = null;
+  /** A `speech_stopped` since the previous commit already asked for the answer. */
+  let speechStoppedSinceCommit = false;
+  /** Frames held while the session (re)configures; replayed after `session.updated`. */
+  let pendingSends: Array<Record<string, unknown>> = [];
+  let pendingAudio = 0;
+  let pendingOps = 0;
+  /** Calls issued to Java and not yet answered, in the order the model issued them. */
+  let callOrder: string[] = [];
+  const outstandingCalls = new Set<string>();
+  const answeredResults = new Map<string, Record<string, unknown>>();
+  let refusedSends = 0;
+  let droppedToolResults = 0;
 
   const emit = (action: SessionAction) => {
     if (!fataled && !closing) {
@@ -173,10 +191,63 @@ export function startSession(options: SessionOptions): LiveSession {
 
   const emitEvent = (event: PhoneEvent) => emit({ kind: 'control', event });
 
-  const send = (payload: Record<string, unknown>) => {
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(payload));
+  /**
+   * Write one provider frame if the socket can take it. The handshake uses this directly;
+   * everything the phone sends goes through {@link send}, which also requires the session
+   * to be configured.
+   */
+  const transmit = (payload: Record<string, unknown>): boolean => {
+    const ws = socket;
+    if (ws === null || ws.readyState !== WebSocket.OPEN) {
+      return false;
     }
+    ws.send(JSON.stringify(payload));
+    return true;
+  };
+
+  const send = (payload: Record<string, unknown>, audio = false) => {
+    if (closing || fataled) {
+      return;
+    }
+    if (configured && transmit(payload)) {
+      return;
+    }
+    if (audio) {
+      if (pendingAudio >= MAX_PENDING_AUDIO) {
+        refusedSends += 1;
+        return;
+      }
+      pendingAudio += 1;
+    } else {
+      if (pendingOps >= MAX_PENDING_OPS) {
+        refusedSends += 1;
+        return;
+      }
+      pendingOps += 1;
+    }
+    pendingSends.push(payload);
+  };
+
+  /** The new session is configured: everything held for it goes out, in arrival order. */
+  const flushPendingSends = () => {
+    const held = pendingSends;
+    pendingSends = [];
+    pendingAudio = 0;
+    pendingOps = 0;
+    for (const payload of held) {
+      if (!transmit(payload)) {
+        refusedSends += 1;
+      }
+    }
+  };
+
+  /** Nothing about the previous provider session survives into the next one. */
+  const resetProviderState = () => {
+    pendingImage = null;
+    speechStoppedSinceCommit = false;
+    callOrder = [];
+    outstandingCalls.clear();
+    answeredResults.clear();
   };
 
   const clearReopen = () => {
@@ -242,10 +313,22 @@ export function startSession(options: SessionOptions): LiveSession {
 
   /** Apply one provider event: the translator decides, this function obeys. */
   const dispatch = (event: Record<string, unknown>) => {
+    if (event.type === 'input_audio_buffer.speech_stopped') {
+      // With `semantic_vad_ec` the provider answers this itself; a phone commit that
+      // follows must not ask for a second response (it would race the first).
+      speechStoppedSinceCommit = true;
+    }
     for (const translation of translator.onEvent(event)) {
       if (translation.kind === 'cancel') {
         send({ type: 'response.cancel' });
         continue;
+      }
+      if (translation.kind === 'tool_call') {
+        // Track the call before the result can arrive, so an answer is never "unknown".
+        if (!outstandingCalls.has(translation.id)) {
+          outstandingCalls.add(translation.id);
+          callOrder.push(translation.id);
+        }
       }
       emit(translation);
     }
@@ -295,22 +378,29 @@ export function startSession(options: SessionOptions): LiveSession {
       };
 
       ws.on('message', (data) => {
-        let event: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          event = JSON.parse(data.toString()) as Record<string, unknown>;
+          parsed = JSON.parse(data.toString());
         } catch {
           return;
         }
+        // A frame of literal `null` (or any non-object) carries no event: ignore it.
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          return;
+        }
+        const event = parsed as Record<string, unknown>;
         if (socket !== ws) {
           return;
         }
         switch (event.type) {
           case 'session.created':
-            send({ type: 'session.update', session: sessionConfig() });
+            // Before `session.updated`: the one frame that must bypass the configured gate.
+            transmit({ type: 'session.update', session: sessionConfig() });
             return;
           case 'session.updated':
             configured = true;
             seedContext();
+            flushPendingSends();
             if (firstOpenedAt === null) {
               firstOpenedAt = clock();
             }
@@ -361,6 +451,10 @@ export function startSession(options: SessionOptions): LiveSession {
    */
   const reopen = async () => {
     emitEvent(translator.expiredEvent());
+    // From here until the new `session.updated`, nothing may reach the old socket: what
+    // the phone sends is held (bounded) and replayed into the new session.
+    configured = false;
+    resetProviderState();
     const old = socket;
     socket = null;
     teardown(old);
@@ -392,7 +486,7 @@ export function startSession(options: SessionOptions): LiveSession {
     ready: () => startup,
 
     appendAudio(dataBase64) {
-      send({ type: 'input_audio_buffer.append', audio: dataBase64 });
+      send({ type: 'input_audio_buffer.append', audio: dataBase64 }, true);
     },
 
     sendText(text) {
@@ -410,27 +504,54 @@ export function startSession(options: SessionOptions): LiveSession {
     },
 
     commit(commitOptions = {}) {
-      if (commitOptions.image === true && pendingImage !== null) {
-        send({ type: 'input_image_buffer.append', image: pendingImage });
+      const image = commitOptions.image === true ? pendingImage : null;
+      if (image !== null) {
+        send({ type: 'input_image_buffer.append', image });
       }
       pendingImage = null;
+      // `semantic_vad_ec` already answered on `speech_stopped`; asking again here races
+      // that response and the provider rejects the second request. An image (or a commit
+      // after no `speech_stopped` at all) still has to ask for one.
+      const askForResponse = image !== null || !speechStoppedSinceCommit;
+      speechStoppedSinceCommit = false;
       send({ type: 'input_audio_buffer.commit' });
-      send({ type: 'response.create' });
+      if (askForResponse) {
+        send({ type: 'response.create' });
+      }
     },
 
     cancel() {
+      // The phone hung up on the answer: the rest of its audio must not reach playback.
+      translator.phoneCancel();
       send({ type: 'response.cancel' });
     },
 
     toolResult(id: string, _ok: boolean, output: string) {
-      // The provider only needs the sentence: Java already turned a failure into one.
-      const item: Record<string, unknown> = {
-        type: 'function_call_output',
-        call_id: id,
-        output,
-      };
-      send({ type: 'conversation.item.create', item });
-      send({ type: 'response.create' });
+      if (!outstandingCalls.has(id)) {
+        // Not a call this session issued (or already answered): the provider would not
+        // know the id, and forwarding it would corrupt the conversation.
+        droppedToolResults += 1;
+        return;
+      }
+      outstandingCalls.delete(id);
+      answeredResults.set(id, { type: 'function_call_output', call_id: id, output });
+      // Inject in the order the model issued the calls, even when Java answered out of
+      // order; a result whose turn has not come waits here.
+      for (;;) {
+        const head = callOrder[0];
+        const item = head === undefined ? undefined : answeredResults.get(head);
+        if (head === undefined || item === undefined) {
+          break;
+        }
+        callOrder.shift();
+        answeredResults.delete(head);
+        send({ type: 'conversation.item.create', item });
+      }
+      // One continuation for the whole batch: a second `response.create` while the first
+      // is already answering is the double-request the phone would see as an error.
+      if (outstandingCalls.size === 0) {
+        send({ type: 'response.create' });
+      }
     },
 
     tower(text) {
@@ -447,9 +568,18 @@ export function startSession(options: SessionOptions): LiveSession {
       }
       closing = true;
       clearReopen();
+      // A frame the phone attached but never committed is not carried past the socket.
+      resetProviderState();
+      pendingSends = [];
+      pendingAudio = 0;
+      pendingOps = 0;
       const dead = socket;
       socket = null;
       teardown(dead);
+    },
+
+    stats() {
+      return { refusedSends, droppedToolResults };
     },
   };
 

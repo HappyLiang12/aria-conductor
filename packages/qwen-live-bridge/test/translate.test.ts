@@ -215,6 +215,24 @@ describe('translate: barge-in', () => {
       { kind: 'audio', dataBase64: 'AAAA' },
     ]);
   });
+
+  it('suppresses audio after a phone cancel until response.done', () => {
+    const translator = createTranslator({ clock });
+    expect(translator.onEvent({ type: 'response.created' })).toEqual([]);
+    expect(translator.onEvent({ type: 'response.audio.delta', delta: 'AAAA' })).toEqual([
+      { kind: 'audio', dataBase64: 'AAAA' },
+    ]);
+    // The phone hung up on the response itself; no `interrupted` echoes back to it.
+    translator.phoneCancel();
+    expect(translator.onEvent({ type: 'response.audio.delta', delta: 'BBBB' })).toEqual([]);
+    // The same window as a barge-in: the provider's response.done closes it.
+    expect(translator.onEvent({ type: 'response.done', response: { status: 'cancelled' } })).toEqual(
+      [],
+    );
+    expect(translator.onEvent({ type: 'response.audio.delta', delta: 'CCCC' })).toEqual([
+      { kind: 'audio', dataBase64: 'CCCC' },
+    ]);
+  });
 });
 
 describe('translate: provider error', () => {

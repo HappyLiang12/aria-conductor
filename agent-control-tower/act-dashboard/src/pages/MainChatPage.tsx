@@ -12,6 +12,7 @@ import {
 import { cancelRun } from '../api/runs';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import SlashCommandMenu from '../components/SlashCommandMenu';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ConversationSidebar } from '../components/main-chat/ConversationSidebar';
 import { ProgressTimeline, StepsDisclosure } from '../components/main-chat/ProgressTimeline';
 import { useLiveProgress } from '../components/main-chat/useLiveProgress';
@@ -74,6 +75,7 @@ export default function MainChatPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => typeof window !== 'undefined' && window.innerWidth <= 900,
   );
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const { progress, replay } = useLiveProgress(activeRunId);
 
@@ -314,9 +316,15 @@ export default function MainChatPage() {
     }
   }, []);
 
-  const handleDelete = useCallback(async (id: string) => {
+  const handleDelete = useCallback((id: string) => {
     if (busy) return;
-    if (!window.confirm('Delete this conversation and its runs?')) return;
+    setPendingDelete(id);
+  }, [busy]);
+
+  const confirmDelete = useCallback(async () => {
+    const id = pendingDelete;
+    setPendingDelete(null);
+    if (!id) return;
     try {
       await deleteConversation(id);
       if (id === conversationId) startNewChat();
@@ -324,7 +332,7 @@ export default function MainChatPage() {
     } catch (err) {
       setListError(err instanceof Error ? err.message : String(err));
     }
-  }, [busy, conversationId, refreshConversations, startNewChat]);
+  }, [conversationId, pendingDelete, refreshConversations, startNewChat]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (slash.open) {
@@ -511,6 +519,15 @@ export default function MainChatPage() {
           </div>
         </div>
       </section>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        danger
+        title="Delete conversation"
+        message="This cancels any live runs and destroys this conversation's history. Runs already recorded stay on the Runs page."
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

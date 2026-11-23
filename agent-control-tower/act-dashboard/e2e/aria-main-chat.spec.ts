@@ -113,8 +113,8 @@ test.describe('Aria main chat', () => {
     await page.goto('/aria');
     await expect(page.locator('.mc-conversation-list')).toContainText('Deploy the crew');
 
-    page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'Delete conversation Deploy the crew' }).click();
+    await page.getByRole('button', { name: 'Confirm' }).click();
 
     await expect(page.locator('.mc-conversation-list')).toHaveCount(0);
     await expect(page.locator('.mc-empty')).toContainText('Ask Aria anything.');

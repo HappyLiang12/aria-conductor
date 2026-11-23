@@ -140,17 +140,21 @@ describe('MainChatPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Send message/i })).toBeTruthy());
   });
 
-  it('deletes a conversation after confirmation and starts a new chat', async () => {
+  it('deletes a conversation only after confirmation and then starts a new chat', async () => {
     mockDelete.mockResolvedValue(undefined);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderPage();
     await screen.findByText('Crew deployed.');
 
     fireEvent.click(screen.getByRole('button', { name: /Delete conversation Deploy the crew/i }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mockDelete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete conversation Deploy the crew/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }));
 
     await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('conv-1'));
     await screen.findByText('Ask Aria anything.');
-    confirmSpy.mockRestore();
   });
 
   it('opens the conversation named by the route param instead of the latest one', async () => {

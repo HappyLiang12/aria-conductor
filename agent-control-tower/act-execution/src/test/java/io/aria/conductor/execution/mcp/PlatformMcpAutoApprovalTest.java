@@ -22,6 +22,8 @@ class PlatformMcpAutoApprovalTest {
             "get_llm_provider", "list_reports", "list_runs", "list_running_runs", "get_run",
             "list_skills", "get_skill", "list_agent_skills", "list_workflow_templates",
             "get_workflow",
+            // 2026-11-23 live voice turn: the clock is read-only and stateless.
+            "get_time",
             // 2026-11-11 operator amendment: the five read-only memory tools the Aria
             // assistant uses, so a read-only memory turn stops interrupting the operator.
             "recall_memory", "list_memory_entities", "get_memory_entity",

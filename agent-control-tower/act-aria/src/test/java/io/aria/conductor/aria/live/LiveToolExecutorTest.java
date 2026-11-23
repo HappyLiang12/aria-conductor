@@ -1,0 +1,356 @@
+package io.aria.conductor.aria.live;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.dto.AgentResponse;
+import io.aria.conductor.agent.dto.RunResponse;
+import io.aria.conductor.agent.dto.WorkflowResponse;
+import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.agent.service.AgentService;
+import io.aria.conductor.agent.service.RunService;
+import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.AriaConstants;
+import io.aria.conductor.common.model.AgentType;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.HealthStatus;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.dashboard.dto.DashboardSummary;
+import io.aria.conductor.execution.approval.ApprovalQueryService;
+import io.aria.conductor.execution.controller.ApprovalController;
+import io.aria.conductor.execution.repository.ApprovalRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+/**
+ * The read-only tool set the live bridge may call (spec X7, L4). Every name executes
+ * through the owning service/repository directly — there is no MCP transport hop — and
+ * returns one compact JSON value. An unknown name, a missing argument or a service
+ * refusal becomes {@link LiveToolExecutor.ToolOutcome.Failure}; the executor never
+ * throws at the socket. The output is capped so a turn's transcript cannot blow up,
+ * and no projection carries an approval's argument/content text or an agent's config.
+ */
+@ExtendWith(MockitoExtension.class)
+class LiveToolExecutorTest {
+
+    private static final Instant NOW = Instant.parse("2026-11-23T09:15:00Z");
+
+    private final ObjectMapper json = new ObjectMapper();
+
+    @Mock
+    private RunService runService;
+    @Mock
+    private ApprovalQueryService approvalQueryService;
+    @Mock
+    private AgentService agentService;
+    @Mock
+    private WorkflowService workflowService;
+    @Mock
+    private RunRepository runRepository;
+    @Mock
+    private AgentRepository agentRepository;
+    @Mock
+    private ApprovalRepository approvalRepository;
+
+    private LiveToolExecutor executor;
+
+    @BeforeEach
+    void setUp() {
+        executor = new LiveToolExecutor(runService, approvalQueryService, agentService, workflowService,
+                runRepository, agentRepository, approvalRepository,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    void theFixedSetIsExactlyTheSevenReadOnlyTools() {
+        assertThat(LiveToolExecutor.TOOL_NAMES).containsExactlyInAnyOrder(
+                "get_time", "get_run", "get_latest_conversation", "list_approvals",
+                "list_agents", "get_dashboard_summary", "get_workflow");
+    }
+
+    @Test
+    void getTimeReturnsAnIsoInstantFromTheInjectedClock() throws Exception {
+        JsonNode value = value(executor.execute("get_time", json.readTree("{}")));
+
+        assertThat(value.path("now").asText()).isEqualTo(NOW.toString());
+        assertThat(Instant.parse(value.path("now").asText())).isEqualTo(NOW);
+    }
+
+    @Test
+    void anUnknownNameIsAFailureAndNeverThrows() {
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("run_agent", json.createObjectNode());
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        assertThat(((LiveToolExecutor.ToolOutcome.Failure) outcome).message())
+                .contains("run_agent")
+                .containsIgnoringCase("unknown");
+        verifyNoInteractions(runService, approvalQueryService, agentService, workflowService,
+                runRepository, agentRepository, approvalRepository);
+    }
+
+    @Test
+    void aNullNameIsAFailure() {
+        assertThat(executor.execute(null, null))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+    }
+
+    @Test
+    void getRunProjectsOneRunThroughRunService() throws Exception {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        when(runService.getRun(runId)).thenReturn(RunResponse.builder()
+                .id(runId)
+                .agentId(agentId)
+                .status(RunStatus.COMPLETED)
+                .iterationCount(3)
+                .totalTokensUsed(1_234L)
+                .finalOutput("done")
+                .build());
+
+        JsonNode value = value(executor.execute("get_run", json.readTree("{\"id\":\"" + runId + "\"}")));
+
+        assertThat(value.path("id").asText()).isEqualTo(runId.toString());
+        assertThat(value.path("agentId").asText()).isEqualTo(agentId.toString());
+        assertThat(value.path("status").asText()).isEqualTo("COMPLETED");
+        assertThat(value.path("iterationCount").asInt()).isEqualTo(3);
+        assertThat(value.path("totalTokensUsed").asLong()).isEqualTo(1_234L);
+        assertThat(value.path("finalOutput").asText()).isEqualTo("done");
+    }
+
+    @Test
+    void getRunWithoutAnIdIsAFailureAndCallsNothing() {
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("get_run", json.createObjectNode());
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        assertThat(((LiveToolExecutor.ToolOutcome.Failure) outcome).message()).contains("id");
+        verifyNoInteractions(runService);
+    }
+
+    @Test
+    void getRunWithAMalformedIdIsAFailure() {
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("get_run",
+                json.createObjectNode().put("id", "not-a-uuid"));
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        verifyNoInteractions(runService);
+    }
+
+    @Test
+    void getLatestConversationReadsTheAriaConversationsNewestFirstFromTheRepository() throws Exception {
+        Instant first = Instant.parse("2026-11-20T08:00:00Z");
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any()))
+                .thenReturn(List.of("conv-9"));
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-9")).thenReturn(List.of(
+                Run.builder().id(UUID.randomUUID()).agentId(AriaConstants.ARIA_AGENT_ID)
+                        .conversationId("conv-9").status(RunStatus.COMPLETED).createdAt(first).build(),
+                Run.builder().id(UUID.randomUUID()).agentId(AriaConstants.ARIA_AGENT_ID)
+                        .conversationId("conv-9").status(RunStatus.COMPLETED).createdAt(NOW).build()));
+
+        JsonNode value = value(executor.execute("get_latest_conversation", null));
+
+        assertThat(value.path("conversationId").asText()).isEqualTo("conv-9");
+        assertThat(value.path("runCount").asInt()).isEqualTo(2);
+        assertThat(Instant.parse(value.path("lastMessageAt").asText())).isEqualTo(NOW);
+    }
+
+    @Test
+    void getLatestConversationIsNullWhenNoConversationExists() throws Exception {
+        when(runRepository.findLatestConversationIds(eq(AriaConstants.ARIA_AGENT_ID), any()))
+                .thenReturn(List.of());
+
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("get_latest_conversation", null);
+
+        assertThat(((LiveToolExecutor.ToolOutcome.Value) outcome).json()).isEqualTo("null");
+    }
+
+    @Test
+    void listApprovalsProjectsTheGatesWithoutTheirArgumentsOrContent() throws Exception {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        when(approvalQueryService.list(ApprovalStatus.PENDING)).thenReturn(List.of(
+                new ApprovalController.ApprovalDetail(approvalId, runId, null, ApprovalStatus.PENDING,
+                        "needs review", NOW, null, null, "TOOL_CALL", "# markdown content",
+                        "MARKDOWN", null, "write_file", "{\"secret\":\"do-not-print\"}", "GATED",
+                        null, null, null, null, null, null, "WORKER_WRITE")));
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("list_approvals",
+                json.readTree("{\"status\":\"PENDING\"}"))).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.size()).isEqualTo(1);
+        assertThat(value.get(0).path("id").asText()).isEqualTo(approvalId.toString());
+        assertThat(value.get(0).path("runId").asText()).isEqualTo(runId.toString());
+        assertThat(value.get(0).path("status").asText()).isEqualTo("PENDING");
+        assertThat(value.get(0).path("toolName").asText()).isEqualTo("write_file");
+        assertThat(raw).doesNotContain("do-not-print").doesNotContain("markdown content");
+    }
+
+    @Test
+    void listApprovalsIsCappedAndRejectsAnUnknownStatus() throws Exception {
+        List<ApprovalController.ApprovalDetail> many = new ArrayList<>();
+        for (int i = 0; i < 40; i++) {
+            many.add(new ApprovalController.ApprovalDetail(UUID.randomUUID(), UUID.randomUUID(), null,
+                    ApprovalStatus.PENDING, null, NOW, null, null, "TOOL_CALL", null, null, null,
+                    "tool-" + i, null, "READ", null, null, null, null, null, null, "WORKER_READ"));
+        }
+        when(approvalQueryService.list(null)).thenReturn(many);
+
+        JsonNode value = value(executor.execute("list_approvals", null));
+        assertThat(value.size()).isEqualTo(LiveToolExecutor.MAX_APPROVALS);
+
+        assertThat(executor.execute("list_approvals", json.readTree("{\"status\":\"WHATEVER\"}")))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+    }
+
+    @Test
+    void listAgentsProjectsTheActiveAgentsAndCapsTheList() throws Exception {
+        List<AgentResponse> agents = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            agents.add(AgentResponse.builder()
+                    .id(UUID.randomUUID())
+                    .name("agent-" + i)
+                    .role("worker")
+                    .agentType(AgentType.ADK)
+                    .config("{\"systemPrompt\":\"do-not-print\"}")
+                    .healthStatus(HealthStatus.HEALTHY)
+                    .build());
+        }
+        when(agentService.listAgents()).thenReturn(agents);
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("list_agents", null)).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.size()).isEqualTo(LiveToolExecutor.MAX_AGENTS);
+        assertThat(value.get(0).path("name").asText()).isEqualTo("agent-0");
+        assertThat(value.get(0).path("healthStatus").asText()).isEqualTo("HEALTHY");
+        assertThat(raw).doesNotContain("do-not-print");
+    }
+
+    @Test
+    void getDashboardSummaryReturnsTheSameShapeAsTheRestSummary() throws Exception {
+        when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(3L);
+        when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(1L);
+        when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(2L);
+        Approval pending = new Approval();
+        pending.setStatus(ApprovalStatus.PENDING);
+        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(pending));
+        when(runRepository.sumReportedUsage()).thenReturn(9_000L);
+        when(runRepository.countWithoutReportedUsage()).thenReturn(4L);
+
+        JsonNode value = value(executor.execute("get_dashboard_summary", null));
+
+        assertThat(value.path("healthyAgents").asLong()).isEqualTo(3L);
+        assertThat(value.path("degradedAgents").asLong()).isEqualTo(1L);
+        assertThat(value.path("runningRuns").asLong()).isEqualTo(2L);
+        assertThat(value.path("pendingApprovals").asLong()).isEqualTo(1L);
+        assertThat(value.path("totalTokensBurned").asLong()).isEqualTo(9_000L);
+        assertThat(value.path("runsWithoutUsage").asLong()).isEqualTo(4L);
+        assertThat(value.path("activeAgents").asLong()).isEqualTo(3L);
+    }
+
+    @Test
+    void getWorkflowProjectsTheChainAndBoundsItsSteps() throws Exception {
+        UUID chainId = UUID.randomUUID();
+        List<WorkflowResponse.StepInfo> steps = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            steps.add(WorkflowResponse.StepInfo.builder()
+                    .index(i)
+                    .agentId(UUID.randomUUID())
+                    .promptTemplate("template")
+                    .status(WorkflowStep.Status.COMPLETED)
+                    .runId(UUID.randomUUID())
+                    .outputPreview("x".repeat(2_000))
+                    .build());
+        }
+        when(workflowService.getWorkflow(chainId)).thenReturn(WorkflowResponse.builder()
+                .id(chainId)
+                .name("chain")
+                .status(WorkflowChain.Status.RUNNING)
+                .currentStepIndex(2)
+                .totalSteps(12)
+                .steps(steps)
+                .build());
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("get_workflow",
+                json.readTree("{\"id\":\"" + chainId + "\"}"))).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.path("id").asText()).isEqualTo(chainId.toString());
+        assertThat(value.path("status").asText()).isEqualTo("RUNNING");
+        assertThat(value.path("totalSteps").asInt()).isEqualTo(12);
+        assertThat(value.path("steps").size()).isEqualTo(LiveToolExecutor.MAX_STEPS);
+        assertThat(raw.length()).isLessThanOrEqualTo(LiveToolExecutor.MAX_OUTPUT_CHARS);
+    }
+
+    @Test
+    void anOversizedValueIsTruncatedToTheOutputCapAndStaysValidJson() throws Exception {
+        UUID runId = UUID.randomUUID();
+        when(runService.getRun(runId)).thenReturn(RunResponse.builder()
+                .id(runId)
+                .agentId(UUID.randomUUID())
+                .status(RunStatus.COMPLETED)
+                .finalOutput("y".repeat(20_000))
+                .build());
+
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("get_run",
+                json.readTree("{\"id\":\"" + runId + "\"}"));
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) outcome).json();
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.Value.class);
+        assertThat(raw.length()).isLessThanOrEqualTo(LiveToolExecutor.MAX_OUTPUT_CHARS);
+        assertThat(json.readTree(raw).isObject()).isTrue();
+    }
+
+    @Test
+    void everyValueFitsTheCapEvenWhenTheToolReturnsEverything() throws Exception {
+        // The projections cap their lists and previews, so a hostile-sized page still
+        // reaches the bridge as a compact value rather than a multi-kilobyte frame.
+        List<AgentResponse> agents = new ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            agents.add(AgentResponse.builder().id(UUID.randomUUID()).name("n".repeat(400))
+                    .healthStatus(HealthStatus.HEALTHY).build());
+        }
+        when(agentService.listAgents()).thenReturn(agents);
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("list_agents", null)).json();
+        assertThat(raw.length()).isLessThanOrEqualTo(LiveToolExecutor.MAX_OUTPUT_CHARS);
+        assertThat(json.readTree(raw).isArray()).isTrue();
+    }
+
+    @Test
+    void theBoundedGuardTurnsAnOverlongValueIntoAMarkedPreview() throws Exception {
+        String bounded = LiveToolExecutor.bounded("{\"a\":\"" + "z".repeat(5_000) + "\"}");
+
+        assertThat(bounded.length()).isLessThanOrEqualTo(LiveToolExecutor.MAX_OUTPUT_CHARS);
+        JsonNode value = json.readTree(bounded);
+        assertThat(value.path("truncated").asBoolean()).isTrue();
+        assertThat(value.path("chars").asInt()).isGreaterThan(LiveToolExecutor.MAX_OUTPUT_CHARS);
+        assertThat(value.path("preview").asText()).isNotBlank();
+    }
+
+    private JsonNode value(LiveToolExecutor.ToolOutcome outcome) throws Exception {
+        assertThat(outcome).as("a read-only tool returns a value, never a failure: %s", outcome)
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Value.class);
+        return json.readTree(((LiveToolExecutor.ToolOutcome.Value) outcome).json());
+    }
+}

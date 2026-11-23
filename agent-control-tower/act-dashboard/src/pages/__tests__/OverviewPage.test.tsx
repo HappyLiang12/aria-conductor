@@ -49,7 +49,7 @@ function setQueues(
   attention: Partial<ReturnType<typeof useAttentionQueue>> = {},
 ) {
   decisionMock.mockReturnValue({
-    rows: [], phase: 'success', partial: false, count: 0, retry: vi.fn(), ...decision,
+    rows: [], phase: 'success', partial: false, count: 0, reviewCount: 0, retry: vi.fn(), ...decision,
   } as never);
   attentionMock.mockReturnValue({
     rows: [], phase: 'success', partial: false, count: 0, retry: vi.fn(), ...attention,
@@ -118,6 +118,22 @@ describe('OverviewPage decision-first layout', () => {
     expect(screen.getByTestId('attention-queue')).toHaveAttribute('data-collapsed', 'false');
   });
 
+  it('stays open for post-run reviews and links to the board', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      writable: true,
+      value: scrollIntoView,
+    });
+    setQueues({ phase: 'success', count: 0, reviewCount: 2 });
+    ui();
+
+    const queue = screen.getByTestId('decision-queue');
+    expect(queue).toHaveAttribute('data-collapsed', 'false');
+    expect(within(queue).getByText(/2 completed runs awaiting review/i)).toBeInTheDocument();
+    fireEvent.click(within(queue).getByRole('button', { name: /open review board/i }));
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   it('renders the review workspace in the main column with a three-widget strip', () => {
     mockState = {
       taskDrawer: { open: false, itemId: 'k-1' },
@@ -146,10 +162,15 @@ describe('OverviewPage decision-first layout', () => {
     title: `Run ${id}`,
     state: 'UNKNOWN',
     askType: 'APPROVAL',
+    approvalType: 'TOOL_CALL',
     source: 'LEGACY_GATE',
     reason: 'Decide this run',
     requestedAt: '2026-10-27T08:00:00Z',
     isPermission: false,
+    riskTier: null,
+    toolName: null,
+    expiresAt: null,
+    blocksRunSlot: false,
   });
 
   it('stays locked while focus remains in the queues after the pointer leaves', () => {

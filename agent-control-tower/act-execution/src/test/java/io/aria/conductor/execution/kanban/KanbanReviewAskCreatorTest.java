@@ -124,6 +124,28 @@ class KanbanReviewAskCreatorTest {
     }
 
     @Test
+    void expiresPendingReviewRequestWhenTheCardLeavesReview() {
+        creator.onKanbanItemTransitioned(event("REVIEW", "DONE"));
+
+        ArgumentCaptor<java.time.Instant> now = ArgumentCaptor.forClass(java.time.Instant.class);
+        verify(approvalRepository).expirePendingAsksByKanbanItemId(
+                eq("c1"), eq(Approval.AskType.REVIEW_REQUEST),
+                argThat(reason -> reason.contains("left REVIEW")), now.capture());
+        assertThat(now.getValue()).isNotNull();
+    }
+
+    @Test
+    void leavingReviewOnlySweepsReviewRequestsNotPermissionAsks() {
+        creator.onKanbanItemTransitioned(event("REVIEW", "DONE"));
+
+        // The sweep is scoped to askType=REVIEW_REQUEST; a pending ACP permission
+        // ask is owned by the permission coordinator and must stay.
+        verify(approvalRepository).expirePendingAsksByKanbanItemId(
+                eq("c1"), eq(Approval.AskType.REVIEW_REQUEST), any(), any());
+        verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
     void skipsWhenPendingAskAlreadyExists() {
         when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
                 .thenReturn(List.of(Approval.builder().runId(runId).status(ApprovalStatus.PENDING).build()));

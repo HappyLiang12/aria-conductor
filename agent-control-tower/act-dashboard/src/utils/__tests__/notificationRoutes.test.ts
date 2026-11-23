@@ -17,7 +17,7 @@ describe('routeForNotificationType', () => {
 
   // The approvals page is retired (kanban HITL redesign, spec D4): the kanban
   // Review column on the overview is the single HITL surface, so approval
-  // notifications route there. The "Waiting on you" summary card opens the
+  // notifications route there. The decision-queue summary card opens the
   // first review card; the bell itself does not know kanban ids.
   it('approval.requested routes to the overview review flow', () => {
     expect(routeForNotificationType('approval.requested')).toBe('/');

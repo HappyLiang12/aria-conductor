@@ -95,10 +95,7 @@ describe('errorActionFor (legacy text fallback)', () => {
     expect(tabOf(errorActionFor('Unsupported execution mode: qoder/SANDBOX.'))).toBe('runtime');
   });
 
-  it('maps circuit caps and the run deadline to Configure > System Config', () => {
-    expect(tabOf(errorActionFor('Raise circuit.breaker.max.iterations in Configure > System Config.')))
-      .toBe('config');
-    expect(tabOf(errorActionFor('Token budget exceeded: used 10, limit 5.'))).toBe('config');
+  it('maps the run deadline to Configure > System Config', () => {
     expect(tabOf(errorActionFor('Run deadline reached at 2026-10-20T12:00:00Z.'))).toBe('config');
   });
 

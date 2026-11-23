@@ -21,6 +21,12 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     /** P6: the state section's pending-approval count, without loading the rows. */
     long countByStatus(ApprovalStatus status);
 
+    /**
+     * Blocking pending asks: every PENDING row except the display-only post-run
+     * {@code REVIEW_REQUEST}, which blocks nothing and is surfaced as a board review.
+     */
+    long countByStatusAndAskTypeNot(ApprovalStatus status, Approval.AskType askType);
+
     List<Approval> findByRunId(UUID runId);
     List<Approval> findByStatusAndExpiresAtBefore(ApprovalStatus status, Instant expiresAtBefore);
     List<Approval> findByStatusAndApprovalType(ApprovalStatus status, Approval.ApprovalType type);
@@ -72,8 +78,22 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
            "and a.kanbanItemId in :ids group by a.kanbanItemId")
     List<Object[]> countPendingByKanbanItemIds(@Param("ids") Collection<String> ids);
 
-    /** Bulk deny of a card's PENDING asks (work cancelled): single-statement
-     *  bulk update, no entity load; callers must be @Transactional and results
+    /**
+     * Review-card sweep: a card leaving REVIEW supersedes its display-only post-run
+     * asks. Single-statement PENDING → EXPIRED scoped to the given ask type, so an
+     * ACP permission ask (owned by the permission coordinator) is never touched.
+     */
+    @Modifying
+    @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
+           "a.reason = :reason, a.decidedAt = :now " +
+           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
+           "and a.askType = :askType")
+    int expirePendingAsksByKanbanItemId(@Param("itemId") String itemId,
+                                        @Param("askType") Approval.AskType askType,
+                                        @Param("reason") String reason,
+                                        @Param("now") Instant now);
+
+    /** Bulk deny of a card's PENDING asks (work cancelled): single-statement     *  bulk update, no entity load; callers must be @Transactional and results
      *  bypass the persistence context. Only {@code LEGACY_GATE} rows are swept:
      *  rows with {@code source = ACP_PERMISSION} are owned by
      *  {@code AcpPermissionCoordinator} ({@code cancelPendingForRun} / the run-end

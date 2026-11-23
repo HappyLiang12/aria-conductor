@@ -12,10 +12,15 @@ const row: DecisionRow = {
   title: 'Fix pickup retry',
   state: 'REVIEW',
   askType: 'REVIEW_REQUEST',
+  approvalType: 'TOOL_CALL',
   source: 'LEGACY_GATE',
   reason: 'Check output',
   requestedAt: '2026-10-27T10:00:00Z',
   isPermission: false,
+  riskTier: null,
+  toolName: null,
+  expiresAt: null,
+  blocksRunSlot: false,
 };
 
 function renderQueue(over: Partial<React.ComponentProps<typeof DecisionQueue>> = {}) {
@@ -25,6 +30,7 @@ function renderQueue(over: Partial<React.ComponentProps<typeof DecisionQueue>> =
       phase="success"
       partial={false}
       count={1}
+      reviewCount={0}
       retry={vi.fn()}
       onActivate={vi.fn()}
       onDecide={vi.fn()}
@@ -51,7 +57,7 @@ describe('DecisionQueue', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
     rerender(
       <DecisionQueue
-        rows={[]} phase="error" partial={false} count={null}
+        rows={[]} phase="error" partial={false} count={null} reviewCount={null}
         retry={vi.fn()} onActivate={vi.fn()} onDecide={vi.fn()} onAnswer={vi.fn()}
         collapsed={false}
       />,
@@ -140,5 +146,44 @@ describe('DecisionQueue', () => {
     renderQueue({ rows: [], count: 0, collapsed: true });
     expect(screen.getByText(/no decisions waiting/i)).toBeInTheDocument();
     expect(screen.queryByTestId('state-notice-empty')).not.toBeInTheDocument();
+  });
+
+  it('labels a destructive tool ask with its risk and tool name', () => {
+    const dangerous: DecisionRow = {
+      ...row,
+      id: 'ap-danger',
+      approvalId: 'ap-danger',
+      source: 'ACP_PERMISSION',
+      askType: 'APPROVAL',
+      riskTier: 'DESTRUCTIVE',
+      toolName: 'Bash',
+    };
+    renderQueue({ rows: [dangerous], count: 1 });
+    expect(screen.getByText('Dangerous')).toBeInTheDocument();
+    expect(screen.getByText('Bash')).toBeInTheDocument();
+  });
+
+  it('surfaces post-run reviews as a count, not decision rows', async () => {
+    const onOpenReviews = vi.fn();
+    renderQueue({ rows: [], count: 0, reviewCount: 3, onOpenReviews });
+    expect(screen.getByText(/3 completed runs awaiting review/i)).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^decision-row-/)).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: /open review board/i }));
+    expect(onOpenReviews).toHaveBeenCalled();
+  });
+
+  it('tells the operator a clarification holds a run slot', () => {
+    const clarification: DecisionRow = {
+      ...row,
+      id: 'ap-clar',
+      approvalId: 'ap-clar',
+      taskId: null,
+      state: 'UNKNOWN',
+      source: 'CLARIFICATION',
+      askType: 'QUESTION',
+      blocksRunSlot: true,
+    };
+    renderQueue({ rows: [clarification], count: 1 });
+    expect(screen.getByText(/holds a run slot/i)).toBeInTheDocument();
   });
 });

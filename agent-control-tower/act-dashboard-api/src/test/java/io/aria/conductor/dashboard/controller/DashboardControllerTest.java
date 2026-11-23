@@ -10,7 +10,6 @@ import io.aria.conductor.common.model.AuditEvent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
@@ -22,8 +21,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -40,7 +37,6 @@ class DashboardControllerTest {
     private AgentRepository agentRepository;
     private RunRepository runRepository;
     private ApprovalRepository approvalRepository;
-    private PromptCallRepository promptCallRepository;
     private AuditEventRepository auditEventRepository;
     private MockMvc mockMvc;
 
@@ -49,10 +45,9 @@ class DashboardControllerTest {
         agentRepository = mock(AgentRepository.class);
         runRepository = mock(RunRepository.class);
         approvalRepository = mock(ApprovalRepository.class);
-        promptCallRepository = mock(PromptCallRepository.class);
         auditEventRepository = mock(AuditEventRepository.class);
         DashboardController controller = new DashboardController(agentRepository, runRepository,
-                approvalRepository, promptCallRepository, auditEventRepository);
+                approvalRepository, auditEventRepository);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler(new MockEnvironment()))
                 .build();
@@ -63,8 +58,9 @@ class DashboardControllerTest {
         when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(3L);
         when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(2L);
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(4L);
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING))
-                .thenReturn(List.of(new Approval(), new Approval()));
+        // Only blocking asks count: a post-run REVIEW_REQUEST blocks nothing.
+        when(approvalRepository.countByStatusAndAskTypeNot(ApprovalStatus.PENDING,
+                Approval.AskType.REVIEW_REQUEST)).thenReturn(2L);
         // Task 7: usage comes from the runs' reported counters, not the prompt_calls table
         // (whose only production writer is self-improvement, so it is blind to agent runs).
         when(runRepository.sumReportedUsage()).thenReturn(165L);
@@ -80,7 +76,6 @@ class DashboardControllerTest {
                 .andExpect(jsonPath("$.pendingApprovals").value(2))
                 .andExpect(jsonPath("$.totalTokensBurned").value(165))
                 .andExpect(jsonPath("$.runsWithoutUsage").value(2));
-        verify(promptCallRepository, never()).findAll();
     }
 
     @Test
@@ -88,7 +83,8 @@ class DashboardControllerTest {
         when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(0L);
         when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(0L);
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(0L);
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of());
+        when(approvalRepository.countByStatusAndAskTypeNot(ApprovalStatus.PENDING,
+                Approval.AskType.REVIEW_REQUEST)).thenReturn(0L);
 
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isOk())
@@ -147,7 +143,7 @@ class DashboardControllerTest {
         UUID agentId = UUID.fromString("33333333-3333-3333-3333-333333333333");
         // row[1] is a Long, row[2] is an Integer -> both must be coerced via Number#longValue().
         Object[] row = new Object[]{agentId, 1200L, 8};
-        when(promptCallRepository.aggregateByAgentSince(org.mockito.ArgumentMatchers.any(Instant.class)))
+        when(runRepository.aggregateTokensByAgentSince(org.mockito.ArgumentMatchers.any(Instant.class)))
                 .thenReturn(List.<Object[]>of(row));
 
         mockMvc.perform(get("/api/v1/dashboard/agent-telemetry"))
@@ -155,12 +151,12 @@ class DashboardControllerTest {
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].agentId").value(agentId.toString()))
                 .andExpect(jsonPath("$[0].totalTokensToday").value(1200))
-                .andExpect(jsonPath("$[0].callCountToday").value(8));
+                .andExpect(jsonPath("$[0].runCountToday").value(8));
     }
 
     @Test
     void getAgentTelemetry_withNoRows_returnsEmptyArray() throws Exception {
-        when(promptCallRepository.aggregateByAgentSince(org.mockito.ArgumentMatchers.any(Instant.class)))
+        when(runRepository.aggregateTokensByAgentSince(org.mockito.ArgumentMatchers.any(Instant.class)))
                 .thenReturn(List.of());
 
         mockMvc.perform(get("/api/v1/dashboard/agent-telemetry"))

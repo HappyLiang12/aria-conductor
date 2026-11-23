@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentSkills, retireAgent } from '../api/agents';
-import { getAgentTelemetry } from '../api/dashboard';
-import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
+import { getAgentTelemetry } from '../api/dashboard';import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
 import { presentError, type PresentedError } from '../api/errorPresentation';
 import { isOperatorRejection, apiErrorMessage } from '../api/operatorSession';
 import type {
@@ -17,7 +16,7 @@ import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import ErrorNotice from '../components/ErrorNotice';
-import { estimateCost } from '../utils/pricing';
+
 
 interface CreateAgentError extends Error {
   agentCreated?: boolean;
@@ -333,17 +332,16 @@ export default function CrewPage() {
 
   const costSummary = useMemo(() => {
     let totalTokens = 0;
-    let totalSpend = 0;
+    let totalRuns = 0;
     for (const a of activeAgents) {
       if (a.healthStatus === 'UNHEALTHY') continue;
       const t = telemetryByAgent.get(a.id);
-      const tokens = t?.totalTokensToday ?? 0;
-      totalTokens += tokens;
-      totalSpend += estimateCost(tokens);
+      totalTokens += t?.totalTokensToday ?? 0;
+      totalRuns += t?.runCountToday ?? 0;
     }
     return {
       totalTokens,
-      totalSpend,
+      totalRuns,
       onlineCount: activeAgents.filter(a => a.healthStatus !== 'UNHEALTHY').length,
       idleCount: activeAgents.filter(a => a.healthStatus === 'DEGRADED').length,
     };
@@ -505,9 +503,9 @@ export default function CrewPage() {
               <span className="d">aggregate across crew</span>
             </div>
             <div className="cell spend">
-              <span className="l">Estimated spend</span>
-              <span className="v">${costSummary.totalSpend.toFixed(2)}</span>
-              <span className="d">@ ~$0.012 / 1k tokens</span>
+              <span className="l">Runs · today</span>
+              <span className="v">{costSummary.totalRuns}</span>
+              <span className="d">started across crew</span>
             </div>
             <div className="cell idle">
               <span className="l">Hiring slots</span>

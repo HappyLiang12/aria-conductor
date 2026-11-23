@@ -2,10 +2,9 @@ package io.aria.conductor.dashboard.dto;
 
 /**
  * The dashboard summary shape returned by {@code GET /api/v1/dashboard/summary}
- * and the MCP {@code get_dashboard_summary} tool. The two paths share this shape
- * but are not byte-identical: the REST controller counts {@code RUNNING} and
- * {@code WAITING_INPUT} runs as {@code runningRuns}, while the MCP tool counts
- * {@code RUNNING} only (a pre-existing divergence in the owning lane).
+ * and the MCP {@code get_dashboard_summary} tool. Both paths share this shape
+ * and count {@code RUNNING} plus {@code WAITING_INPUT} runs as
+ * {@code runningRuns}, and only blocking asks as {@code pendingApprovals}.
  *
  * @param totalTokensBurned the sum over runs that reported usage (Task 7 / spec 5.4),
  *                          never a fabricated zero: a run that reported nothing

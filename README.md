@@ -15,6 +15,19 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **MCP Server** — Model Context Protocol server for tool integration
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
 
+## Current limits
+
+- **No spend cap.** There is no per-run token or cost budget; a run is bounded by the configured
+  wall-clock deadline. "Recorded tokens" only sums usage a run actually reported, so a timed-out
+  or failed run may be under-counted.
+- **Host mode is read-only for opencode.** A HOST opencode agent can read/list/grep a workspace,
+  but edit/write/patch/bash are refused. Writing happens in SANDBOX. The qoder core in HOST mode
+  currently applies the CLI's own tool defaults, so treat it as trusted-local only.
+- **Local files are path-scoped.** A HOST agent sees the workspace path typed on the agent; the
+  containerized stack mounts only `/project` read-only.
+- **Memory is operator-fed.** Recall is injected into every prompt, but memory accumulates through
+  operator/MCP writes and proposals — there is no automatic post-run extraction.
+
 ## Tech Stack
 
 | Component | Technology |
@@ -121,7 +134,7 @@ No other core exists — the removed LangChain runtime is neither selectable nor
 | **qoder** | Qoder CLI driven over the ACP bridge, run on the host or in a sandbox container | `HOST`, `SANDBOX` |
 
 > **Approvals**: Task-level runs require human approval by default: the run starts in
-> approval-pending state and executes after approval in the Approvals page. To disable
+> approval-pending state and executes after approval from the Overview decision queue. To disable
 > per-agent, set agent config `"taskApprovalRequired": false`.
 
 To select a core for an agent, use the Crew page or the API. opencode is the default:

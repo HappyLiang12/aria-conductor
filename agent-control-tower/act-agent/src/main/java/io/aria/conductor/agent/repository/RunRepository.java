@@ -22,6 +22,11 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findByStatusIn(List<RunStatus> statuses);
     List<Run> findByAgentIdAndStatus(UUID agentId, RunStatus status);
     long countByStatus(RunStatus status);
+
+    /** Per-agent token sum and run count since a boundary, grouped by agent. */
+    @Query("SELECT r.agentId, COALESCE(SUM(r.totalTokensUsed), 0), COUNT(r) FROM Run r "
+            + "WHERE r.createdAt >= :since GROUP BY r.agentId")
+    List<Object[]> aggregateTokensByAgentSince(@Param("since") Instant since);
     List<Run> findByConversationIdOrderByCreatedAtAsc(String conversationId);
 
     /**

@@ -84,6 +84,23 @@ const runningRun = (id: string, status: string) => ({
   createdAt: '2026-08-29T06:00:00Z', completedAt: null, conversationId: null,
 });
 
+describe('RunsPage iteration honesty', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    runsData = [runningRun('r-1', 'RUNNING')];
+  });
+
+  it('shows the observed iteration count without an unenforced cap', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+    await waitFor(() => expect(screen.getAllByText('Details').length).toBe(1));
+
+    expect(screen.queryByText('1/10')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '+ Start Run' }));
+    expect(screen.queryByText('Max Iterations')).toBeNull();
+  });
+});
+
 describe('RunsPage run-row keys (S1)', () => {
   beforeEach(() => {
     mockCtx = { lastMessage: null, isConnected: false };

@@ -1,19 +1,17 @@
 import type { Agent, AgentTelemetry } from '../types';
 import { dispatchOpenAgentDrawer } from './DrawerContext';
 import { RuntimeBadge } from './RuntimeBadge';
-import { estimateCost } from '../utils/pricing';
 
 /**
  * AgentCard — rich agent panel rendered inside the Crew view.
  *
  * Visualises the live state of a registered agent: avatar, status pulse,
- * recent activity bars (based on today's prompt call count), and a cost
- * breakdown (tokens used today, estimated daily spend). Clicking the card
- * opens the agent drawer.
+ * recent activity bars (today's run count) and recorded token usage. Clicking
+ * the card opens the agent drawer.
  *
- * Token/cost/activity data is sourced from the backend
- * GET /api/v1/dashboard/agent-telemetry endpoint, which aggregates
- * real PromptCall rows for the current UTC day.
+ * Data comes from GET /api/v1/dashboard/agent-telemetry, which aggregates the
+ * runs that actually reported usage. There is no price table, so no dollar
+ * estimate is shown.
  */
 
 export interface AgentCardProps {
@@ -64,25 +62,21 @@ function statusLabel(s: LiveStatus): string {
   }
 }
 
-/** Quick number formatter — adds k / M suffixes for tokens. */
+/** Quick number formatter — adds K / M suffixes for tokens. */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
   return String(n);
 }
 
-function fmtCost(usd: number): string {
-  return '$' + usd.toFixed(2);
-}
-
-/** Map daily prompt call count to a 0-6 bar activity level. */
-function computeActivityLevel(callCount: number): number {
-  if (callCount <= 0) return 0;
-  if (callCount <= 1) return 1;
-  if (callCount <= 3) return 2;
-  if (callCount <= 6) return 3;
-  if (callCount <= 10) return 4;
-  if (callCount <= 15) return 5;
+/** Map today's run count to a 0-6 bar activity level. */
+function computeActivityLevel(runCount: number): number {
+  if (runCount <= 0) return 0;
+  if (runCount <= 1) return 1;
+  if (runCount <= 3) return 2;
+  if (runCount <= 6) return 3;
+  if (runCount <= 10) return 4;
+  if (runCount <= 15) return 5;
   return 6;
 }
 
@@ -91,10 +85,9 @@ export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardPro
   const role = agent.role || agent.agentType.toLowerCase();
   const avatarKind = avatarClassFor(role);
 
-  const callCount = telemetry?.callCountToday ?? 0;
+  const runCount = telemetry?.runCountToday ?? 0;
   const tokensToday = telemetry?.totalTokensToday ?? 0;
-  const costToday   = estimateCost(tokensToday);
-  const activityLevel = computeActivityLevel(callCount);
+  const activityLevel = computeActivityLevel(runCount);
 
   const handleOpen = () => {
     dispatchOpenAgentDrawer(agent.id);
@@ -162,12 +155,12 @@ export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardPro
 
       <div className="stats">
         <div>
-          <span className="l">Tokens · today</span>
-          <span className="v tok">{fmtTokens(tokensToday)}</span>
+          <span className="l">Runs · today</span>
+          <span className="v run">{runCount}</span>
         </div>
         <div>
-          <span className="l">Spend · today</span>
-          <span className="v cost">{fmtCost(costToday)}</span>
+          <span className="l">Tokens · today</span>
+          <span className="v tok">{fmtTokens(tokensToday)}</span>
         </div>
       </div>
 

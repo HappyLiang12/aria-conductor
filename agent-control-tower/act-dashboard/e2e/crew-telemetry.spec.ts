@@ -29,11 +29,12 @@ test.describe('Crew Telemetry Display', () => {
       const tokenText = await tokenValue.textContent();
       expect(tokenText).toBeTruthy();
 
-      // Cost display — the .v.cost element inside .stats
-      const costValue = statsSection.locator('.v.cost');
-      await expect(costValue).toBeVisible();
-      const costText = await costValue.textContent();
-      expect(costText).toBeTruthy();
+      // Run count replaces the removed hardcoded dollar estimate.
+      const runValue = statsSection.locator('.v.run');
+      await expect(runValue).toBeVisible();
+      const runText = await runValue.textContent();
+      expect(runText).toBeTruthy();
+      await expect(statsSection.locator('.v.cost')).toHaveCount(0);
     }
 
     // Verify activity bars are rendered on the first card
@@ -55,11 +56,11 @@ test.describe('Crew Telemetry Display', () => {
     const tokensLabel = tokensCell.locator('.l');
     await expect(tokensLabel).toHaveText('Tokens · today');
 
-    // Verify "Estimated spend" label is present
+    // The hardcoded dollar estimate is gone; the same cell reports run count.
     const spendCell = costSection.locator('.cell.spend');
     await expect(spendCell).toBeVisible();
-    const spendLabel = spendCell.locator('.l');
-    await expect(spendLabel).toHaveText('Estimated spend');
+    await expect(spendCell.locator('.l')).toHaveText('Runs · today');
+    await expect(spendCell.locator('.d')).toHaveText('started across crew');
 
     // Verify Active count is displayed (first .cell has "Active" label)
     const activeCell = costSection.locator('.cell').first();
@@ -98,8 +99,8 @@ test.describe('Crew Telemetry Display', () => {
         expect(typeof item.agentId).toBe('string');
         expect(item).toHaveProperty('totalTokensToday');
         expect(typeof item.totalTokensToday).toBe('number');
-        expect(item).toHaveProperty('callCountToday');
-        expect(typeof item.callCountToday).toBe('number');
+        expect(item).toHaveProperty('runCountToday');
+        expect(typeof item.runCountToday).toBe('number');
       }
     }
   });
@@ -143,16 +144,15 @@ test.describe('Crew Telemetry Display', () => {
         await expect(tokenValue).toBeVisible();
         const tokenText = await tokenValue.textContent();
 
-        // Cost value: should show "$0.00" for agents with no tokens
-        const costValue = stats.locator('.v.cost');
-        await expect(costValue).toBeVisible();
-        const costText = await costValue.textContent();
-        expect(costText).toMatch(/^\$/);
-        expect(costText).toBeTruthy();
+        // Run count: a plain number for no-activity agents.
+        const runValue = stats.locator('.v.run');
+        await expect(runValue).toBeVisible();
+        const runText = await runValue.textContent();
+        expect(runText).toMatch(/^\d+$/);
 
         // Both should be non-null and present
         expect(tokenText).toBeTruthy();
-        expect(costText).toBeTruthy();
+        expect(runText).toBeTruthy();
       }
     } else if (hasEmpty) {
       // No agents on crew — empty state is expected

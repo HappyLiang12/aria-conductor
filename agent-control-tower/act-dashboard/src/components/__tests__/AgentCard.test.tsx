@@ -89,6 +89,25 @@ describe('AgentCard pickup eligibility', () => {
   });
 });
 
+describe('AgentCard day stats', () => {
+  it('reports runs and recorded tokens without a fabricated dollar estimate', () => {
+    render(
+      <AgentCard
+        agent={baseAgent}
+        telemetry={{ agentId: 'a-1', totalTokensToday: 1500, runCountToday: 7 }}
+        {...cardProps}
+      />,
+    );
+
+    expect(screen.getByText('Runs · today')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('Tokens · today')).toBeInTheDocument();
+    expect(screen.getByText('1.5K')).toBeInTheDocument();
+    expect(screen.queryByText(/spend/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+  });
+});
+
 /**
  * UX-3: the status pill renders the agent lifecycle flag (set at creation /
  * retire, not a live probe), so the labels must not claim online/offline

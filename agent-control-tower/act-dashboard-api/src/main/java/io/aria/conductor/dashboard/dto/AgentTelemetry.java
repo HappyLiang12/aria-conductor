@@ -5,5 +5,5 @@ import java.util.UUID;
 public record AgentTelemetry(
         UUID agentId,
         long totalTokensToday,
-        long callCountToday
+        long runCountToday
 ) {}

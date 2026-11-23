@@ -265,8 +265,15 @@ export function SettingsPage() {
               {formErrors.defaultModel && <span className="error-text">{formErrors.defaultModel}</span>}
             </div>
             <div className="form-field">
-              <label>Max Tokens</label>
-              <input type="number" value={form.maxTokens} onChange={(e) => setForm({ ...form, maxTokens: parseInt(e.target.value) || 4096 })} />
+              <label title="Caps platform LLM calls such as report generation. Agent runs are bounded by the run deadline, not by this value.">
+                Max Tokens (platform calls)
+              </label>
+              <input
+                type="number"
+                value={form.maxTokens}
+                title="Agent runs are not capped by this value."
+                onChange={(e) => setForm({ ...form, maxTokens: parseInt(e.target.value) || 4096 })}
+              />
             </div>
           </div>
           <div className="form-actions">

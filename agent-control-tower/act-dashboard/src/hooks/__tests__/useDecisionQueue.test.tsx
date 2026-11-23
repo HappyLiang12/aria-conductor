@@ -19,11 +19,15 @@ const approval = (over: Record<string, unknown> = {}) => ({
   id: 'ap-1',
   runId: 'run-abcdef12',
   status: 'PENDING',
-  askType: 'REVIEW_REQUEST',
+  askType: 'APPROVAL',
+  approvalType: 'TOOL_CALL',
   source: 'LEGACY_GATE',
   content: 'Check output',
   reason: 'Check output',
   requestedAt: '2026-10-27T10:00:00Z',
+  riskTier: null,
+  toolName: null,
+  expiresAt: null,
   ...over,
 });
 
@@ -104,6 +108,65 @@ describe('useDecisionQueue', () => {
     const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
     await waitFor(() => expect(result.current.phase).toBe('error'));
     expect(result.current.count).toBeNull();
+    expect(result.current.reviewCount).toBeNull();
     expect(result.current.rows).toHaveLength(0);
+  });
+
+  it('counts only blocking asks and reports post-run reviews separately', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval({ id: 'a-perm', source: 'ACP_PERMISSION', riskTier: 'DESTRUCTIVE', toolName: 'Bash' }),
+      approval({ id: 'a-clar', source: 'CLARIFICATION', askType: 'QUESTION' }),
+      approval({ id: 'a-review', askType: 'REVIEW_REQUEST' }),
+    ] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows.map((r) => r.id)).toEqual(['a-perm', 'a-clar']);
+    expect(result.current.count).toBe(2);
+    expect(result.current.reviewCount).toBe(1);
+  });
+
+  it('sorts dangerous asks before pushes and the rest, then by age', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval({ id: 'a-read', riskTier: 'READ', requestedAt: '2026-10-27T08:00:00Z' }),
+      approval({ id: 'a-push', riskTier: 'PUSH', toolName: 'Edit', requestedAt: '2026-10-27T09:00:00Z' }),
+      approval({ id: 'a-danger', riskTier: 'DESTRUCTIVE', toolName: 'Bash', requestedAt: '2026-10-27T10:00:00Z' }),
+    ] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows.map((r) => r.id)).toEqual(['a-danger', 'a-push', 'a-read']);
+    expect(result.current.rows[0]).toMatchObject({ riskTier: 'DESTRUCTIVE', toolName: 'Bash' });
+  });
+
+  it('summarizes a long markdown reason to one short line', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval({
+        approvalType: 'SPEC_REVIEW',
+        reason: null,
+        content: '# Spec\n\n' + 'x'.repeat(400),
+      }),
+    ] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows[0].reason).not.toContain('\n');
+    expect(result.current.rows[0].reason.length).toBeLessThanOrEqual(160);
+  });
+
+  it('marks a clarification as holding a run slot', async () => {
+    vi.mocked(listApprovals).mockResolvedValue([
+      approval({ id: 'a-clar', source: 'CLARIFICATION', askType: 'QUESTION' }),
+      approval({ id: 'a-perm', source: 'ACP_PERMISSION' }),
+    ] as never);
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('success'));
+    expect(result.current.rows.find((r) => r.id === 'a-clar')?.blocksRunSlot).toBe(true);
+    expect(result.current.rows.find((r) => r.id === 'a-perm')?.blocksRunSlot).toBe(false);
   });
 });

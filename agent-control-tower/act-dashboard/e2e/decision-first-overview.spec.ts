@@ -79,7 +79,28 @@ const PERMISSION_APPROVAL = {
   requestedAt: '2026-10-27T08:03:00Z',
   decidedAt: null,
   expiresAt: '2026-10-27T09:00:00Z',
+  approvalType: 'TOOL_CALL',
   askType: 'APPROVAL',
+  source: 'ACP_PERMISSION',
+  riskTier: 'PUSH',
+  toolName: 'write_file',
+};
+
+const REVIEW_REQUEST = {
+  id: 'a-review',
+  runId: 'run-linked',
+  kanbanItemId: 'k-review',
+  status: 'PENDING',
+  reason: 'Run completed',
+  content: 'Run run-link completed (COMPLETED) - awaiting your review: Ship the export',
+  requestedAt: '2026-10-27T08:04:00Z',
+  decidedAt: null,
+  expiresAt: null,
+  approvalType: 'TOOL_CALL',
+  askType: 'REVIEW_REQUEST',
+  source: 'LEGACY_GATE',
+  riskTier: null,
+  toolName: null,
 };
 
 const RUN = {
@@ -155,15 +176,17 @@ test.describe('decision-first overview', () => {
   test('puts decision rows above the board and counts approvals, not asks', async ({ page }) => {
     await stubWebSocket(page);
     await stubApi(page, {
-      approvals: [CARD_APPROVAL, ORPHAN_APPROVAL, PERMISSION_APPROVAL],
+      approvals: [CARD_APPROVAL, ORPHAN_APPROVAL, PERMISSION_APPROVAL, REVIEW_REQUEST],
       kanban: [REVIEW_CARD, TODO_CARD],
     });
     await page.goto('/');
 
     const queue = page.getByTestId('decision-queue');
     await expect(queue).toBeVisible();
+    // The post-run REVIEW_REQUEST blocks nothing: it is a review count, not a row.
     await expect(page.locator('.decision-queue__count')).toHaveText('3');
     await expect(page.locator('.decision-row')).toHaveCount(3);
+    await expect(page.getByTestId('decision-reviews')).toContainText('1 completed run awaiting review');
 
     // The board claims 2 pending asks on one card; the queue counts approvals.
     const queueBox = await queue.boundingBox();
@@ -178,9 +201,11 @@ test.describe('decision-first overview', () => {
     await expect(orphanRow.getByRole('button', { name: 'Approve', exact: true })).toBeVisible();
     await expect(orphanRow.getByRole('button', { name: 'Deny', exact: true })).toBeVisible();
 
-    // A native permission ask is decided by review, never a batch control.
+    // A native permission ask shows its risk and tool, and is decided by review.
     const permissionRow = page.getByTestId('decision-row-a-perm');
     await expect(permissionRow.getByRole('button', { name: 'Review permission' })).toBeVisible();
+    await expect(permissionRow).toContainText('Writes');
+    await expect(permissionRow).toContainText('write_file');
     await expect(permissionRow.getByRole('button', { name: /approve all/i })).toHaveCount(0);
 
     // The main lane must own the decision-first template, not inherit the old
@@ -255,6 +280,18 @@ test.describe('decision-first overview', () => {
     await expect(page.getByText('Refresh failed — showing last known decisions')).toBeVisible({ timeout: 25_000 });
     // The cached row survives the failed refresh.
     await expect(page.locator('.decision-row')).toHaveCount(1);
+  });
+
+  test('post-run reviews keep the queue open without adding decision rows', async ({ page }) => {
+    await stubWebSocket(page);
+    await stubApi(page, { approvals: [REVIEW_REQUEST], kanban: [REVIEW_CARD], runs: [] });
+    await page.goto('/');
+
+    const queue = page.getByTestId('decision-queue');
+    await expect(queue).toHaveAttribute('data-collapsed', 'false');
+    await expect(page.locator('.decision-queue__count')).toHaveText('0');
+    await expect(page.locator('.decision-row')).toHaveCount(0);
+    await expect(page.getByTestId('decision-reviews')).toContainText('1 completed run awaiting review');
   });
 
   test('both queues collapse to their all-clear lines only on zero/zero authoritative data', async ({ page }) => {

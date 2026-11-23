@@ -91,6 +91,19 @@ aria:
   progress:
     retention-days: ${ARIA_PROGRESS_RETENTION_DAYS:7}
     cleanup-cron: ${ARIA_PROGRESS_CLEANUP_CRON:0 30 3 * * *}
+  # The phone's live loop (spec docs/superpowers/specs/2026-11-23-aria-qwen-live-bridge-design.md
+  # §Deployment). Off by default: the endpoint answers, but no bridge child is spawned until a
+  # deployment turns it on. `bridge-script` is repo-relative (resolved from the backend's
+  # working directory and its parents), `credentials-file` is the 0600 env file the child reads
+  # its provider key from; neither value is logged. `realtime-url` empty means the child derives
+  # the SG WSS endpoint from the workspace region, and it is not a secret.
+  live:
+    enabled: ${ARIA_LIVE_ENABLED:false}
+    bridge-script: ${ARIA_LIVE_BRIDGE_SCRIPT:}
+    credentials-file: ${ARIA_LIVE_CREDENTIALS_FILE:}
+    ready-deadline-ms: ${ARIA_LIVE_READY_DEADLINE_MS:5000}
+    max-session-seconds: ${ARIA_LIVE_MAX_SESSION_SECONDS:7200}
+    realtime-url: ${ARIA_LIVE_REALTIME_URL:}
   # Per-core launch configuration. The Qoder bridge refuses a `--cli` that is not
   # an absolute existing executable and must be told files that exist, so a
   # configured value is resolved at launch and an unresolvable one refuses the

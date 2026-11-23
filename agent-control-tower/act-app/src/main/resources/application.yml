@@ -80,6 +80,13 @@ aria:
     # after its Kanban card move already committed (DeferredRunStop.retryPendingStops).
     # The run carries RUN_STOP_PENDING until the stop verifies or the run ends by itself.
     stop-retry-delay-ms: ${ARIA_RUNS_STOP_RETRY_DELAY_MS:30000}
+  # HOST placement only (HostFileAccessProperties). READ_ONLY keeps a HOST core's
+  # workspace tools refused and auto-denies its native write asks; FULL lets the
+  # core edit, write and run shell commands as the backend user. A HOST run is not
+  # bounded by a run-owned container, so FULL is a full-filesystem grant with no
+  # sandbox and no undo. SANDBOX runs are unchanged.
+  host:
+    files: ${ARIA_HOST_FILES:READ_ONLY}
   mcp:
     enabled: ${ARIA_MCP_ENABLED:true}
     auth-mode: ${ARIA_MCP_AUTH_MODE:none}

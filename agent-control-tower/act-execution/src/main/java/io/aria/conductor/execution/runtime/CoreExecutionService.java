@@ -1472,7 +1472,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             NativePermission ask = new NativePermission(runtime.spec().runId(), event.sessionId(), requestId,
                     payload.path("toolName").asText("unknown"), PermissionTarget.NATIVE_TOOL,
                     event.payloadJson(), List.copyOf(options), expiresAt);
-            UUID approvalId = permissions.register(ask);
+            UUID approvalId = permissions.register(ask, runtime.spec().mode());
             runtime.rememberPermissionAsk(approvalId);
         } catch (RuntimeException e) {
             log.error("Run {}: registering the native permission ask failed: {}",

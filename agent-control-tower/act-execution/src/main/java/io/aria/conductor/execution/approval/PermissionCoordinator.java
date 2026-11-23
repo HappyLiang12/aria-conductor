@@ -10,10 +10,12 @@ import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.execution.runtime.HostFileAccessProperties;
 import io.aria.conductor.execution.security.CredentialRedactor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -95,12 +97,31 @@ public class PermissionCoordinator {
     public static final String AUTO_APPROVE_REASON =
             "auto-approved: read-only platform tool (aria.mcp.auto-approve-read-tools)";
 
+    /**
+     * The recorded reason of a HOST native ask settled by
+     * {@code aria.host.files=FULL}. It names the policy so the decision stays
+     * attributable without an operator acting, and so the reason is never
+     * mistaken for the read-only allowlist.
+     */
+    public static final String HOST_FULL_ACCESS_REASON =
+            "auto-approved: host full file access (aria.host.files=FULL)";
+
+    /**
+     * The recorded reason of a HOST native ask refused by the default
+     * {@code aria.host.files=READ_ONLY}. The deny list is enforced here rather
+     * than surfaced as a card an operator could approve.
+     */
+    public static final String HOST_READ_ONLY_DENY_REASON =
+            "auto-denied: host read-only placement (aria.host.files=READ_ONLY)";
+
     private final ApprovalGate approvalGate;
     private final ApprovalRepository approvals;
     private final ApprovalDecisionLockRepository decisionLocks;
     private final AcpPermissionRequestRepository permissions;
     private final WriteGrantService writeGrants;
     private final PlatformMcpAutoApproval platformMcpAutoApproval;
+    /** The operator's HOST file-access policy, consulted only for a HOST placement's native ask. */
+    private final HostFileAccessProperties hostFiles;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
     /** The run coordinator that owns the sessions a decided native reply must reach. */
@@ -119,9 +140,10 @@ public class PermissionCoordinator {
                                  PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher,
                                  ObjectProvider<PermissionReplySink> replySinks,
-                                 ToolRiskResolver toolRiskResolver) {
+                                 ToolRiskResolver toolRiskResolver,
+                                 HostFileAccessProperties hostFiles) {
         this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
-                eventPublisher, replySinks::getIfAvailable,
+                eventPublisher, hostFiles, replySinks::getIfAvailable,
                 name -> {
                     RiskTier tier = toolRiskResolver.resolve(name);
                     return tier != null ? tier : RiskTier.READ;
@@ -136,7 +158,7 @@ public class PermissionCoordinator {
                                  PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher, Clock clock) {
         this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
-                eventPublisher, () -> null, name -> RiskTier.READ, clock);
+                eventPublisher, new HostFileAccessProperties(), () -> null, name -> RiskTier.READ, clock);
     }
 
     /** Test/override seam: the clock and the reply sink are both explicit. */
@@ -147,7 +169,7 @@ public class PermissionCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  Supplier<PermissionReplySink> replySinks, Clock clock) {
         this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
-                eventPublisher, replySinks, name -> RiskTier.READ, clock);
+                eventPublisher, new HostFileAccessProperties(), replySinks, name -> RiskTier.READ, clock);
     }
 
     /** Test/override seam: the clock, the reply sink and the risk resolver are explicit. */
@@ -158,6 +180,29 @@ public class PermissionCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  Supplier<PermissionReplySink> replySinks,
                                  Function<String, RiskTier> riskTierResolver, Clock clock) {
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
+                eventPublisher, new HostFileAccessProperties(), replySinks, riskTierResolver, clock);
+    }
+
+    /** Test/override seam: the HOST file-access policy the placement-aware registration consults. */
+    public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
+                                 ApprovalDecisionLockRepository decisionLocks,
+                                 AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
+                                 ApplicationEventPublisher eventPublisher, HostFileAccessProperties hostFiles,
+                                 Supplier<PermissionReplySink> replySinks, Clock clock) {
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
+                eventPublisher, hostFiles, replySinks, name -> RiskTier.READ, clock);
+    }
+
+    /** Test/override seam: the HOST file-access policy, the clock and the reply sink are explicit. */
+    public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
+                                 ApprovalDecisionLockRepository decisionLocks,
+                                 AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
+                                 ApplicationEventPublisher eventPublisher, HostFileAccessProperties hostFiles,
+                                 Supplier<PermissionReplySink> replySinks,
+                                 Function<String, RiskTier> riskTierResolver, Clock clock) {
         this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.decisionLocks = Objects.requireNonNull(decisionLocks, "decisionLocks");
@@ -165,6 +210,7 @@ public class PermissionCoordinator {
         this.writeGrants = Objects.requireNonNull(writeGrants, "writeGrants");
         this.platformMcpAutoApproval = Objects.requireNonNull(platformMcpAutoApproval, "platformMcpAutoApproval");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
+        this.hostFiles = Objects.requireNonNull(hostFiles, "hostFiles");
         this.replySinks = Objects.requireNonNull(replySinks, "replySinks");
         this.riskTierResolver = Objects.requireNonNull(riskTierResolver, "riskTierResolver");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -173,6 +219,11 @@ public class PermissionCoordinator {
     // ------------------------------------------------------------------
     // Correlation
     // ------------------------------------------------------------------
+
+    /** Registers an ask whose placement the caller did not declare: no HOST policy applies. */
+    public UUID register(NativePermission request) {
+        return register(request, null);
+    }
 
     /**
      * Persists the correlation of one native permission request before it is
@@ -193,9 +244,17 @@ public class PermissionCoordinator {
      * never approved past it (spec §5.3) and keeps the operator-facing flow, as
      * does a covered native ask that offers no single allow-once option to
      * answer with.
+     *
+     * <p>A HOST placement's {@code NATIVE_TOOL} ask is settled by
+     * {@code aria.host.files} instead (operator decision 2026-11-24):
+     * {@code FULL} auto-approves it exactly like a manual allow-once decision,
+     * {@code READ_ONLY} auto-denies it unless the read-only allowlist already
+     * covers it, so the deny list is an enforcement boundary rather than a
+     * prompt an operator could wave through. A {@code PLATFORM_MCP} ask is never
+     * settled by this policy; platform tool governance keeps its own allowlist.
      */
     @Transactional
-    public UUID register(NativePermission request) {
+    public UUID register(NativePermission request, ExecutionMode placement) {
         Objects.requireNonNull(request, "request");
         requireCorrelation(request);
         AcpPermissionRequest existing = permissions.findByRunIdAndSessionIdAndRequestId(
@@ -210,13 +269,29 @@ public class PermissionCoordinator {
         }
 
         Instant now = clock.instant();
-        boolean autoApproved = request.expiresAt().isAfter(now) && autoApprovalCovers(request);
+        boolean windowOpen = request.expiresAt().isAfter(now);
+        boolean readListed = autoApprovalCovers(request);
+        boolean hostNative = placement == ExecutionMode.HOST
+                && request.target() == PermissionTarget.NATIVE_TOOL;
+        boolean fullAllow = windowOpen && hostNative && hostFiles.fullAccess()
+                && singleAllowOnceOptionId(request.options()).isPresent();
+        boolean autoApproved = windowOpen && readListed;
+        boolean autoDenied = windowOpen && hostNative && !hostFiles.fullAccess() && !readListed
+                && singleOptionId(request.options(), PermissionChoice.DENY).isPresent();
+        String settleReason = autoApproved ? AUTO_APPROVE_REASON
+                : fullAllow ? HOST_FULL_ACCESS_REASON
+                : autoDenied ? HOST_READ_ONLY_DENY_REASON
+                : null;
+        boolean settled = settleReason != null;
+        boolean approved = settled && !autoDenied;
         Approval approval = Approval.builder()
                 .runId(request.runId())
                 .source(ApprovalSource.ACP_PERMISSION)
-                .status(autoApproved ? ApprovalStatus.APPROVED : ApprovalStatus.PENDING)
-                .reason(autoApproved ? AUTO_APPROVE_REASON : registrationReason(request))
-                .decidedAt(autoApproved ? now : null)
+                .status(settled
+                        ? (approved ? ApprovalStatus.APPROVED : ApprovalStatus.DENIED)
+                        : ApprovalStatus.PENDING)
+                .reason(settled ? settleReason : registrationReason(request))
+                .decidedAt(settled ? now : null)
                 // The offered options belong on the operator-facing row too: the
                 // ledger carries them for correlation, and the granted reply must
                 // name the option the core actually offered, so the decision UI
@@ -253,7 +328,7 @@ public class PermissionCoordinator {
                 .build();
         permissions.save(row);
 
-        if (autoApproved) {
+        if (approved) {
             // Same delivery path as a manual ALLOW_ONCE decision: a native ask
             // is answered with the reply naming the single allow-once option the
             // core offered, a PLATFORM_MCP delivery issues its one-use grant
@@ -265,8 +340,21 @@ public class PermissionCoordinator {
                     : null);
             row.setDecidedAt(now);
             deliverAndHand(row, PermissionChoice.ALLOW_ONCE, now);
-            log.info("Run {}: platform MCP tool {} auto-approved by the configured read-only policy ({})",
-                    request.runId(), request.toolName(), AUTO_APPROVE_REASON);
+            log.info("Run {}: native ask for tool {} auto-approved by {}",
+                    request.runId(), request.toolName(), settleReason);
+            return approval.getId();
+        }
+
+        if (autoDenied) {
+            // The read-only host placement's deny list is enforced, not offered:
+            // the core is answered with the single reject option it offered, so
+            // the call never reaches the operator's filesystem and no card
+            // surfaces for an approval that the policy would refuse anyway.
+            row.setSelectedOptionId(singleOptionId(request.options(), PermissionChoice.DENY).orElse(null));
+            row.setDecidedAt(now);
+            deliverAndHand(row, PermissionChoice.DENY, now);
+            log.info("Run {}: native ask for tool {} auto-denied by {}",
+                    request.runId(), request.toolName(), settleReason);
             return approval.getId();
         }
 
@@ -410,8 +498,12 @@ public class PermissionCoordinator {
      * decision's own fail-closed selection).
      */
     private static Optional<String> singleAllowOnceOptionId(List<PermissionOption> options) {
+        return singleOptionId(options, PermissionChoice.ALLOW_ONCE);
+    }
+
+    private static Optional<String> singleOptionId(List<PermissionOption> options, PermissionChoice choice) {
         List<PermissionOption> matches = options.stream()
-                .filter(option -> option.choice() == PermissionChoice.ALLOW_ONCE)
+                .filter(option -> option.choice() == choice)
                 .toList();
         return matches.size() == 1 ? Optional.of(matches.get(0).optionId()) : Optional.empty();
     }

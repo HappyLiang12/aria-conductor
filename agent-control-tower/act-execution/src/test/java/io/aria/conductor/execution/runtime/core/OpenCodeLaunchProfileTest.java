@@ -9,6 +9,8 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
+import io.aria.conductor.execution.runtime.HostFileAccess;
+import io.aria.conductor.execution.runtime.HostFileAccessProperties;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.SecretBundle;
@@ -147,6 +149,12 @@ class OpenCodeLaunchProfileTest {
 
     private static OpenCodeCoreAdapter.OpenCodeProfile profile() {
         return new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(), Map.of(), "1.14.31", "efficient");
+    }
+
+    private static HostFileAccessProperties hostFileAccess(HostFileAccess files) {
+        HostFileAccessProperties properties = new HostFileAccessProperties();
+        properties.setFiles(files);
+        return properties;
     }
 
     private static LaunchProfile launch(Fixture fixture, OpenCodeCoreAdapter adapter) {
@@ -324,6 +332,82 @@ class OpenCodeLaunchProfileTest {
         assertThat(permission.path("patch").asText()).isEqualTo("deny");
         assertThat(permission.path("bash").asText()).isEqualTo("deny");
         assertThat(permission.path("*").asText()).isEqualTo("deny");
+    }
+
+    /**
+     * The opt-in FULL policy is the only way a HOST run receives the workspace
+     * tools, because no run-owned container bounds it: a HOST worker may edit,
+     * write, patch, run a shell and leave the workspace directory, while the
+     * sub-agent and question tools stay refused and the wildcard stays deny.
+     */
+    @Test
+    void hostWorkerRunWithFullFileAccessAllowsWorkspaceTools() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.FULL)));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(permission.path(tool).asText())
+                    .as("FULL opens the workspace tool %s on the host", tool)
+                    .isEqualTo("allow");
+        }
+        assertThat(permission.path("external_directory").asText()).isEqualTo("allow");
+        assertThat(permission.path("task").asText()).isEqualTo("deny");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        assertThat(permission.path("*").asText()).isEqualTo("deny");
+    }
+
+    /** The platform switch covers the Aria role too, not only a worker. */
+    @Test
+    void hostAriaRunWithFullFileAccessAllowsWorkspaceTools() throws Exception {
+        Fixture fixture = fixture(AriaConstants.ARIA_AGENT_ID, Instant.now().plusSeconds(600));
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.FULL)));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(permission.path(tool).asText())
+                    .as("FULL opens the workspace tool %s on the host for Aria too", tool)
+                    .isEqualTo("allow");
+        }
+        assertThat(permission.path("external_directory").asText()).isEqualTo("allow");
+    }
+
+    /**
+     * The switch is HOST-only: a SANDBOX run keeps its own placement policy even
+     * when the operator opted into FULL, because the container is already the
+     * boundary and {@code external_directory} must stay refused inside it.
+     */
+    @Test
+    void sandboxRunKeepsItsOwnPolicyWhenHostFileAccessIsFull() throws Exception {
+        Fixture worker = sandboxFixture(UUID.randomUUID(), null);
+
+        launch(worker, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.FULL)));
+
+        JsonNode workerPermission = governedConfig(worker).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(workerPermission.path(tool).asText()).isEqualTo("allow");
+        }
+        assertThat(workerPermission.path("external_directory").asText())
+                .as("the host policy must never widen the sandbox worker's guardrail")
+                .isEqualTo("deny");
+    }
+
+    /** A SANDBOX Aria run stays read-only even when the operator opted into FULL. */
+    @Test
+    void sandboxAriaRunStaysReadOnlyWhenHostFileAccessIsFull() throws Exception {
+        Fixture fixture = sandboxFixture(AriaConstants.ARIA_AGENT_ID, null);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.FULL)));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(permission.path(tool).asText())
+                    .as("the host policy must never widen a sandbox Aria run: %s", tool)
+                    .isEqualTo("deny");
+        }
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
     }
 
     /**

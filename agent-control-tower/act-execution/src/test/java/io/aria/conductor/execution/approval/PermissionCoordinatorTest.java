@@ -9,12 +9,15 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.runtime.HostFileAccess;
+import io.aria.conductor.execution.runtime.HostFileAccessProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -218,6 +221,22 @@ class PermissionCoordinatorTest {
         this.writeGrants = new WriteGrantService(permissionRepository, clock);
         return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
                 writeGrants, new PlatformMcpAutoApproval(mcp), eventPublisher, () -> sink, clock);
+    }
+
+    /** A coordinator under an explicit HOST file-access policy. */
+    private PermissionCoordinator coordinator(Instant now, PermissionReplySink sink, McpProperties mcp,
+            HostFileAccessProperties hostFiles) {
+        this.clock = new MutableClock(now);
+        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
+        this.writeGrants = new WriteGrantService(permissionRepository, clock);
+        return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
+                writeGrants, new PlatformMcpAutoApproval(mcp), eventPublisher, hostFiles, () -> sink, clock);
+    }
+
+    private static HostFileAccessProperties hostFileAccess(HostFileAccess files) {
+        HostFileAccessProperties properties = new HostFileAccessProperties();
+        properties.setFiles(files);
+        return properties;
     }
 
     /** Coordinator with the governance risk resolver the production wiring supplies. */
@@ -556,6 +575,83 @@ class PermissionCoordinatorTest {
         assertThat(delivered).isEmpty();
         assertThat(permissionStore.values())
                 .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /**
+     * A HOST placement under {@code aria.host.files=FULL}: a native write ask is
+     * answered with the single allow-once reply its core session is waiting for,
+     * recorded APPROVED with the policy as its reason — the same one-use delivery
+     * a manual decision produces, no operator card.
+     */
+    @Test
+    void aHostNativeWriteAskIsAutoApprovedWhenHostFileAccessIsFull() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add, new McpProperties(), hostFileAccess(HostFileAccess.FULL));
+
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL), ExecutionMode.HOST);
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getReason()).isEqualTo(PermissionCoordinator.HOST_FULL_ACCESS_REASON);
+        assertThat(approval.getDecidedAt()).isEqualTo(T0);
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getSelectedOptionId()).isEqualTo("proceed_once");
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(requestedEvents).isEmpty();
+        assertThat(delivered).containsExactly(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "proceed_once"));
+    }
+
+    /**
+     * A HOST placement under the default {@code READ_ONLY} policy: a native write
+     * ask off the read allowlist is refused outright, so the deny list is a real
+     * enforcement boundary and an operator card never surfaces.
+     */
+    @Test
+    void aHostNativeWriteAskIsAutoDeniedWhenHostFileAccessIsReadOnly() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL), ExecutionMode.HOST);
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.DENIED);
+        assertThat(approval.getReason()).isEqualTo(PermissionCoordinator.HOST_READ_ONLY_DENY_REASON);
+        assertThat(approval.getDecidedAt()).isEqualTo(T0);
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getSelectedOptionId()).isEqualTo("cancel");
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(requestedEvents).isEmpty();
+        assertThat(delivered).containsExactly(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "cancel"));
+    }
+
+    /** A SANDBOX placement is bounded by its own container: the host policy never applies. */
+    @Test
+    void aSandboxNativeWriteAskKeepsTheOperatorGate() {
+        coordinator = coordinator(T0, null, new McpProperties(), hostFileAccess(HostFileAccess.FULL));
+
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL), ExecutionMode.SANDBOX);
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(requestedEvents).hasSize(1);
+    }
+
+    /**
+     * The host file-access policy never reaches a platform MCP ask: platform tool
+     * governance stays on its own allowlist, so a mutating platform call keeps the
+     * operator card even when the host filesystem is fully open.
+     */
+    @Test
+    void theHostPolicyNeverSettlesAPlatformMcpAsk() {
+        coordinator = coordinator(T0, null, new McpProperties(), hostFileAccess(HostFileAccess.FULL));
+        String tool = "dispatch_run";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                tool, PermissionTarget.PLATFORM_MCP, "{}", OFFERED, EXPIRES_AT), ExecutionMode.HOST);
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(requestedEvents).hasSize(1);
     }
 
     /**

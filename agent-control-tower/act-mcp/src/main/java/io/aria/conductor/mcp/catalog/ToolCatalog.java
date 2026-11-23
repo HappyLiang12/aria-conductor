@@ -164,7 +164,7 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Move a kanban item to a new status. WARNING: this has side effects — it can spawn an agent run (TODO/IN_PROGRESS), resume or pause a linked run (REVIEW/BACKLOG/TODO), create HITL review asks (REVIEW) or cancel a run (CANCELLED). Repeating the current status is a no-op. A refused move answers an error envelope carrying the rejection code in errorType (NO_ELIGIBLE_AGENT, AGENT_NOT_ELIGIBLE, RUN_ALREADY_FINISHED, RUN_NOT_FOUND, CORRUPT_RUN_LINK, LINKED_RUN_ACTIVE) and the reason in message: a tool error here is a governance refusal, not a transport failure."),
             // dashboard
             read("get_dashboard_summary",
-                    "Get the dashboard summary: active/healthy/degraded agents, running runs, pending approvals and total tokens burned. Same shape as GET /api/v1/dashboard/summary (runningRuns counts RUNNING only here; the REST summary also counts WAITING_INPUT).",
+                    "Get the dashboard summary: active/healthy/degraded agents, running runs, blocking pending approvals and recorded tokens. Same shape and definitions as GET /api/v1/dashboard/summary.",
                     true),
             // definition of done
             write("init_dod",

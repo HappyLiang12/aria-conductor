@@ -5,9 +5,8 @@
 // allowlist is dropped and counted, so a new provider event can never reach the phone
 // by accident.
 //
-// Two shape decisions are inherited from the P0 probe (`docs/superpowers/plans/
-// 2026-11-23-phase0-p0-gemini-live-spike.md`) and the phone's caption semantics
-// (`LiveCaption` replaces a line wholesale on each event):
+// Two shape decisions are inherited from the Phase 0 live probe and the phone's caption
+// semantics (`LiveCaption` replaces a line wholesale on each event):
 //   - an input transcription delta carries the running text (`text` + `stash`), so the
 //     bridge forwards it as-is instead of accumulating;
 //   - an output transcription delta is a fragment (`delta`), so the bridge accumulates
@@ -45,6 +44,11 @@ export type Translation =
 export interface Translator {
   /** Map one provider event to the actions it implies; `[]` when nothing crosses. */
   onEvent(event: QwenEvent): Translation[];
+  /**
+   * The phone cancelled the response itself: silence the rest of its audio until
+   * `response.done`, the same window a barge-in opens (spec X6).
+   */
+  phoneCancel(): void;
   /** Aria's own `ready` shape; see {@link ReadyEvent}. */
   readyEvent(): ReadyEvent;
   /** `session_expired` is an error code, not an event type (phone contract). */
@@ -261,6 +265,12 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
         modalities: ['text', 'audio'],
         maxSessionSec: MAX_SESSION_SEC,
       };
+    },
+
+    phoneCancel() {
+      // `response.created` clears the window, so a cancel with no response in flight
+      // never silences the next one.
+      suppressAudio = true;
     },
 
     expiredEvent() {

@@ -5,6 +5,9 @@
   "description": "Per-socket Qwen realtime bridge: one JSON line per stdio frame, translating Qwen realtime events into Aria's live phone events.",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -14,7 +17,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0",
+    "@types/node": "^20.19.43",
     "@types/ws": "^8.18.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

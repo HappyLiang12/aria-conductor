@@ -122,14 +122,19 @@ public class LiveRunService {
     }
 
     /**
-     * Writes the turn's terminal state (or the parked {@code WAITING_INPUT} state Task 4
-     * uses while an approval is pending) with the repository's single-statement
-     * conditional writers, and clears the session's run slot. A concurrent writer — an
-     * operator cancel above all — is evaluated by the database against the committed
-     * row, so this call can never resurrect a run that finished or was cancelled after
-     * it read the row; when it loses, it claims nothing and reports the committed state.
+     * Writes the turn's terminal state (or the parked {@code WAITING_INPUT} state an
+     * approval uses while it waits) with the repository's single-statement conditional
+     * writers, and clears the session's run slot once the run is terminal. A concurrent
+     * writer — an operator cancel above all — is evaluated by the database against the
+     * committed row, so this call can never resurrect a run that finished or was cancelled
+     * after it read the row; when it loses, it claims nothing and reports the committed
+     * state.
      *
-     * <p>No completion event is published here — the live event router (Task 4) owns the
+     * <p>The slot survives a park: WAITING_INPUT is still the turn's live row (it can take
+     * its tool's answer and its finalize), so it must stay reachable from the session that
+     * owns it.
+     *
+     * <p>No completion event is published here — the live event router owns the
      * bridge-facing {@code run_event} and the settled-turn cleanup.
      *
      * @param session the socket that owns the turn; its slot is cleared when it still
@@ -142,22 +147,31 @@ public class LiveRunService {
         if (runId == null || status == null) {
             return null;
         }
+        if (status == RunStatus.WAITING_INPUT) {
+            // Parked, not finished: no completion time, and only a RUNNING row may park.
+            return park(runId, status);
+        }
+        if (!TERMINAL_STATUSES.contains(status)) {
+            log.warn("live run settle ignored: {} is not a settleable live status", status);
+            return committedStatus(runId);
+        }
         if (session != null) {
             session.clearRunSlot(runId);
         }
         Instant now = Instant.now(clock);
-        int written;
-        if (status == RunStatus.WAITING_INPUT) {
-            // Parked, not finished: no completion time, and only a RUNNING row may park.
-            written = runRepository.updateStatusIfCurrentIn(runId, status, null, now,
-                    List.of(RunStatus.RUNNING));
-        } else if (TERMINAL_STATUSES.contains(status)) {
-            written = runRepository.completeIfNotTerminal(runId, status, 0, 0L, now, null,
-                    failureReason(status, reason), null, null, now, TERMINAL_STATUS_LIST);
-        } else {
-            log.warn("live run settle ignored: {} is not a settleable live status", status);
-            return committedStatus(runId);
-        }
+        int written = runRepository.completeIfNotTerminal(runId, status, 0, 0L, now, null,
+                failureReason(status, reason), null, null, now, TERMINAL_STATUS_LIST);
+        return report(runId, status, written);
+    }
+
+    /** The park write: no completion time, and only a RUNNING row may take it. */
+    private RunStatus park(UUID runId, RunStatus status) {
+        int written = runRepository.updateStatusIfCurrentIn(runId, status, null, Instant.now(clock),
+                List.of(RunStatus.RUNNING));
+        return report(runId, status, written);
+    }
+
+    private RunStatus report(UUID runId, RunStatus status, int written) {
         RunStatus committed = committedStatus(runId);
         if (committed == null) {
             log.warn("live run settle ignored: unknown run {}", runId);

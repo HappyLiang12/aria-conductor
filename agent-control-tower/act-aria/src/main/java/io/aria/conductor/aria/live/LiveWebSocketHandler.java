@@ -105,6 +105,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private final LiveContextSource context;
     private final LiveSessionRegistry registry;
     private final LiveToolCallSink toolCalls;
+    private final LiveFrames frames;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "aria-live-hello-deadline");
         thread.setDaemon(true);
@@ -114,29 +115,37 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     @Autowired
     public LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry,
-            ObjectProvider<LiveToolCallSink> toolCalls) {
+            ObjectProvider<LiveToolCallSink> toolCalls, LiveFrames frames) {
         this(properties, bridges, json, context, registry,
-                toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE));
+                toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE), frames);
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json) {
         this(properties, bridges, json, conversationId -> List.of(), new LiveSessionRegistry(),
-                LiveToolCallSink.NONE);
+                LiveToolCallSink.NONE, new LiveFrames(json));
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context) {
-        this(properties, bridges, json, context, new LiveSessionRegistry(), LiveToolCallSink.NONE);
+        this(properties, bridges, json, context, new LiveSessionRegistry(), LiveToolCallSink.NONE,
+                new LiveFrames(json));
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls) {
+        this(properties, bridges, json, context, registry, toolCalls, new LiveFrames(json));
+    }
+
+    LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
+            LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls,
+            LiveFrames frames) {
         this.properties = properties;
         this.bridges = bridges;
         this.json = json;
         this.context = context;
         this.registry = registry;
         this.toolCalls = toolCalls;
+        this.frames = frames;
     }
 
     @Override
@@ -234,6 +243,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         live.cancelHelloDeadline();
         live.markClosed();
         reap(live);
+        releasePark(live);
         log.debug("aria live socket closed: code={}", status.getCode());
     }
 
@@ -416,6 +426,15 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         }
 
         @Override
+        public void onTurnDone() {
+            try {
+                toolCalls.onTurnDone(live);
+            } catch (RuntimeException e) {
+                log.debug("aria live turn-end sink failed: reason={}", e.getClass().getSimpleName());
+            }
+        }
+
+        @Override
         public void onExit(int code) {
             log.debug("aria live bridge exited: code={}", code);
             if (!live.closed()) {
@@ -428,24 +447,11 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     // --- sending and closing --------------------------------------------------------------
 
     private void send(LiveSession live, Map<String, Object> payload) {
-        try {
-            sendRaw(live, json.writeValueAsString(payload));
-        } catch (JsonProcessingException e) {
-            log.debug("aria live phone frame not serializable");
-        }
+        frames.toPhone(live, payload);
     }
 
     private void sendRaw(LiveSession live, String payload) {
-        if (live.closed()) {
-            return;
-        }
-        synchronized (live.lock()) {
-            try {
-                live.ws().sendMessage(new TextMessage(payload));
-            } catch (IOException | IllegalStateException e) {
-                log.debug("aria live send failed");
-            }
-        }
+        frames.toPhoneRaw(live, payload);
     }
 
     private void sendBinary(LiveSession live, byte[] pcm) {
@@ -501,10 +507,25 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         reap(live);
+        releasePark(live);
         try {
             live.ws().close(new CloseStatus(code, reason));
         } catch (IOException | IllegalStateException e) {
             log.debug("aria live close failed");
+        }
+    }
+
+    /**
+     * No park may outlive the socket that answers it: a WAITING_INPUT run whose socket is
+     * gone has no finalize and no approval route left. Idempotent — both the close path
+     * here and the container's own close callback release it, and the second release is a
+     * no-op.
+     */
+    private void releasePark(LiveSession live) {
+        try {
+            toolCalls.onClosed(live);
+        } catch (RuntimeException e) {
+            log.debug("aria live close sink failed: reason={}", e.getClass().getSimpleName());
         }
     }
 

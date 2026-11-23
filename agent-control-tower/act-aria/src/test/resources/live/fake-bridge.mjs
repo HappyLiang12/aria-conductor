@@ -71,6 +71,10 @@ lines.on('line', (line) => {
     write({ type: 'audio', dir: 'out', dataBase64: '' });
     write({ type: 'audio', dir: 'out', dataBase64: '!!!!' });
   }
+  if (message.type === 'turn') {
+    // The turn-end literal Java consumes (Task 4); Task 5's bridge must emit exactly this.
+    write({ type: 'turn_done' });
+  }
   if (message.type === 'close') {
     process.exit(0);
   }

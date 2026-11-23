@@ -32,6 +32,14 @@ public interface LiveBridgeListener {
     default void onToolCall(String json) {
     }
 
+    /**
+     * The bridge's turn is over ({@code {"type":"turn_done"}}, Task 4's literal). It is the
+     * point where a tool-using turn's live run is finalized; a bridge that never sends it
+     * leaves the run to the next turn's first call, which starts its own row.
+     */
+    default void onTurnDone() {
+    }
+
     /** The child exited with {@code code} without being asked to (a phone close is not an exit). */
     void onExit(int code);
 }

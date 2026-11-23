@@ -211,6 +211,7 @@ public final class QwenLiveBridgeProcess implements LiveBridge {
             case "audio" -> outboundAudio(node);
             case "control" -> control(node);
             case "tool_call" -> listener.onToolCall(line);
+            case "turn_done" -> listener.onTurnDone();
             case "log" -> log.debug("qwen live bridge log: kind={} count={} bytes={} ms={}",
                     node.path("event").asText(""),
                     node.path("count").asInt(),

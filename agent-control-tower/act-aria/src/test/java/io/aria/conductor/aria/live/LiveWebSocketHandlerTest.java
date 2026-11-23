@@ -51,6 +51,25 @@ class LiveWebSocketHandlerTest {
         return bridge;
     };
     private final CopyOnWriteArrayList<String> toolCalls = new CopyOnWriteArrayList<>();
+    private final AtomicInteger turnEnds = new AtomicInteger();
+    private final AtomicInteger sinkCloses = new AtomicInteger();
+    /** The Task 4 sink: records every signal the handler must hand over. */
+    private final LiveToolCallSink sink = new LiveToolCallSink() {
+        @Override
+        public void onToolCall(LiveSession live, String json) {
+            toolCalls.add(json);
+        }
+
+        @Override
+        public void onTurnDone(LiveSession live) {
+            turnEnds.incrementAndGet();
+        }
+
+        @Override
+        public void onClosed(LiveSession live) {
+            sinkCloses.incrementAndGet();
+        }
+    };
 
     private LiveWebSocketHandler handler;
 
@@ -374,6 +393,25 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
+    void aBridgeTurnDoneIsHandedToTheListenerHook() throws Exception {
+        WebSocketSession session = opened();
+
+        bridge.listener.onTurnDone();
+
+        assertThat(turnEnds).hasValue(1);
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void aSocketCloseReleasesTheSinksPark() throws Exception {
+        WebSocketSession session = opened();
+
+        handler.afterConnectionClosed(session, CloseStatus.NORMAL);
+
+        assertThat(sinkCloses).hasValue(1);
+    }
+
+    @Test
     void anUnexpectedBridgeExitSaysWhyThenCloses1011() throws Exception {
         WebSocketSession session = opened();
 
@@ -417,8 +455,7 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void aLegal256KibFrameReachesTheBridgeBeforeItsCommit() throws Exception {
-        WebSocketSession session = opened();
+    void aLegal256KibFrameReachesTheBridgeBeforeItsCommit() throws Exception {        WebSocketSession session = opened();
         // 196608 bytes of base64 is exactly the 262144-character limit the validator allows.
         String base64 = Base64.getEncoder().encodeToString(new byte[196_608]);
         assertThat(base64).hasSize(LiveFrameValidator.MAX_BASE64_LENGTH);
@@ -550,8 +587,7 @@ class LiveWebSocketHandlerTest {
 
     private LiveWebSocketHandler handler(long readyDeadlineMs) {
         handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200),
-                bridges, json, conversationId -> List.of(), new LiveSessionRegistry(),
-                (live, toolCall) -> toolCalls.add(toolCall));
+                bridges, json, conversationId -> List.of(), new LiveSessionRegistry(), sink);
         return handler;
     }
 

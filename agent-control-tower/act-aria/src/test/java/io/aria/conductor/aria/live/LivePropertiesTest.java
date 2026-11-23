@@ -1,8 +1,12 @@
 package io.aria.conductor.aria.live;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.WebSocketSession;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 class LivePropertiesTest {
 
@@ -30,11 +34,27 @@ class LivePropertiesTest {
     }
 
     @Test
-    void noopBridgeClosesWithoutASideEffect() {
-        LiveBridge bridge = new NoopLiveBridgeFactory().open("session", "conv");
+    void aDisabledLivePathCannotOpenABridge() {
+        LiveProperties properties = new LiveProperties(false, null, null, 0, 0);
+        QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
+                properties, new LiveCredentials(properties), new ObjectMapper());
 
-        bridge.close();
+        assertThatThrownBy(() -> factory.open(session(), LiveBridgeListener.NONE))
+                .isInstanceOf(LiveBridgeUnavailableException.class);
+    }
 
-        assertThat(LiveBridge.NOOP).isSameAs(bridge);
+    @Test
+    void anEnabledLivePathWithoutCredentialsCannotOpenABridge() {
+        LiveProperties properties = new LiveProperties(true, null,
+                " ~/.aria-conductor/does-not-exist-anywhere.env ", 0, 0);
+        QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
+                properties, new LiveCredentials(properties), new ObjectMapper());
+
+        assertThatThrownBy(() -> factory.open(session(), LiveBridgeListener.NONE))
+                .isInstanceOf(LiveBridgeUnavailableException.class);
+    }
+
+    private static LiveSession session() {
+        return new LiveSession("session", "conv", mock(WebSocketSession.class), null);
     }
 }

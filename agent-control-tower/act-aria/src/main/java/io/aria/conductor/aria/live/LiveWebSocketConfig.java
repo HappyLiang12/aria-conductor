@@ -1,11 +1,13 @@
 package io.aria.conductor.aria.live;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.server.support.DefaultHandshakeHandler;
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 /**
  * Registers the live socket at exactly {@code /api/v1/aria/live} (spec X1).
@@ -40,6 +42,21 @@ public class LiveWebSocketConfig implements WebSocketConfigurer {
                 .addInterceptors(interceptor)
                 .setAllowedOriginPatterns(ALLOWED_ORIGIN_PATTERNS)
                 .setHandshakeHandler(handshakeHandler());
+    }
+
+    /**
+     * The container has to admit what the handler itself judges: a legal image frame is
+     * 256 KiB of base64, far past the container's 8 KiB default, and a 33 KiB audio frame
+     * must reach the handler so it can be dropped there rather than tear the socket down
+     * with 1009. The handler's own caps (64 KiB text, 32 KiB binary, 320 KiB frame) are
+     * the effective limits; these only give it the message to measure.
+     */
+    @Bean
+    public ServletServerContainerFactoryBean webSocketContainer() {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+        container.setMaxTextMessageBufferSize(512 * 1024);
+        container.setMaxBinaryMessageBufferSize(64 * 1024);
+        return container;
     }
 
     /**

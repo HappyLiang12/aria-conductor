@@ -1,10 +1,15 @@
 package io.aria.conductor.aria.live;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
@@ -13,29 +18,36 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * The phone-facing end of the live socket (spec X1 / "Endpoint and handshake").
+ * The phone-facing end of the live socket (spec X1 / §"Endpoint and handshake", §"Bridge
+ * process").
  *
- * <p>Task 1 owns the opening act only: {@code hello} validates, {@code ready} is
- * sent immediately (it must not wait for any provider connection), the subprotocol
- * Spring accepted is enforced, and a socket that stays silent past the deadline
- * gets a {@code capability_mismatch} error and closes 4002. Everything a
- * {@code hello} unlocks (bridge, tools, frames, approvals) arrives in Tasks 2-4;
- * that is why the bridge seam is a no-op factory here.
+ * <p>The opening act validates {@code hello}, sends {@code ready} immediately (it must not
+ * wait for any provider connection), enforces the accepted subprotocol and the hello
+ * deadline. Everything after it is one bridge per socket: the conversation's last 20
+ * user/assistant turns seed the child's {@code hello}, phone frames are routed down, and
+ * the child's control/audio/tool_call lines are routed up. When the bridge cannot be
+ * started — disabled live path, unusable credentials, a factory failure, or an unexpected
+ * child exit — the socket says {@code bridge_internal} and closes 1011.
  *
- * <p>Logs are metadata only (spec L6): event types, refusals and close codes,
- * never payloads, bearer values or ids beyond a debug line.
+ * <p>Limits (spec "Limits"): a text frame over 64 KiB is dropped, a binary frame over
+ * 32 KiB is dropped, and an image frame is validated by {@link LiveFrameValidator} and
+ * refused with {@code frame_too_large}/{@code frame_invalid} while the socket stays open.
+ * A {@code frame} message may legally be larger than 64 KiB (its own limit is 256 KiB of
+ * base64), so it alone is read past that cap.
+ *
+ * <p>Logs are metadata only (spec L6): event types, byte counts and close codes, never a
+ * payload, a bearer, a key, a workspace or an id beyond a debug phase.
  */
 @Component
 public class LiveWebSocketHandler extends TextWebSocketHandler {
@@ -49,9 +61,26 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
     /** Protocol/version refusal (spec close codes). */
     static final int CLOSE_PROTOCOL = 4002;
+    /** Bridge failure or unexpected child exit (spec close codes). */
+    static final int CLOSE_BRIDGE = 1011;
+
     static final String ERROR_CAPABILITY_MISMATCH = "capability_mismatch";
+    static final String ERROR_BRIDGE_INTERNAL = "bridge_internal";
+    static final String ERROR_FRAME_TOO_LARGE = "frame_too_large";
+    static final String ERROR_FRAME_INVALID = "frame_invalid";
+
     static final String ERROR_MESSAGE_HELLO_REJECTED = "hello rejected";
     static final String ERROR_MESSAGE_HELLO_DEADLINE = "hello deadline exceeded";
+    static final String ERROR_MESSAGE_BRIDGE_UNAVAILABLE = "live bridge unavailable";
+    static final String ERROR_MESSAGE_FRAME_TOO_LARGE = "frame too large";
+    static final String ERROR_MESSAGE_FRAME_INVALID = "frame invalid";
+
+    /** A phone control frame may not exceed 64 KiB. */
+    static final int MAX_TEXT_FRAME_BYTES = 64 * 1024;
+    /** A {@code frame} message: 256 KiB of base64 plus its JSON envelope. */
+    static final int MAX_FRAME_MESSAGE_BYTES = 320 * 1024;
+    /** A phone audio frame may not exceed 32 KiB of PCM. */
+    static final int MAX_BINARY_FRAME_BYTES = 32 * 1024;
 
     private static final int MAX_CONVERSATION_ID_LENGTH = 36;
     private static final int HELLO_VERSION = 1;
@@ -65,89 +94,124 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private final LiveProperties properties;
     private final LiveBridgeFactory bridges;
     private final ObjectMapper json;
-    private final Map<String, LiveSocket> sockets = new ConcurrentHashMap<>();
+    private final LiveContextSource context;
+    private final LiveSessionRegistry registry;
+    private final LiveToolCallSink toolCalls;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "aria-live-hello-deadline");
         thread.setDaemon(true);
         return thread;
     });
 
-    public LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json) {
+    @Autowired
+    public LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
+            LiveContextSource context, LiveSessionRegistry registry,
+            ObjectProvider<LiveToolCallSink> toolCalls) {
+        this(properties, bridges, json, context, registry,
+                toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE));
+    }
+
+    LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json) {
+        this(properties, bridges, json, conversationId -> List.of(), new LiveSessionRegistry(),
+                LiveToolCallSink.NONE);
+    }
+
+    LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
+            LiveContextSource context) {
+        this(properties, bridges, json, context, new LiveSessionRegistry(), LiveToolCallSink.NONE);
+    }
+
+    LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
+            LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls) {
         this.properties = properties;
         this.bridges = bridges;
         this.json = json;
+        this.context = context;
+        this.registry = registry;
+        this.toolCalls = toolCalls;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        LiveSocket socket = new LiveSocket(session,
-                UUID.randomUUID().toString(),
+        LiveSession live = new LiveSession(UUID.randomUUID().toString(), null, session,
                 attribute(session, LiveHandshakeInterceptor.OFFERED_PROTOCOL_ATTRIBUTE));
-        sockets.put(session.getId(), socket);
-        socket.deadline = deadlines.schedule(socket::expireHello,
-                properties.readyDeadlineMs(), TimeUnit.MILLISECONDS);
+        registry.register(live);
+        live.helloDeadline(deadlines.schedule(() -> expireHello(live),
+                properties.readyDeadlineMs(), TimeUnit.MILLISECONDS));
         log.debug("aria live socket opened");
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-        LiveSocket socket = sockets.get(session.getId());
-        if (socket == null) {
+        LiveSession live = registry.get(session.getId());
+        if (live == null) {
+            return;
+        }
+        String payload = message.getPayload();
+        int bytes = payload.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > MAX_TEXT_FRAME_BYTES
+                && (bytes > MAX_FRAME_MESSAGE_BYTES || !"frame".equals(probeType(payload)))) {
+            // Metadata only: a dropped frame is a byte count, never its content.
+            log.debug("aria live text frame dropped: bytes={}", bytes);
             return;
         }
         JsonNode frame;
         try {
-            frame = json.readTree(message.getPayload());
+            frame = json.readTree(payload);
         } catch (IOException e) {
-            reject(socket);
+            refuseOrDrop(live);
             return;
         }
-        if (frame == null || !"hello".equals(frame.path("type").asText(""))) {
-            // Nothing else is legal before hello, and a second hello is a second
-            // binding for one conversation (spec X1).
-            reject(socket);
+        if (frame == null || !frame.isObject()) {
+            refuseOrDrop(live);
             return;
         }
-        if (!socket.claimHello() || !validHello(frame)) {
-            reject(socket);
+        String type = frame.path("type").asText("");
+        if (!live.helloSeen()) {
+            if (!"hello".equals(type) || !live.claimHello() || !validHello(frame)) {
+                reject(live);
+                return;
+            }
+            acceptHello(live, frame);
             return;
         }
-        socket.cancelDeadline();
-        send(socket, ready(socket.sessionId));
-        socket.bridge = bridges.open(socket.sessionId, frame.path("conversationId").asText());
-        log.debug("aria live hello accepted");
-        if (socket.offeredProtocol != null && !PROTOCOL.equals(socket.session.getAcceptedProtocol())) {
-            // Refused by what Spring actually accepted, not by the raw header: a
-            // client offering "aria-live.v1, x" was served aria-live.v1 and stays
-            // open (spec L3), while an offer the server could not honour gets its
-            // ready frame and then a clean 4002.
-            close(socket, ERROR_CAPABILITY_MISMATCH);
-        }
+        route(live, type, frame);
     }
 
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
-        // Task 2 owns the inbound 16 kHz PCM path and its 32 KiB cap; until then a
-        // binary frame is dropped rather than tearing the socket down.
-        log.debug("aria live binary frame dropped: phase=pre-bridge");
+        LiveSession live = registry.get(session.getId());
+        if (live == null) {
+            return;
+        }
+        int bytes = message.getPayloadLength();
+        if (bytes > MAX_BINARY_FRAME_BYTES) {
+            log.debug("aria live binary frame dropped: bytes={}", bytes);
+            return;
+        }
+        LiveBridge bridge = live.bridge();
+        if (bridge == null) {
+            return;
+        }
+        if (!live.micOn()) {
+            log.debug("aria live binary frame dropped: mic_off bytes={}", bytes);
+            return;
+        }
+        ByteBuffer payload = message.getPayload();
+        byte[] pcm = new byte[bytes];
+        payload.duplicate().get(pcm);
+        bridge.sendBinary(pcm);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        LiveSocket socket = sockets.remove(session.getId());
-        if (socket == null) {
+        LiveSession live = registry.remove(session.getId());
+        if (live == null) {
             return;
         }
-        socket.cancelDeadline();
-        socket.closed.set(true);
-        LiveBridge bridge = socket.bridge;
-        if (bridge != null) {
-            try {
-                bridge.close();
-            } catch (RuntimeException e) {
-                log.debug("aria live bridge close failed");
-            }
-        }
+        live.cancelHelloDeadline();
+        live.markClosed();
+        reap(live);
         log.debug("aria live socket closed: code={}", status.getCode());
     }
 
@@ -156,7 +220,69 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         deadlines.shutdownNow();
     }
 
-    // --- frames ---------------------------------------------------------------------------
+    /** The registry this handler owns, so a later router can find a run's socket. */
+    LiveSessionRegistry registry() {
+        return registry;
+    }
+
+    // --- hello and ready ------------------------------------------------------------------
+
+    private void acceptHello(LiveSession live, JsonNode hello) {
+        live.cancelHelloDeadline();
+        live.bindConversation(hello.path("conversationId").asText());
+        live.micOn(hello.path("mic").asBoolean(true));
+        send(live, ready(live.id()));
+        log.debug("aria live hello accepted");
+        if (live.offerSubprotocol() != null && !PROTOCOL.equals(live.ws().getAcceptedProtocol())) {
+            // Refused by what Spring actually accepted, not by the raw header: a
+            // client offering "aria-live.v1, x" was served aria-live.v1 and stays
+            // open (spec L3), while an offer the server could not honour gets its
+            // ready frame and then a clean 4002. No child is spawned for this.
+            close(live, CLOSE_PROTOCOL, ERROR_CAPABILITY_MISMATCH);
+            return;
+        }
+        try {
+            live.bridge(bridges.open(live, new BridgeListener(live)));
+            if (live.closed()) {
+                // The hello deadline fired while the child was starting: the socket is
+                // gone, so the child must go with it rather than outlive its only reader.
+                reap(live);
+                return;
+            }
+            live.bridge().send(bridgeHello(live));
+        } catch (RuntimeException e) {
+            // The reason is a class name only: a failure message could carry a path or a
+            // credential fragment, and none of it belongs in a log line.
+            log.debug("aria live bridge unavailable: reason={}", e.getClass().getSimpleName());
+            bridgeUnavailable(live);
+        }
+    }
+
+    /** {@code {"type":"hello","v":1,"conversationId":…,"context":[…]}} — spec Task 2 Step 4. */
+    private String bridgeHello(LiveSession live) {
+        List<LiveContextSource.Entry> entries;
+        try {
+            List<LiveContextSource.Entry> seeded = context.context(live.conversationId());
+            entries = seeded == null ? List.of() : seeded;
+        } catch (RuntimeException e) {
+            log.debug("aria live context unavailable: reason={}", e.getClass().getSimpleName());
+            entries = List.of();
+        }
+        Map<String, Object> hello = new LinkedHashMap<>();
+        hello.put("type", "hello");
+        hello.put("v", HELLO_VERSION);
+        hello.put("conversationId", live.conversationId());
+        hello.put("context", entries);
+        try {
+            return json.writeValueAsString(hello);
+        } catch (JsonProcessingException e) {
+            // The context is plain strings; this cannot happen. Say hello without it
+            // rather than fail the socket over a seed.
+            log.debug("aria live hello not serializable");
+            return "{\"type\":\"hello\",\"v\":" + HELLO_VERSION + ",\"conversationId\":"
+                    + quote(live.conversationId()) + ",\"context\":[]}";
+        }
+    }
 
     private Map<String, Object> ready(String sessionId) {
         Map<String, Object> ready = new LinkedHashMap<>();
@@ -169,44 +295,219 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         return ready;
     }
 
-    private void send(LiveSocket socket, Map<String, Object> payload) {
-        if (socket.closed.get()) {
+    // --- phone frames after hello ---------------------------------------------------------
+
+    private void route(LiveSession live, String type, JsonNode frame) {
+        switch (type) {
+            case "hello" -> reject(live);
+            case "text" -> {
+                Map<String, Object> text = new LinkedHashMap<>();
+                text.put("type", "text");
+                text.put("text", frame.path("text").asText(""));
+                forward(live, text);
+            }
+            case "mic" -> {
+                boolean on = frame.path("on").asBoolean(true);
+                live.micOn(on);
+                Map<String, Object> mic = new LinkedHashMap<>();
+                mic.put("type", "mic");
+                mic.put("on", on);
+                forward(live, mic);
+            }
+            case "cancel" -> forward(live, Map.of("type", "cancel"));
+            case "frame" -> acceptFrame(live, frame);
+            case "commit" -> commit(live, frame);
+            default -> log.debug("aria live phone frame dropped: type={}", type.isBlank() ? "absent" : type);
+        }
+    }
+
+    private void acceptFrame(LiveSession live, JsonNode frame) {
+        LiveFrameValidator.Result result = LiveFrameValidator.validate(
+                frame.path("mime").asText(null), frame.path("dataBase64").asText(null));
+        if (result.failure() == LiveFrameValidator.Failure.TOO_LARGE) {
+            sendError(live, ERROR_FRAME_TOO_LARGE, true, ERROR_MESSAGE_FRAME_TOO_LARGE);
+            return;
+        }
+        if (!result.accepted()) {
+            sendError(live, ERROR_FRAME_INVALID, true, ERROR_MESSAGE_FRAME_INVALID);
+            return;
+        }
+        // One frame per utterance: a newer frame replaces the pending one.
+        live.pendingFrameBase64(frame.path("dataBase64").asText());
+    }
+
+    private void commit(LiveSession live, JsonNode frame) {
+        boolean wantsImage = frame.path("image").asBoolean(false);
+        String pending = live.takePendingFrameBase64();
+        boolean image = wantsImage && pending != null;
+        if (image) {
+            Map<String, Object> imageFrame = new LinkedHashMap<>();
+            imageFrame.put("type", "image");
+            imageFrame.put("dataBase64", pending);
+            forward(live, imageFrame);
+        }
+        Map<String, Object> commit = new LinkedHashMap<>();
+        commit.put("type", "commit");
+        commit.put("image", image);
+        forward(live, commit);
+    }
+
+    private void forward(LiveSession live, Map<String, Object> message) {
+        LiveBridge bridge = live.bridge();
+        if (bridge == null) {
             return;
         }
         try {
-            socket.session.sendMessage(new TextMessage(json.writeValueAsString(payload)));
-        } catch (IOException e) {
-            log.debug("aria live send failed");
+            bridge.send(json.writeValueAsString(message));
+        } catch (JsonProcessingException e) {
+            log.debug("aria live bridge frame not serializable");
         }
     }
 
-    /** {@code capability_mismatch} then 4002: the one refusal this task emits. */
-    private void reject(LiveSocket socket) {
-        refuse(socket, ERROR_MESSAGE_HELLO_REJECTED);
+    // --- bridge → phone -------------------------------------------------------------------
+
+    private final class BridgeListener implements LiveBridgeListener {
+
+        private final LiveSession live;
+
+        BridgeListener(LiveSession live) {
+            this.live = live;
+        }
+
+        @Override
+        public void onControl(String json) {
+            sendRaw(live, json);
+        }
+
+        @Override
+        public void onAudio(byte[] pcm) {
+            sendBinary(live, pcm);
+        }
+
+        @Override
+        public void onToolCall(String json) {
+            try {
+                toolCalls.onToolCall(live, json);
+            } catch (RuntimeException e) {
+                log.debug("aria live tool call sink failed: reason={}", e.getClass().getSimpleName());
+            }
+        }
+
+        @Override
+        public void onExit(int code) {
+            log.debug("aria live bridge exited: code={}", code);
+            if (!live.closed()) {
+                // The child died under an open socket: say why, then 1011 (spec close codes).
+                bridgeUnavailable(live);
+            }
+        }
     }
 
-    private void refuse(LiveSocket socket, String message) {
+    // --- sending and closing --------------------------------------------------------------
+
+    private void send(LiveSession live, Map<String, Object> payload) {
+        try {
+            sendRaw(live, json.writeValueAsString(payload));
+        } catch (JsonProcessingException e) {
+            log.debug("aria live phone frame not serializable");
+        }
+    }
+
+    private void sendRaw(LiveSession live, String payload) {
+        if (live.closed()) {
+            return;
+        }
+        synchronized (live.lock()) {
+            try {
+                live.ws().sendMessage(new TextMessage(payload));
+            } catch (IOException | IllegalStateException e) {
+                log.debug("aria live send failed");
+            }
+        }
+    }
+
+    private void sendBinary(LiveSession live, byte[] pcm) {
+        if (live.closed() || pcm == null || pcm.length == 0) {
+            return;
+        }
+        synchronized (live.lock()) {
+            try {
+                live.ws().sendMessage(new BinaryMessage(pcm));
+            } catch (IOException | IllegalStateException e) {
+                log.debug("aria live binary send failed");
+            }
+        }
+    }
+
+    private void sendError(LiveSession live, String code, boolean retryable, String message) {
         Map<String, Object> error = new LinkedHashMap<>();
         error.put("type", "error");
         error.put("v", HELLO_VERSION);
-        error.put("code", ERROR_CAPABILITY_MISMATCH);
-        error.put("retryable", false);
+        error.put("code", code);
+        error.put("retryable", retryable);
         error.put("message", message);
-        send(socket, error);
-        close(socket, ERROR_CAPABILITY_MISMATCH);
+        send(live, error);
     }
 
-    private void close(LiveSocket socket, String reason) {
-        socket.cancelDeadline();
-        if (!socket.closed.compareAndSet(false, true)) {
+    /** {@code bridge_internal}, retryable, then 1011 — every way the bridge can be missing. */
+    private void bridgeUnavailable(LiveSession live) {
+        sendError(live, ERROR_BRIDGE_INTERNAL, true, ERROR_MESSAGE_BRIDGE_UNAVAILABLE);
+        close(live, CLOSE_BRIDGE, ERROR_BRIDGE_INTERNAL);
+    }
+
+    /** {@code capability_mismatch} then 4002: the hello-side refusal. */
+    private void reject(LiveSession live) {
+        refuse(live, ERROR_MESSAGE_HELLO_REJECTED);
+    }
+
+    private void refuseOrDrop(LiveSession live) {
+        if (live.helloSeen()) {
+            log.debug("aria live phone frame dropped: unparseable");
             return;
         }
+        reject(live);
+    }
+
+    private void refuse(LiveSession live, String message) {
+        sendError(live, ERROR_CAPABILITY_MISMATCH, false, message);
+        close(live, CLOSE_PROTOCOL, ERROR_CAPABILITY_MISMATCH);
+    }
+
+    private void close(LiveSession live, int code, String reason) {
+        live.cancelHelloDeadline();
+        if (!live.markClosed()) {
+            return;
+        }
+        reap(live);
         try {
-            socket.session.close(new CloseStatus(CLOSE_PROTOCOL, reason));
-        } catch (IOException e) {
+            live.ws().close(new CloseStatus(code, reason));
+        } catch (IOException | IllegalStateException e) {
             log.debug("aria live close failed");
         }
     }
+
+    /** No socket close may leave a child behind (spec §Deployment). */
+    private void reap(LiveSession live) {
+        LiveBridge bridge = live.bridge();
+        if (bridge == null) {
+            return;
+        }
+        try {
+            bridge.close();
+        } catch (RuntimeException e) {
+            log.debug("aria live bridge close failed: reason={}", e.getClass().getSimpleName());
+        }
+    }
+
+    private void expireHello(LiveSession live) {
+        if (!live.closed()) {
+            log.debug("aria live hello deadline missed");
+            // Same shape as the invalid-hello refusal: say why, then close.
+            refuse(live, ERROR_MESSAGE_HELLO_DEADLINE);
+        }
+    }
+
+    // --- validation -----------------------------------------------------------------------
 
     private static boolean validHello(JsonNode hello) {
         if (hello.path("v").asInt(-1) != HELLO_VERSION) {
@@ -223,51 +524,48 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
                 && audio.path("channels").asInt(-1) == CHANNELS;
     }
 
+    /**
+     * The cheap type probe an oversized text frame gets: it reads only up to {@code type},
+     * so a 300 KiB blob is classified without materialising its base64 value. A frame the
+     * probe cannot read is not a {@code frame}.
+     */
+    private String probeType(String payload) {
+        try (JsonParser parser = json.getFactory().createParser(payload)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                return "";
+            }
+            while (parser.nextToken() == JsonToken.FIELD_NAME) {
+                String name = parser.currentName();
+                JsonToken value = parser.nextToken();
+                if ("type".equals(name)) {
+                    return parser.getValueAsString("");
+                }
+                if (value != null && value.isStructStart()) {
+                    parser.skipChildren();
+                }
+            }
+        } catch (IOException e) {
+            return "";
+        }
+        return "";
+    }
+
     private static String attribute(WebSocketSession session, String name) {
         Object value = session.getAttributes().get(name);
         return value instanceof String text ? text : null;
     }
 
-    /** One socket's state until Task 2's {@code LiveSession} takes it over. */
-    private final class LiveSocket {
-
-        final WebSocketSession session;
-        final String sessionId;
-        /** The raw offer, or null; the refusal itself reads the accepted protocol. */
-        final String offeredProtocol;
-        final AtomicBoolean closed = new AtomicBoolean();
-        volatile ScheduledFuture<?> deadline;
-        volatile LiveBridge bridge;
-        private boolean hello;
-
-        LiveSocket(WebSocketSession session, String sessionId, String offeredProtocol) {
-            this.session = session;
-            this.sessionId = sessionId;
-            this.offeredProtocol = offeredProtocol;
+    private static String quote(String value) {
+        if (value == null) {
+            return "\"\"";
         }
-
-        /** @return true for the first hello of this socket only */
-        synchronized boolean claimHello() {
-            if (hello) {
-                return false;
+        StringBuilder quoted = new StringBuilder("\"");
+        for (char c : value.toCharArray()) {
+            if (c == '"' || c == '\\') {
+                quoted.append('\\');
             }
-            hello = true;
-            return true;
+            quoted.append(c);
         }
-
-        void cancelDeadline() {
-            ScheduledFuture<?> pending = deadline;
-            if (pending != null) {
-                pending.cancel(false);
-            }
-        }
-
-        void expireHello() {
-            if (!closed.get()) {
-                log.debug("aria live hello deadline missed");
-                // Same shape as the invalid-hello refusal: say why, then close.
-                refuse(this, ERROR_MESSAGE_HELLO_DEADLINE);
-            }
-        }
+        return quoted.append('"').toString();
     }
 }

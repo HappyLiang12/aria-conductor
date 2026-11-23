@@ -14,6 +14,7 @@ const ITEMS: RailItem[] = [
   { path: '/knowledge', label: 'Knowledge', icon: '📚' },
   { path: '/memory', label: 'Memory', icon: '🧠' },
   { path: '/reports', label: 'Reports', icon: '📊' },
+  { path: '/aria', label: 'Aria', icon: '✦' },
   { path: '/chat', label: 'Chat', icon: '💬' },
   { path: '/workflows', label: 'Workflows', icon: '🔗' },
   { path: '/ops', label: 'Ops', icon: '🛡️' },

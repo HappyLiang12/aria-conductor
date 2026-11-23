@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi, type Mock } from 'vite
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import AriaPanel from '../AriaPanel';
 import type { StreamCallbacks } from '../../api/aria';
 import type { Approval } from '../../types';
@@ -124,7 +125,9 @@ function renderPanel() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <AriaPanel />
+      <MemoryRouter>
+        <AriaPanel />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }

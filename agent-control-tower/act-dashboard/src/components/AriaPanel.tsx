@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { streamMessage } from '../api/aria';
 import type { MemoryProposalSignal, StreamError } from '../api/aria';
 import { listApprovals, getApproval } from '../api/approvals';
@@ -886,6 +887,12 @@ export function AriaPanel() {
   const togglePanel = useCallback(() => setOpen((v) => !v), []);
   const closePanel = useCallback(() => setOpen(false), []);
 
+  const navigate = useNavigate();
+  const openMainChat = useCallback(() => {
+    setOpen(false);
+    navigate(conversationId ? `/aria?conversationId=${encodeURIComponent(conversationId)}` : '/aria');
+  }, [conversationId, navigate]);
+
   /**
    * Replaces the old "the request may have timed out. Please try again." text
    * after the client gave up or the stream died before `done`. A turn the backend
@@ -1409,6 +1416,15 @@ export function AriaPanel() {
                 {clearing ? 'Clearing…' : 'Clear'}
               </button>
             </div>
+            <button
+              type="button"
+              className="ai-close"
+              onClick={openMainChat}
+              aria-label="Open Aria in the main chat"
+              title="Open in main chat"
+            >
+              ⤢
+            </button>
             <button
               type="button"
               className="ai-close"

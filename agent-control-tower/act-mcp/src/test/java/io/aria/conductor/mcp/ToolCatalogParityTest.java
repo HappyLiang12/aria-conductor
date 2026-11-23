@@ -516,11 +516,10 @@ class ToolCatalogParityTest {
      * the same.
      */
     @Test
-    void theDashboardSummaryDescriptionsNameTheRunningRunsDivergence() {
+    void theDashboardSummaryDescriptionsPledgeRestParity() {
         assertThat(catalog.find("get_dashboard_summary").orElseThrow().description())
-                .contains("Same shape as GET /api/v1/dashboard/summary")
-                .contains("runningRuns counts RUNNING only here")
-                .contains("the REST summary also counts WAITING_INPUT");
+                .contains("Same shape and definitions as GET /api/v1/dashboard/summary")
+                .doesNotContain("runningRuns counts RUNNING only");
     }
 
     /**

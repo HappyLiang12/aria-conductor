@@ -161,14 +161,14 @@ describe('ExecutiveSummary honest states', () => {
     expect(screen.queryByText('Cumulative spend')).not.toBeInTheDocument();
   });
 
-  it('labels reported-by-runs token scope without a spend claim', async () => {
+  it('labels recorded token scope without a spend claim', async () => {
     mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
     mockedRuns.mockResolvedValue([] as never);
     renderSummary();
 
     expect(await screen.findByText('Recorded tokens')).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByText('Reported by runs; timed-out runs may be unrecorded')).toBeInTheDocument(),
+      expect(screen.getByText('Cumulative recorded input + output over retained records')).toBeInTheDocument(),
     );
     expect(screen.queryByText('Tokens Used')).not.toBeInTheDocument();
   });

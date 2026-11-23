@@ -69,6 +69,8 @@ public class McpProperties {
             "get_llm_provider", "list_reports", "list_runs", "list_running_runs", "get_run",
             "list_skills", "get_skill", "list_agent_skills", "list_workflow_templates",
             "get_workflow",
+            // 2026-11-23 live voice turn: the clock is read-only and stateless.
+            "get_time",
             "recall_memory", "list_memory_entities", "get_memory_entity",
             "list_memory_proposals", "get_context_manifest",
             // 2026-11-21 glasses: ar_render changes no platform state (D3).

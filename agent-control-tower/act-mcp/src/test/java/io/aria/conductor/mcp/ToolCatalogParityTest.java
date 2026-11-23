@@ -144,6 +144,8 @@ class ToolCatalogParityTest {
         expected.put("cancel_scheduled_job", ToolPolicy.WORKER_WRITE);
         expected.put("get_latest_conversation", ToolPolicy.WORKER_READ);
         expected.put("get_conversation_timeline", ToolPolicy.WORKER_READ);
+        // live voice turn (2026-11-23): the model has no clock of its own
+        expected.put("get_time", ToolPolicy.WORKER_READ);
         // glasses AR render (2026-11-21): renders on the device, changes no platform state
         expected.put("ar_render", ToolPolicy.WORKER_READ);
         // the cores' own read-only web tools, listed explicitly for
@@ -221,13 +223,13 @@ class ToolCatalogParityTest {
 
     /**
      * The memory surface is eight tools on top of the 59-descriptor catalog, plus the
-     * glasses {@code ar_render}: 66 registered names, 68 descriptors including the two
-     * core-native web tools.
+     * glasses {@code ar_render} and the live turn's {@code get_time}: 67 registered
+     * names, 69 descriptors including the two core-native web tools.
      */
     @Test
     void theCatalogCoversTheMemorySurface() {
-        assertThat(catalog.tools()).hasSize(68);
-        assertThat(catalog.names()).hasSize(66);
+        assertThat(catalog.tools()).hasSize(69);
+        assertThat(catalog.names()).hasSize(67);
         assertThat(catalog.tools())
                 .filteredOn(tool -> tool.policy() == ToolPolicy.OPERATOR_ONLY)
                 .hasSize(10);
@@ -257,8 +259,8 @@ class ToolCatalogParityTest {
                     .contains("list_memory_proposals (WORKER_READ)")
                     .contains("get_context_manifest (WORKER_READ)")
                     .contains("ar_render (WORKER_READ)");
-            // 68 descriptors minus the 10 operator-only entries.
-            assertThat(section.content().lines()).hasSize(58);
+            // 69 descriptors minus the 10 operator-only entries.
+            assertThat(section.content().lines()).hasSize(59);
             assertThat(section.content().length()).isLessThan(3_000);
             assertThat(section.truncated()).isFalse();
         });

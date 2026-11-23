@@ -2,6 +2,7 @@ package io.aria.conductor.aria.controller;
 
 import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.aria.dto.ConversationListItem;
 import io.aria.conductor.aria.dto.ConversationSummary;
 import io.aria.conductor.aria.dto.TimelineEntry;
 import io.aria.conductor.aria.repository.ConversationRunRepository;
@@ -19,6 +20,7 @@ import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.execution.telemetry.RunTelemetryService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -83,6 +85,59 @@ public class AriaConversationController {
 
     private static String refusal(String action, String surface) {
         return "Operator authority required: " + action + " is an operator decision. " + surface;
+    }
+
+    /** The longest title the switcher shows before clipping; one line, first prompt. */
+    private static final int TITLE_MAX_CHARS = 60;
+
+    /**
+     * The conversation switcher: one row per conversation, newest activity first.
+     * A conversation's title is the first non-blank prompt it was started with;
+     * an id whose runs carry no seed reads as "Untitled".
+     */
+    @GetMapping
+    public ResponseEntity<List<ConversationListItem>> listConversations(
+            @RequestParam(defaultValue = "50") int limit) {
+        int capped = Math.max(1, Math.min(limit, 100));
+        List<RunRepository.ConversationAggregate> aggregates =
+                runRepository.findConversationAggregates(PageRequest.of(0, capped));
+        if (aggregates.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
+
+        List<String> conversationIds = aggregates.stream()
+                .map(RunRepository.ConversationAggregate::getConversationId)
+                .toList();
+        Map<String, String> firstSeeds = new HashMap<>();
+        for (Run run : runRepository.findByConversationIdInOrderByCreatedAtAsc(conversationIds)) {
+            String seed = run.getPromptSeed();
+            if (seed != null && !seed.isBlank()) {
+                firstSeeds.putIfAbsent(run.getConversationId(), seed);
+            }
+        }
+
+        List<ConversationListItem> items = aggregates.stream()
+                .map(aggregate -> ConversationListItem.builder()
+                        .conversationId(aggregate.getConversationId())
+                        .title(titleOf(firstSeeds.get(aggregate.getConversationId())))
+                        .lastMessageAt(aggregate.getLastMessageAt())
+                        .runCount(aggregate.getRunCount())
+                        .build())
+                .toList();
+        return ResponseEntity.ok(items);
+    }
+
+    static String titleOf(String promptSeed) {
+        if (promptSeed == null) {
+            return "Untitled";
+        }
+        String firstLine = promptSeed.strip().split("\\R", 2)[0].strip();
+        if (firstLine.isEmpty()) {
+            return "Untitled";
+        }
+        return firstLine.length() > TITLE_MAX_CHARS
+                ? firstLine.substring(0, TITLE_MAX_CHARS) + "…"
+                : firstLine;
     }
 
     /**

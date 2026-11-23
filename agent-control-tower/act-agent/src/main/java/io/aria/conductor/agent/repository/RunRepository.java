@@ -25,6 +25,25 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findByConversationIdOrderByCreatedAtAsc(String conversationId);
 
     /**
+     * The conversation switcher's aggregate: one row per conversation id with its
+     * newest run time and run count, newest conversation first. A null or blank
+     * conversation id is not a conversation and is excluded in the query.
+     */
+    @Query("SELECT r.conversationId AS conversationId, MAX(r.createdAt) AS lastMessageAt, COUNT(r) AS runCount "
+            + "FROM Run r WHERE r.conversationId IS NOT NULL AND TRIM(r.conversationId) <> '' "
+            + "GROUP BY r.conversationId ORDER BY MAX(r.createdAt) DESC, r.conversationId ASC")
+    List<ConversationAggregate> findConversationAggregates(Pageable pageable);
+
+    interface ConversationAggregate {
+        String getConversationId();
+        Instant getLastMessageAt();
+        long getRunCount();
+    }
+
+    /** Bulk first-seed lookup for the aggregates above; avoids one query per conversation. */
+    List<Run> findByConversationIdInOrderByCreatedAtAsc(List<String> conversationIds);
+
+    /**
      * P6: the bounded conversation-history load. The last 20 runs of a conversation,
      * newest first, are selected by the database — no full-table read followed by a
      * {@code subList}. A conversation with no runs yields an empty list.

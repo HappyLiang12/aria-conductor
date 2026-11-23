@@ -170,10 +170,6 @@ test('OpenCode core: create agent → runtime switch → run → verify', async 
   // Fill prompt
   await page.locator('main .form-card textarea').fill('What is 2+2? Reply with just the number.');
 
-  // Set max iterations to 1 for quick test
-  const maxIterInput = page.locator('main .form-card input[type="number"]');
-  await maxIterInput.fill('1');
-
   await page.screenshot({ path: 'e2e/screenshots/oc-06-create-run.png' });
 
   // Submit the run

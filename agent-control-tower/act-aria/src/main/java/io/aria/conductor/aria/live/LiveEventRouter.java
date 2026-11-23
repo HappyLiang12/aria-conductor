@@ -92,8 +92,12 @@ public class LiveEventRouter {
      * Parks the turn's run on a gated call: WAITING_INPUT, the pending call on the socket,
      * the park, and the two frames the phone renders the ask from.
      *
-     * <p>The park is registered last: a finalize that arrives before the row is committed
-     * WAITING_INPUT is answered 409 rather than settling a run that never waited. A run
+     * <p>The park is registered only once the row is committed WAITING_INPUT: a finalize
+     * that arrives before that is answered 409 rather than settling a run that never
+     * waited. It is registered before the pending call is held, because the park is the
+     * only thing a socket close can release — a close landing between the two writes would
+     * otherwise find nothing to unpark and leave the row WAITING_INPUT with no owner,
+     * while a close after the park settles it ABORTED through the finalize callback. A run
      * that could not take the park (an operator cancel committed first) is reported as the
      * failure it is instead of being offered to an operator who no longer owns it.
      */
@@ -111,8 +115,8 @@ public class LiveEventRouter {
         }
         LivePendingToolCall call = new LivePendingToolCall(runId, approvalId, toolName, riskTier,
                 callId, arguments);
-        session.pendingCall(call);
         park.park(runId, () -> onFinalize(session, call));
+        session.pendingCall(call);
         frames.toPhone(session, LiveFrames.toolStatus(callId, toolName, "approval"));
         frames.toPhone(session, LiveFrames.approvalRequired(runId, approvalId, toolName, riskTier));
         log.debug("live run parked on approval: id={}", runId);

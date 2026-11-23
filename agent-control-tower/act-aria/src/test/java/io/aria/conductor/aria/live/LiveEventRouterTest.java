@@ -31,8 +31,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -238,6 +240,34 @@ class LiveEventRouterTest {
         assertThat(bridge.lines()).singleElement().asString()
                 .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
                 .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+    }
+
+    /**
+     * The close window: the socket dies while the park is being registered. The park is the
+     * only thing a close can release, so it must be registered before the pending call is
+     * held — otherwise the close finds a call it cannot unpark, releases nothing, and the
+     * row sits WAITING_INPUT with no owner (finalize is 409, the approval has no recipient).
+     */
+    @Test
+    void aCloseBetweenTheParkAndThePendingCallStillAbortsTheRun() {
+        when(runs.settle(any(LiveSession.class), eq(runId), eq(RunStatus.WAITING_INPUT),
+                eq("approval pending"))).thenReturn(RunStatus.WAITING_INPUT);
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.SESSION_CLOSED_REASON))).thenReturn(RunStatus.ABORTED);
+        LiveSession closing = spy(new LiveSession("s-close", "conv-live", ws, null));
+        closing.bridge(bridge);
+        closing.runId(runId);
+        doAnswer(invocation -> {
+            // The socket closes here: after the park is in place, before this call is held.
+            router.socketClosed(closing);
+            return invocation.callRealMethod();
+        }).when(closing).pendingCall(any());
+
+        router.parkForApproval(closing, runId, approvalId, "get_time", "READ", "c1", arguments);
+
+        verify(runs).settle(eq(closing), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.SESSION_CLOSED_REASON));
+        assertThat(park.parked(runId)).as("no park outlives the closed socket").isFalse();
     }
 
     @Test

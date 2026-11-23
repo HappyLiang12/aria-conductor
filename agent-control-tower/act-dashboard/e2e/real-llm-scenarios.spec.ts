@@ -173,8 +173,6 @@ test('rl-02 OpenCode agent: create via UI → real-LLM run → result displayed'
   await page.locator('.form-card textarea').fill(
     'Reply with the current year and the capital of France. Do not use any tools.',
   );
-  const maxIterInput = page.locator('.form-card input[type="number"]');
-  await maxIterInput.fill('2');
   await page.screenshot({ path: 'e2e/screenshots/rl-05-create-run.png' });
 
   await page.locator('.form-card button[type="submit"]').click();

@@ -356,6 +356,13 @@ class OpenCodeLaunchProfileTest {
         assertThat(permission.path("task").asText()).isEqualTo("deny");
         assertThat(permission.path("question").asText()).isEqualTo("deny");
         assertThat(permission.path("*").asText()).isEqualTo("deny");
+
+        JsonNode model = governedConfig(fixture).path("provider")
+                .path("aria-deepseek").path("models").path("deepseek-chat");
+        assertThat(model.path("attachment").asBoolean())
+                .as("a FULL HOST run must still declare the governed model's image capability")
+                .isTrue();
+        assertThat(model.path("modalities").path("input").toString()).isEqualTo("[\"text\",\"image\"]");
     }
 
     /** The platform switch covers the Aria role too, not only a worker. */

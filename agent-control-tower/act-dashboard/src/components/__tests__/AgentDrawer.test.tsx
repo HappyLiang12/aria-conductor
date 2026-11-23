@@ -433,7 +433,7 @@ describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
     vi.mocked(listRuns).mockResolvedValue([runningRun]);
     ui();
 
-    await waitFor(() => expect(screen.getByText(/Iter 3 \/ 15/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/3 turns/)).toBeInTheDocument());
     expect(screen.queryByText('Tokens')).not.toBeInTheDocument();
     expect(screen.queryByText('Context')).not.toBeInTheDocument();
     expect(screen.queryByText(/^cap /)).not.toBeInTheDocument();

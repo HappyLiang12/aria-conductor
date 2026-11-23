@@ -6,7 +6,7 @@ A practical guide to operating your AI agent fleet through the Aria Conductor da
 
 ## Dashboard Layout
 
-After opening `http://localhost:3000`, you'll see:
+After opening the Dashboard URL printed by your start script (local dev: `http://localhost:5173`; container stack: `http://localhost:3000`), you'll see:
 
 | Area | What it does |
 |------|-------------|
@@ -69,7 +69,7 @@ approval prompt); write tools are available to a **SANDBOX** worker inside its c
 
 ## Running Agents (Runs Page)
 
-Navigate to `http://localhost:3000/runs`.
+Navigate to the `/runs` route on your dashboard URL.
 
 ### Start a Run
 1. Click **+ Start Run**
@@ -152,7 +152,7 @@ There is no standalone approvals page. Blocking asks appear on **Overview → Ne
 
 Approve, deny, or answer from the row (unlinked asks are decidable inline). A native ask also
 carries the core's own expiry. Post-run **review requests** block nothing: they appear as a
-single "completed runs awaiting review" count that links to the board's REVIEW column, not as
+single "runs awaiting review" count that links to the board's REVIEW column, not as
 decision rows.
 
 ---

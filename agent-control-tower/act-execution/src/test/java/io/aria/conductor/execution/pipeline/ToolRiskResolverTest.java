@@ -102,9 +102,12 @@ class ToolRiskResolverTest {
     void resolveReturnsPushForNativeWriteAndEdit() {
         when(toolRepo.findByName("Write")).thenReturn(Optional.empty());
         when(toolRepo.findByName("Edit")).thenReturn(Optional.empty());
+        when(toolRepo.findByName("patch")).thenReturn(Optional.empty());
 
         assertThat(resolver.resolve("Write")).isEqualTo(RiskTier.PUSH);
         assertThat(resolver.resolve("Edit")).isEqualTo(RiskTier.PUSH);
+        // opencode's patch is a file write; it must not fall through to READ.
+        assertThat(resolver.resolve("patch")).isEqualTo(RiskTier.PUSH);
     }
 
     @Test

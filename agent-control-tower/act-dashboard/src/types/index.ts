@@ -102,7 +102,7 @@ export interface Approval {
   reason: string;
   requestedAt: string;
   decidedAt: string | null;
-  expiresAt: string;
+  expiresAt: string | null;
   approvalType?: ApprovalType;
   content?: string;
   contentKind?: ContentKind;

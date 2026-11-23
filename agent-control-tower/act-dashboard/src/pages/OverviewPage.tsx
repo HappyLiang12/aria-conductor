@@ -139,9 +139,9 @@ export default function OverviewPage() {
     && attention.count === 0;
 
   const openReviewBoard = () => {
-    document
-      .querySelector('[data-testid="kanban-board"]')
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const target = document.querySelector('[data-testid="lane-REVIEW"]')
+      ?? document.querySelector('[data-testid="kanban-board"]');
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const handleActivate = (row: DecisionRow) => {

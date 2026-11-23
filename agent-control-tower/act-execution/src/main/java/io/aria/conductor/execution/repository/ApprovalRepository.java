@@ -87,13 +87,15 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
            "a.reason = :reason, a.decidedAt = :now " +
            "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
-           "and a.askType = :askType")
+           "and a.askType = :askType " +
+           "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
     int expirePendingAsksByKanbanItemId(@Param("itemId") String itemId,
                                         @Param("askType") Approval.AskType askType,
                                         @Param("reason") String reason,
                                         @Param("now") Instant now);
 
-    /** Bulk deny of a card's PENDING asks (work cancelled): single-statement     *  bulk update, no entity load; callers must be @Transactional and results
+    /** Bulk deny of a card's PENDING asks (work cancelled): single-statement
+     *  bulk update, no entity load; callers must be @Transactional and results
      *  bypass the persistence context. Only {@code LEGACY_GATE} rows are swept:
      *  rows with {@code source = ACP_PERMISSION} are owned by
      *  {@code AcpPermissionCoordinator} ({@code cancelPendingForRun} / the run-end

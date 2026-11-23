@@ -29,7 +29,12 @@ export interface DecisionRow {
 }
 
 const SUMMARY_MAX = 160;
-const RISK_RANK: Record<string, number> = { DESTRUCTIVE: 0, PUSH: 1, READ: 2 };
+const RISK_RANK: Record<string, number> = {
+  DESTRUCTIVE: 0,
+  PUSH: 1,
+  WRITE_LOCAL: 2,
+  READ: 3,
+};
 
 /** One short line for the queue: markdown stripped, whitespace collapsed, bounded. */
 function summarize(text: string): string {
@@ -42,7 +47,7 @@ function summarize(text: string): string {
 }
 
 function riskRank(riskTier: string | null): number {
-  return riskTier != null && riskTier in RISK_RANK ? RISK_RANK[riskTier] : 3;
+  return riskTier != null && riskTier in RISK_RANK ? RISK_RANK[riskTier] : 4;
 }
 
 function isReviewRequest(approval: { askType?: string | null }): boolean {
@@ -115,7 +120,12 @@ export function useDecisionQueue(options: { locked: boolean }): {
 
   const approvals = approvalsQuery.data ?? [];
   const blockingApprovals = approvals.filter((approval) => !isReviewRequest(approval));
-  const reviewCount = approvalsQuery.data ? approvals.length - blockingApprovals.length : null;
+  // Review counts follow the same authority rule as decision counts: a stale
+  // refresh or a failed board join is not a fresh count.
+  const reviewCount =
+    phase === 'success' && !partial && approvalsQuery.data
+      ? approvals.length - blockingApprovals.length
+      : null;
 
   const rows = blockingApprovals
     .map((approval): DecisionRow => {
@@ -130,7 +140,8 @@ export function useDecisionQueue(options: { locked: boolean }): {
         askType: approval.askType ?? approval.approvalType ?? 'APPROVAL',
         approvalType: approval.approvalType ?? null,
         source: approval.source ?? '',
-        reason: summarize(approval.content ?? approval.reason ?? 'Decision requested'),
+        reason: summarize(approval.content ?? approval.reason ?? 'Decision requested')
+          || 'Decision requested',
         requestedAt: approval.requestedAt,
         isPermission: nativePermissionOf(approval) !== null,
         riskTier: approval.riskTier ?? null,

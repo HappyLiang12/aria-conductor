@@ -57,9 +57,13 @@ function riskOf(row: DecisionRow): { label: string; className: string } {
       return { label: 'Dangerous', className: 'danger' };
     case 'PUSH':
       return { label: 'Writes', className: 'warn' };
+    case 'WRITE_LOCAL':
+      return { label: 'Writes locally', className: 'warn' };
     case 'READ':
       return { label: 'Read', className: 'dim' };
     default:
+      // An unrecognised tier is shown verbatim, never as a reassuring label.
+      if (row.riskTier) return { label: row.riskTier, className: 'dim' };
       if (row.approvalType === 'SPEC_REVIEW') return { label: 'Spec review', className: 'accent' };
       if (row.source === 'CLARIFICATION') return { label: 'Question', className: 'accent' };
       return { label: 'Approval', className: 'dim' };
@@ -87,6 +91,9 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
   const clarification = taskless && row.source === 'CLARIFICATION';
   const risk = riskOf(row);
   const expiry = expiryLabel(row.expiresAt);
+  const slotNote = row.blocksRunSlot
+    ? `Holds a run slot — ${taskless ? 'task details unavailable — answer here.' : 'open the card to answer.'}`
+    : null;
 
   return (
     <li className="decision-row" data-risk={row.riskTier ?? undefined} data-testid={`decision-row-${row.id}`}>
@@ -99,11 +106,7 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
       <div className="decision-row__meta">
         <span>{waited(row.requestedAt)}</span>
         {expiry && <span>{expiry}</span>}
-        {clarification && (
-          <span className="decision-row__note">
-            Holds a run slot — task details unavailable — answer here.
-          </span>
-        )}
+        {slotNote && <span className="decision-row__note">{slotNote}</span>}
         {taskless && !clarification && (
           <span className="decision-row__note">Task details unavailable — decide here.</span>
         )}
@@ -247,7 +250,7 @@ export function DecisionQueue({
       {reviewCount !== null && reviewCount > 0 && (
         <div className="decision-queue__reviews" data-testid="decision-reviews">
           <span>
-            {reviewCount} completed run{reviewCount === 1 ? '' : 's'} awaiting review
+            {reviewCount} run{reviewCount === 1 ? '' : 's'} awaiting review
           </span>
           {onOpenReviews && (
             <button type="button" className="btn" onClick={onOpenReviews}>

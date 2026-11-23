@@ -35,7 +35,9 @@ test.describe('Ops monitoring surface', () => {
     await expect
       .poll(async () => {
         const { data: now } = await apiCall(request, 'GET', '/approvals');
-        const apiPending = (Array.isArray(now) ? now : []).filter((a) => a?.status === 'PENDING').length;
+        // Ops mirrors the blocking queue: post-run REVIEW_REQUEST asks are board work.
+        const apiPending = (Array.isArray(now) ? now : [])
+          .filter((a) => a?.status === 'PENDING' && a?.askType !== 'REVIEW_REQUEST').length;
         if (apiPending === 0) {
           return inboxZero.isVisible().catch(() => false);
         }

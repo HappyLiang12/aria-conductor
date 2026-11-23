@@ -51,7 +51,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void validHelloIsAnsweredWithReadyAndOpensTheBridge() throws Exception {
-        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL);
+        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
         handler(5000).afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -59,7 +59,7 @@ class LiveWebSocketHandlerTest {
         JsonNode ready = json.readTree(sentPayload(session));
         assertThat(ready.path("type").asText()).isEqualTo("ready");
         assertThat(ready.path("v").asInt()).isEqualTo(1);
-        assertThat(ready.path("model").asText()).isEqualTo(LiveWebSocketHandler.MODEL);
+        assertThat(ready.path("model").asText()).isEqualTo("qwen3.8-omni-flash-realtime");
         assertThat(ready.path("modalities").size()).isEqualTo(2);
         assertThat(ready.path("maxSessionSec").asInt()).isEqualTo(7200);
         assertThat(ready.path("sessionId").asText()).isNotBlank();
@@ -69,7 +69,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void readyIsSentBeforeTheBridgeIsOpened() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         AtomicReference<String> frameAtOpen = new AtomicReference<>();
         LiveBridgeFactory recording = (sessionId, conversationId) -> {
             try {
@@ -102,7 +102,7 @@ class LiveWebSocketHandlerTest {
         };
 
         for (String invalid : invalids) {
-            WebSocketSession session = session("s", null);
+            WebSocketSession session = session("s", null, null);
             handler(5000).afterConnectionEstablished(session);
 
             handler.handleTextMessage(session, new TextMessage(invalid));
@@ -119,7 +119,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void aSecondHelloIsRefused() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         handler(5000).afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage(HELLO));
 
@@ -130,7 +130,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void aNonHelloFrameBeforeHelloIsRefused() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         handler(5000).afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"text\",\"text\":\"hi\"}"));
@@ -140,7 +140,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void unparseableJsonIsRefused() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         handler(5000).afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage("not json"));
@@ -150,7 +150,9 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void aWrongOfferedSubprotocolGetsReadyThen4002() throws Exception {
-        WebSocketSession session = session("s1", "aria-live.v2");
+        // Spring echoes only a supported protocol, so an offer it cannot honour
+        // leaves the session with no accepted protocol at all.
+        WebSocketSession session = session("s1", "aria-live.v2", null);
         handler(5000).afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -160,17 +162,46 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void aSocketThatStaysSilentClosesAtTheDeadline() throws Exception {
-        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL);
+    void anOfferedSubprotocolTheServerAcceptedStaysOpen() throws Exception {
+        // "aria-live.v1, x" is a valid offer: Spring picks aria-live.v1 out of it
+        // and echoes that, so the raw header must not decide the refusal.
+        WebSocketSession session = session("s1", "aria-live.v1, x", LiveWebSocketHandler.PROTOCOL);
+        handler(5000).afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session, new TextMessage(HELLO));
+
+        assertThat(json.readTree(sentPayload(session)).path("type").asText()).isEqualTo("ready");
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void anOfferTheServerCouldNotHonourClosesEvenIfItLooksLikeTheProtocol() throws Exception {
+        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL + "x", null);
+        handler(5000).afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session, new TextMessage(HELLO));
+
+        verify(session).close(argThat(status -> status.getCode() == 4002));
+    }
+
+    @Test
+    void aSocketThatStaysSilentSaysWhyThenClosesAtTheDeadline() throws Exception {
+        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
 
         handler(50).afterConnectionEstablished(session);
 
         verify(session, timeout(2000)).close(argThat(status -> status.getCode() == 4002));
+        JsonNode error = json.readTree(sentPayload(session));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("capability_mismatch");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("hello deadline exceeded");
     }
 
     @Test
     void aBinaryFrameIsDroppedWithoutClosing() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         handler(5000).afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage(HELLO));
 
@@ -181,7 +212,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void closingTheSocketReapsTheBridge() throws Exception {
-        WebSocketSession session = session("s1", null);
+        WebSocketSession session = session("s1", null, null);
         handler(5000).afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage(HELLO));
 
@@ -192,7 +223,7 @@ class LiveWebSocketHandlerTest {
 
     @Test
     void aFrameForAnUnknownSocketIsIgnored() throws Exception {
-        WebSocketSession session = session("unknown", null);
+        WebSocketSession session = session("unknown", null, null);
 
         handler(5000).handleTextMessage(session, new TextMessage(HELLO));
 
@@ -205,7 +236,7 @@ class LiveWebSocketHandlerTest {
         return handler;
     }
 
-    private static WebSocketSession session(String id, String offeredProtocol) {
+    private static WebSocketSession session(String id, String offeredProtocol, String acceptedProtocol) {
         Map<String, Object> attributes = new HashMap<>();
         if (offeredProtocol != null) {
             attributes.put(LiveHandshakeInterceptor.OFFERED_PROTOCOL_ATTRIBUTE, offeredProtocol);
@@ -213,6 +244,7 @@ class LiveWebSocketHandlerTest {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn(id);
         when(session.getAttributes()).thenReturn(attributes);
+        when(session.getAcceptedProtocol()).thenReturn(acceptedProtocol);
         return session;
     }
 

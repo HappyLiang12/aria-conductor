@@ -24,7 +24,8 @@ import java.util.Map;
  *
  * <p>It also records the offered subprotocol for the handler: the handshake
  * succeeds for any offer (or none) and the handler closes 4002 after
- * {@code ready} when an offer other than {@code aria-live.v1} was made.
+ * {@code ready} only when a protocol was offered and the one Spring accepted is
+ * not {@code aria-live.v1}.
  */
 @Component
 public class LiveHandshakeInterceptor implements HandshakeInterceptor {

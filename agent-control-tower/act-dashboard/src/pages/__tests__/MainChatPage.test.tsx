@@ -127,6 +127,7 @@ describe('MainChatPage', () => {
   it('stops the turn through the server cancel path once the run id is known', async () => {
     renderPage();
     await screen.findByText('Crew deployed.');
+    const listCallsBeforeStop = mockList.mock.calls.length;
 
     fireEvent.change(screen.getByPlaceholderText(/Ask Aria anything/), { target: { value: 'Long job' } });
     fireEvent.click(screen.getByRole('button', { name: /Send message/i }));
@@ -138,6 +139,9 @@ describe('MainChatPage', () => {
 
     expect(mockCancel).toHaveBeenCalledWith('run-42');
     await waitFor(() => expect(screen.getByRole('button', { name: /Send message/i })).toBeTruthy());
+    // The stopped turn's conversation exists server-side, so the switcher must
+    // refresh once the cancel settles instead of waiting for a page reload.
+    await waitFor(() => expect(mockList.mock.calls.length).toBeGreaterThan(listCallsBeforeStop));
   });
 
   it('deletes a conversation only after confirmation and then starts a new chat', async () => {

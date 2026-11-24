@@ -301,20 +301,28 @@ export default function MainChatPage() {
     setBusy(false);
     setActiveRunId(null);
     if (runId) {
-      cancelRun(runId).catch((err) => {
-        setEntries((prev) => [
-          ...prev,
-          {
-            id: entryId(),
-            role: 'assistant',
-            content: `The server-side cancel could not be confirmed: ${err instanceof Error ? err.message : String(err)}`,
-            timestamp: new Date().toISOString(),
-            error: true,
-          },
-        ]);
-      });
+      void cancelRun(runId)
+        .catch((err) => {
+          setEntries((prev) => [
+            ...prev,
+            {
+              id: entryId(),
+              role: 'assistant',
+              content: `The server-side cancel could not be confirmed: ${err instanceof Error ? err.message : String(err)}`,
+              timestamp: new Date().toISOString(),
+              error: true,
+            },
+          ]);
+        })
+        .finally(() => {
+          // The stopped turn already has a server-side conversation; refresh the
+          // switcher instead of waiting for a page reload.
+          void refreshConversations();
+        });
+    } else {
+      void refreshConversations();
     }
-  }, []);
+  }, [refreshConversations]);
 
   const handleDelete = useCallback((id: string) => {
     if (busy) return;

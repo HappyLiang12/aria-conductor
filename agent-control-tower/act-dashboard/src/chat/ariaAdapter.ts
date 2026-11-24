@@ -37,6 +37,9 @@ export function createAriaAdapter(options: {
     async *run({ messages, abortSignal }) {
       const controller = new AbortController();
       current = controller;
+      // The runtime can hand over a signal that is already aborted; the request
+      // must not open at all in that case.
+      if (abortSignal.aborted) controller.abort();
       const forwardAbort = () => controller.abort();
       abortSignal.addEventListener('abort', forwardAbort);
 
@@ -47,11 +50,17 @@ export function createAriaAdapter(options: {
       let finished = false;
       let failure: StreamError | null = null;
       let wake: (() => void) | null = null;
+      // Every callback that may change the snapshot bumps `version`; `emitted`
+      // records which version the last yielded chunk was built from. Events
+      // dispatched while the generator is suspended at `yield` (a whole read's
+      // frames, including a terminal one) are therefore seen on the next pull.
+      let version = 0;
+      let emitted = 0;
       const snapshot = (): Part[] => [
         ...[...tools.values()].map((p) => ({ ...p })),
         ...(output ? [{ type: 'text' as const, text: output }] : []),
       ];
-      const notify = () => { const w = wake; wake = null; w?.(); };
+      const notify = () => { version += 1; const w = wake; wake = null; w?.(); };
 
       void stream(options.conversationId, text, options.getHistory(), {
         onToolCall: (name, args, toolCallId) => {
@@ -62,7 +71,11 @@ export function createAriaAdapter(options: {
         onToolResult: (name, result, ok, toolCallId) => {
           const id = toolCallId ?? [...tools].find(([, p]) => p.toolName === name)?.[0];
           if (!id) return;
-          tools.set(id, { ...(tools.get(id) ?? { type: 'tool-call', toolCallId: id, toolName: name }), result: safeJson(result), isError: !ok });
+          tools.set(id, {
+            ...(tools.get(id) ?? { type: 'tool-call', toolCallId: id, toolName: name, args: {}, argsText: '' }),
+            result: safeJson(result),
+            isError: !ok,
+          });
           notify();
         },
         onApprovalRequired: (ask) => {
@@ -90,18 +103,33 @@ export function createAriaAdapter(options: {
           // `streamMessage` returns (instead of throwing) when the request is
           // aborted, so a settled promise with no terminal frame must release
           // the loop too — otherwise `cancel()` leaves the run suspended.
-          finished = true;
-          notify();
+          if (!finished) { finished = true; notify(); }
         });
 
       try {
         while (true) {
-          // The parts mirror the wire frames; assistant-ui declares its content
-          // union with literal discriminants, so the projection is asserted once.
-          const content = snapshot() as unknown as NonNullable<ChatModelRunResult['content']>;
-          if (content.length > 0) yield { content };
-          if (finished) break;
-          await new Promise<void>((resolve) => { wake = resolve; });
+          if (version === emitted && !finished) {
+            // Nothing new yet: park until a callback bumps the version.
+            await new Promise<void>((resolve) => { wake = resolve; });
+            continue;
+          }
+          if (version !== emitted) {
+            // Consume the version even when there is nothing to show, so an
+            // empty snapshot cannot spin the loop.
+            emitted = version;
+            // The parts mirror the wire frames; assistant-ui declares its content
+            // union with literal discriminants, so the projection is asserted once.
+            const content = snapshot() as unknown as NonNullable<ChatModelRunResult['content']>;
+            if (content.length > 0) {
+              // Re-enter the loop after the yield: frames dispatched while the
+              // consumer was holding this chunk (a tool result, the answer, the
+              // terminal frame) are emitted too, finished or not.
+              yield { content };
+            }
+            continue;
+          }
+          // Version consumed and the run is over: nothing can change any more.
+          break;
         }
       } finally {
         abortSignal.removeEventListener('abort', forwardAbort);

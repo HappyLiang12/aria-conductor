@@ -11,6 +11,10 @@ import { test, expect, type Page } from '@playwright/test';
  * thread and Allow must POST the decision to the frame's ask with
  * `{ approved: true }`. The request is answered by a stub, so this proves the
  * request shape and the card's receipt, not that a live backend accepted it.
+ *
+ * The stop case is stubbed the same way: the stream is held open and never
+ * fulfilled, so Stop's abort is observed in the browser. It is evidence of the
+ * client's cancel path, not of a live backend stopping a run.
  */
 
 const ROUTES = [
@@ -97,6 +101,20 @@ async function sendApprovalTurn(page: Page) {
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect(page.locator('.mc-stack').getByText('Approve write_file?')).toBeVisible({ timeout: 15_000 });
 }
+
+/** A completed turn whose assistant message carries a markdown link. */
+const LINK_TURN = [
+  'event: thinking',
+  'data: {"status":"processing","runId":"run-ui-refresh","mode":"core"}',
+  '',
+  'event: message',
+  'data: {"content":"Read [the runbook](https://example.com/runbook) before you decide."}',
+  '',
+  'event: done',
+  'data: {"runId":"run-ui-refresh","conversationId":"conv-ui-refresh","intent":"answer"}',
+  '',
+  '',
+].join('\n');
 
 test.describe('UI refresh acceptance', () => {
   test('every route renders in the new shell without console errors', async ({ page }) => {
@@ -247,6 +265,86 @@ test.describe('UI refresh acceptance', () => {
     const lightError = await contrast(page, '.mc-stack [role="alert"]');
     console.log(`contrast light decision error: ${lightError.toFixed(2)}`);
     expect(lightError, 'light decision error').toBeGreaterThanOrEqual(4.5);
+  });
+
+  test('markdown links meet AA at rest and on hover in both themes', async ({ page }) => {
+    await stubAriaConversations(page);
+    await page.route('**/api/v1/aria/chat/stream', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body: LINK_TURN,
+      }));
+
+    await page.goto('/aria');
+    await page.getByRole('textbox').fill('Show me the runbook');
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const link = page.locator('.mc-stack .aui-md-a').first();
+    await expect(link).toBeVisible({ timeout: 15_000 });
+    await page.addStyleTag({ content: '* { transition: none !important; }' });
+
+    // Resting colour, pointer away from the link, then the hovered colour. The
+    // earlier `hover:text-link/80` measured ~4.3:1 on white; both states must
+    // now clear AA.
+    await page.mouse.move(0, 0);
+    const darkRest = await contrast(page, '.mc-stack .aui-md-a');
+    await link.hover();
+    const darkHover = await contrast(page, '.mc-stack .aui-md-a');
+    console.log(`contrast dark link: rest=${darkRest.toFixed(2)} hover=${darkHover.toFixed(2)}`);
+    expect(darkRest, 'dark link at rest').toBeGreaterThanOrEqual(4.5);
+    expect(darkHover, 'dark link on hover').toBeGreaterThanOrEqual(4.5);
+
+    await page.getByRole('button', { name: 'Toggle theme' }).click();
+    await expect(page.locator('body')).toHaveClass(/light/);
+    await page.mouse.move(0, 0);
+    const lightRest = await contrast(page, '.mc-stack .aui-md-a');
+    await link.hover();
+    const lightHover = await contrast(page, '.mc-stack .aui-md-a');
+    console.log(`contrast light link: rest=${lightRest.toFixed(2)} hover=${lightHover.toFixed(2)}`);
+    expect(lightRest, 'light link at rest').toBeGreaterThanOrEqual(4.5);
+    expect(lightHover, 'light link on hover').toBeGreaterThanOrEqual(4.5);
+  });
+
+  test('stopping an in-flight turn aborts the SSE fetch (stubbed path)', async ({ page }) => {
+    await stubAriaConversations(page);
+    // The stream request is intercepted but never fulfilled, so the turn stays
+    // in flight exactly as a slow core would leave it. Stop's abort is then the
+    // only way the request can leave the browser.
+    const held: import('@playwright/test').Route[] = [];
+    await page.route('**/api/v1/aria/chat/stream', (route) => {
+      held.push(route);
+    });
+
+    try {
+      await page.goto('/aria');
+      await page.getByRole('textbox').fill('Draft an endless answer');
+      const failed = page.waitForEvent('requestfailed', {
+        predicate: (request) => request.url().includes('/api/v1/aria/chat/stream'),
+        timeout: 15_000,
+      });
+      await page.getByRole('button', { name: 'Send message' }).click();
+
+      const stop = page.getByRole('button', { name: 'Stop the turn' });
+      await expect(stop).toBeVisible({ timeout: 15_000 });
+      await stop.click();
+
+      const failure = await failed;
+      expect(failure.failure()?.errorText ?? '').toContain('ERR_ABORTED');
+      // The composer returns to Send: the aborted turn released the runtime.
+      await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole('button', { name: 'Stop the turn' })).toHaveCount(0);
+    } finally {
+      // Release a still-held route so a failed assertion cannot hang the suite.
+      for (const route of held) {
+        try {
+          await route.abort();
+        } catch {
+          // The page already aborted the request.
+        }
+      }
+      await page.unroute('**/api/v1/aria/chat/stream');
+    }
   });
 });
 

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.aria.conductor.common.model.Sensitivity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -15,18 +17,24 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
 /** Minimal qmd REST client for the verified memory/knowledge vault. */
 @Component
 public class QmdClient {
 
+    private static final Logger LOG = LoggerFactory.getLogger(QmdClient.class);
     private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
+    private static final String FILE_PREFIX = "qmd://";
+    private static final Set<String> ALLOWED_COLLECTIONS = Set.of("memory-verified", "knowledge-verified");
+    private static final long MAX_VAULT_BODY_BYTES = 64_000L;
 
     private final HttpClient http;
 
@@ -43,6 +51,11 @@ public class QmdClient {
                 || query.url() == null || query.url().isBlank()
                 || query.collections().isEmpty()) {
             return QmdResult.empty();
+        }
+        for (String collection : query.collections()) {
+            if (collection == null || !ALLOWED_COLLECTIONS.contains(collection)) {
+                return QmdResult.degraded("qmd-collection");
+            }
         }
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(stripSlash(query.url()) + "/query"))
@@ -62,7 +75,8 @@ public class QmdClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return QmdResult.degraded("qmd-interrupted");
-        } catch (Exception e) {
+        } catch (IllegalArgumentException | IOException e) {
+            LOG.warn("qmd query degraded: {}", e.getClass().getName());
             return QmdResult.degraded("qmd-error");
         }
     }
@@ -116,11 +130,14 @@ public class QmdClient {
         Sensitivity ceiling = query.ceiling() == null ? Sensitivity.INTERNAL : query.ceiling();
         List<QmdHit> hits = new ArrayList<>();
         for (JsonNode node : results) {
+            String file = node.path("file").asText("");
+            if (!inAllowedCollection(file)) {
+                continue;
+            }
             Sensitivity sensitivity = sensitivityOf(node.path("metadata").path("sensitivity").asText(null));
             if (sensitivity.ordinal() > ceiling.ordinal()) {
                 continue;
             }
-            String file = node.path("file").asText("");
             String snippet = body(query.vaultDir(), file);
             if (snippet.isBlank()) {
                 snippet = node.path("snippet").asText("");
@@ -129,6 +146,16 @@ public class QmdClient {
                     node.path("score").asDouble(0), sensitivity));
         }
         return new QmdResult(hits, null);
+    }
+
+    private static boolean inAllowedCollection(String file) {
+        if (file == null || !file.startsWith(FILE_PREFIX)) {
+            return false;
+        }
+        String rest = file.substring(FILE_PREFIX.length());
+        int slash = rest.indexOf('/');
+        String collection = slash < 0 ? rest : rest.substring(0, slash);
+        return ALLOWED_COLLECTIONS.contains(collection);
     }
 
     private static String body(String vaultDir, String file) {
@@ -155,6 +182,12 @@ public class QmdClient {
             return "";
         }
         try {
+            if (!Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS)) {
+                return "";
+            }
+            if (Files.size(candidate) > MAX_VAULT_BODY_BYTES) {
+                return "";
+            }
             return compact(stripFrontmatter(Files.readString(candidate, StandardCharsets.UTF_8)), 300);
         } catch (IOException e) {
             return "";
@@ -179,10 +212,17 @@ public class QmdClient {
     }
 
     private static Sensitivity sensitivityOf(String raw) {
+        if (raw == null) {
+            return Sensitivity.RESTRICTED;
+        }
+        String normalized = raw.strip().toUpperCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return Sensitivity.RESTRICTED;
+        }
         try {
-            return raw == null ? Sensitivity.INTERNAL : Sensitivity.valueOf(raw.toUpperCase(Locale.ROOT));
+            return Sensitivity.valueOf(normalized);
         } catch (IllegalArgumentException e) {
-            return Sensitivity.INTERNAL;
+            return Sensitivity.RESTRICTED;
         }
     }
 

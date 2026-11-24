@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import io.aria.conductor.common.model.Sensitivity;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -14,7 +15,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,8 +63,21 @@ class QmdClientTest {
                     assertThat(hit.sensitivity()).isEqualTo(Sensitivity.INTERNAL);
                 });
         JsonNode request = JSON.readTree(body.get());
-        assertThat(request.path("filter").toString())
-                .contains("project:aria-conductor", "sensitivity", "INTERNAL");
+        JsonNode filter = request.path("filter");
+        assertThat(filter.toString()).contains("project:aria-conductor", "sensitivity");
+        assertThat(filter.toString()).doesNotContain("CONFIDENTIAL", "RESTRICTED");
+
+        JsonNode sensitivityOperand = null;
+        for (JsonNode operand : filter.path("operands")) {
+            if ("sensitivity".equals(operand.path("field").asText())) {
+                sensitivityOperand = operand;
+            }
+        }
+        assertThat(sensitivityOperand).isNotNull();
+        List<String> values = new ArrayList<>();
+        sensitivityOperand.path("value").forEach(node -> values.add(node.asText()));
+        assertThat(values).containsExactly("PUBLIC", "INTERNAL");
+
         assertThat(request.path("rerank").asBoolean()).isFalse();
     }
 
@@ -125,6 +141,107 @@ class QmdClientTest {
                 baseUrl + "/bad", List.of("memory-verified"), "q", null,
                 Sensitivity.INTERNAL, 4, 0.15, 1_000, "")).degradedReason())
                 .isEqualTo("qmd-http-500");
+    }
+
+    @Test
+    void sensitivityIsTrimmedAndUnknownValuesFailClosed() throws Exception {
+        server.createContext("/query", exchange -> respond(exchange, 200, """
+                {"results":[
+                  {"title":"ok","file":"qmd://memory-verified/ok.md",
+                   "snippet":"ok body","score":0.9,"metadata":{"sensitivity":"INTERNAL "}},
+                  {"title":"weird","file":"qmd://memory-verified/weird.md",
+                   "snippet":"weird body","score":0.8,"metadata":{"sensitivity":"weird"}}
+                ]}
+                """));
+
+        QmdResult result = new QmdClient().query(new QmdQuery(
+                baseUrl, List.of("memory-verified"), "query", null,
+                Sensitivity.INTERNAL, 4, 0.15, 1_000, ""));
+
+        assertThat(result.hits()).singleElement()
+                .satisfies(hit -> {
+                    assertThat(hit.title()).isEqualTo("ok");
+                    assertThat(hit.sensitivity()).isEqualTo(Sensitivity.INTERNAL);
+                });
+    }
+
+    @Test
+    void aResultFromADisallowedCollectionIsDropped() throws Exception {
+        server.createContext("/query", exchange -> respond(exchange, 200, """
+                {"results":[{"title":"secret","file":"qmd://memory-pending/secret.md",
+                "snippet":"leaked snippet","score":0.9,"metadata":{"sensitivity":"PUBLIC"}}]}
+                """));
+
+        QmdResult result = new QmdClient().query(new QmdQuery(
+                baseUrl, List.of("memory-verified"), "query", null,
+                Sensitivity.INTERNAL, 4, 0.15, 1_000, ""));
+
+        assertThat(result.hits()).isEmpty();
+        assertThat(result.degradedReason()).isNull();
+    }
+
+    @Test
+    void aDisallowedQueryCollectionDegradesWithoutACall() throws Exception {
+        AtomicBoolean called = new AtomicBoolean();
+        server.createContext("/query", exchange -> {
+            called.set(true);
+            respond(exchange, 200, "{\"results\":[]}");
+        });
+
+        QmdResult result = new QmdClient().query(new QmdQuery(
+                baseUrl, List.of("memory-pending"), "query", null,
+                Sensitivity.INTERNAL, 4, 0.15, 1_000, ""));
+
+        assertThat(result.degradedReason()).isEqualTo("qmd-collection");
+        assertThat(result.hits()).isEmpty();
+        assertThat(called).isFalse();
+    }
+
+    @Test
+    void anOversizedFileFallsBackToTheServerSnippet(@TempDir Path vault) throws Exception {
+        Files.createDirectories(vault.resolve("memory/verified"));
+        Files.writeString(vault.resolve("memory/verified/huge.md"), "x".repeat(64_001));
+
+        server.createContext("/query", exchange -> respond(exchange, 200, """
+                {"results":[{"title":"h","file":"qmd://memory-verified/huge.md",
+                "snippet":"server snippet","score":0.9,"metadata":{"sensitivity":"INTERNAL"}}]}
+                """));
+
+        QmdResult result = new QmdClient().query(new QmdQuery(
+                baseUrl, List.of("memory-verified"), "query", null,
+                Sensitivity.INTERNAL, 4, 0.15, 1_000, vault.toString()));
+
+        assertThat(result.hits()).singleElement()
+                .satisfies(hit -> assertThat(hit.snippet()).isEqualTo("server snippet"));
+    }
+
+    @Test
+    void aSymlinkInsideTheVerifiedTreeIsNotFollowed(@TempDir Path vault) throws Exception {
+        Files.createDirectories(vault.resolve("memory/verified"));
+        Files.createDirectories(vault.resolve("memory/pending"));
+        Path target = vault.resolve("memory/pending/secret.md");
+        Files.writeString(target, "do not read");
+        Path link = vault.resolve("memory/verified/link.md");
+        boolean created;
+        try {
+            Files.createSymbolicLink(link, target);
+            created = true;
+        } catch (IOException | UnsupportedOperationException e) {
+            created = false;
+        }
+        Assumptions.assumeTrue(created, "symbolic links are not permitted here");
+
+        server.createContext("/query", exchange -> respond(exchange, 200, """
+                {"results":[{"title":"linked","file":"qmd://memory-verified/link.md",
+                "snippet":"server snippet","score":0.9,"metadata":{"sensitivity":"INTERNAL"}}]}
+                """));
+
+        QmdResult result = new QmdClient().query(new QmdQuery(
+                baseUrl, List.of("memory-verified"), "query", null,
+                Sensitivity.INTERNAL, 4, 0.15, 1_000, vault.toString()));
+
+        assertThat(result.hits()).singleElement()
+                .satisfies(hit -> assertThat(hit.snippet()).isEqualTo("server snippet"));
     }
 
     private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body)

@@ -157,7 +157,6 @@ test('the changes filter covers the bridge, the peer fixtures, the scripts and t
     ['the qoder sandbox image', 'agent-control-tower/qoder-sandbox/Dockerfile'],
     ['the runtime sandbox image', 'agent-control-tower/runtime-sandbox/test.Dockerfile'],
     ['the dashboard package', 'agent-control-tower/act-dashboard/src/App.tsx'],
-    ['the MCP server package', 'packages/mcp-server/src/server.ts'],
     ['the Java modules', 'agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/ExecutionModule.java'],
   ];
   for (const [what, path] of required) {
@@ -235,15 +234,17 @@ test('the PR pipeline keeps its dispatch, tiering, grouping and shard semantics'
   }
   // act-mcp is part of the Java unit grouping.
   assert.match(unit, /act-mcp/, 'act-mcp must be part of the Java unit grouping');
-  // The four Playwright shards, the frontend build+vitest and the MCP tests survive.
+  // The four Playwright shards and the frontend build+vitest survive.
   assert.match(CI, /shard: \[1, 2, 3, 4\]/, 'the four Playwright shards must stay');
   assert.match(CI, /--shard=\$\{\{ matrix\.shard \}\}\/4 --workers=1/,
     'the sharded Playwright run must stay single-worker');
   assert.match(jobBlock(CI, 'frontend-build'), /pnpm test -- --coverage/,
     'the frontend vitest tier with coverage thresholds must stay');
   assert.match(jobBlock(CI, 'frontend-build'), /pnpm build/, 'the frontend build check must stay');
-  assert.match(CI, /packages\/mcp-server && pnpm install --frozen-lockfile && pnpm test/,
-    'the MCP server test lane must stay');
+  // The standalone TypeScript MCP server is gone; the shipped MCP surface is the
+  // embedded Java server (/mcp), tested in the Java unit grouping (act-mcp).
+  assert.ok(!CI.includes('packages/mcp-server'),
+    'ci.yml must not reference the removed TypeScript MCP server');
 });
 
 test('the sandbox lifecycle lane is a separate, requirement-triggered real-container workflow', () => {

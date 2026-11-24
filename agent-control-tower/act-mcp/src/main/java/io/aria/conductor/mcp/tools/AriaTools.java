@@ -32,8 +32,9 @@ import java.util.stream.Collectors;
  * Thin wrappers over the same services/repositories the REST controllers call —
  * REST/dashboard and MCP stay at parity.
  *
- * aria_chat is deliberately NOT exposed: AriaService.chat starts a new Aria run,
- * so a sandboxed agent could recursively invoke Aria from inside her own run.
+ * aria_chat is deliberately NOT exposed: the streaming Aria chat starts a new
+ * Aria run, so a sandboxed agent could recursively invoke Aria from inside her
+ * own run.
  */
 @Component
 @RequiredArgsConstructor

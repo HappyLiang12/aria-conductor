@@ -719,10 +719,10 @@ public class AgentLoopEngine {
                 return;
             }
             // The ask is persisted BEFORE the run is committed as WAITING_INPUT, because
-            // that status is the sync waiter's return signal: AriaSyncRunWaiter returns as
-            // soon as it reads WAITING_INPUT and then names the PENDING CLARIFICATION ask,
-            // so a status committed first makes that read find nothing and the turn
-            // returns the old stub (F3, intermittently). Neither write has an ambient
+            // that status is the signal every reader (the SSE waiting_input frame and the
+            // REST/WebSocket planes) uses to find the PENDING CLARIFICATION ask: a status
+            // committed first makes that read find nothing and the surface renders an old
+            // stub (F3, intermittently). Neither write has an ambient
             // transaction here (the event is published from the run loop), so each
             // repository call commits on its own and the order below is the commit order.
             boolean askRaised = false;

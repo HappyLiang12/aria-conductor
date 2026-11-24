@@ -53,9 +53,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: pnpm audit (mcp-server)
-        continue-on-error: true
-        run: cd packages/mcp-server && pnpm install --frozen-lockfile && pnpm audit --audit-level=high || true
       - name: pnpm audit (dashboard)
         continue-on-error: true
         run: cd agent-control-tower/act-dashboard && pnpm install --frozen-lockfile && pnpm audit --audit-level=high || true

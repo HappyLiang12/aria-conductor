@@ -46,13 +46,15 @@ measured with a CI-variance margin (ratchet iron law); all clear the plan's M1 f
 | Java unit tier (surefire) | 98 | 621 `@Test` |
 | Java integration tier (failsafe `*IntegrationTest`/`*E2ETest`) | 13 | ~55 |
 | Playwright E2E | 24 specs | 158 `test()` |
-| TS mcp-server | 15 | 75 |
 | Frontend (vitest) | 0 | 0 |
 | Contract | 0 | 0 |
 
 > The historical Python `langchain-adk` row (1 file, 5 tests) is gone with the removed LangChain
 > runtime (Task 18); the core runtime's coverage lives in the Java tiers and the
 > `e2e/agent-core/*.test.mjs` contract checks.
+>
+> The historical standalone TypeScript `mcp-server` row (15 files, 75 tests) is gone with that
+> package; the shipped MCP surface is the embedded Java server (`act-mcp`, `/mcp`).
 
 ## Ratchet milestones (from the approved plan)
 

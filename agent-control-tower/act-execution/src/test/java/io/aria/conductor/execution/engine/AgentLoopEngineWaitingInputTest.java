@@ -236,8 +236,8 @@ class AgentLoopEngineWaitingInputTest {
 
     @Test
     void aPollThatObservesWaitingInputAlwaysFindsThePendingClarification() {
-        // F3 (sync contract): AriaSyncRunWaiter returns as soon as it reads
-        // WAITING_INPUT and then names the PENDING CLARIFICATION ask. If the status
+        // F3 (park contract): a reader that observes WAITING_INPUT names the PENDING
+        // CLARIFICATION ask. If the status
         // becomes visible before the ask row is committed, that read finds nothing and
         // the turn returns the old stub — intermittently, depending on the interleave.
         // The rows here are a store: the poll's read is taken at the exact instant the

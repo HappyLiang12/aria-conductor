@@ -395,8 +395,8 @@ export async function setScenario(request: APIRequestContext, agentId: string, s
  * The run-scoped worker credential of a live run, read from the harness-only
  * operator-authenticated surface (`GET /maintenance/core-e2e/worker-token?runId=…`,
  * returning `{runId, token}`). The token is inherently unrecoverable elsewhere:
- * the run lifecycle hands it only to that run's processes (packages/mcp-server
- * documents it as `ACT_ACTOR_TOKEN`), so an E2E must ask the harness for the
+ * the run lifecycle hands it only to that run's processes (the platform MCP
+ * wiring documents it as `ACT_ACTOR_TOKEN`), so an E2E must ask the harness for the
  * exact value the peer received. Like {@link setScenario} this route drives no
  * database outcome — it echoes the credential the coordinator already minted.
  * The route is part of the T18 peer-launch wiring; until it is served the helper

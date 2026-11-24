@@ -219,7 +219,7 @@ public class DoDService {
                 .stream().findFirst().orElse(null);
     }
 
-    /** Build the dashboard-friendly aggregate view used by {@code GET /api/v1/dod/{taskId}}. */
+    /** Build the aggregate view returned by the embedded MCP DoD status tool. */
     @Transactional(readOnly = true)
     public DoDStatusResponse buildStatusResponse(String taskId) {
         DoDRecord record = getStatus(taskId);

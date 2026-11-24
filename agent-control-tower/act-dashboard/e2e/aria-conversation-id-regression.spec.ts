@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { BACKEND, uniqueName } from './fixtures';
 
 /**
@@ -6,15 +6,13 @@ import { BACKEND, uniqueName } from './fixtures';
  * for the governed cores and the deterministic harness.
  *
  * Verifies:
- * 1. Non-streaming chat returns runId + conversationId
- * 2. Streaming done event carries runId + conversationId
- * 3. GET /sessions returns 404 (endpoint removed)
- * 4. DELETE /sessions/{id} returns 404 (endpoint removed)
- * 5. conversationId survives page refresh
- * 6. conversationId echoed back in response
- * 7. Streaming emits correct SSE event sequence
- * 8. Copy button works with new selector
- * 9. Clear button regenerates conversationId
+ * 1. Streaming emits the expected SSE event sequence with runId + conversationId
+ * 2. GET /sessions returns 404 (endpoint removed)
+ * 3. DELETE /sessions/{id} returns 404 (endpoint removed)
+ * 4. conversationId is reused across two turns with exact history content
+ *
+ * The SSE endpoint is the only chat surface: the non-streaming POST /chat route
+ * was removed with the duplicate sync path.
  *
  * Runtime: the deterministic core harness. The message-bearing SSE turn used to
  * be gated behind a real LLM key (`HAS_LLM_KEY`); the harness serves the Aria
@@ -42,7 +40,6 @@ test.describe.configure({ timeout: 300_000 });
 // observe this spec's stale id) and collide across consecutive runs.
 // Uniqueness keeps the echo/reuse assertions testing REUSE semantics, not
 // fixed literals.
-const CONV_ECHO = uniqueName('test-conv');
 const CONV_STREAM = uniqueName('test-conv-stream');
 const CONV_REUSE = uniqueName('reuse-conv');
 
@@ -52,26 +49,56 @@ interface TimelineEntry {
   runId: string;
 }
 
-test('non-streaming chat returns runId + conversationId', async ({ page }) => {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+interface StreamedTurn {
+  runId: string;
+  conversationId: string;
+}
 
-  const result = await page.evaluate(async (convId) => {
-    const res = await fetch('/api/v1/aria/chat', {
+/** Drive one chat turn over the only chat surface (SSE) and return its `done` payload. */
+async function streamTurn(
+  page: Page,
+  conversationId: string | undefined,
+  message: string,
+): Promise<StreamedTurn> {
+  return page.evaluate(async ({ conversationId, message }) => {
+    const res = await fetch('/api/v1/aria/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'hello', history: [], conversationId: convId }),
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({
+        message,
+        history: [],
+        ...(conversationId ? { conversationId } : {}),
+      }),
     });
-    return { status: res.status, body: await res.json() };
-  }, CONV_ECHO);
+    if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
 
-  expect(result.status).toBe(200);
-  expect(result.body.runId).toBeTruthy();
-  expect(result.body.runId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(result.body.conversationId).toBe(CONV_ECHO);
-  expect(result.body.message).toBeTruthy();
-  expect(result.body.intent).toBeTruthy();
-});
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let done: { runId?: string; conversationId?: string } | null = null;
+    while (!done) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+      for (const block of parts) {
+        if (!block.trim()) continue;
+        let eventName = 'message';
+        const dataLines: string[] = [];
+        for (const line of block.split('\n')) {
+          const clean = line.replace(/\r$/, '');
+          if (clean.startsWith('event:')) eventName = clean.slice(6).trim();
+          else if (clean.startsWith('data:')) dataLines.push(clean.slice(5).trimStart());
+        }
+        if (eventName === 'done') done = JSON.parse(dataLines.join('\n'));
+        if (eventName === 'error') throw new Error(`stream error: ${dataLines.join('\n')}`);
+      }
+    }
+    if (!done) throw new Error('stream ended without a done event');
+    return { runId: String(done.runId ?? ''), conversationId: String(done.conversationId ?? '') };
+  }, { conversationId, message });
+}
 
 test('GET /api/v1/aria/sessions returns 404', async ({ page }) => {
   await page.goto('/');
@@ -173,18 +200,10 @@ test('conversationId is reused across two turns with exact history content (#36)
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
-  const turn1 = await page.evaluate(async (convId) => {
-    const res = await fetch('/api/v1/aria/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'remember 1', history: [], conversationId: convId }),
-    });
-    return res.json();
-  }, CONV_REUSE);
+  const turn1 = await streamTurn(page, CONV_REUSE, 'remember 1');
 
   expect(turn1.conversationId).toBe(CONV_REUSE);
   expect(turn1.runId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(turn1.message).toBeTruthy();
 
   // Turn 1's exact content must be stored as this conversation's timeline: the
   // exact user text and the exact assistant reply, both under the captured run
@@ -193,44 +212,33 @@ test('conversationId is reused across two turns with exact history content (#36)
   const first = await request.get(`${BACKEND}/aria/conversations/${CONV_REUSE}`);
   expect(first.status()).toBe(200);
   const firstTimeline = (await first.json()) as TimelineEntry[];
-  expect(firstTimeline.map((e) => `${e.role}:${e.content}`)).toEqual([
-    `user:remember 1`,
-    `assistant:${turn1.message}`,
-  ]);
-  expect(firstTimeline.map((e) => e.runId)).toEqual([turn1.runId, turn1.runId]);
+  expect(firstTimeline).toHaveLength(2);
+  expect(firstTimeline[0]).toMatchObject({ role: 'user', content: 'remember 1', runId: turn1.runId });
+  expect(firstTimeline[1].role).toBe('assistant');
+  expect(firstTimeline[1].content).not.toBe('');
+  expect(firstTimeline[1].runId).toBe(turn1.runId);
 
-  // Turn 2 echoes back the id the server returned on turn 1 AND resends turn 1's
-  // exact history content — the same values the timeline stored above.
-  const turn2 = await page.evaluate(async ({ convId, history }) => {
-    const res = await fetch('/api/v1/aria/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'remember 2', history, conversationId: convId }),
-    });
-    return res.json();
-  }, {
-    convId: turn1.conversationId,
-    history: firstTimeline.map((e) => ({ role: e.role, content: e.content })),
-  });
+  // Turn 2 echoes back the id the server returned on turn 1; the engine loads
+  // the stored history server-side, so the client sends none.
+  const turn2 = await streamTurn(page, turn1.conversationId, 'remember 2');
 
   // Turn 2 must reuse turn 1's conversationId (no new id minted per turn).
   expect(turn2.conversationId).toBe(turn1.conversationId);
   expect(turn2.runId).toMatch(/^[0-9a-f-]{36}$/);
   expect(turn2.runId).not.toBe(turn1.runId);
 
-  // The conversation now holds both turns exactly, in order, with the exact
-  // contents that were submitted — the history the server reuses is the
-  // history the client sent.
+  // The conversation now holds both turns exactly, in order, under their own
+  // run ids — the history the server reuses is the history it stored.
   const second = await request.get(`${BACKEND}/aria/conversations/${CONV_REUSE}`);
   expect(second.status()).toBe(200);
   const timeline = (await second.json()) as TimelineEntry[];
-  expect(timeline.map((e) => `${e.role}:${e.content}`)).toEqual([
-    `user:remember 1`,
-    `assistant:${turn1.message}`,
-    `user:remember 2`,
-    `assistant:${turn2.message}`,
-  ]);
-  expect(timeline.map((e) => e.runId)).toEqual([
-    turn1.runId, turn1.runId, turn2.runId, turn2.runId,
-  ]);
+  expect(timeline).toHaveLength(4);
+  expect(timeline[0]).toMatchObject({ role: 'user', content: 'remember 1', runId: turn1.runId });
+  expect(timeline[1].role).toBe('assistant');
+  expect(timeline[1].content).not.toBe('');
+  expect(timeline[1].runId).toBe(turn1.runId);
+  expect(timeline[2]).toMatchObject({ role: 'user', content: 'remember 2', runId: turn2.runId });
+  expect(timeline[3].role).toBe('assistant');
+  expect(timeline[3].content).not.toBe('');
+  expect(timeline[3].runId).toBe(turn2.runId);
 });

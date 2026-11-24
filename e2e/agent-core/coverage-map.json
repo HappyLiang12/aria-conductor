@@ -873,7 +873,7 @@
       "id": "java:act-mcp/tools/AgentToolsTest.java",
       "path": "agent-control-tower/act-mcp/src/test/java/io/aria/conductor/mcp/tools/AgentToolsTest.java",
       "purpose": "MCP agent tools provider field passthrough.",
-      "replacement": "modified in place (T18) alongside AgentTools.java and packages/mcp-server/src/tools/agents.ts",
+      "replacement": "modified in place (T18) alongside AgentTools.java",
       "rationale": "Provider enumeration changes on both sides of the MCP boundary.",
       "status": "port"
     },

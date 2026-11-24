@@ -37,10 +37,9 @@ import java.util.UUID;
  * {@code ApprovalRequestedEvent} for the row it just persisted and the run also
  * parks), so without that gate one decision would render two cards.
  *
- * <p>A signal is emitted only while the run has a live stream. The turn may be
- * a sync chat ({@code AriaService.chat} starts the run with no emitter) or a
- * panel that already closed; in both cases the ask still exists in the
- * database and the REST/WebSocket planes carry it. The {@code waiting_input}
+ * <p>A signal is emitted only while the run has a live stream. The panel may
+ * already be closed; in that case the ask still exists in the database and the
+ * REST/WebSocket planes carry it. The {@code waiting_input}
  * frame additionally requires the run to be parked ({@code WAITING_INPUT}): the
  * engine's park write can be refused, and it then wakes the run while the ask
  * already exists.
@@ -117,12 +116,10 @@ public class RunSignalSseListener {
             if (runId == null || !registry.hasStream(runId)) {
                 return;
             }
-            // The pick is PendingClarificationAsks.newest — one rule shared with the sync
-            // reader (AriaService), so both surfaces of one park name the same ask. The park is a
-            // conditional write the engine can be refused (it wakes the run and leaves it
-            // un-parked with the ask already persisted), so the frame is emitted only for a run
-            // that is actually parked: the same predicate the sync reader applies before naming
-            // this ask (AriaService).
+            // The pick is PendingClarificationAsks.newest, so every reader of one park
+            // names the same ask. The park is a conditional write the engine can be refused
+            // (it wakes the run and leaves it un-parked with the ask already persisted), so
+            // the frame is emitted only for a run that is actually parked.
             PendingClarificationAsks.newest(approvals.findByRunIdAndStatusAndSource(runId,
                             ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                     .filter(ask -> isParked(runId))

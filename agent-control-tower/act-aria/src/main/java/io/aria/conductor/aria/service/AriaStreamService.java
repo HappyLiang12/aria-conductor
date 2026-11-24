@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Streaming variant of {@link AriaService#chat(AriaChatRequest)}.
+ * The Aria chat turn: creates a Run and streams its progress over SSE.
  *
  * <p>Acts as a thin bridge: creates a Run, then delegates execution to
  * {@link AgentLoopEngine#startRunStream(UUID, SseEmitter, List, String)}.

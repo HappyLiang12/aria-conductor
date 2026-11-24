@@ -33,7 +33,6 @@ jobs:
     name: Detect Changed Trees
     runs-on: ubuntu-latest
     outputs:
-      mcp: ${{ steps.filter.outputs.mcp }}
       frontend: ${{ steps.filter.outputs.frontend }}
       java: ${{ steps.filter.outputs.java }}
     steps:
@@ -42,8 +41,6 @@ jobs:
         id: filter
         with:
           filters: |
-            mcp:
-              - 'packages/mcp-server/**'
             frontend:
               - 'agent-control-tower/act-dashboard/**'
             java:
@@ -76,7 +73,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes]
     # E2E consumes the harness distribution even for frontend-only changes; skip only
-    # for docs/mcp-only PRs.
+    # for docs-only PRs.
     if: needs.changes.outputs.java == 'true' || needs.changes.outputs.frontend == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -261,31 +258,6 @@ jobs:
       - name: Dump backend log tail (diagnose)
         if: failure()
         run: tail -n 300 backend.log || true
-
-  ts-tests:
-    name: TS MCP Server Tests + Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [changes]
-    if: needs.changes.outputs.mcp == 'true' || github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: pnpm
-          cache-dependency-path: packages/mcp-server/pnpm-lock.yaml
-      - name: Run tests with coverage
-        run: cd packages/mcp-server && pnpm install --frozen-lockfile && pnpm test -- --coverage
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v4
-        with:
-          files: packages/mcp-server/coverage/clover.xml
-          fail_ci_if_error: false
 
   e2e-playwright:
     name: E2E Playwright (shard ${{ matrix.shard }}/4)

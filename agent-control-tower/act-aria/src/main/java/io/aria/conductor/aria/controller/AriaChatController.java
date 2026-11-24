@@ -2,9 +2,7 @@ package io.aria.conductor.aria.controller;
 
 import io.aria.conductor.agent.service.SystemConfigService;
 import io.aria.conductor.aria.dto.AriaChatRequest;
-import io.aria.conductor.aria.dto.AriaChatResponse;
 import io.aria.conductor.aria.service.AriaChatAttachmentValidator;
-import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.aria.service.AriaStreamService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -21,32 +19,22 @@ import java.util.Map;
 @RequestMapping("/api/v1/aria")
 public class AriaChatController {
 
-    private final AriaService ariaService;
     private final AriaStreamService ariaStreamService;
     private final SystemConfigService systemConfigService;
 
-    public AriaChatController(AriaService ariaService, AriaStreamService ariaStreamService, SystemConfigService systemConfigService) {
-        this.ariaService = ariaService;
+    public AriaChatController(AriaStreamService ariaStreamService, SystemConfigService systemConfigService) {
         this.ariaStreamService = ariaStreamService;
         this.systemConfigService = systemConfigService;
     }
 
-    @PostMapping("/chat")
-    public ResponseEntity<AriaChatResponse> chat(@Valid @RequestBody AriaChatRequest request,
-                                                 HttpServletRequest httpRequest) {
-        return ResponseEntity.ok(ariaService.chat(request, validated(request, httpRequest.getContentLengthLong())));
-    }
-
     /**
-     * Server-Sent Events streaming variant of {@link #chat}. Emits incremental
-     * progress events ({@code thinking}, {@code tool_call}, {@code tool_result},
-     * {@code message}, {@code done}, {@code error}) as the LLM tool-calling
-     * loop progresses. The non-streaming endpoint above is preserved as a
-     * fallback for clients that cannot consume SSE.
+     * Server-Sent Events streaming chat. Emits incremental progress events
+     * ({@code thinking}, {@code tool_call}, {@code tool_result}, {@code message},
+     * {@code done}, {@code error}) as the LLM tool-calling loop progresses.
      *
      * <p>An attachment the validator refuses is answered before the stream
-     * starts — a JSON {@code {"error": ...}} body with its status, never an
-     * SSE frame, on both endpoints.
+     * starts — a JSON {@code {"error": ...}} body with its status, never an SSE
+     * frame.
      */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> chatStream(@Valid @RequestBody AriaChatRequest request,

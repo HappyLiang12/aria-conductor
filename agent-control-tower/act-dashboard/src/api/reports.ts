@@ -18,11 +18,6 @@ export async function listReports(): Promise<ReportArtifact[]> {
   return data;
 }
 
-export async function getReport(id: string): Promise<ReportArtifact> {
-  const { data } = await client.get<ReportArtifact>(`${BASE}/${encodeURIComponent(id)}`);
-  return data;
-}
-
 export async function generateReport(request: GenerateReportRequest): Promise<ReportArtifact> {
   const { data } = await client.post<ReportArtifact>(`${BASE}/generate`, request);
   return data;

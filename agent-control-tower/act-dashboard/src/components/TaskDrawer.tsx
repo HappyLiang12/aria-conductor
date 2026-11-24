@@ -56,12 +56,11 @@ const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
 interface ParsedLabels {
   acceptance: string[];
   artifacts: string[];
-  comments: { who: string; when: string; text: string }[];
   raw: string[];
 }
 
 function parseLabels(item: KanbanItem | undefined): ParsedLabels {
-  const empty: ParsedLabels = { acceptance: [], artifacts: [], comments: [], raw: [] };
+  const empty: ParsedLabels = { acceptance: [], artifacts: [], raw: [] };
   if (!item?.labels) return empty;
 
   // Best-effort parser: labels may be JSON, comma-list, or plain text.
@@ -75,7 +74,6 @@ function parseLabels(item: KanbanItem | undefined): ParsedLabels {
       return {
         acceptance: Array.isArray(parsed.acceptance) ? parsed.acceptance.map(String) : [],
         artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts.map(String) : [],
-        comments: Array.isArray(parsed.comments) ? parsed.comments : [],
         raw: Array.isArray(parsed.raw) ? parsed.raw : [],
       };
     } catch {
@@ -100,9 +98,6 @@ export function TaskDrawer() {
   // expanding there would create a workspace with nowhere to land.
   const onOverview = useLocation().pathname === '/';
 
-  const [comment, setComment] = useState('');
-  // Task 10: the footer Reject only opens the shared confirmation; the
-  // transition fires from its Confirm handler. Approve is untouched.
   const [confirmingReject, setConfirmingReject] = useState(false);
 
   // Task 7 focus contract: opening moves focus to the card heading (the first
@@ -202,38 +197,27 @@ export function TaskDrawer() {
     mutationFn: ({
       id,
       status,
-      comment: c,
       feedback,
     }: {
       id: string;
       status: KanbanStatus;
-      comment?: string;
       feedback?: string;
-    }) => transitionKanbanItem(id, { status, comment: c, feedback }),
+    }) => transitionKanbanItem(id, { status, feedback }),
     onSuccess: (data) => {
       queryClient.setQueryData(['kanban', 'item', data.id], data);
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
-      setComment('');
     },
   });
 
   const parsed = useMemo(() => parseLabels(item), [item]);
 
-  // Acceptance criteria: derive simple states from item labels OR a default checklist.
-  const acceptance = parsed.acceptance.length
-    ? parsed.acceptance.map((text) => ({ text, done: false }))
-    : item
-    ? [
-        { text: 'Title and description captured', done: Boolean(item.title) },
-        { text: 'Owner / assignee set', done: Boolean(item.assignee) },
-        { text: 'Linked to run or agent', done: Boolean(item.linkedRunId || item.linkedAgentId) },
-        { text: 'Reached terminal state', done: item.status === 'DONE' },
-      ]
-    : [];
+  // Acceptance criteria come from the card's own labels; a card without any
+  // gets an empty state, never a fabricated checklist.
+  const acceptance = parsed.acceptance.map((text) => ({ text, done: false }));
 
   const handleTransition = (status: KanbanStatus) => {
     if (!item) return;
-    transitionMutation.mutate({ id: item.id, status, comment: comment.trim() || undefined });
+    transitionMutation.mutate({ id: item.id, status });
   };
 
   const handleApprove = () => handleTransition('DONE');
@@ -396,6 +380,11 @@ export function TaskDrawer() {
               {/* Acceptance Criteria */}
               <div className="section-h">Acceptance Criteria</div>
               <div className="ac">
+                {acceptance.length === 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--text-mute)', padding: '4px 2px' }}>
+                    No acceptance criteria on this card.
+                  </div>
+                )}
                 {acceptance.map((row, idx) => (
                   <div key={idx} className={`row ${row.done ? 'ok' : 'todo'}`}>
                     <span className="check">{row.done ? '✓' : '○'}</span>
@@ -489,43 +478,12 @@ export function TaskDrawer() {
                 </div>
               )}
 
-              {/* Comments */}
-              <div className="section-h">Comments</div>
-              <div className="comments">
-                {parsed.comments.length === 0 && (
-                  <div
-                    style={{
-                      fontSize: 11.5,
-                      color: 'var(--text-mute)',
-                      padding: '4px 2px',
-                    }}
-                  >
-                    No comments yet — add one below.
-                  </div>
-                )}
-                {parsed.comments.map((c, idx) => (
-                  <div key={idx} className="comment">
-                    <div>
-                      <span className="who">{c.who}</span>
-                      <span className="when">{c.when}</span>
-                    </div>
-                    {c.text}
-                  </div>
-                ))}
-                <textarea
-                  className="dod-textarea"
-                  placeholder="Add a comment / transition note…"
-                  rows={2}
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
+              {transitionMutation.error && (
+                <ErrorNotice
+                  className="evidence-error"
+                  presented={presentError(transitionMutation.error, 'The transition was refused.')}
                 />
-                {transitionMutation.error && (
-                  <ErrorNotice
-                    className="evidence-error"
-                    presented={presentError(transitionMutation.error, 'The transition was refused.')}
-                  />
-                )}
-              </div>
+              )}
 
               {validTransitions.length > 1 && (
                 <>

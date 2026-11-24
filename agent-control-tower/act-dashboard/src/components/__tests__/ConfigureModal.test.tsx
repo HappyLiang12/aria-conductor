@@ -265,8 +265,8 @@ describe('ConfigureModal runtime apply refusal visibility (Task 33)', () => {
 
 // ---------------------------------------------------------------------------
 // Task 12: Configure states what the build can actually enforce. Skills are a
-// read-only catalog (no invented permission model); gates stay visible as an
-// inert reference; Runtime / LLM / System Config keep their real mutations.
+// read-only catalog (no invented permission model); Runtime / LLM / System
+// Config keep their real mutations.
 // ---------------------------------------------------------------------------
 
 async function renderTab(tab: string) {
@@ -304,27 +304,31 @@ describe('ConfigureModal honesty (Task 12)', () => {
     expect(screen.getByRole('tab', { name: /system config/i })).toBeInTheDocument();
   });
 
-  it('keeps Gates present but disabled with an honest reference note', async () => {
-    await renderTab('gates');
+  it('opens on the first real tab and offers no reference-only Gates pane', async () => {
+    await renderTab('skills');
 
-    expect(screen.getByText(/Reference only — gates are not enforced/)).toBeInTheDocument();
-    const switches = screen.getAllByRole('switch');
-    expect(switches.length).toBeGreaterThan(0);
-    switches.forEach((s) => expect(s).toHaveAttribute('aria-disabled', 'true'));
+    expect(screen.getByRole('tab', { name: /skills/i, selected: true })).toBeInTheDocument();
+    // The disabled, backend-less Approval Gates policy is gone, not merely hidden.
+    expect(screen.queryByRole('tab', { name: /approval gates/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Reference only — gates are not enforced/)).not.toBeInTheDocument();
+  });
 
-    const before = switches.map((s) => s.getAttribute('aria-checked'));
-    fireEvent.click(switches[0]);
-    fireEvent.keyDown(switches[0], { key: 'Enter' });
-    expect(switches.map((s) => s.getAttribute('aria-checked'))).toEqual(before);
+  it('defaults to the Skills tab when opened without an explicit tab', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConfigureModal />
+      </QueryClientProvider>,
+    );
+    window.dispatchEvent(new Event('act:open-configure'));
 
-    screen.getAllByRole('combobox').forEach((c) => expect(c).toBeDisabled());
-    screen.getAllByRole('spinbutton').forEach((i) => expect(i).toBeDisabled());
-    expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
-
-    // Row copy must not claim runtime behaviour the build does not enforce.
-    expect(screen.queryByText(/Human approval required before work flows on/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Blocks until approved/)).not.toBeInTheDocument();
-    expect(screen.getAllByText(/Policy target:/).length).toBeGreaterThan(0);
+    const dialog = await screen.findByRole('dialog', { name: /configure/i });
+    expect(dialog).toBeVisible();
+    expect(
+      await within(dialog).findByText('Read-only catalog. No skill permission is editable or enforced in this build.'),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('tab', { name: /skills/i, selected: true })).toBeInTheDocument();
   });
 
   it('keeps the real apply control on Runtime and offers no no-op Reset', async () => {

@@ -16,15 +16,17 @@ import type { Approval } from '../../types';
 // header (the route is operator-only since Task 12).
 // ---------------------------------------------------------------------------
 
-vi.mock('../../api/ops', () => ({
-  listRecentRuns: vi.fn().mockResolvedValue([]),
-  getOpsSummary: vi.fn().mockResolvedValue({
+vi.mock('../../api/runs', () => ({
+  listRuns: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../../api/dashboard', () => ({
+  getSummary: vi.fn().mockResolvedValue({
     activeAgents: 0,
     runningRuns: 0,
     pendingApprovals: 0,
     totalTokensBurned: 0,
   }),
-  getOpsActivity: vi.fn().mockResolvedValue([]),
+  getRecentActivity: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../../api/agents', () => ({
   listAgents: vi.fn().mockResolvedValue([]),

@@ -10,9 +10,9 @@ import {
 import type { PanelItem } from './ariaPanelState';
 import { isPermissionRequestEnvelope, permissionRequestInput } from '../utils/approvalArguments';
 
-export type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
+type AriaApprovalItem = Extract<PanelItem, { kind: 'approval' }>;
 /** The states a decision can produce; `pending` is the absence of one. */
-export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
+type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
 
 /**
  * What an ACP envelope with no usable `input` says instead of a payload.
@@ -24,7 +24,7 @@ export type ApprovalOutcome = Exclude<AriaApprovalItem['state'], 'pending'>;
 const ENVELOPE_WITHOUT_INPUT =
   'This request carries no argument summary — the core sent no tool input.';
 
-export interface ArgumentView {
+interface ArgumentView {
   /** The compact `key: value` lines the card paints. */
   summary: string;
   /** The same payload as one string, for the element's tooltip. */
@@ -62,7 +62,7 @@ function summarizeInput(input: unknown): string {
  * asks them to read transport plumbing. The envelope's `input` IS the payload
  * the decision is about, so it is summarized in full and nothing else is shown.
  */
-export function argumentView(args: string): ArgumentView {
+function argumentView(args: string): ArgumentView {
   const text = args.trim();
   if (text === '') return { summary: '', detail: '' };
   let parsed: unknown;
@@ -84,11 +84,6 @@ export function argumentView(args: string): ArgumentView {
   }
   const summary = summarizeEntries(record);
   return summary === '' ? { summary: text, detail: text } : { summary, detail: text };
-}
-
-/** The card's painted summary; see `argumentView`. */
-export function argumentSummary(args: string): string {
-  return argumentView(args).summary;
 }
 
 /**

@@ -15,16 +15,12 @@ import {
   listKanbanItems,
   getKanbanItem,
   createKanbanItem,
-  updateKanbanItem,
   transitionKanbanItem,
-  deleteKanbanItem,
 } from '../kanban';
-import type { CreateKanbanItemRequest, TransitionKanbanRequest, UpdateKanbanItemRequest } from '../../types';
+import type { CreateKanbanItemRequest, TransitionKanbanRequest } from '../../types';
 
 const get = client.get as Mock;
 const post = client.post as Mock;
-const put = client.put as Mock;
-const del = client.delete as Mock;
 
 describe('kanban api', () => {
   beforeEach(() => {
@@ -62,28 +58,12 @@ describe('kanban api', () => {
     expect(post).toHaveBeenCalledWith('/api/v1/kanban/items', req);
   });
 
-  it('updateKanbanItem PUTs to the encoded item URL', async () => {
-    const req = { title: 'Renamed' } as unknown as UpdateKanbanItemRequest;
-    put.mockResolvedValue({ data: { id: 'k-2', title: 'Renamed' } });
-
-    await expect(updateKanbanItem('k-2', req)).resolves.toEqual({ id: 'k-2', title: 'Renamed' });
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(put).toHaveBeenCalledWith('/api/v1/kanban/items/k-2', req);
-  });
-
   it('transitionKanbanItem POSTs the transition request', async () => {
     const req = { targetStatus: 'DONE' } as unknown as TransitionKanbanRequest;
     post.mockResolvedValue({ data: { id: 'k-3', status: 'DONE' } });
 
     await expect(transitionKanbanItem('k-3', req)).resolves.toEqual({ id: 'k-3', status: 'DONE' });
     expect(post).toHaveBeenCalledWith('/api/v1/kanban/items/k-3/transition', req);
-  });
-
-  it('deleteKanbanItem DELETEs the encoded item URL', async () => {
-    del.mockResolvedValue({ data: undefined });
-
-    await expect(deleteKanbanItem('k#4')).resolves.toBeUndefined();
-    expect(del).toHaveBeenCalledWith('/api/v1/kanban/items/k%234');
   });
 
   it('propagates transition failures to the caller', async () => {

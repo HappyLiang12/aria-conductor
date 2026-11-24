@@ -6,7 +6,7 @@
  * Frames of another run, unknown kinds and observations no newer than the one
  * already held are ignored.
  */
-export type ProgressItemKind = 'thinking' | 'answer' | 'tool' | 'status' | 'error';
+type ProgressItemKind = 'thinking' | 'answer' | 'tool' | 'status' | 'error';
 
 /** The subset of RunProgressEntry the merge needs (WS payload or REST row). */
 export interface ProgressEntryLike {
@@ -102,12 +102,4 @@ export function applyProgress(state: ProgressState, entry: ProgressEntryLike): P
     lastSeq: Math.max(state.lastSeq, seq),
     seen: { ...state.seen, [key]: seq },
   };
-}
-
-/** The answer parts joined in order; what the live bubble shows while the turn runs. */
-export function answerText(state: ProgressState): string {
-  return state.items
-    .filter((item) => item.kind === 'answer' && item.text.trim().length > 0)
-    .map((item) => item.text)
-    .join('\n\n');
 }

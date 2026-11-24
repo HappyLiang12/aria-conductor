@@ -14,54 +14,6 @@ import { composeRuntimes } from '../utils/runtimeComposition';
 import type { ExecutionMode } from '../types';
 import '../styles/configure-flow.css';
 
-/**
- * Pipeline stages shown in the Approval Gates tab.
- * Order is significant — gates sit between consecutive stages.
- */
-interface Stage {
-  id: string;
-  name: string;
-  icon: string;
-}
-
-const STAGES: Stage[] = [
-  { id: 'draft', name: 'Draft', icon: '✎' },
-  { id: 'dev', name: 'Dev', icon: '⚙' },
-  { id: 'review', name: 'Code Review', icon: '👁' },
-  { id: 'qa', name: 'QA', icon: '✓' },
-  { id: 'security', name: 'Security', icon: '🛡' },
-  { id: 'staging', name: 'Staging', icon: '🚉' },
-  { id: 'production', name: 'Production', icon: '🚀' },
-];
-
-interface Gate {
-  id: string;
-  from: string;
-  to: string;
-  label: string;
-  on: boolean;
-  role: string;
-  sla: number;
-}
-
-const APPROVER_ROLES = [
-  'Tech Lead',
-  'QA Lead',
-  'Security Officer',
-  'Release Manager',
-  'Product Owner',
-  'Compliance',
-];
-
-const DEFAULT_GATES: Gate[] = [
-  { id: 'g-draft-dev', from: 'draft', to: 'dev', label: 'Draft → Dev', on: false, role: 'Tech Lead', sla: 8 },
-  { id: 'g-dev-review', from: 'dev', to: 'review', label: 'Dev → Code Review', on: true, role: 'Tech Lead', sla: 4 },
-  { id: 'g-review-qa', from: 'review', to: 'qa', label: 'Code Review → QA', on: true, role: 'Tech Lead', sla: 4 },
-  { id: 'g-qa-security', from: 'qa', to: 'security', label: 'QA → Security', on: false, role: 'QA Lead', sla: 8 },
-  { id: 'g-security-staging', from: 'security', to: 'staging', label: 'Security → Staging', on: true, role: 'Security Officer', sla: 12 },
-  { id: 'g-staging-prod', from: 'staging', to: 'production', label: 'Staging → Production', on: true, role: 'Release Manager', sla: 24 },
-];
-
 interface SkillRow {
   name: string;
   category: string;
@@ -71,7 +23,7 @@ interface SkillRow {
 // B2: Skills are loaded from the backend skill registry (GET /api/v1/skills), not hardcoded.
 // The registry has no permission field — the UI must not invent one (Task 12).
 
-export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string } = {}) {
+export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string } = {}) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>(initialTab);
 
@@ -150,14 +102,6 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
         <div className="tabs" role="tablist">
           <div
-            className={`tab${activeTab === 'gates' ? ' active' : ''}`}
-            role="tab"
-            aria-selected={activeTab === 'gates'}
-            onClick={() => setActiveTab('gates')}
-          >
-            🛡 Approval Gates
-          </div>
-          <div
             className={`tab${activeTab === 'skills' ? ' active' : ''}`}
             role="tab"
             aria-selected={activeTab === 'skills'}
@@ -192,9 +136,6 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
         </div>
 
         <div className="tab-body">
-          {activeTab === 'gates' && (
-            <GatesPane gates={DEFAULT_GATES} />
-          )}
           {activeTab === 'skills' && (
             <SkillsPane skills={skills} />
           )}
@@ -222,9 +163,7 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
         <footer>
           <div className="info">
-            {activeTab === 'gates'
-              ? 'Reference only — gates are not enforced'
-              : activeTab === 'skills'
+            {activeTab === 'skills'
               ? `${skills.length} skills in the read-only catalog`
               : activeTab === 'llm'
               ? 'Configure LLM providers and the one-time Qoder runtime credential'
@@ -238,129 +177,6 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
             </button>
           </div>
         </footer>
-      </div>
-    </>
-  );
-}
-
-interface GatesPaneProps {
-  gates: Gate[];
-}
-
-function GatesPane({ gates }: GatesPaneProps) {
-  const gateBetween = (from: string, to: string) =>
-    gates.find((g) => g.from === from && g.to === to);
-
-  return (
-    <>
-      <div className="configure-reference-note">
-        Reference only — not enforced by the backend. This panel does not change runtime behavior.
-      </div>
-      <p style={{ color: 'var(--text-dim)', fontSize: 12.5, margin: '0 0 14px' }}>
-        These gate definitions are shown for reference so the intended approval
-        policy stays visible; no control here can enable or change a runtime gate.
-      </p>
-
-      {/* Pipeline visualisation: stage → gate → stage */}
-      <div
-        className="pipeline"
-        style={{
-          display: 'flex',
-          alignItems: 'stretch',
-          gap: 4,
-          marginBottom: 18,
-        }}
-      >
-        {STAGES.map((stage, idx) => {
-          const next = STAGES[idx + 1];
-          const gate = next ? gateBetween(stage.id, next.id) : undefined;
-          return (
-            <span
-              key={stage.id}
-              style={{ display: 'contents' }}
-            >
-              <div className="stage" style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, marginBottom: 2 }} aria-hidden>
-                  {stage.icon}
-                </div>
-                <div className="nm">{stage.name}</div>
-              </div>
-              {next && (
-                <div className={`gate-arrow${gate?.on ? ' gate-on' : ''}`}>
-                  <svg viewBox="0 0 18 14" aria-hidden>
-                    <path
-                      d="M0 7 L13 7 M9 2 L14 7 L9 12"
-                      stroke="currentColor"
-                      fill="none"
-                      strokeWidth={2}
-                      strokeDasharray={gate?.on ? '0' : '3 2'}
-                    >
-                      {gate?.on && (
-                        <animate
-                          attributeName="stroke-dashoffset"
-                          from="0"
-                          to="-10"
-                          dur="1.4s"
-                          repeatCount="indefinite"
-                        />
-                      )}
-                    </path>
-                  </svg>
-                  <div className="glabel">{gate?.on ? `🛡 ${gate.role}` : 'auto'}</div>
-                </div>
-              )}
-            </span>
-          );
-        })}
-      </div>
-
-      <div className="gate-list">
-        {gates.map((g) => (
-          <div key={g.id} className={`gate-row${g.on ? ' on' : ' off'}`}>
-            <div>
-              <div className="ttl">{g.label}</div>
-              <div className="sub">
-                {g.on
-                  ? 'Policy target: human approval before work flows on'
-                  : 'Policy target: auto-flow without a human gate'}
-              </div>
-            </div>
-            <div>
-              <div className="col-label">Approver</div>
-              <select value={g.role} disabled>
-                {APPROVER_ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div className="col-label">SLA (hours)</div>
-              <input
-                type="number"
-                min={1}
-                max={168}
-                value={g.sla}
-                disabled
-                readOnly
-              />
-            </div>
-            <div>
-              <div className="col-label">{g.on ? 'Required by policy' : 'Optional by policy'}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                Not enforced in this build
-              </div>
-            </div>
-            <div
-              className={`switch${g.on ? ' on' : ''}`}
-              role="switch"
-              aria-checked={g.on}
-              aria-disabled="true"
-              tabIndex={-1}
-            />
-          </div>
-        ))}
       </div>
     </>
   );

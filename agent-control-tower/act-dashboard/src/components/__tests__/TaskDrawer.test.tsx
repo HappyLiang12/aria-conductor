@@ -531,7 +531,6 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
     await waitFor(() => expect(mockedTransition).toHaveBeenCalledTimes(1));
     expect(mockedTransition).toHaveBeenCalledWith('task-1', {
       status: 'CANCELLED',
-      comment: undefined,
     });
     // Completion clears the pending state.
     await waitFor(() =>
@@ -565,7 +564,6 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
     await waitFor(() =>
       expect(mockedTransition).toHaveBeenCalledWith('task-1', {
         status: 'DONE',
-        comment: undefined,
       }),
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -666,6 +664,43 @@ describe('TaskDrawer REVIEW badge vs open asks (F24)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Acceptance criteria and comments: the drawer shows what the card carries —
+// no fabricated checklist and no comment box the backend never persists.
+// ---------------------------------------------------------------------------
+
+describe('TaskDrawer acceptance criteria and comments honesty', () => {
+  it('renders the label acceptance criteria', async () => {
+    mockedGetKanbanItem.mockResolvedValue(
+      mkItem({ labels: '{"acceptance":["Ship the spec","Green CI"]}' }),
+    );
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('Ship the spec')).toBeInTheDocument();
+    expect(screen.getByText('Green CI')).toBeInTheDocument();
+  });
+
+  it('shows an empty state instead of inventing a checklist', async () => {
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('No acceptance criteria on this card.')).toBeInTheDocument();
+    expect(screen.queryByText('Title and description captured')).not.toBeInTheDocument();
+    expect(screen.queryByText('Owner / assignee set')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reached terminal state')).not.toBeInTheDocument();
+  });
+
+  it('offers no comment box the transition ignores', async () => {
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText('Spec task');
+    expect(screen.queryByText('Comments')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Add a comment/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 7: opening moves focus to the card heading, closing returns it to the
 // opener, and Escape inside an editable draft never closes the drawer.
 // ---------------------------------------------------------------------------
@@ -710,7 +745,7 @@ describe('TaskDrawer focus contract (Task 7)', () => {
     const heading = await screen.findByRole('heading', { name: 'Spec task' });
     await waitFor(() => expect(heading).toHaveFocus());
 
-    const note = screen.getByPlaceholderText(/Add a comment/);
+    const note = screen.getByLabelText('Request-changes feedback');
     await user.type(note, 'keep this draft');
     fireEvent.keyDown(note, { key: 'Escape' });
 

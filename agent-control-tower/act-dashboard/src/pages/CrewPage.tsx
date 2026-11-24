@@ -51,7 +51,6 @@ interface AddAgentForm {
   workspaceMode: WorkspaceMode;
   workspacePath: string;
   workspaceBaseRef: string;
-  maxToolCallRounds: number;
 }
 
 const EMPTY_FORM: AddAgentForm = {
@@ -67,7 +66,6 @@ const EMPTY_FORM: AddAgentForm = {
   workspaceMode: 'WORKTREE',
   workspacePath: '',
   workspaceBaseRef: '',
-  maxToolCallRounds: 15,
 };
 
 const EXECUTION_MODE_LABELS: Record<ExecutionMode, string> = {
@@ -450,7 +448,6 @@ export default function CrewPage() {
       // provider inventory, which is the same source the admission policy uses.
       adkProvider: form.adkProvider as AgentCore,
       executionMode: form.executionMode,
-      config: { maxToolCallRounds: form.maxToolCallRounds },
     };
     if (form.executionMode === 'HOST') {
       // The workspace binding only travels with a Host run; a sandbox run has
@@ -507,11 +504,6 @@ export default function CrewPage() {
               <span className="l">Runs · today</span>
               <span className="v">{costSummary.totalRuns}</span>
               <span className="d">started across crew</span>
-            </div>
-            <div className="cell idle">
-              <span className="l">Hiring slots</span>
-              <span className="v">{Math.max(0, 12 - activeAgents.length)}</span>
-              <span className="d">soft cap · adjustable in Settings</span>
             </div>
           </div>
         </section>

@@ -242,7 +242,9 @@ if ($sandboxMode) {
 }
 
 # ── LLM credentials (injected into sandbox env for opencode provider) ──
-if (-not $env:DEEPSEEK_API_KEY -and $env:LLM_API_KEY) {
+# Alias the platform key only on a DeepSeek base URL: the AR locator spends
+# DEEPSEEK_API_KEY and must never send another provider's bearer to api.deepseek.com.
+if (-not $env:DEEPSEEK_API_KEY -and $env:LLM_API_KEY -and $env:LLM_BASE_URL -like '*api.deepseek.com*') {
     $env:DEEPSEEK_API_KEY = $env:LLM_API_KEY
 }
 

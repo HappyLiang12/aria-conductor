@@ -22,6 +22,28 @@ describe('translate: allowlist', () => {
     });
   });
 
+  it('maps the semantic-VAD commit to speech_end (the provider sends no speech_stopped)', () => {
+    const translator = createTranslator({ clock });
+    const [translation] = translator.onEvent({ type: 'input_audio_buffer.committed' });
+    expect(translation).toEqual({
+      kind: 'control',
+      event: { type: 'speech_end', v: 1, tMs: RECEIVED_AT },
+    });
+  });
+
+  it('yields exactly one speech_end when both events describe the same utterance', () => {
+    const translator = createTranslator({ clock });
+    expect(translator.onEvent({ type: 'input_audio_buffer.speech_stopped' })).toHaveLength(1);
+    expect(translator.onEvent({ type: 'input_audio_buffer.committed' })).toEqual([]);
+  });
+
+  it('arms speech_end again after the next speech_started', () => {
+    const translator = createTranslator({ clock });
+    translator.onEvent({ type: 'input_audio_buffer.speech_stopped' });
+    translator.onEvent({ type: 'input_audio_buffer.speech_started' });
+    expect(translator.onEvent({ type: 'input_audio_buffer.committed' })).toHaveLength(1);
+  });
+
   it('maps input transcription deltas and the completion to one input stream', () => {
     const translator = createTranslator({ clock });
     const delta = translator.onEvent({

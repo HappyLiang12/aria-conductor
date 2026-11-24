@@ -28,7 +28,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -106,7 +107,7 @@ public class LiveToolExecutor {
                             AgentRepository agentRepository,
                             ApprovalRepository approvalRepository) {
         this(runService, approvalQueryService, agentService, workflowService,
-                runRepository, agentRepository, approvalRepository, Clock.systemUTC());
+                runRepository, agentRepository, approvalRepository, Clock.systemDefaultZone());
     }
 
     LiveToolExecutor(RunService runService,
@@ -169,8 +170,11 @@ public class LiveToolExecutor {
     }
 
     private Map<String, Object> timeView() {
+        ZonedDateTime now = ZonedDateTime.now(clock);
         Map<String, Object> view = new LinkedHashMap<>();
-        view.put("now", Instant.now(clock).toString());
+        view.put("now", now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX")));
+        view.put("zone", now.getZone().getId());
+        view.put("utc", now.toInstant().toString());
         return view;
     }
 

@@ -349,29 +349,116 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void aPhotoFrameIsSentToTheBridgeWithTheCommit() throws Exception {
+    void oneFrameWithAudioAndCommitReachesTheBridge() throws Exception {
         WebSocketSession session = opened();
         String base64 = Base64.getEncoder().encodeToString("jpeg-bytes".getBytes());
-        handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
-                + "\"dataBase64\":\"" + base64 + "\",\"capturedAtMs\":1}"));
 
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage(frame(base64)));
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
 
+        assertThat(bridge.binaries).hasSize(1);
         assertThat(bridge.sent).hasSize(3);
         assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("image");
         assertThat(json.readTree(bridge.sent.get(1)).path("dataBase64").asText()).isEqualTo(base64);
         assertThat(json.readTree(bridge.sent.get(2)).path("type").asText()).isEqualTo("commit");
         assertThat(json.readTree(bridge.sent.get(2)).path("image").asBoolean()).isTrue();
+        verify(session, never()).close(any());
     }
 
     @Test
-    void aCommitWithNoFrameIsSentWithoutAnImage() throws Exception {
+    void aSecondFrameInTheSameTurnIsRefusedAndTheFirstStands() throws Exception {
+        WebSocketSession session = opened();
+        String first = Base64.getEncoder().encodeToString("first-jpeg".getBytes());
+        String second = Base64.getEncoder().encodeToString("second-jpeg".getBytes());
+
+        handler.handleTextMessage(session, new TextMessage(frame(first)));
+        handler.handleTextMessage(session, new TextMessage(frame(second)));
+
+        JsonNode error = json.readTree(lastText(session));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("frame_invalid");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("one frame per turn");
+        // Only the bridge hello and the turn's one frame: the second never crossed.
+        assertThat(bridge.sent).hasSize(2);
+        assertThat(json.readTree(bridge.sent.get(1)).path("dataBase64").asText()).isEqualTo(first);
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void anImageCommitWithNoAudioSinceTheTurnBoundaryIsRefused() throws Exception {
         WebSocketSession session = opened();
 
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
 
+        JsonNode error = json.readTree(lastText(session));
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("v").asInt()).isEqualTo(1);
+        assertThat(error.path("code").asText()).isEqualTo("frame_invalid");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("image commit requires audio");
+        // Neither the commit nor an image line reached the fake bridge.
+        assertThat(bridge.sent).hasSize(1);
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void anImageCommitAfterAudioWithoutAFrameIsSentWithoutAnImage() throws Exception {
+        WebSocketSession session = opened();
+
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+
         assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("commit");
         assertThat(json.readTree(bridge.sent.get(1)).path("image").asBoolean()).isFalse();
+    }
+
+    @Test
+    void aSpeechEndStartsANewTurnSoTheNextFrameIsAccepted() throws Exception {
+        WebSocketSession session = opened();
+        String first = Base64.getEncoder().encodeToString("first-jpeg".getBytes());
+        String second = Base64.getEncoder().encodeToString("second-jpeg".getBytes());
+
+        handler.handleTextMessage(session, new TextMessage(frame(first)));
+        // The bridge's own turn end: the next utterance may carry its own frame.
+        bridge.listener.onControl("{\"type\":\"speech_end\",\"tMs\":1}");
+        handler.handleTextMessage(session, new TextMessage(frame(second)));
+
+        assertThat(bridge.sent).hasSize(3);
+        assertThat(json.readTree(bridge.sent.get(2)).path("type").asText()).isEqualTo("image");
+        assertThat(json.readTree(bridge.sent.get(2)).path("dataBase64").asText()).isEqualTo(second);
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void anImageCommitAfterTheSpeechEndBoundaryStillNeedsFreshAudio() throws Exception {
+        WebSocketSession session = opened();
+        String base64 = Base64.getEncoder().encodeToString("jpeg-bytes".getBytes());
+
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage(frame(base64)));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+        // The provider's turn end already reset the audio count; a commit at the phone's
+        // own speech_end without fresh audio is still the refusal.
+        bridge.listener.onControl("{\"type\":\"speech_end\",\"tMs\":1}");
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+
+        assertThat(json.readTree(lastText(session)).path("code").asText()).isEqualTo("frame_invalid");
+        assertThat(bridge.sent).hasSize(3);
+    }
+
+    @Test
+    void aCommitWithoutAnImageIsForwardedUnchanged() throws Exception {
+        WebSocketSession session = opened();
+
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":false}"));
+
+        assertThat(bridge.sent).hasSize(2);
+        assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("commit");
+        assertThat(json.readTree(bridge.sent.get(1)).path("image").asBoolean(true)).isFalse();
     }
 
     @Test
@@ -529,6 +616,7 @@ class LiveWebSocketHandlerTest {
         String base64 = Base64.getEncoder().encodeToString(new byte[196_608]);
         assertThat(base64).hasSize(LiveFrameValidator.MAX_BASE64_LENGTH);
 
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
                 + "\"dataBase64\":\"" + base64 + "\",\"capturedAtMs\":1}"));
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
@@ -683,6 +771,16 @@ class LiveWebSocketHandlerTest {
 
     private String firstText(WebSocketSession session) throws Exception {
         return allTexts(session).get(0);
+    }
+
+    private String lastText(WebSocketSession session) throws Exception {
+        List<String> texts = allTexts(session);
+        return texts.get(texts.size() - 1);
+    }
+
+    private static String frame(String base64) {
+        return "{\"type\":\"frame\",\"mime\":\"image/jpeg\",\"dataBase64\":\"" + base64
+                + "\",\"capturedAtMs\":1}";
     }
 
     private List<String> allTexts(WebSocketSession session) throws Exception {

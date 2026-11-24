@@ -19,8 +19,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * session id never lives here — {@link #id()} is Aria's own per-socket UUID, the only id
  * that appears in {@code ready} or in a log line.
  *
- * <p>The pending photo frame is the one frame allowed per utterance (spec X10): it is
- * held in memory and handed to the bridge only with {@code commit{image:true}}.
+ * <p>Frame ingest is turn-scoped (spec D8): one frame per turn, and an
+ * {@code image} commit needs audio recorded after the turn boundary. The frame itself is
+ * not held here — it reaches the bridge as it arrives and an uncommitted one is the
+ * bridge's pending image; only the two counters live with the socket.
  */
 public final class LiveSession {
 
@@ -34,7 +36,10 @@ public final class LiveSession {
     private volatile UUID runId;
     private volatile LiveBridge bridge;
     private volatile boolean micOn = true;
-    private volatile String pendingFrameBase64;
+    /** One frame per turn: set when a frame is accepted, cleared at the turn boundary. */
+    private boolean frameSeenThisTurn;
+    /** PCM bytes sent to the provider since the turn boundary: an image commit needs some. */
+    private long audioBytesSinceCommit;
     private volatile ScheduledFuture<?> helloDeadline;
     /**
      * Gated tool calls waiting for the operator, by approval id. Remove-and-get is atomic,
@@ -160,15 +165,47 @@ public final class LiveSession {
         this.micOn = micOn;
     }
 
-    public void pendingFrameBase64(String pendingFrameBase64) {
-        this.pendingFrameBase64 = pendingFrameBase64;
+    /**
+     * Claims this turn's one frame (spec D8). Atomic with the check, so two frames racing
+     * in from the phone cannot both be told they are the first.
+     *
+     * @return true when this frame is the turn's first; false when one already stands
+     */
+    synchronized boolean claimFrame() {
+        if (frameSeenThisTurn) {
+            return false;
+        }
+        frameSeenThisTurn = true;
+        return true;
     }
 
-    /** @return the pending frame and forgets it: one frame per utterance */
-    public String takePendingFrameBase64() {
-        String pending = pendingFrameBase64;
-        pendingFrameBase64 = null;
-        return pending;
+    /** Counts PCM actually handed to the bridge: audio the provider can commit. */
+    synchronized void audioSent(int bytes) {
+        audioBytesSinceCommit += bytes;
+    }
+
+    /** What a turn carried, read as the turn is closed. */
+    record Turn(boolean frameSeen, boolean audioSeen) {
+    }
+
+    /**
+     * Reads the turn's ingest state and starts the next turn in one step, so a frame
+     * racing in from the phone cannot land between the read and the reset.
+     */
+    synchronized Turn closeTurn() {
+        Turn turn = new Turn(frameSeenThisTurn, audioBytesSinceCommit > 0);
+        beginTurn();
+        return turn;
+    }
+
+    /**
+     * Marks a turn boundary — {@code hello}, the bridge's {@code speech_end} or the phone's
+     * {@code commit}: the next frame belongs to the next turn and an image commit needs
+     * fresh audio.
+     */
+    synchronized void beginTurn() {
+        frameSeenThisTurn = false;
+        audioBytesSinceCommit = 0;
     }
 
     void helloDeadline(ScheduledFuture<?> helloDeadline) {

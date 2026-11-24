@@ -535,7 +535,6 @@
    "skipped": 4,
    "classSumSec": 5.804,
    "byClass": {
-    "io.aria.conductor.aria.config.AriaPropertiesTest": 0.001,
     "io.aria.conductor.aria.controller.AriaChatControllerTest": 0.112,
     "io.aria.conductor.aria.controller.AriaConversationControllerTest": 0.279,
     "io.aria.conductor.aria.controller.NotificationControllerEndpointsTest": 0.021,
@@ -559,7 +558,6 @@
     "io.aria.conductor.aria.service.ScheduledJobServiceTest": 0.004
    },
    "testsByClass": {
-    "io.aria.conductor.aria.config.AriaPropertiesTest": 1,
     "io.aria.conductor.aria.controller.AriaChatControllerTest": 6,
     "io.aria.conductor.aria.controller.AriaConversationControllerTest": 20,
     "io.aria.conductor.aria.controller.NotificationControllerEndpointsTest": 4,

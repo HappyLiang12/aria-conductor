@@ -57,7 +57,7 @@ public class RunInputCoordinator {
 
     /**
      * The live parks: a run owned by a phone socket instead of an engine thread. The
-     * callback is what finalize runs (settle ABORTED, inject {@code [tower] finalized},
+     * callback is what finalize runs (answer the bridge's pending call, settle ABORTED,
      * tell the phone) — there is no future to complete and no waiter to wake.
      */
     private final Map<UUID, Runnable> liveParks = new ConcurrentHashMap<>();

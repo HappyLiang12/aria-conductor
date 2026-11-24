@@ -732,8 +732,10 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     }
 
     /**
-     * Connects, handshakes, and drives a scripted turn's phone side: one audio frame, one
-     * frame, the image commit and a line. The fake's scripted mode then runs the provider
+     * Connects, handshakes, and drives a scripted turn's phone side: one audio frame, the
+     * image commit, one frame, and a line. The scripted turn follows the AR order (spec D4:
+     * the commit precedes the frame it carries), so the frame is stamped to the utterance
+     * that asks and the backup can claim it. The fake's scripted mode then runs the provider
      * half; the callers await its events.
      */
     private Turn scriptedTurn(Recorder recorder, String question, boolean highlight) throws Exception {
@@ -749,8 +751,8 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
             await("ready", () -> firstEvent(recorder, "ready") != null);
             await("the bridge to report its environment", () -> firstEvent(recorder, "env") != null);
             socket.sendBinary(ByteBuffer.wrap(new byte[640]), true).get(5, TimeUnit.SECONDS);
-            socket.sendText(frameMessage(IMAGE_200_KIB), true).get(5, TimeUnit.SECONDS);
             socket.sendText("{\"type\":\"commit\",\"image\":true}", true).get(5, TimeUnit.SECONDS);
+            socket.sendText(frameMessage(IMAGE_200_KIB), true).get(5, TimeUnit.SECONDS);
             socket.sendText("{\"type\":\"text\",\"text\":\"ask\"}", true).get(5, TimeUnit.SECONDS);
         } catch (Exception e) {
             socket.abort();

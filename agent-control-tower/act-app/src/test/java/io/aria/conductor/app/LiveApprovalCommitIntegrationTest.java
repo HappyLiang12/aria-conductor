@@ -118,10 +118,10 @@ class LiveApprovalCommitIntegrationTest extends BaseH2IntegrationTest {
                 .as("the settle must be committed, not left in the decision's transaction")
                 .isEqualTo(RunStatus.COMPLETED);
         assertThat(park.parked(fixture.runId)).as("the decision claimed the park").isFalse();
-        assertThat(fixture.bridge.lines).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
-                && line.contains("\"id\":\"call-live-1\"") && line.contains("\"ok\":true"));
-        assertThat(fixture.bridge.lines).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] {"));
+        assertThat(fixture.bridge.lines).filteredOn(line -> line.contains("\"id\":\"call-live-1\""))
+                .singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":true").contains("[tower] {");
+        assertThat(fixture.bridge.lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
         assertThat(fixture.phone).anyMatch(frame -> frame.contains("\"type\":\"run_event\"")
                 && frame.contains("\"state\":\"finished\""));
     }
@@ -136,10 +136,11 @@ class LiveApprovalCommitIntegrationTest extends BaseH2IntegrationTest {
                 .as("the settle must be committed, not left in the decision's transaction")
                 .isEqualTo(RunStatus.FAILED);
         assertThat(park.parked(fixture.runId)).isFalse();
-        assertThat(fixture.bridge.lines).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
-                && line.contains("\"id\":\"call-live-1\"") && line.contains("\"ok\":false"));
-        assertThat(fixture.bridge.lines).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains(LiveEventRouter.TOWER_DENIED));
+        assertThat(fixture.bridge.lines).filteredOn(line -> line.contains("\"id\":\"call-live-1\""))
+                .singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":false")
+                .contains(LiveEventRouter.TOWER_DENIED);
+        assertThat(fixture.bridge.lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
         assertThat(fixture.phone).anyMatch(frame -> frame.contains("\"type\":\"run_event\"")
                 && frame.contains("\"state\":\"failed\""));
     }

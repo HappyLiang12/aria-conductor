@@ -15,8 +15,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>The direct-locator keys (spec D6) are the backup AR path: {@code direct-locator-enabled}
  * is off by default, so no direct provider call is made until a deployment turns it on.
  * {@code direct-base-url} and {@code direct-model} are not secrets; the key itself is read
- * from {@code LLM_API_KEY} by {@link DeepSeekLocator} and is deliberately not part of this
- * record, so no property dump can carry it.
+ * from {@code DEEPSEEK_API_KEY} by {@link DeepSeekLocator} and is deliberately not part of
+ * this record, so no property dump can carry it.
  *
  * @param enabled              whether the live bridge may be started
  * @param bridgeScript         path to the Node bridge entry point

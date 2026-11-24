@@ -28,11 +28,11 @@ import java.util.UUID;
  * <ul>
  *   <li>a gated tool <em>parks</em> the run as WAITING_INPUT and registers a
  *       {@link LiveRunPark}, so {@code POST /runs/{id}/finalize} answers 202 and settles
- *       ABORTED with {@code [tower] finalized} — a route that already exists for
- *       coordinated runs and needs no second one;</li>
+ *       ABORTED with a stable reason — a route that already exists for coordinated runs
+ *       and needs no second one;</li>
  *   <li>an operator decision ({@link ApprovalDecidedEvent}) is resolved by approval id
  *       against the pending call the socket holds: approve re-executes that call once and
- *       injects its result, deny fails the run with a stable sentence;</li>
+ *       answers it, deny fails the run with a stable sentence;</li>
  *   <li>a run that ends elsewhere ({@link RunCompletedEvent}, e.g. an operator cancel from
  *       the dashboard) is forwarded once and unparked.</li>
  * </ul>
@@ -46,8 +46,16 @@ import java.util.UUID;
  * is the claim on a pending call: whoever releases it (the finalize, a close, the decision)
  * owns the outcome, so a call reaches the model exactly once.
  *
- * <p>A release of the park that is <em>not</em> a decision (a finalize, a close, a run
- * settled elsewhere) must also release the ask itself: the live approval row carries no
+ * <p>A call is answered with <em>one</em> message. The bridge turns a {@code tool_result}
+ * and a {@code tower} into two model turns, so a gated call's outcome travels as the
+ * {@code tool_result}'s {@code output} (the tower sentence) and never as a second
+ * {@code tower} for the same call: one function call, one response. A release that is not
+ * a decision (a finalize, a close, a run settled elsewhere, a second gated call displacing
+ * the first) still answers the call the bridge is waiting on — with the stable
+ * {@code approval unavailable} — before releasing anything, or the bridge's call queue
+ * never drains and every later tool call stalls.
+ *
+ * <p>Such a release must also release the ask itself: the live approval row carries no
  * expiry, so the PENDING sweep will never collect it, and {@code cancelPendingForRun}
  * only covers ACP asks. Left alone it would stay an actionable ask on a run nobody can
  * answer, so every one of those paths expires it through {@link LiveApprovalService}.
@@ -58,14 +66,12 @@ public class LiveEventRouter {
 
     /** The ABORTED reason the finalize route records for a live run. */
     public static final String FINALIZE_REASON = "Operator finalized the live run";
-    /** What the model is told when the operator ends the turn instead of answering. */
-    public static final String TOWER_FINALIZED = "[tower] finalized";
     /** What the model is told when the operator refuses the gated call. */
     public static final String TOWER_DENIED = "[tower] denied by operator";
     /** The run's own failure reason for a denied call; stable, no tool output in it. */
     static final String DENIED_REASON = "denied by operator";
-    /** Answered to the bridge when the run could not take the park at all. */
-    static final String APPROVAL_UNAVAILABLE = "approval unavailable";
+    /** Answered to the bridge when the run could not take the park, or released a call. */
+    public static final String APPROVAL_UNAVAILABLE = "approval unavailable";
     /** The ABORTED reason a parked run records when its socket is gone. */
     static final String SESSION_CLOSED_REASON = "Live session closed while waiting for an approval";
     /** Payload status of a parked call; mirrors {@link LiveRunService}'s WAITING_INPUT. */
@@ -133,6 +139,10 @@ public class LiveEventRouter {
         }
         LivePendingToolCall call = new LivePendingToolCall(runId, approvalId, toolName, riskTier,
                 callId, arguments);
+        // A second gated call parks the same run again, replacing the first call's park.
+        // That first call is answered and its ask released first: otherwise it is held by
+        // nobody and the bridge waits on its function_call_output forever.
+        releaseDisplaced(session, runId);
         park.park(runId, () -> onFinalize(session, call));
         session.pendingCall(call);
         frames.toPhone(session, LiveFrames.toolStatus(toolName, "approval"));
@@ -142,17 +152,33 @@ public class LiveEventRouter {
     }
 
     /**
+     * Answers and expires the calls a new park displaces on the same run. The park key is
+     * the run, so only one callback can stand: the calls it used to own are released here.
+     */
+    private void releaseDisplaced(LiveSession session, UUID runId) {
+        for (LivePendingToolCall displaced : session.takePendingCalls(runId)) {
+            frames.toBridge(session, LiveFrames.toolResult(displaced.callId(), false, APPROVAL_UNAVAILABLE));
+            frames.toPhone(session, LiveFrames.toolStatus(displaced.toolName(), "done"));
+            approvals.release(displaced.approvalId());
+            log.debug("live gated call displaced by a second ask: id={}", runId);
+        }
+    }
+
+    /**
      * What {@code POST /runs/{id}/finalize} runs on a live park. The coordinator removed
-     * the park before calling this, so the same request can never run it twice. The ask
-     * this call created is expired as well: the turn it belonged to is over, and a
-     * PENDING row would stay an actionable decision on a run that can no longer take it.
+     * the park before calling this, so the same request can never run it twice. The call
+     * this park held is answered first — the bridge is still waiting on it, and a turn that
+     * never hears back cannot ask anything else — then the ask this call created is expired
+     * as well: the turn it belonged to is over, and a PENDING row would stay an actionable
+     * decision on a run that can no longer take it.
      */
     private void onFinalize(LiveSession session, LivePendingToolCall call) {
         session.takePendingCall(call.approvalId());
+        // Best-effort on a closing socket, and still the only answer this call will get.
+        frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, APPROVAL_UNAVAILABLE));
         approvals.release(call.approvalId());
         runs.settle(session, call.runId(), RunStatus.ABORTED, FINALIZE_REASON);
         frames.toPhone(session, runEvent(call.runId(), RunStatus.ABORTED, FINALIZE_REASON));
-        frames.toBridge(session, LiveFrames.tower(TOWER_FINALIZED));
         log.debug("live run finalized by the operator: id={}", call.runId());
     }
 
@@ -209,6 +235,9 @@ public class LiveEventRouter {
             park.unpark(owned);
             session.takePendingCalls().forEach(call -> {
                 park.unpark(call.runId());
+                // Answered before it is released: the call's turn is over, but the bridge's
+                // queue is not, and an unanswered call blocks every later tool.
+                frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, APPROVAL_UNAVAILABLE));
                 // The run ended elsewhere, so no decision can reach this ask any more.
                 approvals.release(call.approvalId());
             });
@@ -237,7 +266,9 @@ public class LiveEventRouter {
         RunStatus settled = runs.settle(session, runId, RunStatus.COMPLETED, null);
         session.takePendingCalls().forEach(call -> {
             park.unpark(call.runId());
-            // A pending ask whose turn already ended is no longer answerable.
+            // A pending ask whose turn already ended is no longer answerable — but the
+            // bridge is still waiting on the call, so it is answered before the ask goes.
+            frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, APPROVAL_UNAVAILABLE));
             approvals.release(call.approvalId());
         });
         frames.toPhone(session, runEvent(runId, settled, null));
@@ -262,7 +293,9 @@ public class LiveEventRouter {
         boolean released = parkedRun != null && park.unpark(parkedRun);
         for (LivePendingToolCall call : session.takePendingCalls()) {
             // Every held call dies with the socket, whether or not its park was still
-            // standing: its ask is expired so no operator is offered a dead decision.
+            // standing: its ask is expired so no operator is offered a dead decision, and
+            // the bridge is answered best-effort before it goes away.
+            frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, APPROVAL_UNAVAILABLE));
             approvals.release(call.approvalId());
             if (park.unpark(call.runId())) {
                 released = true;
@@ -281,10 +314,12 @@ public class LiveEventRouter {
 
     /**
      * The approved call runs once through the approved-write path — a read re-executes,
-     * a gated write performs its action with no second ask — and its value answers the
-     * bridge and is injected as TOWER. A failure is injected too: the turn is waiting on
-     * this call, and a silent result would leave the model talking about an action whose
-     * outcome it never learned.
+     * a gated write performs its action with no second ask — and its outcome answers the
+     * bridge as the call's own {@code tool_result}, whose output is the sentence the model
+     * hears. A failure is answered the same way: the turn is waiting on this call, and a
+     * silent result would leave the model talking about an action whose outcome it never
+     * learned. No {@code tower} follows — a second message for the same call is a second
+     * model turn (the bridge makes one {@code response.create} per message).
      */
     private void approve(LiveSession session, LivePendingToolCall call) {
         LiveToolExecutor.ToolOutcome outcome = tools.executeApproved(call.toolName(), call.arguments());
@@ -296,15 +331,9 @@ public class LiveEventRouter {
             // operator already decided this call, so it is reported instead of re-parked.
             case LiveToolExecutor.ToolOutcome.PendingApproval ignored -> ASKED_AGAIN;
         };
-        frames.toBridge(session, LiveFrames.toolResult(call.callId(), ok, output));
+        String answer = ok ? "[tower] " + output : TOWER_FAILED + ": " + output;
+        frames.toBridge(session, LiveFrames.toolResult(call.callId(), ok, answer));
         frames.toPhone(session, LiveFrames.toolStatus(call.toolName(), "done"));
-        if (ok) {
-            frames.toBridge(session, LiveFrames.tower("[tower] " + output));
-        } else {
-            // The model asked for this write and must hear that it did not happen; the
-            // failure sentence is stable tool text, never an exception's own message.
-            frames.toBridge(session, LiveFrames.tower(TOWER_FAILED + ": " + output));
-        }
         RunStatus settled = runs.settle(session, call.runId(), ok ? RunStatus.COMPLETED : RunStatus.FAILED,
                 ok ? null : output);
         frames.toPhone(session, runEvent(call.runId(), settled, ok ? null : TOOL_FAILED_REASON));
@@ -312,12 +341,11 @@ public class LiveEventRouter {
     }
 
     /**
-     * The refused call never runs; the bridge is answered first (every function call gets
-     * a result) and the model is then told, and the run fails with a stable reason.
+     * The refused call never runs; the bridge is answered with the refusal sentence as the
+     * call's own result (one message, one model turn), and the run fails with a stable reason.
      */
     private void deny(LiveSession session, LivePendingToolCall call) {
-        frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, DENIED_REASON));
-        frames.toBridge(session, LiveFrames.tower(TOWER_DENIED));
+        frames.toBridge(session, LiveFrames.toolResult(call.callId(), false, TOWER_DENIED));
         frames.toPhone(session, LiveFrames.toolStatus(call.toolName(), "done"));
         RunStatus settled = runs.settle(session, call.runId(), RunStatus.FAILED, DENIED_REASON);
         frames.toPhone(session, runEvent(call.runId(), settled, DENIED_REASON));

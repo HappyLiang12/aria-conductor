@@ -108,8 +108,9 @@ aria:
     # own `highlight_target` render was missed. Off by default — no direct provider call is
     # made until a deployment turns it on. The key is never a property here: it is read from
     # DEEPSEEK_API_KEY in the Aria environment (aria.live.direct.api-key is an optional
-    # override for a harness) and is never logged. direct-timeout-ms is the whole call's
-    # budget, and direct-base-url gets /chat/completions appended.
+    # override for a harness) and is never logged; LLM_API_KEY is deliberately not read, and
+    # a deployment without DEEPSEEK_API_KEY leaves the locator disabled. direct-timeout-ms is
+    # the whole call's budget, and direct-base-url gets /chat/completions appended.
     direct-locator-enabled: ${ARIA_LIVE_DIRECT_LOCATOR_ENABLED:false}
     direct-base-url: ${ARIA_LIVE_DIRECT_BASE_URL:}
     direct-model: ${ARIA_LIVE_DIRECT_MODEL:}

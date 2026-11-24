@@ -48,16 +48,23 @@ public final class LiveSession {
     /** PCM bytes sent to the provider since the turn boundary: an image commit needs some. */
     private long audioBytesSinceCommit;
     /**
-     * This turn's backup-locator candidate (spec D6): the accepted frame's JPEG, the last
-     * final input transcript, whether an {@code ar_render} already crossed, and whether the
-     * one backup of the turn was already claimed. The frame lives here in memory only — it
-     * is dropped at the turn end and never written anywhere.
+     * This turn's backup-locator candidate (spec D6): the accepted frame's JPEG (stamped
+     * with the utterance it was attached in), the last final input transcript, whether an
+     * {@code ar_render} already crossed, and whether the one backup of the turn was already
+     * claimed. The frame lives here in memory only — it is dropped at the turn end and never
+     * written anywhere.
      */
     private byte[] backupFrame;
+    private long backupFrameTurn = NO_TURN;
     private String backupTranscript;
     private long backupTurn;
     private boolean backupClaimed;
     private boolean renderThisTurn;
+    /** The phone's commit opened the current utterance; its speech_end belongs to it. */
+    private boolean committedUtterance;
+
+    /** No utterance: a frame that is not held, or one the turn end already dropped. */
+    private static final long NO_TURN = -1;
     private volatile ScheduledFuture<?> helloDeadline;
     /**
      * Gated tool calls waiting for the operator, by approval id. Remove-and-get is atomic,
@@ -150,6 +157,25 @@ public final class LiveSession {
         for (UUID approvalId : List.copyOf(pendingCalls.keySet())) {
             LivePendingToolCall call = pendingCalls.remove(approvalId);
             if (call != null) {
+                calls.add(call);
+            }
+        }
+        return calls;
+    }
+
+    /**
+     * Drops and returns the calls this socket holds for one run. A second gated call parks
+     * the same run again — replacing the park the first call registered — so the first call
+     * is released through this and must be answered on the bridge.
+     */
+    List<LivePendingToolCall> takePendingCalls(UUID runId) {
+        List<LivePendingToolCall> calls = new ArrayList<>();
+        if (runId == null) {
+            return calls;
+        }
+        for (UUID approvalId : List.copyOf(pendingCalls.keySet())) {
+            LivePendingToolCall call = pendingCalls.get(approvalId);
+            if (call != null && runId.equals(call.runId()) && pendingCalls.remove(approvalId, call)) {
                 calls.add(call);
             }
         }
@@ -250,20 +276,38 @@ public final class LiveSession {
      */
     synchronized void beginBackupTurn() {
         backupFrame = null;
+        backupFrameTurn = NO_TURN;
         backupTranscript = null;
         backupClaimed = false;
         renderThisTurn = false;
+        committedUtterance = false;
         backupTurn++;
     }
 
     /**
-     * Starts a new utterance's backup window — the phone's {@code commit} or the bridge's
-     * {@code speech_end}. The previous utterance's question and its render are dropped, but
-     * its frame is not: in the decided AR order (spec D4) the phone commits *before* it sends
-     * the frame this utterance names, and a frame sent before the commit is the same
-     * utterance's. The frame is dropped at the turn end instead.
+     * The phone's {@code commit} opens the next utterance: its own audio ended, so the
+     * frame and the question that follow belong to it. The bridge's {@code speech_end} for
+     * the same utterance is consumed by {@link #speechEnded()}.
      */
     synchronized void beginUtterance() {
+        openUtterance();
+        committedUtterance = true;
+    }
+
+    /**
+     * The bridge's {@code speech_end}. It opens the next utterance unless the phone's own
+     * commit already did: the two signals describe one utterance, and a second boundary
+     * would detach the frame the commit's turn carries.
+     */
+    synchronized void speechEnded() {
+        if (committedUtterance) {
+            committedUtterance = false;
+            return;
+        }
+        openUtterance();
+    }
+
+    private void openUtterance() {
         backupTranscript = null;
         backupClaimed = false;
         renderThisTurn = false;
@@ -273,6 +317,9 @@ public final class LiveSession {
     /** Keeps the turn's accepted frame for the backup only; nothing else reads it. */
     synchronized void backupFrame(byte[] jpeg) {
         backupFrame = jpeg;
+        // The frame answers the utterance it was attached in; a later utterance that sends
+        // none of its own must not be answered with this one.
+        backupFrameTurn = backupTurn;
         // A new frame is a new question: whatever the last utterance asked does not apply.
         backupTranscript = null;
         renderThisTurn = false;
@@ -289,13 +336,14 @@ public final class LiveSession {
     }
 
     /**
-     * Takes this turn's backup claim, once. Eligible only when a frame and a final
-     * transcript are both held and no render crossed; a second call (a second turn end, a
-     * retry) gets null.
+     * Takes this turn's backup claim, once. Eligible only when a frame attached in the
+     * current utterance and a final transcript are both held and no render crossed; a second
+     * call (a second turn end, a retry) gets null. The stamp is what keeps a frame from an
+     * utterance that never ended from answering a later question.
      */
     synchronized Backup claimBackup() {
-        if (backupClaimed || renderThisTurn || backupFrame == null || backupTranscript == null
-                || backupTranscript.isBlank()) {
+        if (backupClaimed || renderThisTurn || backupFrame == null || backupFrameTurn != backupTurn
+                || backupTranscript == null || backupTranscript.isBlank()) {
             return null;
         }
         backupClaimed = true;
@@ -318,6 +366,7 @@ public final class LiveSession {
     /** The turn ended: the stored frame and transcript are dropped (spec D6/D8). */
     synchronized void endBackupTurn() {
         backupFrame = null;
+        backupFrameTurn = NO_TURN;
         backupTranscript = null;
         renderThisTurn = false;
     }

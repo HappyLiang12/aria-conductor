@@ -49,7 +49,9 @@ import static org.mockito.Mockito.when;
  * and settles ABORTED, the operator's decision arrives as an {@code ApprovalDecidedEvent}
  * and is answered exactly once, and the socket's turn end settles the run only when no
  * park still stands. Everything the router writes goes either to the phone (run_event,
- * tool_status, approval_required) or down the bridge (tool_result, tower).
+ * tool_status, approval_required) or down the bridge — and a gated call is answered with
+ * exactly one {@code tool_result} (its output is the tower sentence), never with a tower
+ * as well: the bridge makes one {@code response.create} per message.
  */
 class LiveEventRouterTest {
 
@@ -110,8 +112,13 @@ class LiveEventRouterTest {
                         .containsExactly("type", "v", "runId", "state", "summary"));
     }
 
+    /**
+     * The approved call runs once and its value answers the call it belongs to. One
+     * message: the tool_result whose output is the tower sentence. A second (tower) message
+     * for the same call would make the bridge ask the provider twice.
+     */
     @Test
-    void anApprovedToolRunsOnceAndItsResultIsInjectedAsTower() {
+    void anApprovedToolRunsOnceAndAnswersTheCallWithTheTowerSentence() {
         park();
         when(tools.executeApproved(eq("get_run"), eq(arguments)))
                 .thenReturn(new LiveToolExecutor.ToolOutcome.Value("{\"id\":\"r1\"}"));
@@ -123,10 +130,12 @@ class LiveEventRouterTest {
 
         verify(tools, times(1)).executeApproved(eq("get_run"), eq(arguments));
         verify(runs, times(1)).settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull());
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
-                && line.contains("\"id\":\"c1\"") && line.contains("\"ok\":true"));
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] {\\\"id\\\":\\\"r1\\\"}"));
+        List<String> lines = bridge.lines();
+        assertThat(lines).as("one message per call: the bridge makes one response.create").hasSize(1);
+        assertThat(lines).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":true").contains("[tower] {\\\"id\\\":\\\"r1\\\"}");
+        assertThat(lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("finished")
                 && frame.path("summary").asText().equals("finished"));
@@ -135,10 +144,11 @@ class LiveEventRouterTest {
 
     /**
      * The approved call ran and failed: the model asked for this write and must hear that
-     * it did not happen. The phone keeps the stable summary; the tower carries the reason.
+     * it did not happen. The phone keeps the stable summary; the call's own output carries
+     * the reason — one message, no tower.
      */
     @Test
-    void anApprovedCallThatFailsInjectsAFailedTower() {
+    void anApprovedCallThatFailsAnswersTheCallWithTheFailedTowerSentence() {
         park();
         when(tools.executeApproved(eq("get_run"), eq(arguments)))
                 .thenReturn(new LiveToolExecutor.ToolOutcome.Failure("Tool get_run failed"));
@@ -147,10 +157,12 @@ class LiveEventRouterTest {
 
         router.onApprovalDecided(decided(ApprovalStatus.APPROVED));
 
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
-                && line.contains("\"id\":\"c1\"") && line.contains("\"ok\":false"));
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains(LiveEventRouter.TOWER_FAILED) && line.contains("Tool get_run failed"));
+        List<String> lines = bridge.lines();
+        assertThat(lines).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false")
+                .contains(LiveEventRouter.TOWER_FAILED).contains("Tool get_run failed");
+        assertThat(lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: tool call failed"));
@@ -166,27 +178,26 @@ class LiveEventRouterTest {
 
         verifyNoInteractions(tools);
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.FAILED), eq("denied by operator"));
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] denied by operator"));
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":false")
+                .contains(LiveEventRouter.TOWER_DENIED);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: denied by operator"));
     }
 
     @Test
-    void aDeniedToolAnswersTheFunctionCallBeforeTheTowerInjection() {
+    void aDeniedToolAnswersTheFunctionCallExactlyOnce() {
         park();
         when(runs.settle(eq(session), eq(runId), eq(RunStatus.FAILED), eq("denied by operator")))
                 .thenReturn(RunStatus.FAILED);
 
         router.onApprovalDecided(decided(ApprovalStatus.DENIED));
 
-        int result = indexOfBridge("\"type\":\"tool_result\"");
-        int tower = indexOfBridge("\"type\":\"tower\"");
-        assertThat(result).as("the refused call is answered, not left waiting").isNotNegative();
-        assertThat(tower).isGreaterThan(result);
-        assertThat(bridge.lines().get(result))
-                .contains("\"id\":\"c1\"").contains("\"ok\":false").contains("denied by operator");
+        List<String> lines = bridge.lines();
+        assertThat(lines).as("the refused call is answered once, not left waiting").hasSize(1);
+        assertThat(lines.get(0)).contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.TOWER_DENIED);
     }
 
     /**
@@ -236,11 +247,12 @@ class LiveEventRouterTest {
 
     /**
      * The interleaving the claim exists for: the finalize thread released the park and is
-     * running its callback while the decision is being applied. The decision loses, and no
-     * second tower may reach the model.
+     * running its callback while the decision is being applied. The decision loses, and the
+     * call is answered exactly once — by the finalize's release, with the stable
+     * {@code approval unavailable} — so no second model turn may reach the bridge.
      */
     @Test
-    void aFinalizeThatWinsTheRaceLeavesExactlyOneTower() {
+    void aFinalizeThatWinsTheRaceLeavesExactlyOneAnswer() {
         FinalizeWinsPark racing = new FinalizeWinsPark();
         LiveEventRouter racingRouter = new LiveEventRouter(runs, tools, registry, frames, approvals, racing);
         session.runId(runId);
@@ -253,12 +265,14 @@ class LiveEventRouterTest {
         racingRouter.onApprovalDecided(decided(ApprovalStatus.APPROVED));
 
         verifyNoInteractions(tools);
-        assertThat(bridge.lines()).noneMatch(line -> line.contains("\"type\":\"tool_result\""));
-        assertThat(bridge.lines()).filteredOn(line -> line.contains("\"type\":\"tower\""))
-                .singleElement().asString().contains(LiveEventRouter.TOWER_FINALIZED);
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+        assertThat(bridge.lines()).noneMatch(line -> line.contains("\"type\":\"tower\""));
         verify(runs, times(1)).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq(LiveEventRouter.FINALIZE_REASON));
         assertThat(racing.parked(runId)).isFalse();
+        assertThat(session.takePendingCalls()).as("the released call is not held twice").isEmpty();
     }
 
     /** A park that cannot be taken must still answer the function call Qwen is waiting on. */
@@ -331,10 +345,31 @@ class LiveEventRouterTest {
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq("Live session closed while waiting for an approval"));
         verify(approvals).release(approvalId);
+        // The socket is gone but the child may still be alive: the call is answered (best
+        // effort) before the bridge goes, or its queue never drains.
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: " + LiveEventRouter.SESSION_CLOSED_REASON));
         verifyNoInteractions(tools);
+    }
+
+    /** A turn end whose call lost its park still answers the call the bridge waits on. */
+    @Test
+    void aTurnEndAnswersACallWhoseParkIsGone() {
+        park();
+        assertThat(park.unpark(runId)).isTrue(); // the park went without running its callback
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull()))
+                .thenReturn(RunStatus.COMPLETED);
+
+        router.turnDone(session);
+
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+        verify(approvals).release(approvalId);
     }
 
     /** The close path runs twice on a real socket; the second release must settle nothing. */
@@ -351,7 +386,7 @@ class LiveEventRouterTest {
     }
 
     @Test
-    void finalizingAParkedLiveRunAbortsItAndInjectsTower() {
+    void finalizingAParkedLiveRunAbortsItAndAnswersTheCall() {
         park();
         when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq(LiveEventRouter.FINALIZE_REASON))).thenReturn(RunStatus.ABORTED);
@@ -362,13 +397,63 @@ class LiveEventRouterTest {
                 eq("Operator finalized the live run"));
         // The finalized turn can no longer take a decision: its ask must not stay PENDING.
         verify(approvals).release(approvalId);
-        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] finalized"));
+        // And the call the bridge is waiting on is answered — once, with the stable string.
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: " + LiveEventRouter.FINALIZE_REASON));
         assertThat(park.parked(runId)).isFalse();
         assertThat(park.finalize(runId)).isFalse();
+    }
+
+    /**
+     * A released call is answered, so the bridge's call queue drains: a later turn's gated
+     * call parks, is held and is answered on its own finalize. A call left unanswered would
+     * keep the bridge's {@code outstandingCalls} non-empty and stall every later tool.
+     */
+    @Test
+    void aFinalizedCallDoesNotStallTheNextTurnsTool() {
+        park();
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
+                eq(LiveEventRouter.FINALIZE_REASON))).thenReturn(RunStatus.ABORTED);
+
+        assertThat(park.finalize(runId)).isTrue();
+
+        // The next turn: a second gated call, its own approval, its own call id.
+        UUID nextApproval = UUID.randomUUID();
+        session.runId(runId);
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.WAITING_INPUT), eq("approval pending")))
+                .thenReturn(RunStatus.WAITING_INPUT);
+        assertThat(router.parkForApproval(session, runId, nextApproval, "run_skill", "WRITE_LOCAL",
+                "c2", arguments)).isTrue();
+        assertThat(park.finalize(runId)).isTrue();
+
+        assertThat(bridge.lines()).filteredOn(line -> line.contains("\"type\":\"tool_result\""))
+                .map(line -> line.contains("\"id\":\"c1\"") ? "c1" : line.contains("\"id\":\"c2\"") ? "c2" : "?")
+                .containsExactly("c1", "c2");
+    }
+
+    /**
+     * A second gated call parks the same run again, replacing the first call's park. The
+     * first call is then owned by nobody, so it is answered and its ask released here.
+     */
+    @Test
+    void aSecondGatedCallAnswersTheCallItDisplaces() {
+        park();
+        UUID second = UUID.randomUUID();
+
+        assertThat(router.parkForApproval(session, runId, second, "run_skill", "WRITE_LOCAL",
+                "c2", arguments)).isTrue();
+
+        assertThat(bridge.lines()).filteredOn(line -> line.contains("\"type\":\"tool_result\""))
+                .singleElement().asString()
+                .contains("\"id\":\"c1\"").contains("\"ok\":false")
+                .contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+        verify(approvals).release(approvalId);
+        assertThat(session.takePendingCalls()).singleElement()
+                .extracting(LivePendingToolCall::approvalId).isEqualTo(second);
     }
 
     @Test
@@ -410,8 +495,12 @@ class LiveEventRouterTest {
         router.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.CANCELLED));
 
         assertThat(park.parked(runId)).isFalse();
-        // Cancelled elsewhere: the ask has no run left to act on, so it is expired too.
+        // Cancelled elsewhere: the ask has no run left to act on, so it is expired too —
+        // and the call the bridge waits on is answered first.
         verify(approvals).release(approvalId);
+        assertThat(bridge.lines()).singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"id\":\"c1\"")
+                .contains("\"ok\":false").contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: cancelled"));
@@ -464,17 +553,6 @@ class LiveEventRouterTest {
             }
         }
         return frames;
-    }
-
-    /** @return the index of the first bridge line containing {@code fragment}, or -1 */
-    private int indexOfBridge(String fragment) {
-        List<String> lines = bridge.lines();
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).contains(fragment)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     /**

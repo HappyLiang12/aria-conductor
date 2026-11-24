@@ -28,14 +28,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@code POST /api/v1/runs/{id}/finalize} on a live park (spec §"Tools, approvals, live
  * run"): the run store's existing route answers 202 for a run a phone socket parked,
- * settles it ABORTED, injects {@code [tower] finalized} down the bridge and consumes the
- * park, so the second request is the honest 409.
+ * settles it ABORTED, answers the call the bridge is waiting on (one {@code tool_result}
+ * with the stable {@code approval unavailable}) and consumes the park, so the second
+ * request is the honest 409.
  *
  * <p>The park is entered through the router rather than through a gated tool call: this
  * test exercises the finalize route itself, and the park it needs is the production
  * {@code LiveEventRouter.parkForApproval} entry the gated ops tools also use.
- * Everything on the route itself — the port, the conditional ABORTED write, the tower
- * injection — is the production path.
+ * Everything on the route itself — the port, the conditional ABORTED write, the call's
+ * answer — is the production path.
  */
 @Import(NoopLlmTestConfig.class)
 class LiveFinalizeIntegrationTest extends BaseH2IntegrationTest {
@@ -73,7 +74,7 @@ class LiveFinalizeIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
-    void finalizeOnAParkedLiveRunAnswers202SettlesAbortedAndInjectsTower() {
+    void finalizeOnAParkedLiveRunAnswers202SettlesAbortedAndAnswersTheCall() {
         RecordingBridge bridge = new RecordingBridge();
         // Socket-less on purpose: the park and the route are the subject, not the wire.
         LiveSession session = new LiveSession("it-" + UUID.randomUUID(), "conv-it-finalize", null, null);
@@ -87,8 +88,13 @@ class LiveFinalizeIntegrationTest extends BaseH2IntegrationTest {
 
         assertThat(finalize.getStatusCode().value()).isEqualTo(202);
         assertThat(committedStatus(runId)).isEqualTo(RunStatus.ABORTED);
-        assertThat(bridge.sent).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] finalized"));
+        // One message, the call's own answer: the bridge makes exactly one response.create
+        // for it, and no tower follows the same call.
+        assertThat(bridge.sent).filteredOn(line -> line.contains("call-1"))
+                .singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":false")
+                .contains(LiveEventRouter.APPROVAL_UNAVAILABLE);
+        assertThat(bridge.sent).noneMatch(line -> line.contains("\"type\":\"tower\""));
 
         ResponseEntity<String> again = restTemplate.postForEntity(
                 "/api/v1/runs/{id}/finalize", null, String.class, runId);

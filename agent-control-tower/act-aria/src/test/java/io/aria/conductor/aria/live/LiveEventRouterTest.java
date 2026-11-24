@@ -112,7 +112,7 @@ class LiveEventRouterTest {
     @Test
     void anApprovedToolRunsOnceAndItsResultIsInjectedAsTower() {
         park();
-        when(tools.execute(eq("get_run"), eq(arguments)))
+        when(tools.executeApproved(eq("get_run"), eq(arguments)))
                 .thenReturn(new LiveToolExecutor.ToolOutcome.Value("{\"id\":\"r1\"}"));
         when(runs.settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull()))
                 .thenReturn(RunStatus.COMPLETED);
@@ -120,7 +120,7 @@ class LiveEventRouterTest {
         router.onApprovalDecided(decided(ApprovalStatus.APPROVED));
         router.onApprovalDecided(decided(ApprovalStatus.APPROVED));
 
-        verify(tools, times(1)).execute(eq("get_run"), eq(arguments));
+        verify(tools, times(1)).executeApproved(eq("get_run"), eq(arguments));
         verify(runs, times(1)).settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull());
         assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
                 && line.contains("\"id\":\"c1\"") && line.contains("\"ok\":true"));
@@ -174,7 +174,7 @@ class LiveEventRouterTest {
     @Test
     void anApprovedCallActsOnlyAfterTheDecisionTransactionCommits() {
         park();
-        when(tools.execute(eq("get_run"), eq(arguments)))
+        when(tools.executeApproved(eq("get_run"), eq(arguments)))
                 .thenReturn(new LiveToolExecutor.ToolOutcome.Value("{\"id\":\"r1\"}"));
         when(runs.settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull()))
                 .thenReturn(RunStatus.COMPLETED);
@@ -188,7 +188,7 @@ class LiveEventRouterTest {
                 assertThat(park.parked(runId)).isTrue();
             });
 
-            verify(tools).execute(eq("get_run"), eq(arguments));
+            verify(tools).executeApproved(eq("get_run"), eq(arguments));
             assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
                     && line.contains("\"ok\":true"));
             assertThat(park.parked(runId)).isFalse();

@@ -23,6 +23,8 @@ import io.aria.conductor.dashboard.dto.DashboardSummary;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
 import io.aria.conductor.execution.controller.ApprovalController;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.knowledge.selfimprove.SkillDefinition;
+import io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,12 +47,14 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * The read-only tool set the live bridge may call (spec X7, L4). Every name executes
+ * The tool set the live bridge may call (spec X7, X15, L4). Every name executes
  * through the owning service/repository directly — there is no MCP transport hop — and
- * returns one compact JSON value. An unknown name, a missing argument or a service
- * refusal becomes {@link LiveToolExecutor.ToolOutcome.Failure}; the executor never
- * throws at the socket. The output is capped so a turn's transcript cannot blow up,
- * and no projection carries an approval's argument/content text or an agent's config.
+ * returns one compact JSON value. The read tier answers immediately; the two write tools
+ * answer {@code PendingApproval} and run nothing until the router's approved path. An
+ * unknown name, a missing argument or a service refusal becomes
+ * {@link LiveToolExecutor.ToolOutcome.Failure}; the executor never throws at the socket.
+ * The output is capped so a turn's transcript cannot blow up, and no projection carries
+ * an approval's argument/content text, an agent's config or a skill's template.
  */
 @ExtendWith(MockitoExtension.class)
 class LiveToolExecutorTest {
@@ -73,21 +77,39 @@ class LiveToolExecutorTest {
     private AgentRepository agentRepository;
     @Mock
     private ApprovalRepository approvalRepository;
+    @Mock
+    private SkillDefinitionRepository skillRepository;
+    @Mock
+    private LiveWriteService writes;
 
     private LiveToolExecutor executor;
 
     @BeforeEach
     void setUp() {
         executor = new LiveToolExecutor(runService, approvalQueryService, agentService, workflowService,
-                runRepository, agentRepository, approvalRepository,
+                runRepository, agentRepository, approvalRepository, skillRepository, writes,
                 Clock.fixed(NOW, ZoneId.of("Asia/Hong_Kong")));
     }
 
     @Test
-    void theFixedSetIsExactlyTheSevenReadOnlyTools() {
+    void theFixedSetIsTheSevenReadsAndTheTwoGatedWrites() {
         assertThat(LiveToolExecutor.TOOL_NAMES).containsExactlyInAnyOrder(
                 "get_time", "get_run", "get_latest_conversation", "list_approvals",
-                "list_agents", "get_dashboard_summary", "get_workflow");
+                "list_agents", "get_dashboard_summary", "get_workflow",
+                "list_skills", "list_runs", "get_agent",
+                "start_agent_run", "run_skill");
+    }
+
+    /** The operator's decision tools are never in the declared set (spec X15). */
+    @Test
+    void noOperatorDecisionOrOtherWriteToolIsDeclared() {
+        assertThat(LiveToolExecutor.TOOL_NAMES).doesNotContain(
+                "decide_approval", "approve", "finalize", "answer",
+                "create_agent", "update_agent", "retire_agent",
+                "create_llm_provider", "update_llm_provider", "delete_llm_provider",
+                "remember_fact", "create_knowledge", "update_knowledge", "retire_knowledge",
+                "create_kanban_item", "transition_kanban_item",
+                "generate_report", "housekeeping_execute");
     }
 
     @Test
@@ -399,6 +421,185 @@ class LiveToolExecutorTest {
         assertThat(value.path("truncated").asBoolean()).isTrue();
         assertThat(value.path("chars").asInt()).isGreaterThan(LiveToolExecutor.MAX_OUTPUT_CHARS);
         assertThat(value.path("preview").asText()).isNotBlank();
+    }
+
+    // --- ops tier reads (spec X15) ---------------------------------------------------------
+
+    @Test
+    void listSkillsFiltersByStageAndEnabledAndNeverCarriesTheTemplate() throws Exception {
+        List<SkillDefinition> skills = new ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            skills.add(SkillDefinition.builder().id("skill-" + i).name("skill-" + i)
+                    .description("desc-" + i).template("DO-NOT-PRINT-" + i)
+                    .stage("SKILL").enabled(true).tier("A").usageCount(i).build());
+        }
+        when(skillRepository.findByStageAndEnabledTrue("SKILL")).thenReturn(skills);
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("list_skills",
+                json.readTree("{\"stage\":\"skill\",\"enabled\":true}"))).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.size()).isEqualTo(LiveToolExecutor.MAX_SKILLS);
+        assertThat(value.get(0).path("id").asText()).isEqualTo("skill-0");
+        assertThat(value.get(0).path("stage").asText()).isEqualTo("SKILL");
+        assertThat(value.get(0).path("enabled").asBoolean()).isTrue();
+        assertThat(value.get(0).path("usageCount").asInt()).isZero();
+        assertThat(raw).doesNotContain("DO-NOT-PRINT");
+        verifyNoInteractions(runService);
+    }
+
+    @Test
+    void listSkillsRejectsAnUnknownStage() {
+        assertThat(executor.execute("list_skills", json.createObjectNode().put("stage", "NOPE")))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        verifyNoInteractions(skillRepository);
+    }
+
+    @Test
+    void listRunsFiltersByAgentAndStatusAndCapsTheList() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        List<RunResponse> runs = new ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            runs.add(RunResponse.builder().id(UUID.randomUUID()).agentId(agentId)
+                    .status(RunStatus.COMPLETED).iterationCount(i).totalTokensUsed((long) i)
+                    .promptSeed("SECRET-PROMPT").finalOutput("SECRET-OUTPUT").build());
+        }
+        when(runService.listRunsByAgentAndStatus(agentId, RunStatus.COMPLETED)).thenReturn(runs);
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("list_runs",
+                json.readTree("{\"agentId\":\"" + agentId + "\",\"status\":\"completed\"}"))).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.size()).isEqualTo(LiveToolExecutor.MAX_RUNS);
+        assertThat(value.get(0).path("agentId").asText()).isEqualTo(agentId.toString());
+        assertThat(value.get(0).path("status").asText()).isEqualTo("COMPLETED");
+        assertThat(raw).doesNotContain("SECRET-PROMPT").doesNotContain("SECRET-OUTPUT");
+    }
+
+    @Test
+    void listRunsWithNoFilterReadsTheWholeListAndRejectsABadStatus() throws Exception {
+        when(runService.listRuns()).thenReturn(List.of());
+
+        JsonNode value = value(executor.execute("list_runs", null));
+        assertThat(value.isArray()).isTrue();
+        assertThat(value.size()).isZero();
+
+        assertThat(executor.execute("list_runs", json.readTree("{\"status\":\"WHATEVER\"}")))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+    }
+
+    @Test
+    void getAgentProjectsTheIdentityAndSkillsWithoutTheConfig() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        List<String> skills = new ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            skills.add("skill-" + i);
+        }
+        when(agentService.getAgent(agentId)).thenReturn(AgentResponse.builder()
+                .id(agentId).name("worker").role("developer").agentType(AgentType.ADK)
+                .model("m").provider("p").healthStatus(HealthStatus.HEALTHY)
+                .config("{\"systemPrompt\":\"DO-NOT-PRINT\"}")
+                .workspacePath("/secret/path")
+                .skills(skills).build());
+
+        String raw = ((LiveToolExecutor.ToolOutcome.Value) executor.execute("get_agent",
+                json.readTree("{\"id\":\"" + agentId + "\"}"))).json();
+        JsonNode value = json.readTree(raw);
+
+        assertThat(value.path("id").asText()).isEqualTo(agentId.toString());
+        assertThat(value.path("name").asText()).isEqualTo("worker");
+        assertThat(value.path("healthStatus").asText()).isEqualTo("HEALTHY");
+        assertThat(value.path("skills").size()).isEqualTo(LiveToolExecutor.MAX_AGENT_SKILLS);
+        assertThat(raw).doesNotContain("DO-NOT-PRINT").doesNotContain("/secret/path");
+    }
+
+    // --- ops tier writes (spec X15) --------------------------------------------------------
+
+    @Test
+    void startAgentRunReturnsPendingApprovalAndPerformsNothing() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        JsonNode arguments = json.readTree("{\"agentId\":\"" + agentId
+                + "\",\"prompt\":\"ship it\",\"maxIterations\":3}");
+
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("start_agent_run", arguments);
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.PendingApproval.class);
+        LiveToolExecutor.ToolOutcome.PendingApproval pending =
+                (LiveToolExecutor.ToolOutcome.PendingApproval) outcome;
+        assertThat(pending.toolName()).isEqualTo("start_agent_run");
+        assertThat(pending.riskTier()).isEqualTo(LiveToolExecutor.WRITE_RISK_TIER);
+        assertThat(pending.arguments()).isEqualTo(arguments);
+        verifyNoInteractions(writes);
+    }
+
+    @Test
+    void runSkillReturnsPendingApprovalAndPerformsNothing() throws Exception {
+        JsonNode arguments = json.readTree("{\"skillId\":\"skill-1\",\"prompt\":\"go\"}");
+
+        LiveToolExecutor.ToolOutcome outcome = executor.execute("run_skill", arguments);
+
+        assertThat(outcome).isInstanceOf(LiveToolExecutor.ToolOutcome.PendingApproval.class);
+        assertThat(((LiveToolExecutor.ToolOutcome.PendingApproval) outcome).toolName())
+                .isEqualTo("run_skill");
+        verifyNoInteractions(writes, skillRepository);
+    }
+
+    @Test
+    void aWriteWithMissingArgumentsIsAFailureAndRaisesNoAsk() throws Exception {
+        assertThat(executor.execute("start_agent_run", json.createObjectNode()))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        assertThat(executor.execute("run_skill", json.createObjectNode()))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        assertThat(executor.execute("start_agent_run", json.readTree("{\"agentId\":\"" + UUID.randomUUID()
+                + "\",\"prompt\":\"p\",\"maxIterations\":0}")))
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Failure.class);
+        verifyNoInteractions(writes);
+    }
+
+    @Test
+    void theApprovedStartAgentRunReachesTheWriteServiceOnce() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        when(writes.startAgentRun(agentId, "ship it", 3)).thenReturn(RunResponse.builder()
+                .id(runId).agentId(agentId).status(RunStatus.PENDING).maxIterations(3).build());
+
+        ToolOutcomeView value = approved("start_agent_run",
+                "{\"agentId\":\"" + agentId + "\",\"prompt\":\"ship it\",\"maxIterations\":3}");
+
+        assertThat(value.json().path("runId").asText()).isEqualTo(runId.toString());
+        assertThat(value.json().path("agentId").asText()).isEqualTo(agentId.toString());
+        assertThat(value.json().path("status").asText()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void theApprovedRunSkillReachesTheWriteServiceOnce() throws Exception {
+        UUID runId = UUID.randomUUID();
+        when(writes.runSkill("skill-1", null)).thenReturn(RunResponse.builder()
+                .id(runId).agentId(AriaConstants.ARIA_AGENT_ID).status(RunStatus.RUNNING).build());
+
+        ToolOutcomeView value = approved("run_skill", "{\"skillId\":\"skill-1\"}");
+
+        assertThat(value.json().path("runId").asText()).isEqualTo(runId.toString());
+        assertThat(value.json().path("skillId").asText()).isEqualTo("skill-1");
+        assertThat(value.json().path("status").asText()).isEqualTo("RUNNING");
+    }
+
+    /** A read is not a gated write: the approved path still answers it as a read. */
+    @Test
+    void theApprovedPathStillServesARead() throws Exception {
+        ToolOutcomeView value = approved("get_time", "{}");
+
+        assertThat(value.json().path("zone").asText()).isEqualTo("Asia/Hong_Kong");
+    }
+
+    private ToolOutcomeView approved(String name, String arguments) throws Exception {
+        LiveToolExecutor.ToolOutcome outcome = executor.executeApproved(name, json.readTree(arguments));
+        assertThat(outcome).as("approved %s answers a value: %s", name, outcome)
+                .isInstanceOf(LiveToolExecutor.ToolOutcome.Value.class);
+        return new ToolOutcomeView(json.readTree(((LiveToolExecutor.ToolOutcome.Value) outcome).json()));
+    }
+
+    private record ToolOutcomeView(JsonNode json) {
     }
 
     private JsonNode value(LiveToolExecutor.ToolOutcome outcome) throws Exception {

@@ -2,7 +2,10 @@ package io.aria.conductor.aria.live;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -28,6 +31,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -47,9 +51,11 @@ class LiveToolCallHandlerTest {
     private final LiveRunService runs = mock(LiveRunService.class);
     private final LiveToolExecutor tools = mock(LiveToolExecutor.class);
     private final LiveEventRouter router = mock(LiveEventRouter.class);
+    private final ApprovalRepository approvalRepository = mock(ApprovalRepository.class);
+    private final LiveApprovalService approvals = new LiveApprovalService(approvalRepository, json);
     /** Direct executor: the tests below assert the frames of one call synchronously. */
     private final LiveToolCallHandler handler =
-            new LiveToolCallHandler(runs, tools, frames, json, router, Runnable::run);
+            new LiveToolCallHandler(runs, tools, frames, json, router, approvals, Runnable::run);
 
     private final WebSocketSession ws = mock(WebSocketSession.class);
     private final RecordingBridge bridge = new RecordingBridge();
@@ -138,6 +144,96 @@ class LiveToolCallHandlerTest {
         assertThat(bridge.sent).isEmpty();
     }
 
+    /**
+     * A write tier call (spec X15): the executor only says "gated", and the handler owns the
+     * ask — exactly one approval row on the turn's lazy live run, carrying the tool, the
+     * arguments and the tier the phone renders. The bridge is not answered until the
+     * operator decides.
+     */
+    @Test
+    void aGatedWriteCreatesExactlyOneApprovalOnTheLiveRunAndParksIt() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        JsonNode arguments = json.readTree("{\"agentId\":\"" + agentId + "\",\"prompt\":\"ship it\"}");
+        when(runs.findOrCreateForToolTurn(session, "start_agent_run")).thenReturn(runId);
+        when(tools.execute(eq("start_agent_run"), any())).thenReturn(
+                new LiveToolExecutor.ToolOutcome.PendingApproval(
+                        null, null, "start_agent_run", "WRITE_LOCAL", arguments));
+        when(router.parkForApproval(eq(session), eq(runId), any(), eq("start_agent_run"),
+                eq("WRITE_LOCAL"), eq("c2"), eq(arguments))).thenReturn(true);
+
+        handler.onToolCall(session, "{\"type\":\"tool_call\",\"id\":\"c2\",\"name\":\"start_agent_run\","
+                + "\"arguments\":{\"agentId\":\"" + agentId + "\",\"prompt\":\"ship it\"}}");
+
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository, times(1)).save(saved.capture());
+        Approval approval = saved.getValue();
+        assertThat(approval.getRunId()).isEqualTo(runId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approval.getApprovalType()).isEqualTo(Approval.ApprovalType.TOOL_CALL);
+        assertThat(approval.getAskType()).isEqualTo(Approval.AskType.APPROVAL);
+        assertThat(approval.getToolName()).isEqualTo("start_agent_run");
+        assertThat(approval.getRiskTier()).isEqualTo("WRITE_LOCAL");
+        assertThat(approval.getId()).isNotNull();
+        // The park is the only path the ask takes; the bridge waits for the decision.
+        verify(router, times(1)).parkForApproval(eq(session), eq(runId), eq(approval.getId()),
+                eq("start_agent_run"), eq("WRITE_LOCAL"), eq("c2"), eq(arguments));
+        assertThat(bridge.sent).isEmpty();
+    }
+
+    /** A park the run cannot take releases the ask it created instead of leaving it waiting. */
+    @Test
+    void aWriteWhoseParkIsRefusedIsReleased() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        JsonNode arguments = json.readTree("{\"agentId\":\"" + agentId + "\",\"prompt\":\"ship it\"}");
+        when(runs.findOrCreateForToolTurn(session, "start_agent_run")).thenReturn(runId);
+        when(tools.execute(eq("start_agent_run"), any())).thenReturn(
+                new LiveToolExecutor.ToolOutcome.PendingApproval(
+                        null, null, "start_agent_run", "WRITE_LOCAL", arguments));
+        when(router.parkForApproval(eq(session), eq(runId), any(), eq("start_agent_run"),
+                eq("WRITE_LOCAL"), eq("c2"), eq(arguments))).thenReturn(false);
+        when(approvalRepository.findById(any())).thenReturn(java.util.Optional.empty());
+
+        handler.onToolCall(session, "{\"type\":\"tool_call\",\"id\":\"c2\",\"name\":\"start_agent_run\","
+                + "\"arguments\":{\"agentId\":\"" + agentId + "\",\"prompt\":\"ship it\"}}");
+
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(saved.capture());
+        verify(approvalRepository).findById(saved.getValue().getId());
+    }
+
+    @Test
+    void theApprovalArgumentsAreRedactedAndBounded() {
+        UUID approvalId = approvals.createPending(runId, "start_agent_run",
+                json.createObjectNode()
+                        .put("agentId", UUID.randomUUID().toString())
+                        .put("prompt", "sk-abcdefghijklmnop " + "x".repeat(8_000))
+                        .put("apiKey", "sk-zyxwvutsrqponmlk"),
+                "WRITE_LOCAL");
+
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(saved.capture());
+        String arguments = saved.getValue().getArguments();
+        assertThat(saved.getValue().getId()).isEqualTo(approvalId);
+        assertThat(arguments).doesNotContain("sk-abcdefghijklmnop").doesNotContain("sk-zyxwvutsrqponmlk");
+        assertThat(arguments.length())
+                .isLessThanOrEqualTo(LiveApprovalService.MAX_ARGUMENTS_CHARS + " [truncated]".length());
+    }
+
+    @Test
+    void releaseExpiresOnlyAPendingApproval() {
+        UUID pendingId = UUID.randomUUID();
+        Approval pending = Approval.builder().id(pendingId).runId(runId)
+                .status(ApprovalStatus.PENDING).build();
+        when(approvalRepository.findById(pendingId)).thenReturn(java.util.Optional.of(pending));
+
+        approvals.release(pendingId);
+
+        assertThat(pending.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(pending.getReason()).isEqualTo(LiveApprovalService.RELEASED_REASON);
+        assertThat(pending.getDecidedAt()).isNotNull();
+        verify(approvalRepository).save(pending);
+    }
+
     @Test
     void anOutcomeThatBlowsUpStillAnswersAndFailsTheRun() {
         when(runs.findOrCreateForToolTurn(session, "get_time")).thenReturn(runId);
@@ -193,7 +289,7 @@ class LiveToolCallHandlerTest {
             return thread;
         });
         LiveToolCallHandler offloaded =
-                new LiveToolCallHandler(runs, tools, frames, json, router, worker);
+                new LiveToolCallHandler(runs, tools, frames, json, router, approvals, worker);
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         when(runs.findOrCreateForToolTurn(session, "get_time")).thenReturn(runId);
@@ -230,7 +326,7 @@ class LiveToolCallHandlerTest {
     /** A full queue still answers the function call: Qwen is never left waiting on it. */
     @Test
     void aFullToolQueueStillAnswersTheCall() {
-        LiveToolCallHandler refused = new LiveToolCallHandler(runs, tools, frames, json, router,
+        LiveToolCallHandler refused = new LiveToolCallHandler(runs, tools, frames, json, router, approvals,
                 command -> {
                     throw new RejectedExecutionException("full");
                 });

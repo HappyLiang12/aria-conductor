@@ -1,7 +1,7 @@
 // The Qwen realtime connection and its lifecycle (spec X2, X3, X9, X10).
 //
 // One session per phone socket. It owns the provider WebSocket, the session config, the
-// seven declared read-only tools, the forwarding seams and the 119-minute reopen. It
+// fixed tool set, the forwarding seams and the 119-minute reopen. It
 // never logs and never touches stdout: what it learns is handed to the caller as actions.
 //
 // The credentials arrive only as option values (the Java parent clears its environment
@@ -97,7 +97,7 @@ const STRING_ID = {
 
 const NO_ARGUMENTS = { type: 'object', properties: {}, required: [] } as const;
 
-/** The seven read-only tools of spec X7; the parameter names are Java's (Task 3). */
+/** The live tool set: seven reads, three ops reads, two approval-gated writes (spec X7/X15). */
 export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     type: 'function',
@@ -162,6 +162,84 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       name: 'get_workflow',
       description: 'One workflow chain by id: its steps and their latest outcomes.',
       parameters: { type: 'object', properties: STRING_ID, required: ['id'] },
+    },
+  },
+  // Ops tier reads (spec X15): direct, never gated.
+  {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description: 'List skills by stage and enabled state. Never returns their template.',
+      parameters: {
+        type: 'object',
+        properties: {
+          stage: { type: 'string', description: 'SKILL, SCRIPT or WORKFLOW; omit for every stage.' },
+          enabled: { type: 'boolean', description: 'true = enabled only, false = disabled only.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_runs',
+      description: 'List recent runs, optionally filtered by agent and status.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agentId: { type: 'string', description: 'Agent id (a UUID); omit for every agent.' },
+          status: {
+            type: 'string',
+            description:
+              'PENDING, INITIALIZING, RUNNING, PAUSED, WAITING_INPUT, COMPLETED, FAILED, CANCELLED or ABORTED.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_agent',
+      description: 'One agent by id: name, type, role, model, provider, health and skills.',
+      parameters: { type: 'object', properties: STRING_ID, required: ['id'] },
+    },
+  },
+  // Ops tier writes (spec X15): the operator must approve before they run.
+  {
+    type: 'function',
+    function: {
+      name: 'start_agent_run',
+      description: 'Start a run for an agent. The operator approves before it starts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agentId: { type: 'string', description: 'Agent id (a UUID).' },
+          prompt: { type: 'string', description: 'The instruction the agent starts from.' },
+          maxIterations: {
+            type: 'integer',
+            description: 'Maximum reasoning iterations; omit for the service default.',
+          },
+        },
+        required: ['agentId', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_skill',
+      description: 'Run an enabled skill with Aria. The operator approves before it starts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skillId: { type: 'string', description: 'The enabled skill id.' },
+          prompt: { type: 'string', description: 'Optional instruction; omit to run the skill as-is.' },
+        },
+        required: ['skillId'],
+      },
     },
   },
   {

@@ -1,7 +1,7 @@
 package io.aria.conductor.memory.service;
 
 import io.aria.conductor.common.context.ContextContributor;
-import io.aria.conductor.common.context.ContextMessage;
+import io.aria.conductor.common.context.ContextQueryText;
 import io.aria.conductor.common.context.ContextRequest;
 import io.aria.conductor.common.context.ContextSection;
 import io.aria.conductor.common.model.Sensitivity;
@@ -13,7 +13,6 @@ import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -247,22 +246,9 @@ public class MemoryContextContributor implements ContextContributor {
         return left.ordinal() >= right.ordinal() ? left : right;
     }
 
-    /** The goal plus the last three user turns (spec §8.4 step 1). */
-    private static String queryText(ContextRequest request) {
-        if (request == null) {
-            return "";
-        }
-        StringBuilder text = new StringBuilder(request.goal() == null ? "" : request.goal());
-        List<String> userTurns = new ArrayList<>();
-        for (ContextMessage message : request.priorHistory()) {
-            if (message != null && "user".equalsIgnoreCase(message.role())) {
-                userTurns.add(message.content());
-            }
-        }
-        for (String turn : userTurns.subList(Math.max(0, userTurns.size() - 3), userTurns.size())) {
-            text.append('\n').append(turn);
-        }
-        return text.toString().trim();
+    /** The goal plus the last three user turns (spec §8.4 step 1), shared with the qmd contributor. */
+    static String queryText(ContextRequest request) {
+        return ContextQueryText.of(request);
     }
 
     private static ContextSection degradedSection(String reason) {

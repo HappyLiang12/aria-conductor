@@ -214,8 +214,40 @@ class DeepSeekLocatorTest {
 
         assertThat(requests.get()).as("no key, no call").isZero();
         List<String> logged = lines.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
-        assertThat(logged).anyMatch(message -> message.contains("outcome=disabled")
-                && message.contains("missing_key"));
+        assertThat(logged).anyMatch(message -> message.contains("DEEPSEEK_API_KEY is not set"));
+    }
+
+    @Test
+    void aRejectedKeySuspendsTheBackupLoudlyAndStopsCalling() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        respond(exchange -> {
+            requests.incrementAndGet();
+            exchange.sendResponseHeaders(401, -1);
+            exchange.close();
+        });
+
+        Logger logger = (Logger) LoggerFactory.getLogger(DeepSeekLocator.class);
+        Level previous = logger.getLevel();
+        ListAppender<ILoggingEvent> lines = new ListAppender<>();
+        lines.start();
+        logger.setLevel(Level.DEBUG);
+        logger.addAppender(lines);
+        LiveLocator locator = locator(true, KEY, () -> null);
+        try {
+            // A key the platform rejects cannot start working mid-process: the first call
+            // warns, suspends, and later turns cost neither a request nor the latency.
+            assertThat(locator.locate(TRANSCRIPT, JPEG)).isEmpty();
+            assertThat(locator.locate(TRANSCRIPT, JPEG)).isEmpty();
+        } finally {
+            logger.detachAppender(lines);
+            logger.setLevel(previous);
+        }
+
+        assertThat(requests.get()).as("one request, then suspended").isEqualTo(1);
+        List<String> logged = lines.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(logged).anyMatch(message -> message.contains("suspended") && message.contains("401"));
+        // The key and the request body never reach a log line.
+        assertThat(logged).noneMatch(message -> message.contains(KEY) || message.contains(BASE64));
     }
 
     @Test

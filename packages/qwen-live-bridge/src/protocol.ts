@@ -27,13 +27,18 @@ export interface ContextEntry {
   text: string;
 }
 
-/** `{"type":"hello","v":1,"conversationId":…,"ar":…,"context":[…]}` — the first line of a socket. */
+/** `{"type":"hello","v":1,"conversationId":…,"ar":…,"arCommit":…,"context":[…]}` — the first line of a socket. */
 export interface HelloLine {
   type: 'hello';
   v: number;
   conversationId: string;
   /** The phone's AR mode (spec D5); absent is AR-off. */
   ar?: boolean;
+  /**
+   * The phone drives every AR turn itself, first look included (D5 amendment, 2026-11-25):
+   * the commit guard is skipped, so the handshake already runs with no turn detection.
+   */
+  arCommit?: boolean;
   context?: ContextEntry[];
 }
 

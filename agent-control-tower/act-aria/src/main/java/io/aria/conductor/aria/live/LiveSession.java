@@ -43,6 +43,14 @@ public final class LiveSession {
      * bridge's commit grace (spec D4) and changes no other frame.
      */
     private volatile boolean arOn;
+    /**
+     * The phone's AR one-look capability (spec D5 amendment, 2026-11-25): the phone drives
+     * every AR turn itself (`frame` + `commit{image:true}`), including the first, so the
+     * bridge's commit guard is skipped and the provider runs with no turn detection from
+     * the handshake. Remembered per socket and echoed in {@code ready} so the phone has
+     * an acknowledgement to wait for.
+     */
+    private volatile boolean arCommit;
     /** One frame per turn: set when a frame is accepted, cleared at the turn boundary. */
     private boolean frameSeenThisTurn;
     /** PCM bytes sent to the provider since the turn boundary: an image commit needs some. */
@@ -216,6 +224,14 @@ public final class LiveSession {
 
     public void arOn(boolean arOn) {
         this.arOn = arOn;
+    }
+
+    public boolean arCommit() {
+        return arCommit;
+    }
+
+    public void arCommit(boolean arCommit) {
+        this.arCommit = arCommit;
     }
 
     /**

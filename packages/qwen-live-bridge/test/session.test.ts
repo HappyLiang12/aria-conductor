@@ -119,6 +119,7 @@ async function open(fake: Awaited<ReturnType<typeof fakeQwen>>, options: {
   context?: Array<{ role: string; text: string }>;
   clock?: () => number;
   ar?: boolean;
+  arCommit?: boolean;
 } = {}) {
   const recorder = createRecorder();
   const fatal: number[] = [];
@@ -132,6 +133,7 @@ async function open(fake: Awaited<ReturnType<typeof fakeQwen>>, options: {
     reopenAfterMs: REOPEN_MS,
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.ar === undefined ? {} : { ar: options.ar }),
+    ...(options.arCommit === undefined ? {} : { arCommit: options.arCommit }),
   });
   sessions.push({ close: () => session.close() });
   await session.ready();
@@ -457,6 +459,29 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     expect(offSession.stats().arGuardHolds).toBe(0);
     await session.close();
     await offSession.close();
+  });
+
+  it('runs the first AR look with no turn detection when the phone declares it commits', async () => {
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true, arCommit: true });
+
+    // The handshake itself carries the manual mode: no VAD turn, no guard, and the
+    // first commit is a normal AR turn with its image.
+    expect(updatesOf(fake)).toEqual([null]);
+    expect(session.stats().arGuardHolds).toBe(0);
+
+    session.appendAudio('AAAA');
+    session.attachImage('ARIMAGE');
+    session.commit({ image: true });
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the first AR turn');
+    const types = typesOf(0, fake);
+    const image = types.indexOf('input_image_buffer.append');
+    expect(types.slice(image)).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    await session.close();
   });
 
   it('defers the commits that follow the guard-lifting one per the frame grace', async () => {

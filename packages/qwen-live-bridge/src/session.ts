@@ -26,6 +26,8 @@ export interface SessionOptions {
   workspace: string;
   /** The conversation's last turns, seeded on every open and never answered by the model. */
   context?: ContextEntry[];
+  /** The phone's AR mode from `hello.ar` (spec D5); absent is AR-off. */
+  ar?: boolean;
   onAction: (action: SessionAction) => void;
   /** The session cannot continue: 1011 dead provider socket, 4012 failed reopen. */
   onFatal: (code: number) => void;
@@ -41,6 +43,11 @@ export interface LiveSession {
   sendText(text: string): void;
   attachImage(dataBase64: string): void;
   commit(options?: { image?: boolean }): void;
+  /**
+   * The phone's AR mode changed (spec D5): the next commit is held for its frame, or the
+   * Phase 2 auto-commit is back. A configured session is reconfigured in place (D4).
+   */
+  setAr(on: boolean): void;
   cancel(): void;
   toolResult(id: string, ok: boolean, output: string): void;
   tower(text: string): void;
@@ -57,6 +64,11 @@ export const MAX_PENDING_AUDIO = 200;
 const MAX_PENDING_OPS = 200;
 /** A provider that neither creates nor updates a session in this window is unusable. */
 export const READY_TIMEOUT_MS = 15_000;
+/**
+ * Spec D4: in AR the phone commits at its speech end and its frame follows ~150 ms later,
+ * so the provider commit is held for at most this long waiting for that frame.
+ */
+export const AR_FRAME_GRACE_MS = 300;
 /** How long a close frame may take before the socket is torn down. */
 const CLOSE_GRACE_MS = 500;
 /** The fixed read errors' arg names mirror `LiveToolExecutor` (`id`). */
@@ -204,6 +216,15 @@ export function startSession(options: SessionOptions): LiveSession {
   let firstOpenedAt: number | null = null;
   let reopenTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingImage: string | null = null;
+  /** Spec D4/D5: AR-off keeps Phase 2's server VAD; AR-on has none and commits explicitly. */
+  let arEnabled = options.ar === true;
+  /** AR-on: the phone's commit, held for the frame that may still be behind it. */
+  let deferredCommit: { image: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+  /**
+   * AR-on: this utterance's commit already went out, so a frame that arrives now belongs
+   * to no turn (spec D8). It lifts at the next turn boundary (`turn_done`) or commit.
+   */
+  let arCommitted = false;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
@@ -277,14 +298,51 @@ export function startSession(options: SessionOptions): LiveSession {
     }
   };
 
+  /** Forgets a held AR commit without sending it: the socket it was for is gone. */
+  const cancelDeferredCommit = () => {
+    if (deferredCommit !== null) {
+      clearTimeout(deferredCommit.timer);
+      deferredCommit = null;
+    }
+    arCommitted = false;
+  };
+
   /** Nothing about the previous provider session survives into the next one. */
   const resetProviderState = () => {
     pendingImage = null;
+    // Spec D8: an image held for a commit that will never reach this session is dropped,
+    // and an AR commit still waiting for its frame dies with the session it belonged to.
+    cancelDeferredCommit();
     speechStoppedSinceCommit = false;
     callOrder = [];
     outstandingCalls.clear();
     answeredResults.clear();
     renderedThisTurn = false;
+  };
+
+  /**
+   * Spec D4/D8: the one AR commit path. The phone's commit and its frame race, so the
+   * image (when the commit asked for one) goes first, then the explicit commit, then the
+   * response. `beginUtterance` re-arms the translator's `speech_end` first: with no turn
+   * detection the provider never sends `speech_started`, so without it the second
+   * utterance's commit would produce no `speech_end` at all.
+   */
+  const flushDeferredCommit = () => {
+    const held = deferredCommit;
+    if (held === null) {
+      return;
+    }
+    clearTimeout(held.timer);
+    deferredCommit = null;
+    arCommitted = true;
+    const image = held.image ? pendingImage : null;
+    pendingImage = null;
+    if (image !== null) {
+      send({ type: 'input_image_buffer.append', image });
+    }
+    translator.beginUtterance();
+    send({ type: 'input_audio_buffer.commit' });
+    send({ type: 'response.create' });
   };
 
   const clearReopen = () => {
@@ -326,9 +384,11 @@ export function startSession(options: SessionOptions): LiveSession {
       },
     },
     input_audio_transcription: { model: 'qwen3-asr-flash-realtime' },
-    // The contract's server-side semantic turn detection (spec X2). P0 ran with null,
-    // so this shape is the one point of the config that no probe has confirmed.
-    turn_detection: { type: 'semantic_vad_ec' },
+    // Spec D4, from the live probe: AR-off keeps the Phase 2 server VAD (auto-commit,
+    // barge-in). AR-on runs with none, because `semantic_vad_ec` with
+    // `create_response:false` never commits nor answers the image turn, while an explicit
+    // commit after the image append does; the phone's commit drives the turn instead.
+    turn_detection: arEnabled ? null : { type: 'semantic_vad_ec' },
     tools: TOOL_DECLARATIONS,
     tool_choice: 'auto',
   });
@@ -446,6 +506,10 @@ export function startSession(options: SessionOptions): LiveSession {
       if (translation.kind === 'turn_done') {
         // Backstop: a turn the provider ends without a further utterance still starts clean.
         renderedThisTurn = false;
+        // Spec D8: an image that never reached a commit belongs to the turn that just
+        // ended and is dropped, and AR's next-utterance frame window is open again.
+        pendingImage = null;
+        arCommitted = false;
       }
       emit(translation);
     }
@@ -515,13 +579,18 @@ export function startSession(options: SessionOptions): LiveSession {
             transmit({ type: 'session.update', session: sessionConfig() });
             return;
           case 'session.updated':
-            configured = true;
-            seedContext();
-            flushPendingSends();
-            if (firstOpenedAt === null) {
-              firstOpenedAt = clock();
+            if (!configured) {
+              configured = true;
+              seedContext();
+              flushPendingSends();
+              if (firstOpenedAt === null) {
+                firstOpenedAt = clock();
+              }
+              settle(null);
             }
-            settle(null);
+            // A mid-session `session.update` (an `ar` toggle, spec D4) is an update to a
+            // session that already holds its context: re-seeding here would replay every
+            // seeded turn into the live conversation.
             return;
           default:
             if (configured) {
@@ -638,12 +707,41 @@ export function startSession(options: SessionOptions): LiveSession {
     },
 
     attachImage(dataBase64) {
+      if (arEnabled && arCommitted) {
+        // Spec D8: this utterance's commit already went out, so the frame belongs to no
+        // turn — it is dropped rather than carried into the next one.
+        return;
+      }
       // Held until the utterance's commit: the phone's ordering is audio, image, commit,
       // and the provider's image buffer must see the same order (spec X10).
       pendingImage = dataBase64;
+      if (deferredCommit !== null) {
+        // The frame the held commit is waiting for: flush now rather than at the grace's
+        // end (spec D4 allows either as the trigger).
+        flushDeferredCommit();
+      }
     },
 
     commit(commitOptions = {}) {
+      const asksForImage = commitOptions.image === true;
+      if (arEnabled) {
+        // Spec D4: the phone's commit ends its speech, not the turn — the frame it names
+        // may still be ~150 ms behind, and the provider takes the image only before the
+        // commit. Hold it for the grace or for the frame, whichever comes first.
+        if (deferredCommit !== null) {
+          clearTimeout(deferredCommit.timer);
+        }
+        arCommitted = false;
+        if (!asksForImage) {
+          // The Phase 2 rule holds in AR too: a frame this commit did not ask for is not
+          // sent (spec X10).
+          pendingImage = null;
+        }
+        const timer = setTimeout(flushDeferredCommit, AR_FRAME_GRACE_MS);
+        timer.unref?.();
+        deferredCommit = { image: asksForImage, timer };
+        return;
+      }
       const image = commitOptions.image === true ? pendingImage : null;
       if (image !== null) {
         send({ type: 'input_image_buffer.append', image });
@@ -658,6 +756,25 @@ export function startSession(options: SessionOptions): LiveSession {
       if (askForResponse) {
         send({ type: 'response.create' });
       }
+    },
+
+    setAr(on) {
+      const next = on === true;
+      if (next === arEnabled) {
+        // A repeat is the same mode: no second reconfiguration crosses.
+        return;
+      }
+      arEnabled = next;
+      if (!next) {
+        // Leaving AR with a commit held for a frame that may never come: the utterance is
+        // due now rather than stranded when the grace timer is dropped.
+        flushDeferredCommit();
+      }
+      // Spec D4: the switch is proven in place. A provider that refuses keeps the old
+      // config — its error is reported as it is, and this session goes on. While the
+      // session is (re)configuring, this waits with the other ops and lands after
+      // `session.updated`, so the handshake's own config is never the stale one.
+      send({ type: 'session.update', session: sessionConfig() });
     },
 
     cancel() {

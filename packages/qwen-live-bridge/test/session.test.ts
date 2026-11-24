@@ -7,7 +7,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingHttpHeaders } from 'node:http';
-import { MAX_PENDING_AUDIO, startSession, type SessionAction } from '../src/session.js';
+import {
+  AR_FRAME_GRACE_MS,
+  MAX_PENDING_AUDIO,
+  startSession,
+  type SessionAction,
+} from '../src/session.js';
 
 const KEY = 'synthetic-dashscope-key';
 const WORKSPACE = 'synthetic-workspace';
@@ -112,6 +117,7 @@ afterEach(async () => {
 async function open(fake: Awaited<ReturnType<typeof fakeQwen>>, options: {
   context?: Array<{ role: string; text: string }>;
   clock?: () => number;
+  ar?: boolean;
 } = {}) {
   const recorder = createRecorder();
   const fatal: number[] = [];
@@ -124,6 +130,7 @@ async function open(fake: Awaited<ReturnType<typeof fakeQwen>>, options: {
     onFatal: (code) => fatal.push(code),
     reopenAfterMs: REOPEN_MS,
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.ar === undefined ? {} : { ar: options.ar }),
   });
   sessions.push({ close: () => session.close() });
   await session.ready();
@@ -369,6 +376,185 @@ describe('session: one response per commit', () => {
       'input_audio_buffer.commit',
       'response.create',
     ]);
+    await session.close();
+  });
+});
+
+describe('session: AR grace (D4) and the ar capability (D5)', () => {
+  const typesOf = (index: number, fake: Awaited<ReturnType<typeof fakeQwen>>) =>
+    fake.connections[index]!.messages.map((message) => message.type);
+  const updatesOf = (fake: Awaited<ReturnType<typeof fakeQwen>>) =>
+    fake.connections[0]!.messages
+      .filter((message) => message.type === 'session.update')
+      .map((message) => (message.session as { turn_detection: unknown }).turn_detection);
+  const appendsOf = (fake: Awaited<ReturnType<typeof fakeQwen>>) =>
+    fake.connections[0]!.messages.filter(
+      (message) => message.type === 'input_image_buffer.append',
+    );
+  const speechEnds = (recorder: ReturnType<typeof createRecorder>) =>
+    recorder.actions.filter(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    ).length;
+  /** Only the grace timer is faked: the fake provider is real I/O, driven by `setImmediate`. */
+  const fakeGraceTimers = () =>
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+
+  it('configures no turn detection when hello.ar is true and semantic_vad_ec when it is false', async () => {
+    const arFake = await fakeQwen();
+    const { session: arSession } = await open(arFake, { ar: true });
+    expect(updatesOf(arFake)).toEqual([null]);
+    await arSession.close();
+
+    const offFake = await fakeQwen();
+    const { session: offSession } = await open(offFake, { ar: false });
+    expect(updatesOf(offFake)).toEqual([{ type: 'semantic_vad_ec' }]);
+    await offSession.close();
+  });
+
+  it('reconfigures a live session in place on an ar toggle and never reseeds the context', async () => {
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true, context: [{ role: 'user', text: '早' }] });
+
+    session.setAr(false);
+    await waitUntil(() => updatesOf(fake).length === 2, 'the semantic_vad_ec update');
+    // AR back on: the no-turn-detection config again, on the same socket.
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 3, 'the null update');
+    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }, null]);
+
+    // A duplicate declaration is the same mode: nothing new crosses.
+    session.setAr(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(updatesOf(fake)).toHaveLength(3);
+    // The mid-session updates are reconfigurations, not handshakes: the seed is not replayed.
+    expect(
+      fake.connections[0]!.messages.filter(
+        (message) => message.type === 'conversation.item.create',
+      ),
+    ).toHaveLength(1);
+    expect(fake.connections).toHaveLength(1);
+    await session.close();
+  });
+
+  it('holds the AR commit for its frame and appends the image before the commit', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(150);
+    // Nothing reaches the provider while the grace is open.
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+
+    session.attachImage('ARIMAGE');
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the held commit');
+    const types = typesOf(0, fake);
+    const image = types.indexOf('input_image_buffer.append');
+    expect(image).toBeGreaterThanOrEqual(0);
+    expect(types.slice(image)).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    expect(appendsOf(fake)).toEqual([{ type: 'input_image_buffer.append', image: 'ARIMAGE' }]);
+    await session.close();
+  });
+
+  it('commits without an image and asks for a response when no frame arrives in time', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the grace expiry');
+    expect(typesOf(0, fake).slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
+    expect(typesOf(0, fake)).not.toContain('input_image_buffer.append');
+    await session.close();
+  });
+
+  it('speaks a second utterance: its commit yields its own speech_end', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+    const heartbeat = (label: string) =>
+      waitUntil(() => typesOf(0, fake).includes('response.create'), label);
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(150);
+    session.attachImage('ARIMAGE');
+    await heartbeat('first utterance');
+    fake.send(0, { type: 'input_audio_buffer.committed' });
+    await waitUntil(() => speechEnds(recorder) === 1, 'first speech_end');
+
+    session.appendAudio('BBBB');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(150);
+    session.attachImage('ARIMAGE2');
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      'second commit',
+    );
+    fake.send(0, { type: 'input_audio_buffer.committed' });
+    await waitUntil(() => speechEnds(recorder) === 2, 'second speech_end');
+    expect(appendsOf(fake).map((message) => message.image)).toEqual(['ARIMAGE', 'ARIMAGE2']);
+    await session.close();
+  });
+
+  it('drops a frame that arrives after the flushed commit and carries none to the next utterance', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(150);
+    session.attachImage('FIRST');
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'first flush');
+
+    // The turn's one frame already crossed: a late one belongs to no turn (spec D8).
+    session.attachImage('LATE');
+    await vi.advanceTimersByTimeAsync(30);
+    expect(appendsOf(fake).map((message) => message.image)).toEqual(['FIRST']);
+
+    // The next utterance asks for an image but sends none: the late frame is not it.
+    session.appendAudio('BBBB');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      'second commit',
+    );
+    expect(appendsOf(fake).map((message) => message.image)).toEqual(['FIRST']);
+
+    // The provider's turn end opens a fresh turn: a frame can cross again.
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
+    await recorder.waitFor((action) => action.kind === 'turn_done');
+    session.attachImage('NEXT');
+    session.appendAudio('CCCC');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await waitUntil(() => appendsOf(fake).length === 2, 'the next turn frame');
+    expect(appendsOf(fake).map((message) => message.image)).toEqual(['FIRST', 'NEXT']);
+    await session.close();
+  });
+
+  it('flushes a held commit when AR turns off instead of stranding the utterance', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    session.setAr(false);
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the upgrade');
+    expect(typesOf(0, fake)).toContain('input_audio_buffer.commit');
     await session.close();
   });
 });

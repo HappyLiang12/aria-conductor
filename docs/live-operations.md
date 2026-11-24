@@ -122,7 +122,8 @@ configure — check the backend log for the bridge stderr lines.
 The only check that proves the provider accepts the session config the bridge declares
 (`turn_detection: {type: "semantic_vad_ec"}`, `voice: Kiki`, ASR `qwen3-asr-flash-realtime`). It sends
 one `{"type":"text","v":1,…}` after `ready` and prints metadata only — never the text, audio, ids or
-the key.
+the key. It sends no `ar` frame, so it exercises the AR-off config; an AR-on session declares
+`turn_detection: null` instead and commits explicitly (spec D4).
 
 ```bash
 export ARIA_OPERATOR_BEARER_TOKEN="$(tr -d '\r\n' < ~/.aria-conductor/phone-dev-operator-token)"

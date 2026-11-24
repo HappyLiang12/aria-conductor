@@ -2,7 +2,7 @@
 // One JSON object per line. The Java reader is the authority for what it accepts
 // (`QwenLiveBridgeProcess.dispatch`), so every shape below mirrors a case there:
 //
-//   Java -> bridge : hello, audio{dir:"in"}, text, mic, cancel, image, commit,
+//   Java -> bridge : hello, audio{dir:"in"}, text, mic, ar, cancel, image, commit,
 //                    tool_result, tower, close
 //   bridge -> Java : audio{dir:"out"}, control{event}, tool_call, turn_done, fatal
 //
@@ -27,11 +27,13 @@ export interface ContextEntry {
   text: string;
 }
 
-/** `{"type":"hello","v":1,"conversationId":…,"context":[…]}` — the first line of a socket. */
+/** `{"type":"hello","v":1,"conversationId":…,"ar":…,"context":[…]}` — the first line of a socket. */
 export interface HelloLine {
   type: 'hello';
   v: number;
   conversationId: string;
+  /** The phone's AR mode (spec D5); absent is AR-off. */
+  ar?: boolean;
   context?: ContextEntry[];
 }
 
@@ -51,6 +53,15 @@ export interface TextLine {
 /** The phone's mic gate; Java already drops binary frames while it is off. */
 export interface MicLine {
   type: 'mic';
+  on: boolean;
+}
+
+/**
+ * The phone's AR mode (spec X17, D5). It gates the bridge's turn detection and commit
+ * grace (D4) and changes no other frame; a repeat of the current mode is a no-op.
+ */
+export interface ArLine {
+  type: 'ar';
   on: boolean;
 }
 
@@ -95,6 +106,7 @@ export type InboundLine =
   | AudioInLine
   | TextLine
   | MicLine
+  | ArLine
   | CancelLine
   | ImageLine
   | CommitLine

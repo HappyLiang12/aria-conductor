@@ -49,6 +49,12 @@ export interface Translator {
    * `response.done`, the same window a barge-in opens (spec X6).
    */
   phoneCancel(): void;
+  /**
+   * A new utterance begins and the provider will not say so itself: with no turn
+   * detection (AR-on) there is no `speech_started`, so the bridge re-arms the one
+   * `speech_end` per utterance right before it commits the audio explicitly.
+   */
+  beginUtterance(): void;
   /** Aria's own `ready` shape; see {@link ReadyEvent}. */
   readyEvent(): ReadyEvent;
   /** `session_expired` is an error code, not an event type (phone contract). */
@@ -376,6 +382,10 @@ function transcriptText(raw: string, final: boolean): string {
       // `response.created` clears the window, so a cancel with no response in flight
       // never silences the next one.
       suppressAudio = true;
+    },
+
+    beginUtterance() {
+      speechEnded = false;
     },
 
     expiredEvent() {

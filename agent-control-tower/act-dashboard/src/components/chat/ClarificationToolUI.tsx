@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { answerAsk } from '@/api/approvals';
+import { applyOperatorHeaders } from '@/api/operatorSession';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -32,6 +33,9 @@ export const ClarificationToolUI: ToolCallMessagePartComponent<ClarificationArgs
     inFlight.current = true;
     setState('submitting');
     try {
+      // The answer resumes an operator-only ask; the cookie mutation needs the
+      // session's CSRF header.
+      applyOperatorHeaders();
       await answerAsk(args.approvalId, { approved: true, answer: text });
       setError(null);
       setState('answered');

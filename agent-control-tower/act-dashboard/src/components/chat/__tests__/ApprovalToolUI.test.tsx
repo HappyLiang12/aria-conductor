@@ -1,11 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { ApprovalDecisionReceipt } from '../../../types';
+import { applyOperatorHeaders } from '../../../api/operatorSession';
 import { ApprovalToolUI } from '../ApprovalToolUI';
 
 vi.mock('../../../api/approvals', () => ({ decideApproval: vi.fn().mockResolvedValue({}) }));
+// Keep the real session helpers; only the header application is spied so the
+// card's "operator headers before the decision" ordering is observable.
+vi.mock('../../../api/operatorSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/operatorSession')>();
+  return { ...actual, applyOperatorHeaders: vi.fn() };
+});
+
+const mockApplyHeaders = applyOperatorHeaders as Mock;
 
 describe('ApprovalToolUI', () => {
   const props = {
@@ -31,6 +40,17 @@ describe('ApprovalToolUI', () => {
     await userEvent.click(screen.getByRole('button', { name: /allow/i }));
     await waitFor(() => expect(decideApproval).toHaveBeenCalledWith('a1', { approved: true }));
     expect(screen.getByText(/allowed/i)).toBeInTheDocument();
+  });
+
+  it('applies the operator session headers before deciding', async () => {
+    const { decideApproval } = await import('../../../api/approvals');
+    render(<ApprovalToolUI {...props} />);
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }));
+    await waitFor(() => expect(decideApproval).toHaveBeenCalledWith('a1', { approved: true }));
+    expect(mockApplyHeaders).toHaveBeenCalledTimes(1);
+    expect(mockApplyHeaders.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(decideApproval).mock.invocationCallOrder[0],
+    );
   });
 
   it('posts a rejection', async () => {

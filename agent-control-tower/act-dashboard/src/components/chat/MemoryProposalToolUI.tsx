@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { decideMemoryProposal, type MemoryProposalDecision } from '@/api/memory';
+import { applyOperatorHeaders } from '@/api/operatorSession';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -33,6 +34,9 @@ export const MemoryProposalToolUI: ToolCallMessagePartComponent<MemoryProposalAr
     inFlight.current = true;
     setState('submitting');
     try {
+      // The proposal decision is an operator-only mutation; the cookie needs the
+      // session's CSRF header.
+      applyOperatorHeaders();
       await decideMemoryProposal(args.id, decision);
       setError(null);
       setState(decision);

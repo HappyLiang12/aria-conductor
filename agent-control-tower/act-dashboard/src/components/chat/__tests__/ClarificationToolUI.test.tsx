@@ -1,11 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { Approval } from '../../../types';
+import { applyOperatorHeaders } from '../../../api/operatorSession';
 import { ClarificationToolUI } from '../ClarificationToolUI';
 
 vi.mock('../../../api/approvals', () => ({ answerAsk: vi.fn().mockResolvedValue({}) }));
+// Keep the real session helpers; only the header application is spied so the
+// card's "operator headers before the answer" ordering is observable.
+vi.mock('../../../api/operatorSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/operatorSession')>();
+  return { ...actual, applyOperatorHeaders: vi.fn() };
+});
+
+const mockApplyHeaders = applyOperatorHeaders as Mock;
 
 describe('ClarificationToolUI', () => {
   const withArgs = (args: Record<string, unknown>) =>
@@ -26,6 +35,18 @@ describe('ClarificationToolUI', () => {
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     await waitFor(() => expect(answerAsk).toHaveBeenCalledWith('a2', { approved: true, answer: '#131' }));
     expect(screen.getByText(/answered/i)).toBeInTheDocument();
+  });
+
+  it('applies the operator session headers before sending the answer', async () => {
+    const { answerAsk } = await import('../../../api/approvals');
+    render(<ClarificationToolUI {...withArgs({ approvalId: 'a2', question: 'Which PR?' })} />);
+    await userEvent.type(screen.getByLabelText('Your answer'), '#131');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    await waitFor(() => expect(answerAsk).toHaveBeenCalledTimes(1));
+    expect(mockApplyHeaders).toHaveBeenCalledTimes(1);
+    expect(mockApplyHeaders.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(answerAsk).mock.invocationCallOrder[0],
+    );
   });
 
   it('keeps Send disabled until an answer is typed', async () => {

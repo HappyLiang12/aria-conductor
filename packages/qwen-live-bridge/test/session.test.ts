@@ -9,6 +9,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingHttpHeaders } from 'node:http';
 import {
   AR_FRAME_GRACE_MS,
+  AR_UPDATE_SETTLE_MS,
   MAX_PENDING_AUDIO,
   startSession,
   type SessionAction,
@@ -715,6 +716,70 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
       'the held commit',
     );
     expect(session.stats().refusedArSwitches).toBe(1);
+    await session.close();
+  });
+
+  it('settles an ar update the provider never answers and lets the phone ask again', async () => {
+    fakeGraceTimers();
+    // Only the handshake is answered: the mid-session switch is silently dropped.
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: false });
+
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 2, 'the unanswered update');
+    await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS - 1);
+    expect(session.stats().refusedArSwitches).toBe(0);
+
+    // The bounded settle treats silence as a refusal: the provider still runs its old
+    // mode, one switch is counted, and nothing is retried automatically.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(session.stats().refusedArSwitches).toBe(1);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(updatesOf(fake)).toHaveLength(2);
+
+    // The in-flight marker is gone, so asking again crosses instead of being swallowed.
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 3, 'the fresh update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null, null]);
+    await session.close();
+  });
+
+  it('drops an ar update queued on a dying socket and reconciles the rebuilt session', async () => {
+    // The handshake is answered on the first socket only; the rebuilt handshake is held so
+    // a wish can arrive between `session.created` and its acknowledgement.
+    const fake = await fakeQwen({ respondToUpdate: (index) => index === 0 });
+    const updatesOn = (index: number) =>
+      fake.connections[index]!.messages
+        .filter((message) => message.type === 'session.update')
+        .map((message) => (message.session as { turn_detection: unknown }).turn_detection);
+    const { session } = await open(fake, { ar: true });
+
+    // Pausing the server holds the close handshake open, so the client sits CLOSING while
+    // the bridge still believes the session configured: the toggle below is queued, never
+    // written, and the newer wish waits behind it.
+    const dying = fake.connections[0]!;
+    dying.socket.pause();
+    dying.socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.setAr(false);
+    session.setAr(true);
+    expect(updatesOn(0)).toEqual([null]);
+
+    // Completing the close rebuilds the provider session in place.
+    dying.socket.terminate();
+    await waitUntil(() => fake.connections.length === 2, 'the rebuilt socket');
+    await waitUntil(() => updatesOn(1).length === 1, 'the rebuilt handshake');
+    // The handshake carries the phone's current wish, and the queued stale update was not
+    // replayed into it.
+    expect(updatesOn(1)).toEqual([null]);
+
+    // A wish that arrives during the handshake is reconciled once the session is configured:
+    // one fresh update, not the stale replay plus a correction.
+    session.setAr(false);
+    fake.send(1, { type: 'session.updated', session: {} });
+    await waitUntil(() => updatesOn(1).length === 2, 'the fresh update');
+    expect(updatesOn(1)).toEqual([null, { type: 'semantic_vad_ec' }]);
     await session.close();
   });
 

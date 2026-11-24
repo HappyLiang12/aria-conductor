@@ -84,7 +84,7 @@ Only these Qwen events cross to Java/phone. Everything else is counted and dropp
 
 | Qwen event | Phone event |
 |---|---|
-| `input_audio_buffer.speech_stopped` | `speech_end{tMs: bridgeReceiveEpochMs}` |
+| `input_audio_buffer.speech_stopped` **or** `input_audio_buffer.committed` (semantic VAD ends an utterance with a commit and sends no `speech_stopped`; one `speech_end` per utterance) | `speech_end{tMs: bridgeReceiveEpochMs}` |
 | `conversation.item.input_audio_transcription.delta/completed` | `input_transcript{seq, text, final}` |
 | `response.audio_transcript.delta/done` | `output_transcript{seq, text, final}` |
 | `input_audio_buffer.speech_started` (while a response is active) | `interrupted{reason:"user_speech"}` **before** any further audio delta, then `response.cancel` upstream |
@@ -139,3 +139,10 @@ Only these Qwen events cross to Java/phone. Everything else is counted and dropp
 - AR capture/overlay (Phase 3), async TOWER runs, remote MCP, device tokens.
 - Qwen resumption handles (none exist; reconnect rebuilds from the Aria summary).
 - Persisting audio, images or transcripts from the live path beyond the normal run/timeline rows.
+
+### Client compatibility notes (verified on the emulator, 2026-11-24)
+
+- A phone that sends `mic` as its first text frame is tolerated: the frame is ignored until `hello` (which carries the authoritative mic flag); every other non-hello first frame still closes 4002.
+- A `hello` without a conversationId is refused (4002). The phone must mint and persist a 36-char conversation id before connecting; a fresh install that connects first has no id.
+- An image frame committed without an audio buffer is rejected by the provider; the phone's Phase 3 flow always carries an utterance with a frame.
+- `get_time` returns `now` (local ISO-8601 with offset), `zone` and `utc`; the live instructions answer time from `now`.

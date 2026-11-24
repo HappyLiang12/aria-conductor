@@ -7,7 +7,6 @@ import { test, expect, type Page } from '@playwright/test';
  * 1. Aria SSE streaming produces thinking → tool_call → tool_result → message → done events
  * 2. AgentDrawer Live Activity Stream shows enhanced events (tool calls, thinking)
  * 3. Agent creation respects config.maxToolCallRounds
- * 4. Aria non-streaming endpoint works via new Run-based flow
  */
 test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
@@ -80,31 +79,6 @@ test('Aria SSE streaming produces all expected events', async ({ page }) => {
   expect(eventNames).toContain('done');
 
   await page.screenshot({ path: 'test-results/screenshots/aria-unification-01-sse-events.png' });
-});
-
-test('Aria non-streaming chat uses Run-based flow', async ({ page }) => {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-
-  const result = await page.evaluate(async () => {
-    const res = await fetch('/api/v1/aria/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'list all agents', history: [] }),
-    });
-    if (!res.ok) return null;
-    return res.json();
-  });
-
-  expect(result).not.toBeNull();
-  expect(result.runId).toBeTruthy();
-  // runId should be a UUID (run ID)
-  expect(result.runId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(result.message).toBeTruthy();
-  expect(result.intent).toBeTruthy();
-  console.log(`Non-streaming chat: runId=${result.runId}, intent=${result.intent}`);
-
-  await page.screenshot({ path: 'test-results/screenshots/aria-unification-02-non-streaming.png' });
 });
 
 test('AgentDrawer Live Activity Stream shows enhanced events', async ({ page }) => {

@@ -167,19 +167,6 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
-    void ariaChatResponds() {
-        Map<String, Object> chatRequest = Map.of(
-                "message", "Hello Aria, what can you do?"
-        );
-        ResponseEntity<Map> chatResponse = restTemplate.postForEntity(
-                "/api/v1/aria/chat", chatRequest, Map.class);
-        assertThat(chatResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(chatResponse.getBody()).isNotNull();
-        assertThat(chatResponse.getBody().get("message")).isNotNull();
-        assertThat(chatResponse.getBody().get("runId")).isNotNull();
-    }
-
-    @Test
     void dashboardSummary() {
         ResponseEntity<Map> response = restTemplate.getForEntity(
                 "/api/v1/dashboard/summary", Map.class);

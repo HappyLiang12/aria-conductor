@@ -6,9 +6,9 @@
 
 Aria Conductor is an open-source AI Agent orchestration and governance platform (modular monolith).
 Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, run-owned agent cores
-(OpenCode — default and recommended — and Qoder, each placed in HOST or SANDBOX mode), Node.js
-MCP server. The LangChain ADK runtime was removed; there is no Python runtime, no fallback and
-no removed provider to select.
+(OpenCode — default and recommended — and Qoder, each placed in HOST or SANDBOX mode), and an
+embedded Java MCP server (`act-mcp`, served at `/mcp`). The LangChain ADK runtime was removed;
+there is no Python runtime, no fallback and no removed provider to select.
 
 ## Module Responsibility Table
 
@@ -25,7 +25,6 @@ no removed provider to select.
 | `act-test-support` | Shared test utilities and test data builders | `agent-control-tower/act-test-support/src/main/java/io/aria/conductor/test/` |
 | `act-dashboard` | React frontend (pages, components, API layer) | `agent-control-tower/act-dashboard/src/App.tsx` |
 | `opencode-sandbox` | Container image (docker/podman) for the OpenCode sandbox (SANDBOX mode) | `agent-control-tower/opencode-sandbox/Dockerfile` |
-| `packages/mcp-server` | MCP protocol server (TypeScript) | `packages/mcp-server/src/server.ts` |
 
 ## Common Task Paths
 
@@ -81,7 +80,7 @@ no removed provider to select.
 | Frontend type-check + build | `cd agent-control-tower/act-dashboard && pnpm build` |
 | Frontend unit tests (vitest) | `cd agent-control-tower/act-dashboard && pnpm test` |
 | Frontend E2E (Playwright) | `cd agent-control-tower/act-dashboard && npx playwright test` |
-| MCP server tests | `cd packages/mcp-server && pnpm test` |
+| MCP module tests (embedded `/mcp` server) | `cd agent-control-tower && mvn test -pl act-mcp` |
 | Core cutover contract checks | `node --test e2e/agent-core/cutover-contract.test.mjs` |
 | Full build (skip tests) | `cd agent-control-tower && mvn install -DskipTests` |
 | Container runtime scenario tests | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |

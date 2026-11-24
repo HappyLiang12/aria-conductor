@@ -49,7 +49,7 @@ After switching branches, run `mvn install -DskipTests` once so dependent module
 - Run Java tests: `cd agent-control-tower && mvn test`
 - Run frontend build check: `cd agent-control-tower/act-dashboard && pnpm build`
 - Run frontend unit tests: `cd agent-control-tower/act-dashboard && pnpm test`
-- Run MCP server tests: `cd packages/mcp-server && pnpm test`
+- Run MCP module tests (embedded `/mcp` server): `cd agent-control-tower && mvn test -pl act-mcp`
 - Run the core cutover contract checks: `node --test e2e/agent-core/cutover-contract.test.mjs`
 
 ### Commit Messages

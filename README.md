@@ -12,7 +12,7 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **LLM Provider Agnostic** — Works with OpenAI, DeepSeek, or any OpenAI-compatible API
 - **Exchangeable Agent Core** — **OpenCode** is the default and recommended agent core; **Qoder** is the second supported core. Every agent also selects an execution mode: **Host** (no container runtime needed) or **Sandbox** (isolated container via OpenSandbox)
 - **OpenCode Sandbox** — Agent code execution in an isolated container per agent via OpenSandbox
-- **MCP Server** — Model Context Protocol server for tool integration
+- **MCP Server** — Embedded Model Context Protocol server at `/mcp` (Java, `act-mcp`)
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
 
 ## Current limits
@@ -39,7 +39,7 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 | Agent Runtime | OpenCode (default core) / Qoder, placed in Host or Sandbox mode |
 | OpenSandbox | One sandbox container per agent (Sandbox mode), via a Docker-compatible socket |
 | Database | H2 (dev) / MariaDB (production) |
-| MCP Server | Node.js, TypeScript |
+| MCP Server | Java, embedded (Spring AI MCP at `/mcp`) |
 | Containerization | Docker / Podman, Docker Compose / Podman Compose |
 
 ## Quick Start
@@ -295,7 +295,6 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `act-test-support` | Shared test utilities |
 | `act-dashboard` | React frontend dashboard |
 | `opencode-sandbox` | Container image for the OpenCode sandbox (podman or docker) |
-| `packages/mcp-server` | MCP protocol server |
 
 ## Configuration
 
@@ -348,7 +347,8 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 
 ### MCP endpoint (aria.mcp.*)
 
-The backend exposes an MCP (Model Context Protocol) server at `http://<host>:8080/mcp` for AI agents:
+The backend embeds an MCP (Model Context Protocol) server at `http://<host>:8080/mcp`
+for AI agents (module `act-mcp`; there is no separate MCP process to run):
 
 - **Sandboxed agents**: in `none` and `actor` modes, Aria's opencode sandbox connects automatically (workers do not); `token` mode wires no platform MCP for a run-owned core, because the static platform token is never handed to a run. Requires a sandbox-reachable host address: set `ARIA_MCP_SANDBOX_HOST_ADDRESS`. The backend refuses to guess one, so a blank value leaves the run without the platform MCP.
 - **External agents**: point any MCP client at `http://<host>:8080/mcp`.

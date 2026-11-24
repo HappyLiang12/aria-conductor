@@ -170,17 +170,23 @@ Access via:
 
 ## MCP Server Tools
 
-The MCP server (`packages/mcp-server/`) exposes these tool categories:
+The backend embeds the MCP server at `http://<host>:8080/mcp` (Java module `act-mcp`;
+there is no separate MCP process). Point any MCP client at that endpoint. Tool categories:
 - `agents` — CRUD operations on agents
-- `runs` / `execution` — Start, monitor, control runs
+- `runs` — Start, monitor, pause/resume/cancel runs
 - `approvals` — List and decide approvals
 - `knowledge` — Store, query, review knowledge
 - `kanban` — Task board operations
 - `reports` — Generate and amend reports
-- `trajectory` — Run observability
-- `aria` — Natural language assistant
+- `workflows` — Workflow templates and chain inspection
+- `dod` — Definition-of-Done init, review, status and evidence
+- `memory` — Governed long-term memory reads and writes
+- `providers` — LLM provider management
 - `dashboard` — System summary
-- `llm-providers` — Provider management
+- `aria` — Notifications, scheduled jobs and conversation history
+- `ops` — Housekeeping scan
+- `skills` — Skill discovery
+- `ar-render` — AR render frames
 
 ## Known Limitations
 

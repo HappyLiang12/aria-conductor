@@ -1,13 +1,9 @@
 package io.aria.conductor.aria.service;
 
-import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
-import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,22 +31,13 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class AriaSynthesisPromptTest {
 
-    @Mock AgentLoopEngine agentLoopEngine;
-    @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
-    @Mock IntentClassifier intentClassifier;
-    @Mock ToolCallRepository toolCallRepository;
 
     private AriaService ariaService;
 
     @BeforeEach
     void setUp() {
-        ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                intentClassifier, toolCallRepository,
-                new AriaSyncRunWaiter(
-                        org.mockito.Mockito.mock(io.aria.conductor.aria.repository.AriaRunStateRepository.class),
-                        AriaSyncRunWaiterTestSupport.template(), millis -> { }, 0L, 1, 0L),
-                org.mockito.Mockito.mock(io.aria.conductor.execution.repository.ApprovalRepository.class));
+        ariaService = new AriaService(runRepository);
     }
 
     /** The template's fixed header and tail, verbatim from the plan. */

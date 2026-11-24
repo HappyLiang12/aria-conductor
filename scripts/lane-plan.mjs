@@ -74,8 +74,7 @@ function matchesAny(name, patterns) {
  *
  * Discovery is per top-level type declaration, not per file name: surefire scans target/test-classes and
  * matches the *class* name against its include patterns, so a second top-level type in the same file is a
- * test class in its own right (act-app's DevSqlControllerProfileTest.java declares
- * DevSqlControllerH2ProfilePresenceTest, and keying on the file name loses it). Nested types run with their
+ * test class in its own right, and keying on the file name loses it. Nested types run with their
  * outer class, so they are not listed - and the outer name is what a report line is keyed by.
  */
 function shardableClasses(module) {

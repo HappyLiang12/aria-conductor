@@ -28,11 +28,11 @@ public class GitBranchConfig {
     static final String GIT_PACK_ID = "pack-git-0001";
     static final String GITHUB_TOKEN_KEY = "GITHUB_TOKEN";
     /**
-     * Transitional alias. The startup scripts warned on {@code GH_TOKEN} and
-     * {@code scripts/sdd-mcp-e2e.mjs} still gates on it, so environments in the wild
-     * are as likely to export {@code GH_TOKEN} as {@code GITHUB_TOKEN}. Resolving the
-     * alias through the same service keeps one resolution path while those setups
-     * migrate. Remove once nothing exports the old name.
+     * Transitional alias. The startup scripts warned on {@code GH_TOKEN}, so
+     * environments in the wild are as likely to export {@code GH_TOKEN} as
+     * {@code GITHUB_TOKEN}. Resolving the alias through the same service keeps one
+     * resolution path while those setups migrate. Remove once nothing exports the
+     * old name.
      *
      * <p>Precedence is per key, not global: {@link #GITHUB_TOKEN_KEY} is resolved first
      * <em>including its own {@code GITHUB_TOKEN} environment fallback</em>, and the alias is

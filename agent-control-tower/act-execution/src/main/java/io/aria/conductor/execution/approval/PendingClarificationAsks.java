@@ -9,15 +9,14 @@ import java.util.Optional;
 /**
  * The one selection rule for "the ask this parked run is waiting on" (A4).
  *
- * <p>Two readers name that ask for one park: the sync chat response
- * ({@code AriaService.findPendingClarification}) and the panel's
- * {@code waiting_input} card ({@code RunSignalSseListener}). The finder they share
+ * <p>The panel's {@code waiting_input} card ({@code RunSignalSseListener}) names
+ * that ask for a parked run. The finder it shares
  * ({@code ApprovalRepository.findByRunIdAndStatusAndSource}) is a derived query
- * with no {@code ORDER BY}, so a {@code findFirst()} would make each reader depend
+ * with no {@code ORDER BY}, so a {@code findFirst()} would make the reader depend
  * on the row order the database happened to return — and a run can briefly own two
  * PENDING clarification rows (the terminal-race ask of a recorded residual beside a
- * live park, or a duplicate waiting event). Two readers of one park would then name
- * two different questions. Both resolve the pick here instead, from the row's own
+ * live park, or a duplicate waiting event). Surfaces of one park would then name
+ * two different questions. Resolve the pick here instead, from the row's own
  * identity: newest {@code requestedAt} first, ties broken by {@code id}, with both
  * keys nulls-first so the order stays total even for an unset column.
  *

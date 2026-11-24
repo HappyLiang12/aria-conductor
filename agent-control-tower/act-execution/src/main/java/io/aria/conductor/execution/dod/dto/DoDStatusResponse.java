@@ -7,10 +7,10 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Aggregate response for {@code GET /api/v1/dod/{taskId}}.
+ * Aggregate DoD status payload returned by the embedded MCP DoD status tool.
  *
- * <p>Includes the full DoD record plus the per-stage roll-up so the dashboard
- * drawer can render the stage progression strip without extra round-trips.
+ * <p>Includes the full DoD record plus the per-stage roll-up so a caller can
+ * render the stage progression strip without extra round-trips.
  */
 public record DoDStatusResponse(
         String id,

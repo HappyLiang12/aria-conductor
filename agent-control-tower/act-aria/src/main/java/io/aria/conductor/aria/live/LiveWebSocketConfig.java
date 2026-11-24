@@ -7,6 +7,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.server.support.DefaultHandshakeHandler;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 /**
@@ -56,7 +57,14 @@ public class LiveWebSocketConfig implements WebSocketConfigurer {
      * buffer is container-wide, so the STOMP endpoint co-tenant ({@code /ws/events}) gets
      * the same headroom; its frames were never near 8 KiB and nothing else changes.
      */
+    /**
+     * The container buffer sizes only matter when live is enabled, and the bean needs a
+     * real Jakarta WebSocket container: a MOCK servlet test context has no
+     * {@code ServerContainer} attribute, so building this bean unconditionally breaks
+     * every non-web test context that loads the application.
+     */
     @Bean
+    @ConditionalOnProperty(name = "aria.live.enabled", havingValue = "true")
     public ServletServerContainerFactoryBean webSocketContainer() {
         ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
         container.setMaxTextMessageBufferSize(512 * 1024);

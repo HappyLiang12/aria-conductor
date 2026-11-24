@@ -17,6 +17,18 @@ class QmdScopeTest {
     }
 
     @Test
+    void trailingSeparatorKeepsTheProjectScope() {
+        assertThat(QmdScope.projectOf("/Users/happy/Documents/project/aria-conductor/"))
+                .isEqualTo("project:aria-conductor");
+    }
+
+    @Test
+    void modeAtBaseRefIsNotAPath() {
+        assertThat(QmdScope.projectOf("HOST@main")).isNull();
+        assertThat(QmdScope.projectOf("HOST@feature/x")).isNull();
+    }
+
+    @Test
     void blankWorkspaceIsNull() {
         assertThat(QmdScope.projectOf(null)).isNull();
         assertThat(QmdScope.projectOf("  ")).isNull();

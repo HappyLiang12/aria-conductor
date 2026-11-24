@@ -12,7 +12,14 @@ public final class QmdScope {
         if (workspaceRef == null || workspaceRef.isBlank()) {
             return null;
         }
-        String normalized = workspaceRef.replace('\\', '/');
+        String normalized = workspaceRef.replace('\\', '/').replaceAll("/+$", "");
+        if (normalized.isBlank()) {
+            return null;
+        }
+        // A "MODE@baseRef" value (e.g. HOST@main) names a core mode and a git ref, not a path.
+        if (normalized.contains("@")) {
+            return null;
+        }
         String base = normalized.substring(normalized.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
         if (base.isBlank()) {
             return null;

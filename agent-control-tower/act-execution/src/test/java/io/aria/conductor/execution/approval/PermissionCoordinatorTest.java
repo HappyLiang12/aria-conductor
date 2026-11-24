@@ -610,7 +610,8 @@ class PermissionCoordinatorTest {
     @Test
     void aHostNativeWriteAskIsAutoDeniedWhenHostFileAccessIsReadOnly() {
         List<PermissionReply> delivered = new ArrayList<>();
-        coordinator = coordinator(T0, delivered::add);
+        coordinator = coordinator(T0, delivered::add, new McpProperties(),
+                hostFileAccess(HostFileAccess.READ_ONLY));
 
         UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL), ExecutionMode.HOST);
 

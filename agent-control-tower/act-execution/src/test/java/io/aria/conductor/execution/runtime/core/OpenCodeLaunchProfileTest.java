@@ -178,7 +178,8 @@ class OpenCodeLaunchProfileTest {
     void anUnwiredRunWritesTheUnchangedGovernedConfigurationByteForByte() throws Exception {
         Fixture fixture = fixture(UUID.randomUUID(), null);
 
-        LaunchProfile profile = launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
+        LaunchProfile profile = launch(fixture,
+                new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.READ_ONLY)));
 
         assertThat(Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(fixture.environment())))
                 .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);
@@ -321,10 +322,10 @@ class OpenCodeLaunchProfileTest {
      * worker policy must never leak onto the operator's own host.
      */
     @Test
-    void hostWorkerRunStaysReadOnly() throws Exception {
+    void hostWorkerRunStaysReadOnlyUnderTheReadOnlyPolicy() throws Exception {
         Fixture fixture = fixture(UUID.randomUUID(), null);
 
-        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.READ_ONLY)));
 
         JsonNode permission = governedConfig(fixture).path("permission");
         assertThat(permission.path("edit").asText()).isEqualTo("deny");
@@ -335,12 +336,13 @@ class OpenCodeLaunchProfileTest {
     }
 
     /**
-     * GATED is the operator-gate posture: the HOST document keeps the shipped
-     * refusals (the ask is what the operator decides), so no workspace tool is
-     * opened in the core itself.
+     * GATED is the operator-gate posture: the HOST document asks for the workspace
+     * write tools instead of hiding them, so opencode raises a native permission
+     * request the operator can allow or deny. The wildcard, sub-agent and question
+     * tools stay refused.
      */
     @Test
-    void hostRunWithGatedFileAccessKeepsTheReadOnlyDocument() throws Exception {
+    void hostRunWithGatedFileAccessAsksForWorkspaceTools() throws Exception {
         Fixture fixture = fixture(UUID.randomUUID(), null);
 
         launch(fixture, new OpenCodeCoreAdapter(profile(), wiring, hostFileAccess(HostFileAccess.GATED)));
@@ -348,10 +350,39 @@ class OpenCodeLaunchProfileTest {
         JsonNode permission = governedConfig(fixture).path("permission");
         for (String tool : WORKSPACE_WRITE_TOOLS) {
             assertThat(permission.path(tool).asText())
-                    .as("GATED keeps %s refused in the core; the operator decides the ask", tool)
-                    .isEqualTo("deny");
+                    .as("GATED must surface %s as an operator ask, not hide it", tool)
+                    .isEqualTo("ask");
         }
-        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+        assertThat(permission.path("external_directory").asText()).isEqualTo("ask");
+        assertThat(permission.path("task").asText()).isEqualTo("deny");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        assertThat(permission.path("*").asText()).isEqualTo("deny");
+
+        JsonNode model = governedConfig(fixture).path("provider")
+                .path("aria-deepseek").path("models").path("deepseek-chat");
+        assertThat(model.path("attachment").asBoolean())
+                .as("a GATED HOST run must still declare the governed model's image capability")
+                .isTrue();
+    }
+
+    @Test
+    void theDefaultHostFilePolicyIsGated() {
+        assertThat(new HostFileAccessProperties().getFiles()).isEqualTo(HostFileAccess.GATED);
+    }
+
+    @Test
+    void hostRunWithDefaultFileAccessUsesTheGatedDocument() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+
+        launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
+
+        JsonNode permission = governedConfig(fixture).path("permission");
+        for (String tool : WORKSPACE_WRITE_TOOLS) {
+            assertThat(permission.path(tool).asText())
+                    .as("the default GATED posture surfaces %s as an ask", tool)
+                    .isEqualTo("ask");
+        }
+        assertThat(permission.path("external_directory").asText()).isEqualTo("ask");
         assertThat(permission.path("*").asText()).isEqualTo("deny");
     }
 

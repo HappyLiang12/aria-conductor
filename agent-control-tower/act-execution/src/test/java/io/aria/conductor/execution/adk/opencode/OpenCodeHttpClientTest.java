@@ -74,6 +74,40 @@ class OpenCodeHttpClientTest {
     }
 
     @Test
+    void listPermissions_parsesThePendingAsks() {
+        stubFor(get(urlEqualTo("/permission"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                [{"id":"per_1","sessionID":"sess-abc","permission":"write",
+                                  "patterns":["gated.txt"],"metadata":{},"always":[],
+                                  "tool":{"messageID":"msg_1","callID":"call_1"}}]
+                                """)));
+
+        List<OpenCodeHttpClient.PermissionSnapshot> pending = client.listPermissions();
+
+        assertThat(pending).hasSize(1);
+        assertThat(pending.get(0).id()).isEqualTo("per_1");
+        assertThat(pending.get(0).sessionId()).isEqualTo("sess-abc");
+        assertThat(pending.get(0).permission()).isEqualTo("write");
+        assertThat(pending.get(0).patterns()).containsExactly("gated.txt");
+        assertThat(pending.get(0).rawJson()).contains("\"callID\":\"call_1\"");
+    }
+
+    @Test
+    void replyPermission_postsTheV1Reply() {
+        stubFor(post(urlEqualTo("/permission/per_1/reply"))
+                .withRequestBody(matchingJsonPath("$.reply", equalTo("once")))
+                .willReturn(aResponse().withStatus(200).withBody("true")));
+
+        client.replyPermission("per_1", "once");
+
+        verify(postRequestedFor(urlEqualTo("/permission/per_1/reply"))
+                .withRequestBody(matchingJsonPath("$.reply", equalTo("once"))));
+    }
+
+    @Test
     void sendPrompt_omitsTheModelMemberForThePinnedCorePayload() {
         // The pinned opencode (>= 1.18) rejects a string model member on
         // /session/:id/message ("Expected object | null, got \"...\" at [\"model\"]"),

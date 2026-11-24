@@ -20,9 +20,11 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **No spend cap.** There is no per-run token or cost budget; a run is bounded by the configured
   wall-clock deadline. "Recorded tokens" only sums usage a run actually reported, so a timed-out
   or failed run may be under-counted.
-- **Host mode is read-only for opencode.** A HOST opencode agent can read/list/grep a workspace,
-  but edit/write/patch/bash are refused. Writing happens in SANDBOX. The qoder core in HOST mode
-  currently applies the CLI's own tool defaults, so treat it as trusted-local only.
+- **Host file access follows `aria.host.files`.** The default **GATED** posture keeps a HOST
+  core's workspace tools read-only at the core but surfaces each edit/write/patch/shell as an
+  operator approval. `READ_ONLY` auto-denies those asks; `FULL` auto-approves and lets the core
+  edit/write/bash as the backend user (full filesystem, opt-in). SANDBOX runs are unchanged.
+  The qoder core in HOST still applies the CLI's own tool defaults.
 - **Local files are path-scoped.** A HOST agent sees the workspace path typed on the agent; the
   containerized stack mounts only `/project` read-only.
 - **Memory is operator-fed.** Recall is injected into every prompt, but memory accumulates through

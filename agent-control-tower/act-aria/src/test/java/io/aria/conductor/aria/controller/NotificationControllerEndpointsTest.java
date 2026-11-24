@@ -20,9 +20,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Endpoint tests for the non-paging notification routes. The paging list
- * endpoint is exercised elsewhere; standalone MockMvc cannot reliably
- * serialize {@link org.springframework.data.domain.Page} without the Spring
- * Data web extension, which is why it is skipped here.
+ * endpoint has no standalone test: MockMvc cannot reliably serialize
+ * {@link org.springframework.data.domain.Page} without the Spring Data web
+ * extension, which a standalone setup does not install.
  */
 class NotificationControllerEndpointsTest {
 

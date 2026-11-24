@@ -219,8 +219,17 @@ export function startSession(options: SessionOptions): LiveSession {
   let firstOpenedAt: number | null = null;
   let reopenTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingImage: string | null = null;
-  /** Spec D4/D5: AR-off keeps Phase 2's server VAD; AR-on has none and commits explicitly. */
-  let arEnabled = options.ar === true;
+  /**
+   * Spec D4/D5: AR-off keeps Phase 2's server VAD; AR-on has none and commits explicitly.
+   * This is the mode the phone asked for last, and what its own commit path follows.
+   */
+  let arDesired = options.ar === true;
+  /**
+   * The mode the provider's live session is known to hold. Only the acknowledgement of a
+   * `session.update` moves it forward and only a refusal moves it back, so the bridge can
+   * never claim a mode the provider is not running.
+   */
+  let arApplied = options.ar === true;
   /** AR-on: the phone's commit, held for the frame that may still be behind it. */
   let deferredCommit: { image: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
   /**
@@ -229,11 +238,12 @@ export function startSession(options: SessionOptions): LiveSession {
    */
   let arCommitted = false;
   /**
-   * A mid-session `session.update` (the `ar` switch, spec D4) the provider has not
-   * acknowledged yet. A provider that refuses the new config answers with an `error`
-   * before `session.updated`; what it keeps running is the mode this field remembers.
+   * Spec D4: at most one `session.update` for an `ar` change is in flight. The phone's
+   * latest wish waits in `arDesired`, so a rapid off→on→off cannot overwrite the state a
+   * refusal has to revert to — the provider answers one update at a time, and
+   * `reconcileAr` sends whatever still differs afterwards.
    */
-  let pendingArUpdate: { previous: boolean } | null = null;
+  let arUpdateInFlight: { target: boolean } | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
@@ -326,8 +336,9 @@ export function startSession(options: SessionOptions): LiveSession {
     // and an AR commit still waiting for its frame dies with the session it belonged to.
     cancelDeferredCommit();
     // An unacknowledged `ar` update died with the socket it was sent on; the rebuilt
-    // session's own config already carries the current mode.
-    pendingArUpdate = null;
+    // session's own config carries the mode the phone wants, and no sweep is left to run.
+    arUpdateInFlight = null;
+    arApplied = arDesired;
     speechStoppedSinceCommit = false;
     callOrder = [];
     outstandingCalls.clear();
@@ -382,7 +393,7 @@ export function startSession(options: SessionOptions): LiveSession {
     options.onFatal(code);
   };
 
-  const sessionConfig = () => ({
+  const sessionConfig = (ar: boolean) => ({
     modalities: ['text', 'audio'],
     instructions: INSTRUCTIONS,
     audio: {
@@ -406,10 +417,31 @@ export function startSession(options: SessionOptions): LiveSession {
     // barge-in). AR-on runs with none, because `semantic_vad_ec` with
     // `create_response:false` never commits nor answers the image turn, while an explicit
     // commit after the image append does; the phone's commit drives the turn instead.
-    turn_detection: arEnabled ? null : { type: 'semantic_vad_ec' },
+    turn_detection: ar ? null : { type: 'semantic_vad_ec' },
     tools: TOOL_DECLARATIONS,
     tool_choice: 'auto',
   });
+
+  /**
+   * Spec D4: one `session.update` for an `ar` change at a time. `arDesired` holds the
+   * phone's latest wish; an acknowledgement settles the one that went out and this sends
+   * whatever still differs, so off→on→off lands on the last mode instead of overwriting
+   * the state a refusal has to revert to. Nothing crosses while the session rebuilds: the
+   * handshake's own config carries `arDesired` and the ack re-conciles.
+   */
+  const reconcileAr = () => {
+    if (arUpdateInFlight !== null || !configured || closing || fataled) {
+      return;
+    }
+    if (arDesired === arApplied) {
+      return;
+    }
+    const target = arDesired;
+    // Even a frame the socket queues (it is going away) counts as in flight: the ack that
+    // replays it, or the reopen's reset, is what settles it.
+    arUpdateInFlight = { target };
+    send({ type: 'session.update', session: sessionConfig(target) });
+  };
 
   /** The conversation so far, as message items. Seeding never asks for a response. */
   const seedContext = () => {
@@ -497,14 +529,15 @@ export function startSession(options: SessionOptions): LiveSession {
       // follows must not ask for a second response (it would race the first).
       speechStoppedSinceCommit = true;
     }
-    if (event.type === 'error' && pendingArUpdate !== null) {
+    if (event.type === 'error' && arUpdateInFlight !== null) {
       // Spec D4: an `error` before `session.updated` is the provider refusing the
-      // mid-session reconfiguration, so it is still running the previous mode. Revert to
-      // that mode (the error itself reaches the phone through the translator unchanged)
-      // and count the refusal for the metadata line — the provider's text is never
-      // logged, because it can quote the request.
-      arEnabled = pendingArUpdate.previous;
-      pendingArUpdate = null;
+      // mid-session reconfiguration, so it is still running the last applied mode. Revert
+      // to that mode (the error itself reaches the phone through the translator unchanged)
+      // and count the refusal for the metadata line — the provider's text is never logged,
+      // because it can quote the request. A refused switch is never retried: the phone's
+      // wish collapses onto what the provider really runs, and a later toggle asks again.
+      arUpdateInFlight = null;
+      arDesired = arApplied;
       refusedArSwitches += 1;
     }
     for (const translation of translator.onEvent(event)) {
@@ -563,6 +596,8 @@ export function startSession(options: SessionOptions): LiveSession {
       });
       socket = ws;
       configured = false;
+      /** The mode this socket's handshake config carries; its ack makes it the applied one. */
+      let handshakeAr = arDesired;
 
       let settled = false;
       const timeout = setTimeout(() => {
@@ -609,24 +644,34 @@ export function startSession(options: SessionOptions): LiveSession {
         switch (event.type) {
           case 'session.created':
             // Before `session.updated`: the one frame that must bypass the configured gate.
-            transmit({ type: 'session.update', session: sessionConfig() });
+            // Its config carries the mode the phone wants right now, and its ack is what
+            // makes that mode the applied one.
+            handshakeAr = arDesired;
+            transmit({ type: 'session.update', session: sessionConfig(handshakeAr) });
             return;
           case 'session.updated':
-            // The update the mode was waiting on is acknowledged (or the rebuilt
-            // session's own config already carries the current mode): nothing to revert.
-            pendingArUpdate = null;
             if (!configured) {
               configured = true;
               seedContext();
               flushPendingSends();
+              // The handshake's own config is now the provider's: what it carried is the
+              // applied mode (the harness confirmed it), so a refusal can revert to it.
+              arApplied = handshakeAr;
               if (firstOpenedAt === null) {
                 firstOpenedAt = clock();
               }
               settle(null);
+            } else if (arUpdateInFlight !== null) {
+              // The `ar` reconfiguration that went out is acknowledged: it is the applied
+              // mode now, whatever the phone asked for in the meantime.
+              arApplied = arUpdateInFlight.target;
+              arUpdateInFlight = null;
             }
             // A mid-session `session.update` (an `ar` toggle, spec D4) is an update to a
             // session that already holds its context: re-seeding here would replay every
-            // seeded turn into the live conversation.
+            // seeded turn into the live conversation. A wish that arrived while this one
+            // was in flight (or while the session rebuilt) crosses now, one at a time.
+            reconcileAr();
             return;
           default:
             if (configured) {
@@ -743,7 +788,7 @@ export function startSession(options: SessionOptions): LiveSession {
     },
 
     attachImage(dataBase64) {
-      if (arEnabled && arCommitted) {
+      if (arDesired && arCommitted) {
         // Spec D8: this utterance's commit already went out, so the frame belongs to no
         // turn — it is dropped rather than carried into the next one.
         return;
@@ -760,7 +805,7 @@ export function startSession(options: SessionOptions): LiveSession {
 
     commit(commitOptions = {}) {
       const asksForImage = commitOptions.image === true;
-      if (arEnabled) {
+      if (arDesired) {
         // Spec D4: the phone's commit ends its speech, not the turn — the frame it names
         // may still be ~150 ms behind, and the provider takes the image only before the
         // commit. Hold it for the grace or for the frame, whichever comes first.
@@ -796,26 +841,23 @@ export function startSession(options: SessionOptions): LiveSession {
 
     setAr(on) {
       const next = on === true;
-      if (next === arEnabled) {
+      if (next === arDesired) {
         // A repeat is the same mode: no second reconfiguration crosses.
         return;
       }
-      // Spec D4: the switch is proven in place. A provider that refuses keeps the old
-      // config and answers with an `error` before `session.updated`, so the mode the
-      // bridge believes in is only settled by that acknowledgement: until then the old
-      // value is remembered and a refusal reverts to it.
-      const previous = arEnabled;
-      arEnabled = next;
+      // Spec D4: the switch is proven in place. The provider acknowledges it with
+      // `session.updated` and refuses it with an `error`; until one of those arrives it
+      // still runs `arApplied`, so only one update may be in flight and this wish waits
+      // here (commits follow the wish, not the acknowledgement). While the session is
+      // (re)configuring, `reconcileAr` sends it after `session.updated`, so the rebuilt
+      // session's own config is never the stale one.
+      arDesired = next;
       if (!next) {
         // Leaving AR with a commit held for a frame that may never come: the utterance is
         // due now rather than stranded when the grace timer is dropped.
         flushDeferredCommit();
       }
-      // While the session is (re)configuring, this waits with the other ops and lands
-      // after `session.updated`, so the handshake's own config is never the stale one.
-      if (send({ type: 'session.update', session: sessionConfig() })) {
-        pendingArUpdate = { previous };
-      }
+      reconcileAr();
     },
 
     cancel() {

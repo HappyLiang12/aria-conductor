@@ -624,6 +624,100 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
+  it('serialises rapid ar toggles so the last mode lands, not the first', async () => {
+    fakeGraceTimers();
+    // The handshake is answered by the fake; every ar change is answered by the test, so
+    // the phone can toggle again while the previous update is still in flight.
+    let updates = 0;
+    const fake = await fakeQwen({
+      respondToUpdate: () => {
+        updates += 1;
+        return updates === 1;
+      },
+    });
+    const { session, recorder } = await open(fake, { ar: false });
+    /** A provider frame round-trip: everything the session queued has been written. */
+    const drained = async () => {
+      const before = speechEnds(recorder);
+      fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 1 });
+      fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 1 });
+      await waitUntil(() => speechEnds(recorder) === before + 1, 'the round-trip');
+    };
+
+    session.setAr(true);
+    session.setAr(false);
+    await waitUntil(() => updatesOf(fake).length >= 2, 'the AR-on update');
+    await drained();
+    // One update at a time: the toggle back waits instead of racing the first.
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
+
+    // The provider acknowledges AR-on, so the queued wish (AR-off) crosses now.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => updatesOf(fake).length >= 3, 'the AR-off update');
+    expect(updatesOf(fake)).toEqual([
+      { type: 'semantic_vad_ec' },
+      null,
+      { type: 'semantic_vad_ec' },
+    ]);
+    fake.send(0, { type: 'session.updated', session: {} });
+    await drained();
+    expect(session.stats().refusedArSwitches).toBe(0);
+
+    // The final mode is AR-off: the commit is not held for a frame (nothing advances the
+    // grace timer below, so a deferral could never flush).
+    session.commit();
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the commit');
+    await session.close();
+  });
+
+  it('reverts a refused ar switch to the applied mode and keeps the newer wish', async () => {
+    fakeGraceTimers();
+    // The handshake and every update after the first ar change are answered.
+    let updates = 0;
+    const fake = await fakeQwen({
+      respondToUpdate: () => {
+        updates += 1;
+        return updates !== 2;
+      },
+    });
+    const { session, recorder } = await open(fake, { ar: false });
+
+    // off → on → off while the refused AR-on update is still in flight.
+    session.setAr(true);
+    session.setAr(false);
+    await waitUntil(() => updatesOf(fake).length >= 2, 'the refused update');
+    fake.send(0, {
+      type: 'error',
+      error: { code: 'invalid_value', message: 'turn_detection refused' },
+    });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'error',
+    );
+
+    // One refusal, and the provider never left semantic_vad_ec: the bridge is AR-off
+    // again, which the wish that arrived meanwhile already asked for (no second update).
+    expect(session.stats().refusedArSwitches).toBe(1);
+    session.commit();
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the AR-off commit');
+    expect(updatesOf(fake)).toHaveLength(2);
+
+    // Asking again after the refusal is a new request: this one is accepted, and the
+    // commit after it follows the acknowledged mode (held for its frame).
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 3, 'the accepted update');
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      'the held commit',
+    );
+    expect(session.stats().refusedArSwitches).toBe(1);
+    await session.close();
+  });
+
   it('keeps an acknowledged ar switch, so the next commit is held for its frame', async () => {
     fakeGraceTimers();
     const fake = await fakeQwen();

@@ -1,0 +1,21 @@
+services:
+  qmd:
+    build:
+      context: .
+    image: aria-qmd:2.9.0
+    container_name: aria-qmd
+    volumes:
+      - "${ARIA_MEMORY_VAULT_DIR:?set ARIA_MEMORY_VAULT_DIR to the vault checkout}:/vault:z"
+      - "aria-qmd-home:/root"
+    ports:
+      - "127.0.0.1:8181:8181"
+    command: ["mcp", "--http", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8181/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  aria-qmd-home:

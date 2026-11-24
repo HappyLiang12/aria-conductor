@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "qmd-memory": {
+      "url": "http://127.0.0.1:8181/mcp",
+      "timeout": 60000
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${QODER_PROJECT_DIR}/scripts/qmd-runtime/qoder-memory-hook.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${QODER_PROJECT_DIR}/scripts/qmd-runtime/qoder-memory-hook.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

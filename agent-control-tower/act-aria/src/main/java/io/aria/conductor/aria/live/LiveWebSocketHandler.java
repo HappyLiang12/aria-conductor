@@ -55,7 +55,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * standing — and an {@code image} commit needs audio sent since the boundary, or it is
  * answered {@code frame_invalid} ("image commit requires audio") and neither the commit
  * nor an image crosses. An accepted frame is forwarded immediately; the pending image is
- * the bridge's until the commit. Both refusals are non-retryable and keep the socket.
+ * the bridge's until the commit. The commit's own {@code image} flag travels exactly as
+ * the phone sent it: in the decided AR order the phone commits at its speech end and the
+ * frame arrives ~150 ms later, so the bridge — not this class — holds the commit for it.
+ * Both refusals are non-retryable and keep the socket.
  *
  * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
  * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
@@ -396,6 +399,13 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             sendError(live, ERROR_FRAME_INVALID, true, ERROR_MESSAGE_FRAME_INVALID);
             return;
         }
+        if (live.bridge() == null) {
+            // A frame that cannot cross is not the turn's frame: claiming it would refuse
+            // the phone's next (real) frame and leave a commit announcing an image the
+            // bridge never saw.
+            log.debug("aria live phone frame dropped: no bridge");
+            return;
+        }
         if (!live.claimFrame()) {
             // One frame per turn (spec D8): the turn's frame already stands, so this one is
             // refused rather than replacing it. Not retryable — the phone resends next turn.
@@ -408,37 +418,46 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> image = new LinkedHashMap<>();
         image.put("type", "image");
         image.put("dataBase64", frame.path("dataBase64").asText());
-        forward(live, image);
+        if (!forward(live, image)) {
+            // The claim follows the forward: a frame that never crossed is owed to the
+            // phone rather than counted against it.
+            live.releaseFrame();
+        }
     }
 
     private void commit(LiveSession live, JsonNode frame) {
         boolean wantsImage = frame.path("image").asBoolean(false);
-        // The commit closes its turn whether or not it is forwarded: the audio and the
-        // frame it names belong to the turn it ends.
-        LiveSession.Turn turn = live.closeTurn();
-        if (wantsImage && !turn.audioSeen()) {
+        // The commit closes its turn whether or not it is forwarded: the audio it names
+        // belongs to the turn it ends.
+        boolean audioSeen = live.closeTurn();
+        if (wantsImage && !audioSeen) {
             // The provider rejects an image-only commit (spec D4/D8). Nothing is forwarded:
             // neither the commit nor an image the bridge would append with no audio.
             sendError(live, ERROR_FRAME_INVALID, false, ERROR_MESSAGE_IMAGE_COMMIT_AUDIO);
             return;
         }
-        // Only a frame accepted this turn is announced as an image; the bridge appends it
-        // from its own pending slot. A commit{image:false} passes through unchanged.
+        // The flag travels exactly as the phone sent it (spec D4 AR ordering): the phone
+        // sends commit{image:true} at speech_end and its frame ~150 ms later, so Java must
+        // not rewrite the flag from what it has already seen. The bridge (Task 3) holds
+        // the commit for that frame, and a commit{image:false} passes through unchanged.
         Map<String, Object> commit = new LinkedHashMap<>();
         commit.put("type", "commit");
-        commit.put("image", wantsImage && turn.frameSeen());
+        commit.put("image", wantsImage);
         forward(live, commit);
     }
 
-    private void forward(LiveSession live, Map<String, Object> message) {
+    /** @return true when the line reached the bridge; false when there was none or it could not be built */
+    private boolean forward(LiveSession live, Map<String, Object> message) {
         LiveBridge bridge = live.bridge();
         if (bridge == null) {
-            return;
+            return false;
         }
         try {
             bridge.send(json.writeValueAsString(message));
+            return true;
         } catch (JsonProcessingException e) {
             log.debug("aria live bridge frame not serializable");
+            return false;
         }
     }
 

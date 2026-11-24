@@ -405,14 +405,46 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
-    void anImageCommitAfterAudioWithoutAFrameIsSentWithoutAnImage() throws Exception {
+    void anImageCommitIsForwardedWithThePhonesOwnFlagBeforeItsFrame() throws Exception {
         WebSocketSession session = opened();
 
         handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
 
+        // Spec D4 AR ordering: the phone commits at speech_end and sends the frame later, so
+        // the flag is the phone's to set. Java never rewrites it from what it has seen.
         assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("commit");
-        assertThat(json.readTree(bridge.sent.get(1)).path("image").asBoolean()).isFalse();
+        assertThat(json.readTree(bridge.sent.get(1)).path("image").asBoolean()).isTrue();
+    }
+
+    /**
+     * The decided AR order (spec D4): audio, then {@code commit{image:true}} at speech_end,
+     * then the frame ~150 ms later. The commit must reach the bridge with its own flag, the
+     * frame must be accepted after it, and a second frame in that turn must be refused.
+     */
+    @Test
+    void theArOrderSendsTheImageCommitBeforeTheFrameItNames() throws Exception {
+        WebSocketSession session = opened();
+        String base64 = Base64.getEncoder().encodeToString("ar-jpeg".getBytes());
+        String second = Base64.getEncoder().encodeToString("ar-jpeg-2".getBytes());
+
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+        handler.handleTextMessage(session, new TextMessage(frame(base64)));
+        handler.handleTextMessage(session, new TextMessage(frame(second)));
+
+        // hello, commit{image:true}, image; the commit precedes the frame it will hold for.
+        assertThat(bridge.sent).hasSize(3);
+        assertThat(json.readTree(bridge.sent.get(1)).path("type").asText()).isEqualTo("commit");
+        assertThat(json.readTree(bridge.sent.get(1)).path("image").asBoolean()).isTrue();
+        assertThat(json.readTree(bridge.sent.get(2)).path("type").asText()).isEqualTo("image");
+        assertThat(json.readTree(bridge.sent.get(2)).path("dataBase64").asText()).isEqualTo(base64);
+
+        JsonNode error = json.readTree(lastText(session));
+        assertThat(error.path("code").asText()).isEqualTo("frame_invalid");
+        assertThat(error.path("message").asText()).isEqualTo("one frame per turn");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        verify(session, never()).close(any());
     }
 
     @Test

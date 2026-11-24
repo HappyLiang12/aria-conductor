@@ -179,23 +179,30 @@ public final class LiveSession {
         return true;
     }
 
+    /**
+     * Gives back the turn's frame claim when the frame never reached the bridge. The
+     * phone's next frame is then a retry, not a second frame, and a later commit cannot
+     * lean on a frame that stayed in Java.
+     */
+    synchronized void releaseFrame() {
+        frameSeenThisTurn = false;
+    }
+
     /** Counts PCM actually handed to the bridge: audio the provider can commit. */
     synchronized void audioSent(int bytes) {
         audioBytesSinceCommit += bytes;
     }
 
-    /** What a turn carried, read as the turn is closed. */
-    record Turn(boolean frameSeen, boolean audioSeen) {
-    }
-
     /**
-     * Reads the turn's ingest state and starts the next turn in one step, so a frame
-     * racing in from the phone cannot land between the read and the reset.
+     * Reads the turn's audio and starts the next turn in one step, so a frame racing in
+     * from the phone cannot land between the read and the reset.
+     *
+     * @return true when audio reached the provider during the turn being closed
      */
-    synchronized Turn closeTurn() {
-        Turn turn = new Turn(frameSeenThisTurn, audioBytesSinceCommit > 0);
+    synchronized boolean closeTurn() {
+        boolean audioSeen = audioBytesSinceCommit > 0;
         beginTurn();
-        return turn;
+        return audioSeen;
     }
 
     /**

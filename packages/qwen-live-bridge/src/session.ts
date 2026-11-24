@@ -54,7 +54,8 @@ export interface LiveSession {
   close(): Promise<void>;
   /**
    * Metadata only: frames refused while reconfiguring, results for unknown calls, and
-   * an `ar` switch the provider refused (the mode was reverted, never forwarded).
+   * an `ar` switch the provider refused (or never answered within its settle window);
+   * the mode was reverted, never forwarded.
    */
   stats(): { refusedSends: number; droppedToolResults: number; refusedArSwitches: number };
 }
@@ -72,6 +73,12 @@ export const READY_TIMEOUT_MS = 15_000;
  * so the provider commit is held for at most this long waiting for that frame.
  */
 export const AR_FRAME_GRACE_MS = 300;
+/**
+ * Spec D4/D5: a `session.update` the provider neither acknowledges nor refuses in this
+ * window is settled as refused. Without a bound a silently dropped update would sit in
+ * flight forever and every later `setAr` would only move the wish.
+ */
+export const AR_UPDATE_SETTLE_MS = 2_000;
 /** How long a close frame may take before the socket is torn down. */
 const CLOSE_GRACE_MS = 500;
 /** The fixed read errors' arg names mirror `LiveToolExecutor` (`id`). */
@@ -241,9 +248,10 @@ export function startSession(options: SessionOptions): LiveSession {
    * Spec D4: at most one `session.update` for an `ar` change is in flight. The phone's
    * latest wish waits in `arDesired`, so a rapid off→on→off cannot overwrite the state a
    * refusal has to revert to — the provider answers one update at a time, and
-   * `reconcileAr` sends whatever still differs afterwards.
+   * `reconcileAr` sends whatever still differs afterwards. The timer is the bounded
+   * settle: an update the provider never answers is treated as refused.
    */
-  let arUpdateInFlight: { target: boolean } | null = null;
+  let arUpdateInFlight: { target: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
@@ -329,15 +337,57 @@ export function startSession(options: SessionOptions): LiveSession {
     arCommitted = false;
   };
 
+  /** Disarms the settle for the one in-flight `ar` update (ack, refusal, reset, close). */
+  const forgetArUpdate = () => {
+    if (arUpdateInFlight !== null) {
+      clearTimeout(arUpdateInFlight.timer);
+      arUpdateInFlight = null;
+    }
+  };
+
+  /**
+   * Drops every `ar` reconfiguration still waiting in the send queue. A frame queued for
+   * a socket that was going away must never be replayed into the rebuilt session: that
+   * handshake already carries the phone's current wish, so the queued one is stale by
+   * construction and its acknowledgement would land on no in-flight update.
+   */
+  const dropQueuedArUpdates = () => {
+    if (pendingSends.length === 0) {
+      return;
+    }
+    const kept = pendingSends.filter((payload) => payload.type !== 'session.update');
+    const dropped = pendingSends.length - kept.length;
+    pendingSends = kept;
+    pendingOps = Math.max(0, pendingOps - dropped);
+  };
+
+  /**
+   * Settles an `ar` update the provider never answered as a refusal: it still runs
+   * `arApplied`, so the wish collapses onto that mode and one switch is counted (the
+   * shutdown metadata line, never a provider frame). Reconcile then finds nothing to
+   * send — a settled switch is not retried automatically; the next `setAr` asks again.
+   */
+  const settleArUpdate = () => {
+    if (arUpdateInFlight === null) {
+      return;
+    }
+    arUpdateInFlight = null;
+    refusedArSwitches += 1;
+    arDesired = arApplied;
+    reconcileAr();
+  };
+
   /** Nothing about the previous provider session survives into the next one. */
   const resetProviderState = () => {
     pendingImage = null;
     // Spec D8: an image held for a commit that will never reach this session is dropped,
     // and an AR commit still waiting for its frame dies with the session it belonged to.
     cancelDeferredCommit();
-    // An unacknowledged `ar` update died with the socket it was sent on; the rebuilt
-    // session's own config carries the mode the phone wants, and no sweep is left to run.
-    arUpdateInFlight = null;
+    // An unacknowledged or unanswered `ar` update died with the socket it was sent on;
+    // the rebuilt session's own config carries the mode the phone wants, and no settle is
+    // left to fire. A queued one is dropped rather than replayed into that handshake.
+    forgetArUpdate();
+    dropQueuedArUpdates();
     arApplied = arDesired;
     speechStoppedSinceCommit = false;
     callOrder = [];
@@ -427,7 +477,9 @@ export function startSession(options: SessionOptions): LiveSession {
    * phone's latest wish; an acknowledgement settles the one that went out and this sends
    * whatever still differs, so off→on→off lands on the last mode instead of overwriting
    * the state a refusal has to revert to. Nothing crosses while the session rebuilds: the
-   * handshake's own config carries `arDesired` and the ack re-conciles.
+   * handshake's own config carries `arDesired` and the ack re-conciles. Every update carries
+   * a bounded settle, so one the provider silently drops cannot pin `arUpdateInFlight`
+   * forever and swallow every later `setAr`.
    */
   const reconcileAr = () => {
     if (arUpdateInFlight !== null || !configured || closing || fataled) {
@@ -437,9 +489,11 @@ export function startSession(options: SessionOptions): LiveSession {
       return;
     }
     const target = arDesired;
+    const timer = setTimeout(settleArUpdate, AR_UPDATE_SETTLE_MS);
+    timer.unref?.();
     // Even a frame the socket queues (it is going away) counts as in flight: the ack that
     // replays it, or the reopen's reset, is what settles it.
-    arUpdateInFlight = { target };
+    arUpdateInFlight = { target, timer };
     send({ type: 'session.update', session: sessionConfig(target) });
   };
 
@@ -536,7 +590,7 @@ export function startSession(options: SessionOptions): LiveSession {
       // and count the refusal for the metadata line — the provider's text is never logged,
       // because it can quote the request. A refused switch is never retried: the phone's
       // wish collapses onto what the provider really runs, and a later toggle asks again.
-      arUpdateInFlight = null;
+      forgetArUpdate();
       arDesired = arApplied;
       refusedArSwitches += 1;
     }
@@ -663,8 +717,11 @@ export function startSession(options: SessionOptions): LiveSession {
               settle(null);
             } else if (arUpdateInFlight !== null) {
               // The `ar` reconfiguration that went out is acknowledged: it is the applied
-              // mode now, whatever the phone asked for in the meantime.
-              arApplied = arUpdateInFlight.target;
+              // mode now, whatever the phone asked for in the meantime, and its settle is
+              // disarmed so it cannot fire against the next one.
+              const settled = arUpdateInFlight;
+              clearTimeout(settled.timer);
+              arApplied = settled.target;
               arUpdateInFlight = null;
             }
             // A mid-session `session.update` (an `ar` toggle, spec D4) is an update to a

@@ -60,6 +60,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * frame arrives ~150 ms later, so the bridge — not this class — holds the commit for it.
  * Both refusals are non-retryable and keep the socket.
  *
+ * <p>The AR mode (spec X17) is a small optional capability: {@code ar} before {@code hello}
+ * is remembered and carried in the bridge hello, {@code hello.ar} seeds it on reconnect and
+ * an {@code ar} after hello is forwarded so the bridge reconfigures in place. A malformed
+ * {@code ar} is ignored — never an error, never a close — and the mode gates nothing here
+ * beyond what the bridge does with it (spec D4).
+ *
  * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
  * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
  * message larger than that never reaches this class and the container closes 1009 on it.
@@ -228,6 +234,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
                 // rather than refused; every other non-hello frame still closes 4002.
                 return;
             }
+            if ("ar".equals(type)) {
+                // The phone may declare its AR mode before hello (spec X17, D5). There is no
+                // bridge to forward it to yet, so it is remembered and carried in the bridge
+                // hello; a malformed one is ignored like a duplicate, never a close.
+                Boolean ar = arState(frame);
+                if (ar != null) {
+                    live.arOn(ar);
+                }
+                return;
+            }
             if (!"hello".equals(type) || !live.claimHello() || !validHello(frame)) {
                 reject(live);
                 return;
@@ -294,6 +310,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         live.cancelHelloDeadline();
         live.bindConversation(hello.path("conversationId").asText());
         live.micOn(hello.path("mic").asBoolean(true));
+        JsonNode ar = hello.get("ar");
+        if (ar != null && ar.isBoolean()) {
+            // The phone's own AR state on reconnect (spec D5). A hello without the field
+            // keeps whatever an `ar` frame before it declared.
+            live.arOn(ar.booleanValue());
+        }
         // The opening turn starts empty: no frame, no audio of its own.
         live.beginTurn();
         send(live, ready(live.id()));
@@ -337,6 +359,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         hello.put("type", "hello");
         hello.put("v", HELLO_VERSION);
         hello.put("conversationId", live.conversationId());
+        // The AR mode the bridge configures its provider session from (spec D4, D5).
+        hello.put("ar", live.arOn());
         hello.put("context", entries);
         try {
             return json.writeValueAsString(hello);
@@ -345,7 +369,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             // rather than fail the socket over a seed.
             log.debug("aria live hello not serializable");
             return "{\"type\":\"hello\",\"v\":" + HELLO_VERSION + ",\"conversationId\":"
-                    + quote(live.conversationId()) + ",\"context\":[]}";
+                    + quote(live.conversationId()) + ",\"ar\":" + live.arOn() + ",\"context\":[]}";
         }
     }
 
@@ -380,6 +404,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
                 forward(live, mic);
             }
             case "cancel" -> forward(live, Map.of("type", "cancel"));
+            case "ar" -> ar(live, frame);
             case "frame" -> acceptFrame(live, frame);
             case "commit" -> commit(live, frame);
             default -> log.debug("aria live phone frame dropped: type={}", type.isBlank() ? "absent" : type);
@@ -423,6 +448,35 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             // phone rather than counted against it.
             live.releaseFrame();
         }
+    }
+
+    /**
+     * The phone's AR capability (spec X17): {@code {"type":"ar","v":1,"on":bool}}. It is
+     * remembered for the socket's life (hello carries it into a reconnect) and forwarded
+     * so the bridge reconfigures its turn detection in place (spec D4). A frame that is
+     * not this protocol's version, or whose {@code on} is not a boolean, is ignored — it
+     * is an optional capability, and a stale build must not lose the socket over it.
+     */
+    private void ar(LiveSession live, JsonNode frame) {
+        Boolean on = arState(frame);
+        if (on == null) {
+            log.debug("aria live phone frame dropped: type=ar");
+            return;
+        }
+        live.arOn(on);
+        Map<String, Object> ar = new LinkedHashMap<>();
+        ar.put("type", "ar");
+        ar.put("on", on);
+        forward(live, ar);
+    }
+
+    /** @return the requested AR state; null when the frame is not a valid {@code ar} frame */
+    private static Boolean arState(JsonNode frame) {
+        if (frame.path("v").asInt(-1) != HELLO_VERSION) {
+            return null;
+        }
+        JsonNode on = frame.get("on");
+        return on != null && on.isBoolean() ? on.booleanValue() : null;
     }
 
     private void commit(LiveSession live, JsonNode frame) {

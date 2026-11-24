@@ -46,6 +46,9 @@ class LiveWebSocketHandlerTest {
     private static final String HELLO = "{\"type\":\"hello\",\"v\":1,\"conversationId\":\"conv-live\","
             + "\"audio\":{\"inRate\":16000,\"outRate\":24000,\"format\":\"pcm16le\",\"channels\":1},"
             + "\"mic\":true,\"ar\":false}";
+    /** A phone that declared its AR mode before hello: the field is simply absent. */
+    private static final String HELLO_NO_AR = HELLO.replace(",\"ar\":false", "");
+    private static final String HELLO_AR = HELLO.replace("\"ar\":false", "\"ar\":true");
 
     private final ObjectMapper json = new ObjectMapper();
     private final RecordingBridge bridge = new RecordingBridge();
@@ -301,6 +304,84 @@ class LiveWebSocketHandlerTest {
 
         assertThat(json.readTree(allTexts(session).get(0)).path("type").asText()).isEqualTo("ready");
         verify(session, never()).close(any());
+    }
+
+    @Test
+    void anArFrameBeforeHelloIsRememberedAndCarriedInTheBridgeHello() throws Exception {
+        WebSocketSession session = session("s1", null, null);
+        handler = handler(5000);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":true}"));
+
+        // Nothing to answer and nothing to refuse: there is no bridge yet. A malformed one
+        // is ignored on this path too rather than closing the socket before its hello.
+        verify(session, never()).sendMessage(any(TextMessage.class));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1}"));
+        verify(session, never()).sendMessage(any(TextMessage.class));
+
+        // A hello without its own ar keeps the mode the phone declared first.
+        handler.handleTextMessage(session, new TextMessage(HELLO_NO_AR));
+
+        assertThat(json.readTree(allTexts(session).get(0)).path("type").asText()).isEqualTo("ready");
+        JsonNode hello = json.readTree(bridge.sent.get(0));
+        assertThat(hello.path("type").asText()).isEqualTo("hello");
+        assertThat(hello.path("ar").asBoolean()).isTrue();
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void helloArSeedsTheBridgeHello() throws Exception {
+        WebSocketSession off = session("s1", null, null);
+        handler(5000).afterConnectionEstablished(off);
+        handler.handleTextMessage(off, new TextMessage(HELLO));
+        assertThat(json.readTree(bridge.sent.get(0)).path("ar").asBoolean(true)).isFalse();
+
+        handler.shutdown();
+        WebSocketSession on = session("s2", null, null);
+        handler(5000).afterConnectionEstablished(on);
+        handler.handleTextMessage(on, new TextMessage(HELLO_AR));
+        assertThat(json.readTree(bridge.sent.get(1)).path("ar").asBoolean()).isTrue();
+    }
+
+    @Test
+    void anArFrameAfterHelloIsForwardedToTheBridge() throws Exception {
+        WebSocketSession session = opened();
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":true}"));
+
+        assertThat(bridge.sent).hasSize(2);
+        JsonNode on = json.readTree(bridge.sent.get(1));
+        assertThat(on.path("type").asText()).isEqualTo("ar");
+        assertThat(on.path("on").asBoolean()).isTrue();
+        assertThat(openedSession.get().arOn()).isTrue();
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":false}"));
+
+        JsonNode off = json.readTree(bridge.sent.get(2));
+        assertThat(off.path("type").asText()).isEqualTo("ar");
+        assertThat(off.path("on").asBoolean(true)).isFalse();
+        assertThat(openedSession.get().arOn()).isFalse();
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void anInvalidArFrameIsIgnoredWithoutClosingOrAnswering() throws Exception {
+        WebSocketSession session = opened();
+
+        // A stale version, no `on`, and a non-boolean `on`: none of them is a mode.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":2,\"on\":true}"));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1}"));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":\"yes\"}"));
+
+        assertThat(bridge.sent).hasSize(1); // the bridge hello only
+        assertThat(openedSession.get().arOn()).isFalse();
+        // A duplicate declaration is the last state winning, not a refusal.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":true}"));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ar\",\"v\":1,\"on\":true}"));
+        assertThat(openedSession.get().arOn()).isTrue();
+        verify(session, never()).close(any());
+        assertThat(allTexts(session)).noneMatch(text -> text.contains("\"error\""));
     }
 
     @Test

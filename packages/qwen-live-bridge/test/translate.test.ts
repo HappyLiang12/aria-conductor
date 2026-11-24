@@ -44,6 +44,15 @@ describe('translate: allowlist', () => {
     expect(translator.onEvent({ type: 'input_audio_buffer.committed' })).toHaveLength(1);
   });
 
+  it('re-arms speech_end for the next utterance when the caller begins one explicitly', () => {
+    const translator = createTranslator({ clock });
+    expect(translator.onEvent({ type: 'input_audio_buffer.committed' })).toHaveLength(1);
+    // No turn detection (AR-on): the provider never sends `speech_started`, so the bridge
+    // says where the next utterance starts before it commits that audio.
+    translator.beginUtterance();
+    expect(translator.onEvent({ type: 'input_audio_buffer.committed' })).toHaveLength(1);
+  });
+
   it('maps input transcription deltas and the completion to one input stream', () => {
     const translator = createTranslator({ clock });
     const delta = translator.onEvent({

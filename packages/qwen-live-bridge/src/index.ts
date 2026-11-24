@@ -190,6 +190,9 @@ async function main(): Promise<void> {
       apiKey: config.apiKey,
       workspace: config.workspace,
       context: line.context ?? [],
+      // The mode the phone had on its last socket (spec X17): Java keeps it per socket
+      // and folds an `ar` received before hello into this field.
+      ar: line.ar === true,
       onAction,
       onFatal,
     });
@@ -245,6 +248,14 @@ async function main(): Promise<void> {
           flushQueue();
         }
         return;
+      case 'ar': {
+        // Java forwards only a post-hello `ar`; a pre-hello one it folds into `hello.ar`.
+        const current = session;
+        if (current !== null) {
+          defer(() => current.setAr(line.on === true));
+        }
+        return;
+      }
       case 'close':
         void shutdown(0);
         return;

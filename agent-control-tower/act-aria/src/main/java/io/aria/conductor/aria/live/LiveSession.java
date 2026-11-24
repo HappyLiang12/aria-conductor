@@ -36,6 +36,12 @@ public final class LiveSession {
     private volatile UUID runId;
     private volatile LiveBridge bridge;
     private volatile boolean micOn = true;
+    /**
+     * The phone's AR mode (spec X17): declared before or after {@code hello}, remembered
+     * for the socket's life and seeded into the bridge's own {@code hello}. It gates the
+     * bridge's commit grace (spec D4) and changes no other frame.
+     */
+    private volatile boolean arOn;
     /** One frame per turn: set when a frame is accepted, cleared at the turn boundary. */
     private boolean frameSeenThisTurn;
     /** PCM bytes sent to the provider since the turn boundary: an image commit needs some. */
@@ -163,6 +169,15 @@ public final class LiveSession {
 
     public void micOn(boolean micOn) {
         this.micOn = micOn;
+    }
+
+    /** The phone's AR mode; false until it says otherwise (spec X17, D5). */
+    public boolean arOn() {
+        return arOn;
+    }
+
+    public void arOn(boolean arOn) {
+        this.arOn = arOn;
     }
 
     /**

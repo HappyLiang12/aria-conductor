@@ -130,6 +130,43 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
   let outputText = '';
   let droppedCount = 0;
 
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+/**
+ * Qwen's transcription text is HTML-escaped on the wire (`&#10;` for a newline, `&quot;`
+ * for a quote). The phone renders the text as-is, so the bridge is the one place that
+ * decodes it: a single pass keeps `&amp;lt;` from turning into `<`.
+ */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body: string) => {
+    if (body.startsWith('#')) {
+      const code = body[1] === 'x' || body[1] === 'X'
+        ? Number.parseInt(body.slice(2), 16)
+        : Number.parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
+/**
+ * A transcript delta can split an entity (`&#1` then `0;`), so a non-final frame keeps
+ * a trailing partial entity out of the caption until the rest arrives.
+ */
+function transcriptText(raw: string, final: boolean): string {
+  const complete = final ? raw : raw.replace(/&[#a-zA-Z0-9]*$/, '');
+  return decodeEntities(complete);
+}
+
   /** Between `response.created` and `response.done`: a barge-in is only meaningful here. */
   let responseActive = false;
   /** After a barge-in: the cancelled response's audio must not reach the playback queue. */
@@ -142,13 +179,13 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
   const inputTranscript = (text: string, final: boolean): InputTranscriptEvent => {
     lastInputText = text;
     inputSeq += 1;
-    return { type: 'input_transcript', v: PROTOCOL_VERSION, seq: inputSeq, text, final };
+    return { type: 'input_transcript', v: PROTOCOL_VERSION, seq: inputSeq, text: transcriptText(text, final), final };
   };
 
   const outputTranscript = (text: string, final: boolean): OutputTranscriptEvent => {
     outputText = text;
     outputSeq += 1;
-    return { type: 'output_transcript', v: PROTOCOL_VERSION, seq: outputSeq, text, final };
+    return { type: 'output_transcript', v: PROTOCOL_VERSION, seq: outputSeq, text: transcriptText(text, final), final };
   };
 
   const control = (event: PhoneEvent): Translation[] => [{ kind: 'control', event }];

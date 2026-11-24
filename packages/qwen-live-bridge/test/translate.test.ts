@@ -336,3 +336,45 @@ describe('translate: lifecycle controls', () => {
     expect(translator.resumedEvent(7140)).toEqual({ type: 'resumed', v: 1, handleAgeSec: 7140 });
   });
 });
+
+describe('translate: transcript entities', () => {
+  const outputEvent = (translator: ReturnType<typeof createTranslator>, delta: string) =>
+    translator.onEvent({ type: 'response.audio_transcript.delta', delta });
+
+  it('decodes numeric and named entities into plain text', () => {
+    const translator = createTranslator({ clock });
+    const [first] = outputEvent(translator, '第一行&#10;第二行 &quot;引號&quot; &lt;tag&gt; &amp;');
+    expect((first as { event: { text: string } }).event.text)
+      .toBe('第一行\n第二行 "引號" <tag> &');
+  });
+
+  it('decodes a hex entity and leaves an unknown named entity alone', () => {
+    const translator = createTranslator({ clock });
+    const [first] = outputEvent(translator, '&#x41; &nbsp;');
+    expect((first as { event: { text: string } }).event.text).toBe('A &nbsp;');
+  });
+
+  it('never double-decodes an escaped entity', () => {
+    const translator = createTranslator({ clock });
+    const [first] = outputEvent(translator, '&amp;lt;');
+    expect((first as { event: { text: string } }).event.text).toBe('&lt;');
+  });
+
+  it('holds back an entity split across two deltas until it completes', () => {
+    const translator = createTranslator({ clock });
+    const [first] = outputEvent(translator, '行&#1');
+    expect((first as { event: { text: string } }).event.text).toBe('行');
+    const [second] = outputEvent(translator, '0;行');
+    expect((second as { event: { text: string } }).event.text).toBe('行\n行');
+  });
+
+  it('decodes entities in the input transcript as well', () => {
+    const translator = createTranslator({ clock });
+    const [first] = translator.onEvent({
+      type: 'conversation.item.input_audio_transcription.delta',
+      text: '你&#10;好',
+      stash: '',
+    });
+    expect((first as { event: { text: string } }).event.text).toBe('你\n好');
+  });
+});

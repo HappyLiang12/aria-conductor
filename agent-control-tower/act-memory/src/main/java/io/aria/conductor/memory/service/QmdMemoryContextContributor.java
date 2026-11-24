@@ -91,7 +91,7 @@ public class QmdMemoryContextContributor implements ContextContributor {
                 maxResults, minScore, timeoutMillis, vaultDir));
         if (result.degradedReason() != null) {
             return List.of(new ContextSection(SECTION_ID, TITLE, "", Sensitivity.INTERNAL,
-                    List.of(), false, result.degradedReason()));
+                    List.of(), false, "memory-recall-degraded"));
         }
         return QmdSectionRenderer.render(SECTION_ID, TITLE, result, MAX_CONTENT_CHARS)
                 .map(List::of).orElseGet(List::of);

@@ -65,7 +65,7 @@ class QmdMemoryContextContributorTest {
         when(client.query(any())).thenReturn(QmdResult.degraded("qmd-timeout"));
         ContextSection section = contributor(true).contribute(request("operator")).get(0);
         assertThat(section.content()).isEmpty();
-        assertThat(section.degradedReason()).isEqualTo("qmd-timeout");
+        assertThat(section.degradedReason()).isEqualTo("memory-recall-degraded");
     }
 
     @Test

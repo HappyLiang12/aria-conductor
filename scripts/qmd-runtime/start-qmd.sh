@@ -1,23 +1,34 @@
 #!/usr/bin/env bash
 # Portable qmd runtime for the aria-memory-vault.
 # Works with podman or docker on macOS, Linux, and Windows (Git Bash/WSL).
+# Runtime selection follows the repository contract in scripts/lib/container-runtime.sh
+# (CONTAINER_RUNTIME, docker first, then podman) instead of a local probe.
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$SCRIPT_DIR"
+source "$SCRIPT_DIR/../lib/container-runtime.sh"
+
 IMAGE="aria-qmd:2.9.0"
 CONTAINER="aria-qmd"
 VAULT_DIR="${ARIA_MEMORY_VAULT_DIR:-$HOME/aria-memory-vault}"
 export ARIA_MEMORY_VAULT_DIR="$VAULT_DIR"
 
-runtime() {
-  if command -v podman >/dev/null 2>&1; then echo podman
-  elif command -v docker >/dev/null 2>&1; then echo docker
-  else echo "podman or docker is required" >&2; exit 1; fi
+resolve_container_runtime || exit 1
+if [ -z "${CONTAINER_RT:-}" ]; then
+  echo "ERROR: podman or docker is required. Install one, or set CONTAINER_RUNTIME to 'docker' or 'podman'." >&2
+  exit 1
+fi
+RT="$CONTAINER_RT"
+
+# The image predicate is `image inspect`: it exists on both runtimes, while
+# `podman image exists` is podman-only (docker answers "unknown command", exit 1).
+ensure_image() {
+  "$RT" image inspect "$IMAGE" >/dev/null 2>&1 || "$RT" build -t "$IMAGE" "$DIR"
 }
 
 run_qmd() {
-  local rt; rt="$(runtime)"
-  "$rt" run --rm -v "$VAULT_DIR:/vault:z" -v aria-qmd-home:/root -w /vault "$IMAGE" "$@"
+  "$RT" run --rm -v "$VAULT_DIR:/vault:z" -v aria-qmd-home:/root -w /vault "$IMAGE" "$@"
 }
 
 wait_health() {
@@ -33,15 +44,15 @@ wait_health() {
 }
 
 cmd="${1:-start}"
-rt="$(runtime)"
 
 case "$cmd" in
   build)
-    "$rt" build -t "$IMAGE" "$DIR"
+    "$RT" build -t "$IMAGE" "$DIR"
     ;;
   init)
     [ -d "$VAULT_DIR" ] || { echo "vault not found: $VAULT_DIR" >&2; exit 1; }
-    "$rt" volume create aria-qmd-home >/dev/null 2>&1 || true
+    ensure_image
+    "$RT" volume create aria-qmd-home >/dev/null 2>&1 || true
     run_qmd collection add /vault/memory/verified --name memory-verified || true
     run_qmd collection add /vault/knowledge/verified --name knowledge-verified || true
     run_qmd update
@@ -49,9 +60,9 @@ case "$cmd" in
     ;;
   start)
     [ -d "$VAULT_DIR" ] || { echo "vault not found: $VAULT_DIR" >&2; exit 1; }
-    "$rt" image exists "$IMAGE" >/dev/null 2>&1 || "$rt" build -t "$IMAGE" "$DIR"
-    "$rt" rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    "$rt" run -d --name "$CONTAINER" \
+    ensure_image
+    "$RT" rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    "$RT" run -d --name "$CONTAINER" \
       -p 127.0.0.1:8181:8181 \
       -v "$VAULT_DIR:/vault:z" \
       -v aria-qmd-home:/root \
@@ -60,15 +71,15 @@ case "$cmd" in
     wait_health
     ;;
   stop)
-    "$rt" rm -f "$CONTAINER"
+    "$RT" rm -f "$CONTAINER"
     ;;
   status)
-    "$rt" ps --filter "name=$CONTAINER" --format '{{.Names}} {{.Status}}'
+    "$RT" ps --filter "name=$CONTAINER" --format '{{.Names}} {{.Status}}'
     curl -fsS http://127.0.0.1:8181/health || true
     echo
     ;;
   logs)
-    "$rt" logs --tail 100 "$CONTAINER"
+    "$RT" logs --tail 100 "$CONTAINER"
     ;;
   *)
     echo "usage: $0 {build|init|start|stop|status|logs}" >&2

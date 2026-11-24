@@ -307,6 +307,8 @@ interface DeferredCommit {
   timer: ReturnType<typeof setTimeout>;
   awaitMode: boolean;
   due: boolean;
+  /** Bounds the mode proof: a turn whose mode cannot be proven still answers (VAD path). */
+  modeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** A reconnect that cannot reach the provider: the phone gets 4012, not a retry loop. */
@@ -564,6 +566,9 @@ export function startSession(options: SessionOptions): LiveSession {
   const cancelDeferredCommit = () => {
     if (deferredCommit !== null) {
       clearTimeout(deferredCommit.timer);
+      if (deferredCommit.modeTimer !== undefined) {
+        clearTimeout(deferredCommit.modeTimer);
+      }
       deferredCommit = null;
     }
     arCommitted = false;
@@ -685,6 +690,9 @@ export function startSession(options: SessionOptions): LiveSession {
       return;
     }
     clearTimeout(held.timer);
+    if (held.modeTimer !== undefined) {
+      clearTimeout(held.modeTimer);
+    }
     deferredCommit = null;
     arCommitted = true;
     const image = held.image ? pendingImage : null;
@@ -1226,6 +1234,9 @@ export function startSession(options: SessionOptions): LiveSession {
         // that arrives after its frame has nothing left to wait for (see below).
         if (deferredCommit !== null) {
           clearTimeout(deferredCommit.timer);
+          if (deferredCommit.modeTimer !== undefined) {
+            clearTimeout(deferredCommit.modeTimer);
+          }
         }
         arCommitted = false;
         if (!asksForImage) {
@@ -1249,6 +1260,21 @@ export function startSession(options: SessionOptions): LiveSession {
           flushDeferredCommit();
         }, AR_FRAME_GRACE_MS);
         held.timer.unref?.();
+        if (held.awaitMode) {
+          // The provider may be on the VAD with the utterance's own audio still pending,
+          // so the guard-lifting switch cannot be sent until that audio commits (it would
+          // drop speech). The turn must not wait forever for that: after the settle window
+          // it answers under the mode the provider really runs, and the switch follows the
+          // commit.
+          held.modeTimer = setTimeout(() => {
+            if (deferredCommit !== held || !held.awaitMode) {
+              return;
+            }
+            held.awaitMode = false;
+            flushDeferredCommit();
+          }, AR_UPDATE_SETTLE_MS);
+          held.modeTimer.unref?.();
+        }
         deferredCommit = held;
         if (asksForImage && pendingImage !== null) {
           // The phone already sent the frame ahead of this commit: the frame side of the

@@ -750,6 +750,30 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
+  it('answers the held turn under the VAD when the unproven switch cannot be sent in time', async () => {
+    fakeGraceTimers();
+    const loud = (() => {
+      const bytes = Buffer.alloc(1600 * 2);
+      for (let at = 0; at < bytes.length; at += 2) bytes.writeInt16LE(4000, at);
+      return bytes.toString('base64');
+    })();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+
+    // The provider is still on the VAD and the phone's utterance audio has not been
+    // committed: the switch would clear speech, so it waits for that commit. The turn
+    // must still answer rather than hold forever.
+    session.appendAudio(loud);
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS + AR_FRAME_GRACE_MS);
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the VAD-path flush');
+    const types = typesOf(0, fake);
+    expect(types.slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
+    // The switch is not sent over a buffer that holds speech; it waits for the commit.
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }]);
+    await session.close();
+  });
+
   it('reconfigures a live session in place on an ar toggle and never reseeds the context', async () => {
     const fake = await fakeQwen();
     const { session } = await open(fake, { ar: true, context: [{ role: 'user', text: '早' }] });
@@ -1349,8 +1373,8 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
 
     const armedBeforeCommit = vi.getTimerCount();
     session.commit({ image: true });
-    // The frame grace and the guard-lifting update's settle are both armed.
-    expect(vi.getTimerCount()).toBe(armedBeforeCommit + 2);
+    // The frame grace, the guard-lifting update's settle and its mode proof are armed.
+    expect(vi.getTimerCount()).toBe(armedBeforeCommit + 3);
 
     const before = fake.connections[3]!.messages.length;
     fake.connections[3]!.socket.terminate();

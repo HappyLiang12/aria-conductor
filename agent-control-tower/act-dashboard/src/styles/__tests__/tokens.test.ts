@@ -23,4 +23,20 @@ describe('design tokens', () => {
       index.indexOf('@import "tailwindcss"'),
     );
   });
+
+  it('lets the unlayered legacy root use the 8px radius', () => {
+    // The unlayered legacy `:root` wins the cascade over tokens.css (layered),
+    // so the effective radius is whatever this block declares.
+    const legacyRoot = index.match(/:root\s*\{[^}]*\}/);
+    expect(legacyRoot).not.toBeNull();
+    expect(legacyRoot?.[0]).toContain('--radius: 8px;');
+    expect(legacyRoot?.[0]).not.toContain('--radius: 14px');
+  });
+
+  it('applies dark utilities by default and turns them off in light mode', () => {
+    // The app toggles `body.light`; `.dark` is never set, so a `.dark`-based
+    // variant would be dead code.
+    expect(index).toContain('@custom-variant dark (&:where(body:not(.light) *));');
+    expect(index).not.toContain('@custom-variant dark (&:is(.dark *));');
+  });
 });

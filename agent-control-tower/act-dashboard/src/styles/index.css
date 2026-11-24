@@ -4,7 +4,7 @@
 @import "shadcn/tailwind.css";
 @import "./tokens.css";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where(body:not(.light) *));
 
 /* ============================================================
    ACT Dashboard — Enterprise Design System
@@ -29,7 +29,7 @@
   --amber: #f6c453;
   --red: #ff6b7a;
   --shadow: 0 10px 30px rgba(0, 0, 0, .35);
-  --radius: 14px;
+  --radius: 8px;
   /* Scrollbar theme tokens (dark default; body.light overrides below). */
   --sb-thumb: rgba(154, 166, 200, .30);
   --sb-thumb-hover: rgba(154, 166, 200, .52);

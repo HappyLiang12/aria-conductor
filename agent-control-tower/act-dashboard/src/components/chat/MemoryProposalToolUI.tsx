@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { decideMemoryProposal, type MemoryProposalDecision } from '@/api/memory';
 import { Button } from '@/components/ui/button';
@@ -18,10 +18,20 @@ export interface MemoryProposalArgs {
 }
 
 export const MemoryProposalToolUI: ToolCallMessagePartComponent<MemoryProposalArgs> = ({ args }) => {
-  const [state, setState] = useState<'pending' | MemoryProposalDecision | 'error'>('pending');
+  const [state, setState] = useState<'pending' | 'submitting' | MemoryProposalDecision | 'error'>('pending');
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Synchronous in-flight guard: two clicks can land before React re-renders,
+   * and the backend rejects the second overlapping decision with a 409 — which
+   * would replace the landed receipt with an error card. The ref settles that
+   * race; `state === 'submitting'` keeps the buttons disabled for the user.
+   */
+  const inFlight = useRef(false);
 
   async function decide(decision: MemoryProposalDecision) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setState('submitting');
     try {
       await decideMemoryProposal(args.id, decision);
       setError(null);
@@ -29,6 +39,8 @@ export const MemoryProposalToolUI: ToolCallMessagePartComponent<MemoryProposalAr
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       setState('error');
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -56,10 +68,15 @@ export const MemoryProposalToolUI: ToolCallMessagePartComponent<MemoryProposalAr
         </p>
       )}
       <div className="mt-3 flex gap-2">
-        <Button size="sm" onClick={() => void decide('APPROVE')}>
+        <Button size="sm" disabled={state === 'submitting'} onClick={() => void decide('APPROVE')}>
           Approve
         </Button>
-        <Button size="sm" variant="outline" onClick={() => void decide('REJECT')}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={state === 'submitting'}
+          onClick={() => void decide('REJECT')}
+        >
           Reject
         </Button>
       </div>

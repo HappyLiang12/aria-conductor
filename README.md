@@ -258,6 +258,25 @@ provider always wins: `--provider=qoder` (Linux/macOS) or `-AdkProvider qoder` (
 `ADK_PROVIDER=qoder` in the environment — `ADK_PROVIDER` belongs to `scripts/start-backend.{sh,ps1}`
 only.
 
+### Local CI before pushing
+
+Run the hosted CI gates locally before a push. The local run is faster than a hosted
+run and catches flakes before they spend a cloud job:
+
+```bash
+bash scripts/local-ci.sh affected   # the gates implied by the diff against origin/main
+bash scripts/local-ci.sh frontend   # frozen install + unit tests --coverage + build
+bash scripts/local-ci.sh java-unit  # reactor install + surefire tier on h2
+bash scripts/local-ci.sh integration
+bash scripts/local-ci.sh e2e        # needs a running stack; BASE_URL defaults to :5173
+bash scripts/local-ci.sh all --with-e2e
+```
+
+`affected` mirrors the path filters in `.github/workflows/ci.yml`. It reports E2E as
+`NOT RUN` unless the stack is already started; exit code `2` means a prerequisite is
+missing, not that the gate passed. The argument contract has its own smoke test:
+`bash scripts/local-ci.test.sh`.
+
 ### Backend
 
 ```bash

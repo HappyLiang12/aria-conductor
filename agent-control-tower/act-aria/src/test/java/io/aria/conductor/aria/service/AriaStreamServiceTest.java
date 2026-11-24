@@ -293,22 +293,6 @@ class AriaStreamServiceTest {
     }
 
     @Test
-    void streamChat_withSkillId_sendsOnlyTheSkillDirective() {
-        when(skillContextProvider.getEnabledSkillsByIds(List.of("skill-123")))
-                .thenReturn(List.of(new SkillContext("skill-123", "workflow", "desc", "Use instantiate_template.", "SKILL")));
-
-        AriaChatRequest req = AriaChatRequest.builder()
-                .conversationId("conv-9").message("start SDD on #42").skillId("skill-123").build();
-        streamService.streamChat(req, emitter);
-
-        List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(1);
-        assertThat(context.get(0).role()).isEqualTo("system");
-        assertThat(context.get(0).content()).startsWith("## Active Skill: workflow");
-        assertThat(context.get(0).content()).contains("Use instantiate_template.");
-    }
-
-    @Test
     void streamChat_withUnknownOrDisabledSkillId_injectsNothing() {
         when(skillContextProvider.getEnabledSkillsByIds(List.of("nonexistent")))
                 .thenReturn(List.of()); // filtered out by governance

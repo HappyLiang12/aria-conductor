@@ -4,7 +4,6 @@ import type {
   KanbanItem,
   KanbanStatus,
   TransitionKanbanRequest,
-  UpdateKanbanItemRequest,
 } from '../types';
 
 const BASE = '/api/v1/kanban/items';
@@ -42,14 +41,6 @@ export async function createKanbanItem(request: CreateKanbanItemRequest): Promis
   return data;
 }
 
-export async function updateKanbanItem(
-  id: string,
-  request: UpdateKanbanItemRequest
-): Promise<KanbanItem> {
-  const { data } = await client.put<KanbanItem>(`${BASE}/${encodeURIComponent(id)}`, request);
-  return data;
-}
-
 export async function transitionKanbanItem(
   id: string,
   request: TransitionKanbanRequest
@@ -59,8 +50,4 @@ export async function transitionKanbanItem(
     request
   );
   return data;
-}
-
-export async function deleteKanbanItem(id: string): Promise<void> {
-  await client.delete(`${BASE}/${encodeURIComponent(id)}`);
 }

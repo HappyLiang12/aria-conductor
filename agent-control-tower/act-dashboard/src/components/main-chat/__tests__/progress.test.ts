@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyProgress, answerText, emptyProgress, type ProgressEntryLike } from '../progress';
+import { applyProgress, emptyProgress, type ProgressEntryLike } from '../progress';
 
 function entry(overrides: Partial<ProgressEntryLike> = {}): ProgressEntryLike {
   return { runId: 'run-1', kind: 'ANSWER', content: 'x', seq: 1, partId: 'p1', ...overrides };
@@ -79,20 +79,5 @@ describe('applyProgress', () => {
     expect(live.items).toHaveLength(1);
     expect(live.items[0].text).toBe('Raft needs a majority.');
     expect(live).toEqual(replayed);
-  });
-});
-
-describe('answerText', () => {
-  it('joins every answer part in order and ignores other kinds', () => {
-    let state = emptyProgress('run-1');
-    state = applyProgress(state, entry({ content: 'first', seq: 1, partId: 'a1' }));
-    state = applyProgress(state, entry({ kind: 'TOOL_CALL', toolName: 'bash', content: 'ls', seq: 2, partId: 't1' }));
-    state = applyProgress(state, entry({ content: 'second', seq: 3, partId: 'a2' }));
-
-    expect(answerText(state)).toBe('first\n\nsecond');
-  });
-
-  it('returns an empty string when the turn has produced no answer yet', () => {
-    expect(answerText(emptyProgress('run-1'))).toBe('');
   });
 });

@@ -33,8 +33,3 @@ export function effectiveRuntimeOf(agent: Agent): string {
   const mode = storedMode == null || storedMode === '' ? 'SANDBOX' : storedMode;
   return `${core}/${mode}`;
 }
-
-/** True when every non-retired agent runs the same (core, mode) pair. */
-export function isUniform(agents: Agent[]): boolean {
-  return composeRuntimes(agents).length <= 1;
-}

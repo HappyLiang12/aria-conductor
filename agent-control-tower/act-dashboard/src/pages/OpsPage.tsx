@@ -1,10 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  listRecentRuns,
-  getOpsSummary,
-  getOpsActivity,
-} from '../api/ops';
+import { listRuns } from '../api/runs';
+import { getSummary, getRecentActivity } from '../api/dashboard';
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
@@ -144,7 +141,7 @@ export default function OpsPage() {
 
   const runsQ = useQuery<Run[]>({
     queryKey: ['ops', 'runs'],
-    queryFn: listRecentRuns,
+    queryFn: listRuns,
     refetchInterval: 10_000,
   });
 
@@ -155,13 +152,13 @@ export default function OpsPage() {
 
   const summaryQ = useQuery({
     queryKey: ['ops', 'summary'],
-    queryFn: getOpsSummary,
+    queryFn: getSummary,
     refetchInterval: 15_000,
   });
 
   const activityQ = useQuery<ActivityEvent[]>({
     queryKey: ['ops', 'activity'],
-    queryFn: getOpsActivity,
+    queryFn: getRecentActivity,
     refetchInterval: 12_000,
   });
 

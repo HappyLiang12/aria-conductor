@@ -105,7 +105,7 @@ test.describe('kanban keyboard contract', () => {
     await expect(opener).toBeFocused();
   });
 
-  test('Escape from the comment draft keeps the drawer open and keeps the text', async ({ page }) => {
+  test('Escape from the request-changes draft keeps the drawer open and keeps the text', async ({ page }) => {
     await stubWebSocket(page);
     await stubApi(page);
     await page.goto('/');
@@ -114,7 +114,7 @@ test.describe('kanban keyboard contract', () => {
     const drawer = page.locator('.drawer.open');
     await expect(drawer).toBeVisible();
 
-    const note = drawer.getByPlaceholder(/Add a comment/);
+    const note = drawer.getByLabel('Request-changes feedback');
     await note.click();
     await note.fill('keep this draft');
     await page.keyboard.press('Escape');

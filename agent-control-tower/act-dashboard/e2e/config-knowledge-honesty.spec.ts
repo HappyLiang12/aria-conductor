@@ -100,38 +100,16 @@ test.describe('configure honesty', () => {
     await expect(page.getByRole('button', { name: 'Reset to defaults' })).toHaveCount(0);
   });
 
-  test('Gates stays present but every reference control is inert', async ({ page }) => {
+  test('the reference-only Approval Gates policy is gone, not disguised', async ({ page }) => {
     await stubWebSocket(page);
     await stubApi(page);
     await page.goto('/');
 
     await page.getByRole('button', { name: 'Open configuration' }).click();
-    await page.getByRole('tab', { name: /Approval Gates/ }).click();
-
-    await expect(
-      page.getByText('Reference only — not enforced by the backend. This panel does not change runtime behavior.'),
-    ).toBeVisible();
-    await expect(page.getByText('Reference only — gates are not enforced')).toBeVisible();
-
-    const switches = page.getByRole('switch');
-    await expect(switches).toHaveCount(6);
-    for (const control of await switches.all()) {
-      await expect(control).toHaveAttribute('aria-disabled', 'true');
-    }
-    const before = await switches.evaluateAll((els) => els.map((el) => el.getAttribute('aria-checked')));
-    await switches.first().click({ force: true });
-    await switches.first().press('Enter');
-    const after = await switches.evaluateAll((els) => els.map((el) => el.getAttribute('aria-checked')));
-    expect(after).toEqual(before);
-
-    await expect(page.getByRole('combobox')).toHaveCount(6);
-    for (const select of await page.getByRole('combobox').all()) {
-      await expect(select).toBeDisabled();
-    }
-    for (const spin of await page.getByRole('spinbutton').all()) {
-      await expect(spin).toBeDisabled();
-    }
-    await expect(page.getByRole('button', { name: 'Reset to defaults' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /Skills/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /Approval Gates/ })).toHaveCount(0);
+    await expect(page.getByRole('switch')).toHaveCount(0);
+    await expect(page.getByText(/Reference only — gates are not enforced/)).toHaveCount(0);
   });
 
   test('Runtime, LLM and System Config remain real tabs', async ({ page }) => {

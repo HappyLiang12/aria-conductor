@@ -140,57 +140,6 @@ test.describe('Issue #80: Template API migration', () => {
     // The click should have completed without errors
   });
 
-  // ── Test 5 ───────────────────────────────────────────────────────
-  // STALE: the "+ Add Agent" mini-dialog was replaced by the Hire-from-Catalog flow
-  // in the UI redesign. Rewrite against the current UI in the Phase E E2E overhaul.
-  test.skip('CrewPage role dropdown populates from API', async ({ page }) => {
-    // Already on /crew from beforeEach
-    const catalog = page.locator('[data-testid="agent-catalog"]');
-    await expect(catalog).toBeVisible({ timeout: 10_000 });
-
-    // Click "+ Add Agent" button (on the Crew page, different from "+ Create Agent")
-    const addAgentBtn = page.getByRole('button', { name: /\+ Add Agent/ });
-    await expect(addAgentBtn).toBeVisible({ timeout: 10_000 });
-    await addAgentBtn.click();
-
-    // Wait for the mini-dialog to appear
-    await page.waitForTimeout(500);
-
-    // Find the "Role" dropdown inside the mini-dialog
-    // It could be in a dialog, modal, or inline form
-    const roleSelect = page.locator('select').filter({ hasText: new RegExp(EXPECTED_TEMPLATE_NAMES.join('|')) }).first();
-
-    // Fallback if exact match fails
-    let targetRoleSelect = roleSelect;
-    if ((await targetRoleSelect.count()) === 0) {
-      // Try to find any select that contains template roles
-      const allSelects = page.locator('select');
-      const sc = await allSelects.count();
-      for (let i = 0; i < sc; i++) {
-        const opts = await allSelects.nth(i).locator('option').allTextContents();
-        if (opts.some((o) => EXPECTED_TEMPLATE_NAMES.includes(o.trim()))) {
-          targetRoleSelect = allSelects.nth(i);
-          break;
-        }
-      }
-    }
-
-    await expect(targetRoleSelect).toBeVisible({ timeout: 5_000 });
-
-    // Verify Role dropdown has exactly 3 options matching template labels
-    const roleOptions = await targetRoleSelect.locator('option').allTextContents();
-    expect(roleOptions.length).toBeGreaterThanOrEqual(3);
-
-    // Each option text should match one of the expected template labels
-    const optionTextsTrimmed = roleOptions.map((o) => o.trim());
-    for (const label of EXPECTED_TEMPLATE_LABELS) {
-      const matchFound = optionTextsTrimmed.some((opt) =>
-        opt.includes(label) || EXPECTED_TEMPLATE_NAMES.includes(opt),
-      );
-      expect(matchFound, `Role dropdown should contain option matching "${label}"`).toBe(true);
-    }
-  });
-
   // ── Test 6 ───────────────────────────────────────────────────────
   test('createFromTemplate API path is correct', async ({ page }) => {
     const catalog = page.locator('[data-testid="agent-catalog"]');

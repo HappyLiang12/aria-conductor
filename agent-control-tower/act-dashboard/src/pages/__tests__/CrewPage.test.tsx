@@ -391,7 +391,6 @@ describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
       workspaceMode: 'WORKTREE',
       workspacePath: '/srv/repos/atlas',
       workspaceBaseRef: 'main',
-      config: { maxToolCallRounds: 15 },
     });
   });
 
@@ -415,8 +414,17 @@ describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
       description: undefined,
       adkProvider: 'opencode',
       executionMode: 'SANDBOX',
-      config: { maxToolCallRounds: 15 },
     });
+  });
+});
+
+describe('CrewPage cost banner honesty', () => {
+  it('does not invent a hiring-slot cap', async () => {
+    ui();
+
+    expect(await screen.findByRole('heading', { name: /Roster Cost/ })).toBeInTheDocument();
+    expect(screen.queryByText('Hiring slots')).not.toBeInTheDocument();
+    expect(screen.queryByText(/soft cap/i)).not.toBeInTheDocument();
   });
 });
 

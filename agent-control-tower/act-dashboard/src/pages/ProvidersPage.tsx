@@ -63,7 +63,6 @@ export function ProvidersPage() {
                 <th>ID</th>
                 <th>Display Name</th>
                 <th>Capability</th>
-                <th>Execution modes</th>
                 <th>Default</th>
                 <th>Health</th>
               </tr>
@@ -76,11 +75,6 @@ export function ProvidersPage() {
                     <td className="cell-mono">{p.id}</td>
                     <td className="cell-primary">{p.displayName}</td>
                     <td><span className="type-badge">{p.supportsTaskExecution ? 'Task' : 'Turn'}</span></td>
-                    <td className="cell-mono">
-                      {p.executionModes && p.executionModes.length > 0
-                        ? p.executionModes.join(' · ')
-                        : 'not declared'}
-                    </td>
                     <td>{p.isDefault && <span className="type-badge">Default</span>}</td>
                     <td>
                       {health ? (

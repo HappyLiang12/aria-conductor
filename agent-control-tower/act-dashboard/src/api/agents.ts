@@ -80,21 +80,6 @@ export async function getRoleDefaults(role: string): Promise<RoleDefaults> {
   return data;
 }
 
-export async function getAgentSkills(id: string): Promise<AdkSkill[]> {
-  const { data } = await client.get<AdkSkill[]>(`/api/v1/agents/${id}/skills`);
-  return data;
-}
-
-export async function assignAgentSkill(id: string, skillId: string): Promise<AdkSkill[]> {
-  const { data } = await client.post<AdkSkill[]>(`/api/v1/agents/${id}/skills`, { skillId });
-  return data;
-}
-
-export async function unassignAgentSkill(id: string, skillId: string): Promise<AdkSkill[]> {
-  const { data } = await client.delete<AdkSkill[]>(`/api/v1/agents/${id}/skills/${skillId}`);
-  return data;
-}
-
 /** Idempotent bulk-replace: set the agent's skills to exactly these ids. */
 export async function setAgentSkills(id: string, ids: string[]): Promise<AdkSkill[]> {
   const { data } = await client.put<AdkSkill[]>(`/api/v1/agents/${id}/skills`, { ids });

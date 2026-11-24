@@ -104,15 +104,17 @@ aria:
     ready-deadline-ms: ${ARIA_LIVE_READY_DEADLINE_MS:5000}
     max-session-seconds: ${ARIA_LIVE_MAX_SESSION_SECONDS:7200}
     realtime-url: ${ARIA_LIVE_REALTIME_URL:}
-  # Verified qmd read paths (spec:
-  # docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both blocks are
-  # opt-in: with `enabled: false` the contributors keep the pre-qmd behaviour and never
-  # open a connection, so a CI box needs no running qmd. When enabled, an unreachable qmd
-  # degrades the section within `timeout-ms` instead of stalling the turn. `collections`
-  # is a comma-separated allow-list the client enforces on every hit, together with the
-  # request's sensitivity ceiling. `project` is the single-project vault scope: a run's
-  # workspaceRef is `MODE@baseRef` (for example `HOST@main`), so the derived scope is null
-  # and this override applies.
+  # Verified qmd read paths
+  # (spec: docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both
+  # blocks are opt-in: with `enabled: false` the contributors keep the pre-qmd
+  # behaviour and never open a connection, so a CI box needs no running qmd. When
+  # enabled, an unreachable qmd degrades the section within `timeout-ms` instead of
+  # stalling the turn. `collections` is a comma-separated allow-list the client
+  # enforces on every hit, together with the request's sensitivity ceiling.
+  # `project` is the single-project vault scope that stands in for a real path: a
+  # run's workspaceRef is `MODE@baseRef` (for example `HOST@main`), not a filesystem
+  # path, so the project scope derived from it is null and `aria.memory.qmd.project` /
+  # `aria.knowledge.qmd.project` supplies the vault project instead.
   memory:
     qmd:
       enabled: ${ARIA_MEMORY_QMD_ENABLED:false}

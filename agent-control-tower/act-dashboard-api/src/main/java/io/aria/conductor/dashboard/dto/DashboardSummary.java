@@ -6,6 +6,11 @@ package io.aria.conductor.dashboard.dto;
  * and count {@code RUNNING} plus {@code WAITING_INPUT} runs as
  * {@code runningRuns}, and only blocking asks as {@code pendingApprovals}.
  *
+ * @param activeAgents      the live fleet the KPI headlines: {@code HEALTHY + DEGRADED}.
+ *                          Degraded agents are active work the dashboard details as
+ *                          "Healthy · N degraded"; UNHEALTHY agents are not counted here
+ *                          (they are surfaced on the crew page, which lists every
+ *                          non-retired agent)
  * @param totalTokensBurned the sum over runs that reported usage (Task 7 / spec 5.4),
  *                          never a fabricated zero: a run that reported nothing
  *                          contributes nothing

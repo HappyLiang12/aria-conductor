@@ -45,6 +45,11 @@ public class DashboardController {
     public DashboardSummary getSummary() {
         long healthyAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY);
         long degradedAgents = agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
+        // The UI headlines activeAgents and details it as "Healthy · N degraded",
+        // so a degraded agent is part of the active set — counting only healthy
+        // agents made the number contradict its own detail. UNHEALTHY agents are
+        // outside this DTO: it has no field for them, and they are not "active".
+        long activeAgents = healthyAgents + degradedAgents;
         // A parked (WAITING_INPUT) run still holds its admission slot and live
         // runtime, so the KPI counts it as live work, not as finished.
         long runningRuns = runRepository.countByStatus(RunStatus.RUNNING)
@@ -59,7 +64,7 @@ public class DashboardController {
         long totalTokensBurned = runRepository.sumReportedUsage();
         long runsWithoutUsage = runRepository.countWithoutReportedUsage();
 
-        return new DashboardSummary(healthyAgents, healthyAgents, degradedAgents,
+        return new DashboardSummary(activeAgents, healthyAgents, degradedAgents,
                 runningRuns, pendingApprovals, totalTokensBurned, runsWithoutUsage);
     }
 

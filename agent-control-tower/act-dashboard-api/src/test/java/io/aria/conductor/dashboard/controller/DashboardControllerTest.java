@@ -68,8 +68,9 @@ class DashboardControllerTest {
 
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isOk())
-                // activeAgents is the healthy-only count, not HEALTHY + DEGRADED.
-                .andExpect(jsonPath("$.activeAgents").value(3))
+                // activeAgents is the live fleet: HEALTHY + DEGRADED (5), matching the
+                // UI detail "Healthy · N degraded" — degraded agents must not vanish.
+                .andExpect(jsonPath("$.activeAgents").value(5))
                 .andExpect(jsonPath("$.healthyAgents").value(3))
                 .andExpect(jsonPath("$.degradedAgents").value(2))
                 .andExpect(jsonPath("$.runningRuns").value(4))

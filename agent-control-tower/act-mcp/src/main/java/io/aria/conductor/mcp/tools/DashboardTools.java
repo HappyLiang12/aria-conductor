@@ -29,11 +29,14 @@ public class DashboardTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "get_dashboard_summary",
-            description = "Get the dashboard summary: active/healthy/degraded agents, running runs, blocking pending approvals and recorded tokens. Same shape and definitions as GET /api/v1/dashboard/summary.")
+            description = "Get the dashboard summary: active (healthy + degraded) agents, the healthy/degraded split, running runs, blocking pending approvals and recorded tokens. Same shape and definitions as GET /api/v1/dashboard/summary.")
     public String getDashboardSummary() {
         try {
             long healthyAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY);
             long degradedAgents = agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
+            // Same active-set definition as DashboardController: the headline count
+            // includes degraded agents, the way the UI details it.
+            long activeAgents = healthyAgents + degradedAgents;
             // Same definitions as DashboardController: a parked WAITING_INPUT run
             // is live work, only blocking asks count, and runs own token usage.
             long runningRuns = runRepository.countByStatus(RunStatus.RUNNING)
@@ -43,7 +46,7 @@ public class DashboardTools implements McpTool {
             long totalTokensBurned = runRepository.sumReportedUsage();
             long runsWithoutUsage = runRepository.countWithoutReportedUsage();
 
-            return ToolResponses.ok(new DashboardSummary(healthyAgents, healthyAgents, degradedAgents,
+            return ToolResponses.ok(new DashboardSummary(activeAgents, healthyAgents, degradedAgents,
                     runningRuns, pendingApprovals, totalTokensBurned, runsWithoutUsage));
         } catch (Exception e) {
             return ToolResponses.error("DASHBOARD_SUMMARY_FAILED", e.getMessage(), e, mcpProperties.isDebug());

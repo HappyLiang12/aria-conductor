@@ -18,15 +18,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Proves that the dashboard summary reports healthy and degraded agents separately, so a
- * DEGRADED agent is never surfaced as healthy (the UI rendered {@code activeAgents} as
- * "N Agents Online" next to "Healthy & responsive").
+ * Proves the dashboard summary's active-set contract: {@code activeAgents} is the
+ * live fleet ({@code HEALTHY + DEGRADED}), and the two parts are still reported
+ * separately so the UI's "Healthy · N degraded" detail stays truthful.
  *
- * <p>{@code activeAgents} must equal the healthy-only count. These assertions use
- * before/after differences rather than absolute numbers because the shared H2 database may
- * already contain unrelated agents: a regression to {@code HEALTHY + DEGRADED} would leave
- * {@code activeAgents} unchanged after a healthy insert, and would bump it after a degraded
- * insert, both of which are detected below.
+ * <p>Counting only healthy agents made a DEGRADED agent disappear from the KPI
+ * while the same response reported it as degraded. These assertions use
+ * before/after differences rather than absolute numbers because the shared H2
+ * database may already contain unrelated agents.
  */
 @AutoConfigureMockMvc
 class DashboardSummaryIntegrationTest extends BaseH2IntegrationTest {
@@ -40,15 +39,15 @@ class DashboardSummaryIntegrationTest extends BaseH2IntegrationTest {
     private AgentRepository agentRepository;
 
     @Test
-    void degradedAgentsAreNotCountedAsHealthy() throws Exception {
+    void degradedAgentsAreActiveButNeverCountedAsHealthy() throws Exception {
         JsonNode before = fetchSummary();
 
-        // activeAgents is by definition the healthy-only count.
+        // activeAgents is by definition the live fleet: healthy + degraded.
         assertThat(before.get("activeAgents").asLong())
-                .as("activeAgents must equal healthyAgents")
-                .isEqualTo(before.get("healthyAgents").asLong());
+                .as("activeAgents must equal healthyAgents + degradedAgents")
+                .isEqualTo(before.get("healthyAgents").asLong() + before.get("degradedAgents").asLong());
 
-        // A new DEGRADED agent must be reported as degraded, but must NOT increase activeAgents.
+        // A new DEGRADED agent is active: it must raise both degradedAgents and activeAgents by 1.
         agentRepository.save(newAgent("summary-degraded-", HealthStatus.DEGRADED));
 
         JsonNode afterDegraded = fetchSummary();
@@ -56,14 +55,11 @@ class DashboardSummaryIntegrationTest extends BaseH2IntegrationTest {
                 .as("inserting a DEGRADED agent must raise degradedAgents by exactly 1")
                 .isEqualTo(before.get("degradedAgents").asLong() + 1);
         assertThat(afterDegraded.get("activeAgents").asLong())
-                .as("a DEGRADED agent must not raise activeAgents")
-                .isEqualTo(before.get("activeAgents").asLong());
+                .as("a DEGRADED agent must raise activeAgents by exactly 1")
+                .isEqualTo(before.get("activeAgents").asLong() + 1);
         assertThat(afterDegraded.get("healthyAgents").asLong())
                 .as("a DEGRADED agent must not affect healthyAgents")
                 .isEqualTo(before.get("healthyAgents").asLong());
-        assertThat(afterDegraded.get("activeAgents").asLong())
-                .as("activeAgents must equal healthyAgents after the degraded insert")
-                .isEqualTo(afterDegraded.get("healthyAgents").asLong());
 
         // A new HEALTHY agent must raise both activeAgents and healthyAgents by exactly 1.
         agentRepository.save(newAgent("summary-healthy-", HealthStatus.HEALTHY));
@@ -79,8 +75,28 @@ class DashboardSummaryIntegrationTest extends BaseH2IntegrationTest {
                 .as("a HEALTHY agent must not affect degradedAgents")
                 .isEqualTo(afterDegraded.get("degradedAgents").asLong());
         assertThat(afterHealthy.get("activeAgents").asLong())
-                .as("activeAgents must equal healthyAgents after the healthy insert")
-                .isEqualTo(afterHealthy.get("healthyAgents").asLong());
+                .as("activeAgents must equal healthyAgents + degradedAgents after both inserts")
+                .isEqualTo(afterHealthy.get("healthyAgents").asLong()
+                        + afterHealthy.get("degradedAgents").asLong());
+    }
+
+    @Test
+    void unhealthyAndRetiredAgentsAreNotActive() throws Exception {
+        JsonNode before = fetchSummary();
+
+        agentRepository.save(newAgent("summary-unhealthy-", HealthStatus.UNHEALTHY));
+        agentRepository.save(newAgent("summary-retired-", HealthStatus.RETIRED));
+
+        JsonNode after = fetchSummary();
+        assertThat(after.get("activeAgents").asLong())
+                .as("UNHEALTHY and RETIRED agents must not raise activeAgents")
+                .isEqualTo(before.get("activeAgents").asLong());
+        assertThat(after.get("healthyAgents").asLong())
+                .as("UNHEALTHY and RETIRED agents must not raise healthyAgents")
+                .isEqualTo(before.get("healthyAgents").asLong());
+        assertThat(after.get("degradedAgents").asLong())
+                .as("UNHEALTHY and RETIRED agents must not raise degradedAgents")
+                .isEqualTo(before.get("degradedAgents").asLong());
     }
 
     private Agent newAgent(String namePrefix, HealthStatus healthStatus) {

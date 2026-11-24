@@ -219,7 +219,10 @@ if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
 fi
 
 # ── LLM credentials (injected into sandbox env for opencode provider) ──
-if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -n "${LLM_API_KEY:-}" ]; then
+# Alias the platform key only on a DeepSeek base URL: the AR locator spends
+# DEEPSEEK_API_KEY and must never send another provider's bearer to api.deepseek.com.
+if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -n "${LLM_API_KEY:-}" ] \
+        && [[ "${LLM_BASE_URL:-}" == *api.deepseek.com* ]]; then
     export DEEPSEEK_API_KEY="$LLM_API_KEY"
 fi
 

@@ -49,5 +49,8 @@ COPY --from=build /build/act-app/target/act-app-*.jar /app/aria-conductor.jar
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 --start-period=60s \
   CMD curl -sf http://localhost:8080/actuator/health || exit 1
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", \
+# The wrapper aliases LLM_API_KEY into DEEPSEEK_API_KEY only on a DeepSeek base URL
+# (compose cannot test the URL); run it through /bin/sh so no exec bit is needed.
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh", "java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", \
   "--enable-preview", "-jar", "/app/aria-conductor.jar"]

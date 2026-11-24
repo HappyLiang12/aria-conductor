@@ -198,8 +198,14 @@ describe('session: config and handshake', () => {
       'list_agents',
       'get_dashboard_summary',
       'get_workflow',
+      'list_skills',
+      'list_runs',
+      'get_agent',
+      'start_agent_run',
+      'run_skill',
       'highlight_target',
     ]);
+    expect(tools.map((tool) => tool.function.name)).not.toContain('decide_approval');
     expect(tools.find((tool) => tool.function.name === 'highlight_target')).toEqual({
       type: 'function',
       function: {

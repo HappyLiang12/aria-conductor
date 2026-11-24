@@ -104,9 +104,12 @@ public class LiveEventRouter {
      * while a close after the park settles it ABORTED through the finalize callback. A run
      * that could not take the park (an operator cancel committed first) is reported as the
      * failure it is instead of being offered to an operator who no longer owns it.
+     *
+     * @return true when the row is committed WAITING_INPUT and the park is held; false when
+     *         the run could not wait, in which case the caller releases the ask it created
      */
-    public void parkForApproval(LiveSession session, UUID runId, UUID approvalId, String toolName,
-                                String riskTier, String callId, JsonNode arguments) {
+    public boolean parkForApproval(LiveSession session, UUID runId, UUID approvalId, String toolName,
+                                   String riskTier, String callId, JsonNode arguments) {
         RunStatus parked = runs.settle(session, runId, RunStatus.WAITING_INPUT, PARK_REASON);
         if (parked != RunStatus.WAITING_INPUT) {
             // The call is answered before anything else: Qwen is waiting on this function
@@ -115,7 +118,7 @@ public class LiveEventRouter {
             frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));
             frames.toPhone(session, runEvent(runId, parked, APPROVAL_UNAVAILABLE));
             log.debug("live run could not park: id={} state={}", runId, state(parked));
-            return;
+            return false;
         }
         LivePendingToolCall call = new LivePendingToolCall(runId, approvalId, toolName, riskTier,
                 callId, arguments);
@@ -124,6 +127,7 @@ public class LiveEventRouter {
         frames.toPhone(session, LiveFrames.toolStatus(toolName, "approval"));
         frames.toPhone(session, LiveFrames.approvalRequired(runId, approvalId, toolName, riskTier));
         log.debug("live run parked on approval: id={}", runId);
+        return true;
     }
 
     /**
@@ -250,9 +254,13 @@ public class LiveEventRouter {
 
     // --- outcomes -------------------------------------------------------------------------
 
-    /** The approved call runs once; its value answers the bridge and is injected as TOWER. */
+    /**
+     * The approved call runs once through the approved-write path — a read re-executes,
+     * a gated write performs its action with no second ask — and its value answers the
+     * bridge and is injected as TOWER.
+     */
     private void approve(LiveSession session, LivePendingToolCall call) {
-        LiveToolExecutor.ToolOutcome outcome = tools.execute(call.toolName(), call.arguments());
+        LiveToolExecutor.ToolOutcome outcome = tools.executeApproved(call.toolName(), call.arguments());
         boolean ok = outcome instanceof LiveToolExecutor.ToolOutcome.Value;
         String output = switch (outcome) {
             case LiveToolExecutor.ToolOutcome.Value value -> value.json();

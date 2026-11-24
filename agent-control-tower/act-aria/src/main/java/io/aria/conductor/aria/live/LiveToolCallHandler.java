@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the executor refuses is still answered: the bridge must always get its
  * {@code tool_result}, or the model waits on a function call that can never complete.
  * Failures carry the executor's stable sentence, never an exception's text or stack.
+ * A gated write is not answered here: the handler creates the one approval row on the
+ * turn's run and parks it, and the operator's decision answers the call later.
  *
  * <p>Execution is off the stdout reader thread: that thread carries every other line of the
  * socket (audio, control), so it hands the call to a small bounded pool and returns. Each
@@ -58,21 +60,25 @@ public class LiveToolCallHandler implements LiveToolCallSink {
     private final LiveFrames frames;
     private final ObjectMapper json;
     private final LiveEventRouter router;
+    private final LiveApprovalService approvals;
     private final Executor executor;
 
     @Autowired
     public LiveToolCallHandler(LiveRunService runs, LiveToolExecutor tools, LiveFrames frames,
-                               ObjectMapper json, LiveEventRouter router) {
-        this(runs, tools, frames, json, router, boundedPool());
+                               ObjectMapper json, LiveEventRouter router,
+                               LiveApprovalService approvals) {
+        this(runs, tools, frames, json, router, approvals, boundedPool());
     }
 
     LiveToolCallHandler(LiveRunService runs, LiveToolExecutor tools, LiveFrames frames,
-                        ObjectMapper json, LiveEventRouter router, Executor executor) {
+                        ObjectMapper json, LiveEventRouter router, LiveApprovalService approvals,
+                        Executor executor) {
         this.runs = runs;
         this.tools = tools;
         this.frames = frames;
         this.json = json;
         this.router = router;
+        this.approvals = approvals;
         this.executor = executor;
     }
 
@@ -133,8 +139,22 @@ public class LiveToolCallHandler implements LiveToolCallSink {
                 // The run the executor names wins when it names one; the turn's row otherwise,
                 // because a gated tool has no way to know which turn asked it.
                 UUID parked = pending.runId() == null ? runId : pending.runId();
-                router.parkForApproval(session, parked, pending.approvalId(), toolName,
-                        pending.riskTier(), callId, arguments);
+                JsonNode pendingArguments = pending.arguments() == null ? arguments : pending.arguments();
+                UUID approvalId = pending.approvalId();
+                boolean created = approvalId == null;
+                if (created) {
+                    // The ask is the turn's own row: one approval per gated call, on the
+                    // lazy live run the phone is already watching.
+                    approvalId = approvals.createPending(parked, pending.toolName(),
+                            pendingArguments, pending.riskTier());
+                }
+                boolean parkedOk = router.parkForApproval(session, parked, approvalId,
+                        pending.toolName(), pending.riskTier(), callId, pendingArguments);
+                if (created && !parkedOk) {
+                    // The run could not wait (a cancel or a close won the race): the ask has
+                    // no recipient, so it is released instead of waiting forever.
+                    approvals.release(approvalId);
+                }
             } else if (outcome instanceof LiveToolExecutor.ToolOutcome.Value value) {
                 frames.toBridge(session, LiveFrames.toolResult(callId, true, value.json()));
                 frames.toPhone(session, LiveFrames.toolStatus(toolName, "done"));

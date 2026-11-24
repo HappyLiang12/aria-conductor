@@ -31,8 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * settles it ABORTED, injects {@code [tower] finalized} down the bridge and consumes the
  * park, so the second request is the honest 409.
  *
- * <p>The park is entered through the router rather than through a gated tool call: the
- * live catalog is read-only by design, so no live tool ever answers PENDING_APPROVAL today.
+ * <p>The park is entered through the router rather than through a gated tool call: this
+ * test exercises the finalize route itself, and the park it needs is the production
+ * {@code LiveEventRouter.parkForApproval} entry the gated ops tools also use.
  * Everything on the route itself — the port, the conditional ABORTED write, the tower
  * injection — is the production path.
  */

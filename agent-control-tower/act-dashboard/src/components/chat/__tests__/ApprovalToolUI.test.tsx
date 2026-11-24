@@ -224,6 +224,46 @@ describe('ApprovalToolUI', () => {
     expect(screen.getByText(/cwd: \/tmp/)).toBeInTheDocument();
   });
 
+  // F-B1 parity with AriaApprovalCard: a NATIVE_TOOL ask stores the whole ACP
+  // `permission.request` envelope as `arguments` (transport plumbing plus the
+  // tool's `input`). The legacy card reduces it to `input`; the chat card must
+  // show that same payload, never the digest/session/sequence fields.
+  it('reduces an ACP permission envelope to the tool input it carries', async () => {
+    const { getApproval } = await import('../../../api/approvals');
+    const envelope = {
+      seq: 248,
+      at: '2026-11-11T23:26:57.051Z',
+      type: 'permission.request',
+      requestId: 7,
+      sessionId: '5708a4ad-6ef0-4605-861d-0fc7c05cc799',
+      toolCallId: 'call_76afe3236bab41868add80af',
+      toolName: 'mcp__aria-conductor__remember_fact',
+      input: { canonicalKey: 'person:operator', factKey: 'morning_briefing_content' },
+      inputBytes: 295,
+      inputTruncated: false,
+      argumentsDigest: 'a790e991fa9d6983f46dcade8c5dcb13c5079e20419538e44094c878f5c60f7f',
+      options: [{ optionId: 'proceed_once', kind: 'allow_once', name: 'Allow' }],
+    };
+    vi.mocked(getApproval).mockResolvedValueOnce({
+      id: 'a1',
+      toolName: 'remember_fact',
+      arguments: JSON.stringify(envelope),
+    } as never);
+    render(<ApprovalToolUI {...props} />);
+
+    const summary = await screen.findByText(/canonicalKey: person:operator/);
+    expect(summary.textContent).toBe(
+      'canonicalKey: person:operator\nfactKey: morning_briefing_content',
+    );
+    for (const leaked of [
+      'permission.request', 'seq', 'sessionId', 'requestId', 'toolCallId',
+      'inputBytes', 'inputTruncated', 'argumentsDigest', 'a790e991', 'proceed_once',
+    ]) {
+      expect(summary.textContent).not.toContain(leaked);
+      expect(document.body.textContent).not.toContain(leaked);
+    }
+  });
+
   it('says unclassified when the ask carries no risk tier', () => {
     render(<ApprovalToolUI {...withArgs({ approvalId: 'a1', toolName: 'bash' })} />);
     expect(screen.getByText('unclassified')).toBeInTheDocument();

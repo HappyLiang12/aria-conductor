@@ -5,6 +5,7 @@ import { applyOperatorHeaders } from '@/api/operatorSession';
 import type { Approval } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { argumentView } from '@/utils/approvalArguments';
 import { decisionErrorMessage, isUnsettleableAsk } from './decisionToolkit';
 
 /**
@@ -126,27 +127,6 @@ function parseOptions(optionsJson: string | undefined): OfferedOption[] {
   });
 }
 
-/**
- * The ask's arguments as compact `key: value` lines (the backend already
- * redacted them). A JSON object becomes one line per entry so a command and its
- * target are legible; anything else is shown verbatim. Nothing is paraphrased.
- */
-function argumentsSummary(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed === '') return '';
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return Object.entries(parsed as Record<string, unknown>)
-        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
-        .join('\n');
-    }
-  } catch {
-    // not JSON: the raw text IS the argument
-  }
-  return trimmed;
-}
-
 function nonEmpty(value: string | undefined | null): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
@@ -225,7 +205,7 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
   const riskTier = nonEmpty(approval?.riskTier) ?? nonEmpty(args.riskTier);
   const toolPolicy = nonEmpty(approval?.toolPolicy) ?? nonEmpty(args.toolPolicy);
   const expiresAt = args.expiresAt ?? approval?.expiresAt ?? undefined;
-  const argsText = argumentsSummary(approval?.arguments ?? '');
+  const argsText = argumentView(approval?.arguments ?? '').summary;
 
   if (state === 'allowed' || state === 'denied') {
     return (

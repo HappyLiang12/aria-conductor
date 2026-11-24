@@ -49,6 +49,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link #MAX_FRAME_MESSAGE_BYTES} is answered {@code frame_too_large} and the socket kept,
  * because a silent drop would leave the phone waiting for a reply forever.
  *
+ * <p>Ingest is turn-scoped (spec D8): a turn starts at {@code hello}, at the bridge's
+ * {@code speech_end} and at every {@code commit}. Within it one frame is accepted — a
+ * second is answered {@code frame_invalid} ("one frame per turn") and dropped, the first
+ * standing — and an {@code image} commit needs audio sent since the boundary, or it is
+ * answered {@code frame_invalid} ("image commit requires audio") and neither the commit
+ * nor an image crosses. An accepted frame is forwarded immediately; the pending image is
+ * the bridge's until the commit. Both refusals are non-retryable and keep the socket.
+ *
  * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
  * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
  * message larger than that never reaches this class and the container closes 1009 on it.
@@ -92,6 +100,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     static final String ERROR_MESSAGE_FRAME_TOO_LARGE = "frame too large";
     static final String ERROR_MESSAGE_FRAME_ENVELOPE = "frame exceeds 256 KiB base64";
     static final String ERROR_MESSAGE_FRAME_INVALID = "frame invalid";
+    static final String ERROR_MESSAGE_FRAME_ONE_PER_TURN = "one frame per turn";
+    static final String ERROR_MESSAGE_IMAGE_COMMIT_AUDIO = "image commit requires audio";
 
     /** A phone control frame may not exceed 64 KiB. */
     static final int MAX_TEXT_FRAME_BYTES = 64 * 1024;
@@ -248,6 +258,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         byte[] pcm = new byte[bytes];
         payload.duplicate().get(pcm);
         bridge.sendBinary(pcm);
+        // Only audio the provider actually received counts towards an image commit.
+        live.audioSent(pcm.length);
     }
 
     @Override
@@ -279,6 +291,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         live.cancelHelloDeadline();
         live.bindConversation(hello.path("conversationId").asText());
         live.micOn(hello.path("mic").asBoolean(true));
+        // The opening turn starts empty: no frame, no audio of its own.
+        live.beginTurn();
         send(live, ready(live.id()));
         log.debug("aria live hello accepted");
         if (live.offerSubprotocol() != null && !PROTOCOL.equals(live.ws().getAcceptedProtocol())) {
@@ -382,23 +396,37 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             sendError(live, ERROR_FRAME_INVALID, true, ERROR_MESSAGE_FRAME_INVALID);
             return;
         }
-        // One frame per utterance: a newer frame replaces the pending one.
-        live.pendingFrameBase64(frame.path("dataBase64").asText());
+        if (!live.claimFrame()) {
+            // One frame per turn (spec D8): the turn's frame already stands, so this one is
+            // refused rather than replacing it. Not retryable — the phone resends next turn.
+            sendError(live, ERROR_FRAME_INVALID, false, ERROR_MESSAGE_FRAME_ONE_PER_TURN);
+            return;
+        }
+        // Straight down: the bridge holds the pending image until the utterance's commit
+        // (spec X10), so nothing is buffered here and an uncommitted frame dies with the
+        // bridge's own turn.
+        Map<String, Object> image = new LinkedHashMap<>();
+        image.put("type", "image");
+        image.put("dataBase64", frame.path("dataBase64").asText());
+        forward(live, image);
     }
 
     private void commit(LiveSession live, JsonNode frame) {
         boolean wantsImage = frame.path("image").asBoolean(false);
-        String pending = live.takePendingFrameBase64();
-        boolean image = wantsImage && pending != null;
-        if (image) {
-            Map<String, Object> imageFrame = new LinkedHashMap<>();
-            imageFrame.put("type", "image");
-            imageFrame.put("dataBase64", pending);
-            forward(live, imageFrame);
+        // The commit closes its turn whether or not it is forwarded: the audio and the
+        // frame it names belong to the turn it ends.
+        LiveSession.Turn turn = live.closeTurn();
+        if (wantsImage && !turn.audioSeen()) {
+            // The provider rejects an image-only commit (spec D4/D8). Nothing is forwarded:
+            // neither the commit nor an image the bridge would append with no audio.
+            sendError(live, ERROR_FRAME_INVALID, false, ERROR_MESSAGE_IMAGE_COMMIT_AUDIO);
+            return;
         }
+        // Only a frame accepted this turn is announced as an image; the bridge appends it
+        // from its own pending slot. A commit{image:false} passes through unchanged.
         Map<String, Object> commit = new LinkedHashMap<>();
         commit.put("type", "commit");
-        commit.put("image", image);
+        commit.put("image", wantsImage && turn.frameSeen());
         forward(live, commit);
     }
 
@@ -434,11 +462,17 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
         @Override
         public void onControl(String payload) {
+            String type = eventType(payload);
+            if ("speech_end".equals(type)) {
+                // The bridge's turn end is the phone's next turn: the frame it may attach
+                // and the audio its image commit needs are both counted from here.
+                live.beginTurn();
+            }
             String code = errorCode(payload);
             if (code != null) {
                 lastErrorCode.set(code);
             }
-            log.debug("aria live -> phone control: type={}", eventType(payload));
+            log.debug("aria live -> phone control: type={}", type);
             sendRaw(live, payload);
         }
 

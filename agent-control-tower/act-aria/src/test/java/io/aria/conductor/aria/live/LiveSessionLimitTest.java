@@ -89,6 +89,24 @@ class LiveSessionLimitTest {
     }
 
     @Test
+    void aThreeHundredKiBFrameIsStillAnsweredFrameTooLarge() throws Exception {
+        WebSocketSession session = opened();
+
+        // Inside the 320 KiB envelope, so it is parsed and judged by the validator: the
+        // one-frame-per-turn rule must not turn this into a retryable refusal.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"frame\",\"mime\":\"image/jpeg\","
+                + "\"dataBase64\":\"" + "A".repeat(300 * 1024) + "\"}"));
+
+        JsonNode error = lastPhoneFrame(session);
+        assertThat(error.path("type").asText()).isEqualTo("error");
+        assertThat(error.path("code").asText()).isEqualTo("frame_too_large");
+        assertThat(error.path("retryable").asBoolean(true)).isFalse();
+        assertThat(error.path("message").asText()).isEqualTo("frame too large");
+        assertThat(bridge.sent).hasSize(1); // no image line left for the bridge
+        verify(session, never()).close(any());
+    }
+
+    @Test
     void aFrameThatIsNotJpegIsAnsweredInvalidAndKeepsTheSocket() throws Exception {
         WebSocketSession session = opened();
         String base64 = Base64.getEncoder().encodeToString(new byte[] {1, 2, 3, 4});

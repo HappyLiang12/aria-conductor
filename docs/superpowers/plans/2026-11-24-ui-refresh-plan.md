@@ -13,7 +13,7 @@
 
 ## Global Constraints
 
-- Base branch is `main` after `feat/main-chat` is merged. Do not start Tasks 3 and 7 while that branch is unmerged.
+- Base branch is `main`, which already contains the main-chat surface (`ConversationSidebar`, `ProgressTimeline`, and the `/aria` page landed as `87b08497` and follow-ups). The stale `feat/main-chat` branch head is not the gate; the gate is the content on main.
 - Phase 1 is frontend-only: no Spring endpoint, DTO, migration, or permission change.
 - Preserve every E2E hook that existing specs use: `.rail-btn` + `data-view` on sidebar links, `data-testid="decision-queue"`, `data-testid="attention-queue"`, `data-testid="kanban-board"`, and the `mc-*` class hooks in `e2e/aria-main-chat.spec.ts` or update that spec in the same task.
 - Do not edit `src/components/AriaPanel.tsx` or `src/components/main-chat/*` except `ConversationSidebar` import sites. Those belong to `feat/main-chat`.
@@ -46,24 +46,25 @@ Shared files `src/App.tsx` and `src/styles/index.css` are edited only by Task 1 
 - Consumes: `main`, `feat/main-chat`.
 - Produces: a worktree based on `main` that already contains the main-chat work.
 
-- [ ] **Step 1: Verify both prerequisite branches are merged**
+- [ ] **Step 1: Verify the prerequisites are present**
 
 Run:
 ```bash
-git merge-base --is-ancestor feat/main-chat main && echo MAIN_CHAT_MERGED || echo MAIN_CHAT_NOT_MERGED
+test -f agent-control-tower/act-dashboard/src/components/main-chat/ConversationSidebar.tsx && echo MAIN_CHAT_PRESENT || echo MAIN_CHAT_MISSING
 test -f docs/superpowers/specs/2026-11-24-ui-refresh-design.md && echo SPEC_PRESENT || echo SPEC_MISSING
 ```
-Expected: `MAIN_CHAT_MERGED` and `SPEC_PRESENT`. If either line is negative, stop the plan, report which prerequisite is missing, and wait for its owner or the user. Do not copy the spec by hand into the implementation worktree.
+Expected: `MAIN_CHAT_PRESENT` and `SPEC_PRESENT`. If either line is negative, stop the plan, report which prerequisite is missing, and wait for its owner or the user. The `feat/main-chat` branch head is not checked: its content is already on main, but the branch itself may be stale.
 
-- [ ] **Step 2: Recreate the implementation worktree from main**
+- [ ] **Step 2: Create the implementation worktree from the design branch**
 
 Run:
 ```bash
-git worktree add /Users/happy/.qoder/worktrees/app/b420ea/aria-conductor-ui -b feat/ui-refresh main
+git rebase origin/main
+git worktree add /Users/happy/.qoder/worktrees/app/b420ea/aria-conductor-ui -b feat/ui-refresh design/ui-refresh
 cd /Users/happy/.qoder/worktrees/app/b420ea/aria-conductor-ui
 git status -sb
 ```
-Expected: clean `## feat/ui-refresh`.
+Expected: clean `## feat/ui-refresh`. The branch carries the spec and plan until their docs PR lands on main; rebase it onto main again after that merge.
 
 - [ ] **Step 3: Record the baseline bundle**
 

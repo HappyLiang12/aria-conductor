@@ -108,10 +108,10 @@
    }
   },
   "act-execution": {
-   "classes": 136,
-   "tests": 1411,
+   "classes": 135,
+   "tests": 1401,
    "skipped": 11,
-   "classSumSec": 67.085,
+   "classSumSec": 67.083,
    "byClass": {
     "io.aria.conductor.execution.adk.opencode.OpenCodeHttpClientTest": 0.096,
     "io.aria.conductor.execution.adk.opencode.OpenCodePropertiesBindingTest": 0.003,
@@ -530,15 +530,14 @@
    }
   },
   "act-aria": {
-   "classes": 22,
-   "tests": 157,
+   "classes": 20,
+   "tests": 152,
    "skipped": 4,
-   "classSumSec": 5.804,
+   "classSumSec": 5.803,
    "byClass": {
     "io.aria.conductor.aria.controller.AriaChatControllerTest": 0.112,
     "io.aria.conductor.aria.controller.AriaConversationControllerTest": 0.279,
     "io.aria.conductor.aria.controller.NotificationControllerEndpointsTest": 0.021,
-    "io.aria.conductor.aria.controller.NotificationControllerTest": 0,
     "io.aria.conductor.aria.controller.ScheduledJobControllerEdgeCasesTest": 0.023,
     "io.aria.conductor.aria.controller.ScheduledJobControllerTest": 0.595,
     "io.aria.conductor.aria.init.AriaDefaultAgentInitializerTest": 0.02,
@@ -561,7 +560,6 @@
     "io.aria.conductor.aria.controller.AriaChatControllerTest": 6,
     "io.aria.conductor.aria.controller.AriaConversationControllerTest": 20,
     "io.aria.conductor.aria.controller.NotificationControllerEndpointsTest": 4,
-    "io.aria.conductor.aria.controller.NotificationControllerTest": 4,
     "io.aria.conductor.aria.controller.ScheduledJobControllerEdgeCasesTest": 3,
     "io.aria.conductor.aria.controller.ScheduledJobControllerTest": 5,
     "io.aria.conductor.aria.init.AriaDefaultAgentInitializerTest": 4,

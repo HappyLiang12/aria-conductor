@@ -58,16 +58,15 @@ public class ApprovalSettleCardListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onDecided(ApprovalDecidedEvent event) {
         settle(event.getApprovalId(),
-                event.getDecision() == ApprovalStatus.APPROVED ? KanbanStatus.DONE : KanbanStatus.CANCELLED,
-                event.getDecision() == ApprovalStatus.APPROVED ? "ask approved" : "ask denied");
+                event.getDecision() == ApprovalStatus.APPROVED ? KanbanStatus.DONE : KanbanStatus.CANCELLED);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onExpired(ApprovalExpiredEvent event) {
-        settle(event.getApprovalId(), KanbanStatus.CANCELLED, "ask expired");
+        settle(event.getApprovalId(), KanbanStatus.CANCELLED);
     }
 
-    private void settle(UUID approvalId, KanbanStatus target, String comment) {
+    private void settle(UUID approvalId, KanbanStatus target) {
         try {
             settleTransaction.executeWithoutResult(status -> {
                 Approval approval = approvals.findById(approvalId).orElse(null);
@@ -79,7 +78,7 @@ public class ApprovalSettleCardListener {
                 if (card == null || card.getStatus() != KanbanStatus.REVIEW) {
                     return; // the operator already moved it; never override a human action
                 }
-                kanbanService.transition(card.getId(), target, comment);
+                kanbanService.transition(card.getId(), target);
             });
         } catch (RuntimeException e) {
             log.warn("Ask {} settled but its review card could not be settled: {}", approvalId, e.getMessage());

@@ -182,7 +182,7 @@ class KanbanReviewCardListenerTest {
 
         listener.onApprovalRequested(event());
 
-        verify(kanbanService).transition("card-1", KanbanStatus.DONE, "ask approved");
+        verify(kanbanService).transition("card-1", KanbanStatus.DONE);
     }
 
     @Test
@@ -200,7 +200,7 @@ class KanbanReviewCardListenerTest {
 
         listener.onApprovalRequested(event());
 
-        verify(kanbanService).transition("card-new", KanbanStatus.CANCELLED, "ask denied");
+        verify(kanbanService).transition("card-new", KanbanStatus.CANCELLED);
     }
 
     @Test
@@ -214,7 +214,7 @@ class KanbanReviewCardListenerTest {
 
         // Still pending: the settle listener owns the later settle — the mirror
         // must not touch the board beyond its own write.
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     @Test
@@ -233,7 +233,7 @@ class KanbanReviewCardListenerTest {
 
         listener.onApprovalRequested(event());
 
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     // ---- behavior 3: orphan approval ----

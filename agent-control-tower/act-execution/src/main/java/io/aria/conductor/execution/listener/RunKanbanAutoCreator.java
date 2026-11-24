@@ -150,7 +150,7 @@ public class RunKanbanAutoCreator {
         List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
         for (KanbanItem item : items) {
             if (item.getStatus() == KanbanStatus.TODO) {
-                kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, "Run iteration started");
+                kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS);
                 log.info("Auto-transitioned Kanban item {} to IN_PROGRESS for run {}",
                         item.getId(), event.getRunId());
             }
@@ -212,10 +212,9 @@ public class RunKanbanAutoCreator {
                 // the run started it. Any other unexpected state keeps failing
                 // loudly in the transition below.
                 if (item.getStatus() == KanbanStatus.TODO) {
-                    kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS,
-                            "Run " + event.getStatus() + " (settling from Todo)");
+                    kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS);
                 }
-                kanbanService.transition(item.getId(), targetStatus, "Run " + event.getStatus());
+                kanbanService.transition(item.getId(), targetStatus);
                 log.info("Auto-transitioned Kanban item {} to {} for run {}",
                         item.getId(), targetStatus, event.getRunId());
             }

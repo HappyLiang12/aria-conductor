@@ -188,11 +188,9 @@ class RunKanbanAutoCreatorTest {
 
         ArgumentCaptor<String> idCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<KanbanStatus> statusCaptor = ArgumentCaptor.forClass(KanbanStatus.class);
-        ArgumentCaptor<String> commentCaptor = ArgumentCaptor.forClass(String.class);
-        verify(kanbanService).transition(idCaptor.capture(), statusCaptor.capture(), commentCaptor.capture());
+        verify(kanbanService).transition(idCaptor.capture(), statusCaptor.capture());
         assertThat(idCaptor.getValue()).isEqualTo("item-todo");
         assertThat(statusCaptor.getValue()).isEqualTo(KanbanStatus.IN_PROGRESS);
-        assertThat(commentCaptor.getValue()).isEqualTo("Run iteration started");
     }
 
     @Test
@@ -205,7 +203,7 @@ class RunKanbanAutoCreatorTest {
         ArgumentCaptor<String> lookupCaptor = ArgumentCaptor.forClass(String.class);
         verify(kanbanRepository).findByLinkedRunId(lookupCaptor.capture());
         assertThat(lookupCaptor.getValue()).isEqualTo(runId.toString());
-        verify(kanbanService, never()).transition(anyString(), any(), anyString());
+        verify(kanbanService, never()).transition(anyString(), any());
     }
 
     // ---- onRunCompleted ----
@@ -231,11 +229,9 @@ class RunKanbanAutoCreatorTest {
         creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, runStatus));
 
         ArgumentCaptor<KanbanStatus> statusCaptor = ArgumentCaptor.forClass(KanbanStatus.class);
-        ArgumentCaptor<String> commentCaptor = ArgumentCaptor.forClass(String.class);
         verify(kanbanService).transition(org.mockito.ArgumentMatchers.eq("item-active"),
-                statusCaptor.capture(), commentCaptor.capture());
+                statusCaptor.capture());
         assertThat(statusCaptor.getValue()).isEqualTo(expected);
-        assertThat(commentCaptor.getValue()).isEqualTo("Run " + runStatus);
     }
 
     @Test
@@ -250,9 +246,8 @@ class RunKanbanAutoCreatorTest {
         creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, RunStatus.COMPLETED));
 
         InOrder ordered = inOrder(kanbanService);
-        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS,
-                "Run COMPLETED (settling from Todo)");
-        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.REVIEW, "Run COMPLETED");
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS);
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.REVIEW);
         verifyNoMoreInteractions(kanbanService);
     }
 
@@ -264,9 +259,8 @@ class RunKanbanAutoCreatorTest {
         creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, RunStatus.ABORTED));
 
         InOrder ordered = inOrder(kanbanService);
-        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS,
-                "Run ABORTED (settling from Todo)");
-        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.CANCELLED, "Run ABORTED");
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS);
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.CANCELLED);
         verifyNoMoreInteractions(kanbanService);
     }
 
@@ -279,7 +273,7 @@ class RunKanbanAutoCreatorTest {
 
         creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, RunStatus.COMPLETED));
 
-        verify(kanbanService, never()).transition(anyString(), any(), anyString());
+        verify(kanbanService, never()).transition(anyString(), any());
         assertThat(doneItem.getStatus()).isEqualTo(KanbanStatus.DONE);
         assertThat(cancelledItem.getStatus()).isEqualTo(KanbanStatus.CANCELLED);
     }
@@ -292,7 +286,7 @@ class RunKanbanAutoCreatorTest {
         assertThatCode(() -> creator.onRunCompleted(
                 new RunCompletedEvent(this, runId, agentId, RunStatus.COMPLETED)))
                 .doesNotThrowAnyException();
-        verify(kanbanService, never()).transition(anyString(), any(), anyString());
+        verify(kanbanService, never()).transition(anyString(), any());
     }
 
     // ---- helpers ----

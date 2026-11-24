@@ -116,7 +116,7 @@ public class KanbanTransitionService {
                 stopLinkedRun(item);
                 detachLinkOnStop(item);
                 clearStaleLinksOnReopen(item);
-                yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
+                yield kanbanService.transition(id, KanbanStatus.BACKLOG);
             }
             case TODO -> switch (item.getStatus()) {
                 case REVIEW -> requestChanges(item, request);
@@ -125,7 +125,7 @@ public class KanbanTransitionService {
                 case IN_PROGRESS -> {
                     stopLinkedRun(item);
                     detachLinkOnStop(item);
-                    yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
+                    yield kanbanService.transition(id, KanbanStatus.TODO);
                 }
                 // Normalize BACKLOG/DONE -> TODO first, then the pickup's
                 // TODO -> IN_PROGRESS step is a legal transition. DONE means
@@ -133,7 +133,7 @@ public class KanbanTransitionService {
                 // creates a fresh run for the new attempt (defect D3).
                 case BACKLOG, DONE -> {
                     clearStaleLinksOnReopen(item);
-                    kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
+                    kanbanService.transition(id, KanbanStatus.TODO);
                     yield pickup(item, request);
                 }
                 // (TODO -> TODO never reaches here: the same-status no-op guard above returns first.)
@@ -152,12 +152,12 @@ public class KanbanTransitionService {
                 default -> throw new IllegalArgumentException(
                         "Invalid kanban transition: " + item.getStatus() + " -> " + to);
             };
-            case REVIEW -> kanbanService.transition(id, KanbanStatus.REVIEW, request.getComment());
+            case REVIEW -> kanbanService.transition(id, KanbanStatus.REVIEW);
             case DONE -> {
                 approvalRepository.approvePendingByKanbanItemId(id, "accepted by card decision", Instant.now());
-                yield kanbanService.transition(id, KanbanStatus.DONE, request.getComment());
+                yield kanbanService.transition(id, KanbanStatus.DONE);
             }
-            case CANCELLED -> cancel(item, request.getComment());
+            case CANCELLED -> cancel(item);
             // BLOCKED is retired: persisted rows may still carry it; it has no
             // orchestrator side effects and is rejected like any illegal move.
             default -> throw new IllegalArgumentException("Unsupported target status: " + to);
@@ -213,7 +213,7 @@ public class KanbanTransitionService {
                 .build());
         // Link BEFORE the IN_PROGRESS move so every later card face shows the run.
         item.setLinkedRunId(run.getId().toString());
-        return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, request.getComment());
+        return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS);
     }
 
     /**
@@ -233,7 +233,7 @@ public class KanbanTransitionService {
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
         cancelLiveLinkedRun(item);
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "superseded by request changes", Instant.now());
-        kanbanService.transition(item.getId(), KanbanStatus.TODO, request.getComment());
+        kanbanService.transition(item.getId(), KanbanStatus.TODO);
         return pickup(item, request);
     }
 
@@ -263,17 +263,17 @@ public class KanbanTransitionService {
                     Map.of("runId", runId.toString(), "runStatus", run.getStatus().name()));
         }
         runService.resumeRun(runId);
-        return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, null);
+        return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS);
     }
 
-    private KanbanItem cancel(KanbanItem item, String comment) {
+    private KanbanItem cancel(KanbanItem item) {
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "task cancelled", Instant.now());
         // Card transition FIRST: the card lands on CANCELLED before any listener
         // can race it. RunKanbanAutoCreator.onRunCompleted (fired by cancelRun
         // below, after this transaction commits) then finds the card already
         // CANCELLED and skips it (terminal cards are never re-transitioned) —
         // harmless by design.
-        kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
+        kanbanService.transition(item.getId(), KanbanStatus.CANCELLED);
         cancelLiveLinkedRun(item);
         return item;
     }

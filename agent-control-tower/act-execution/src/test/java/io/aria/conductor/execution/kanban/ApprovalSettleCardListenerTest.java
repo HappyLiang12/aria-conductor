@@ -80,7 +80,7 @@ class ApprovalSettleCardListenerTest {
 
         listener.onDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
 
-        verify(kanbanService).transition("card-1", KanbanStatus.DONE, "ask approved");
+        verify(kanbanService).transition("card-1", KanbanStatus.DONE);
     }
 
     @Test
@@ -91,7 +91,7 @@ class ApprovalSettleCardListenerTest {
 
         listener.onDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.DENIED));
 
-        verify(kanbanService).transition("card-1", KanbanStatus.CANCELLED, "ask denied");
+        verify(kanbanService).transition("card-1", KanbanStatus.CANCELLED);
     }
 
     @Test
@@ -102,7 +102,7 @@ class ApprovalSettleCardListenerTest {
 
         listener.onExpired(new ApprovalExpiredEvent(this, approvalId, UUID.randomUUID(), "run ended", "run_agent"));
 
-        verify(kanbanService).transition("card-1", KanbanStatus.CANCELLED, "ask expired");
+        verify(kanbanService).transition("card-1", KanbanStatus.CANCELLED);
     }
 
     // ---- behavior 2: native asks only ----
@@ -117,7 +117,7 @@ class ApprovalSettleCardListenerTest {
 
         listener.onDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
 
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     // ---- behavior 3: the operator's move wins ----
@@ -132,7 +132,7 @@ class ApprovalSettleCardListenerTest {
 
         listener.onExpired(new ApprovalExpiredEvent(this, approvalId, UUID.randomUUID(), "run ended", "WebSearch"));
 
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     // ---- behavior 4: the settle never breaks the publisher ----
@@ -148,7 +148,7 @@ class ApprovalSettleCardListenerTest {
         UUID approvalId = UUID.randomUUID();
         when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(nativeAsk(approvalId, ApprovalStatus.APPROVED)));
         when(kanbanRepository.findById("card-1")).thenReturn(Optional.of(reviewCard("card-1")));
-        when(kanbanService.transition("card-1", KanbanStatus.DONE, "ask approved"))
+        when(kanbanService.transition("card-1", KanbanStatus.DONE))
                 .thenThrow(new IllegalArgumentException("Cannot move to Done: linked run is still RUNNING"));
 
         assertThatCode(() -> listener.onDecided(

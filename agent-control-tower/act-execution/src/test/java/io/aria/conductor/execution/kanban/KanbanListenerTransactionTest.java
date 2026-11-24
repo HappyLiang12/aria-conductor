@@ -135,7 +135,7 @@ class KanbanListenerTransactionTest {
                 .linkedRunId("not-a-uuid")
                 .build());
 
-        assertThatThrownBy(() -> kanbanService.transition(card.getId(), KanbanStatus.REVIEW, null))
+        assertThatThrownBy(() -> kanbanService.transition(card.getId(), KanbanStatus.REVIEW))
                 .isInstanceOf(PickupRejectedException.class)
                 .satisfies(e -> assertThat(((PickupRejectedException) e).code())
                         .isEqualTo("CORRUPT_RUN_LINK"));

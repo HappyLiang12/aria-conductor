@@ -10,7 +10,9 @@
 //
 // Modes, selected by FAKE_BRIDGE_MODE:
 //   plain     (default) the Task 2 seam probe above and nothing else.
-//   scripted  Task 6's replay of one recorded live turn. Java's `hello` starts it: speech,
+//   scripted  Task 6's replay of one recorded live turn. Java's `hello` starts it, and it
+//             waits for the phone's `commit` before writing `speech_end` (AR-on: the
+//             provider's turn end follows our explicit commit, spec D4), then the speech,
 //             transcripts, one `tool_call`, a wait for Java's `tool_result`, a barge-in and
 //             the turn end — the whole phone-facing order of spec X4-X6/X8.
 //   fatal     a dead-provider replay: optionally the `session_expired` error a failed reopen
@@ -147,6 +149,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let started = false;
 let toolResultArrived = false;
 let onToolResult = null;
+/** Set by the phone's `commit` line (Java forwards it after the audio and the frame). */
+let commitArrived = false;
+let onCommit = null;
 
 const waitForToolResult = async (timeoutMs) => {
   if (toolResultArrived) {
@@ -165,7 +170,33 @@ const waitForToolResult = async (timeoutMs) => {
   });
 };
 
+/**
+ * The provider's own turn end follows the phone's explicit `commit` when AR is on (Java
+ * forwards the commit after the audio and the frame, spec D4). Waiting for it keeps the
+ * scripted `speech_end` from racing ahead of that commit: the turn boundary must not land
+ * between the audio and the commit it belongs to, or the audio rule refuses the commit.
+ */
+const waitForCommit = async (timeoutMs) => {
+  if (commitArrived) {
+    return true;
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      onCommit = null;
+      resolve(false);
+    }, timeoutMs);
+    onCommit = () => {
+      clearTimeout(timer);
+      onCommit = null;
+      resolve(true);
+    };
+  });
+};
+
 const scripted = async () => {
+  // Realistic for AR-on: the utterance's commit reaches the bridge before the provider
+  // ends the turn. A scripted turn with no commit still proceeds after the timeout.
+  await waitForCommit(10_000);
   await sleep(SCRIPTED_STEP_MS);
   write(control({ type: 'speech_end', v: 1, tMs: Date.now() }));
   await sleep(SCRIPTED_STEP_MS);
@@ -242,6 +273,12 @@ lines.on('line', (line) => {
     toolResultArrived = true;
     if (onToolResult !== null) {
       onToolResult();
+    }
+  }
+  if (message.type === 'commit') {
+    commitArrived = true;
+    if (onCommit !== null) {
+      onCommit();
     }
   }
   if (message.type === 'audio' && message.dir === 'in') {

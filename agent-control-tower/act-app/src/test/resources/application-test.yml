@@ -47,7 +47,6 @@ adk:
   default-provider: opencode
 
 aria:
-  system-prompt: "Test Aria prompt"
   kanban:
     auto-dispatch-on-create: false
   mcp:

@@ -53,9 +53,6 @@ adk:
   default-provider: ${ADK_DEFAULT_PROVIDER:opencode}
 
 aria:
-  system-prompt: |
-    You are Aria, the AI operator assistant for the Aria Conductor.
-    You help operators manage their fleet of AI agents.
   mcp:
     debug: true
 

@@ -255,7 +255,7 @@ public class ToolCatalog implements ToolCatalogProvider {
                     "Return the full message timeline of a conversation across all its runs: role, content, timestamp, runId and error/retryPrompt per entry, ordered by run creation time then turn. A failed run adds a synthetic assistant entry (error=true, retryPrompt) directly after that run's entries. Returns an empty list for an unknown conversationId.",
                     true),
             read("get_time",
-                    "Return the current date and time as an ISO-8601 UTC instant, e.g. 2026-11-23T09:15:00Z. Read-only and stateless; use it instead of guessing the time.",
+                    "Return the current date and time. `now` is the local wall-clock time to speak (ISO-8601 with offset), `zone` its zone id, `utc` the same instant. Read-only and stateless; always answer time questions from `now`, never guess.",
                     true),
             // the cores' own read-only web tools (2026-10-04 operator decision, D5)
             read("WebSearch",

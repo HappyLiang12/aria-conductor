@@ -203,6 +203,7 @@ async function main(): Promise<void> {
       // The mode the phone had on its last socket (spec X17): Java keeps it per socket
       // and folds an `ar` received before hello into this field.
       ar: line.ar === true,
+      arCommit: line.arCommit === true,
       onAction,
       onFatal,
     });

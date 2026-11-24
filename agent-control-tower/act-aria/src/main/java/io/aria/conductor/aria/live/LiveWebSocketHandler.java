@@ -350,10 +350,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             // keeps whatever an `ar` frame before it declared.
             live.arOn(ar.booleanValue());
         }
+        JsonNode arCommit = hello.get("arCommit");
+        if (arCommit != null && arCommit.isBoolean()) {
+            // The phone drives every AR turn itself, first look included (D5 amendment):
+            // skip the commit guard so the handshake already runs with no turn detection.
+            live.arCommit(arCommit.booleanValue());
+        }
         // The opening turn starts empty: no frame, no audio of its own, no backup candidate.
         live.beginTurn();
         live.beginBackupTurn();
-        send(live, ready(live.id()));
+        send(live, ready(live));
         log.debug("aria live hello accepted");
         if (live.offerSubprotocol() != null && !PROTOCOL.equals(live.ws().getAcceptedProtocol())) {
             // Refused by what Spring actually accepted, not by the raw header: a
@@ -394,8 +400,10 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         hello.put("type", "hello");
         hello.put("v", HELLO_VERSION);
         hello.put("conversationId", live.conversationId());
-        // The AR mode the bridge configures its provider session from (spec D4, D5).
+        // The AR mode the bridge configures its provider session from (spec D4, D5) and
+        // whether the phone drives its own turns from the first look (D5 amendment).
         hello.put("ar", live.arOn());
+        hello.put("arCommit", live.arCommit());
         hello.put("context", entries);
         try {
             return json.writeValueAsString(hello);
@@ -404,18 +412,22 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             // rather than fail the socket over a seed.
             log.debug("aria live hello not serializable");
             return "{\"type\":\"hello\",\"v\":" + HELLO_VERSION + ",\"conversationId\":"
-                    + quote(live.conversationId()) + ",\"ar\":" + live.arOn() + ",\"context\":[]}";
+                    + quote(live.conversationId()) + ",\"ar\":" + live.arOn()
+                    + ",\"arCommit\":" + live.arCommit() + ",\"context\":[]}";
         }
     }
 
-    private Map<String, Object> ready(String sessionId) {
+    private Map<String, Object> ready(LiveSession live) {
         Map<String, Object> ready = new LinkedHashMap<>();
         ready.put("type", "ready");
         ready.put("v", HELLO_VERSION);
-        ready.put("sessionId", sessionId);
+        ready.put("sessionId", live.id());
         ready.put("model", MODEL);
         ready.put("modalities", List.of("text", "audio"));
         ready.put("maxSessionSec", properties.maxSessionSeconds());
+        // The acknowledgement the phone waits for before its first AR look: this socket's
+        // bridge is started in manual mode (D5 amendment).
+        ready.put("arCommit", live.arCommit());
         return ready;
     }
 

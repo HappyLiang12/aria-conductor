@@ -78,6 +78,13 @@ public class DeepSeekLocator implements LiveLocator {
     private final URI endpoint;
     /** One metadata line for a missing key, however many turns ask. */
     private final AtomicBoolean missingKeyLogged = new AtomicBoolean();
+    private final AtomicBoolean rejectedKeyLogged = new AtomicBoolean();
+    /**
+     * The provider rejected the key (401/403). The backup cannot work until the deployment
+     * changes it, so later turns skip the request entirely: one warning names the condition
+     * and no per-turn latency is spent proving the same answer.
+     */
+    private volatile boolean suspended;
 
     @Autowired
     public DeepSeekLocator(LiveProperties properties, ObjectMapper json,
@@ -117,11 +124,16 @@ public class DeepSeekLocator implements LiveLocator {
             // No DeepSeek key: the backup is off, said once as metadata (never the key) so a
             // silent deployment is diagnosable. No request is made.
             if (missingKeyLogged.compareAndSet(false, true)) {
-                log.debug("deepseek locator outcome=disabled reason=missing_key");
+                // A deployment misconfiguration, not a per-turn event: warn once so it can
+                // never fail silently, and never include the value or a request body.
+                log.warn("deepseek locator disabled: DEEPSEEK_API_KEY is not set; the AR backup draws nothing");
             }
             return Optional.empty();
         }
         if (transcript == null || transcript.isBlank() || jpeg == null || jpeg.length == 0) {
+            return Optional.empty();
+        }
+        if (suspended) {
             return Optional.empty();
         }
         long started = System.nanoTime();
@@ -149,6 +161,13 @@ public class DeepSeekLocator implements LiveLocator {
             long ms = elapsedMs(started);
             int responseBytes = bytes(response.body());
             if (response.statusCode() != 200) {
+                if (response.statusCode() == 401 || response.statusCode() == 403) {
+                    suspended = true;
+                    if (rejectedKeyLogged.compareAndSet(false, true)) {
+                        log.warn("deepseek locator suspended: the provider rejected the key (status={}); "
+                                + "set a valid DEEPSEEK_API_KEY to enable the AR backup", response.statusCode());
+                    }
+                }
                 log.debug("deepseek locator outcome=status status={} ms={} requestBytes={} responseBytes={}",
                         response.statusCode(), ms, requestBytes, responseBytes);
                 return Optional.empty();

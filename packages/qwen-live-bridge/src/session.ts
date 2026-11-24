@@ -28,6 +28,8 @@ export interface SessionOptions {
   context?: ContextEntry[];
   /** The phone's AR mode from `hello.ar` (spec D5); absent is AR-off. */
   ar?: boolean;
+  /** The phone drives every AR turn itself, first look included (D5 amendment). */
+  arCommit?: boolean;
   onAction: (action: SessionAction) => void;
   /** The session cannot continue: 1011 dead provider socket, 4012 failed reopen. */
   onFatal: (code: number) => void;
@@ -341,7 +343,7 @@ export function startSession(options: SessionOptions): LiveSession {
    * drives its own turns; a phone that never commits degrades to AR-off. It resets only
    * with the bridge session, never with a provider reopen.
    */
-  let commitObserved = false;
+  let commitObserved = options.arCommit === true;
   /** The mode the provider should run: the phone's wish, gated by the commit guard. */
   const effectiveAr = () => arDesired && commitObserved;
   /**
@@ -422,7 +424,7 @@ export function startSession(options: SessionOptions): LiveSession {
   let droppedToolResults = 0;
   let refusedArSwitches = 0;
   /** AR-on wishes the commit guard kept on the server VAD (metadata only). */
-  let arGuardHolds = arDesired ? 1 : 0;
+  let arGuardHolds = arDesired && options.arCommit !== true ? 1 : 0;
 
   const emit = (action: SessionAction) => {
     if (!fataled && !closing) {

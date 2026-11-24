@@ -354,6 +354,41 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
+    void helloArCommitIsEchoedInReadyAndSeedsTheBridgeHello() throws Exception {
+        WebSocketSession session = session("s1", null, null);
+        handler = handler(5000);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session,
+                new TextMessage(HELLO_AR.replace("}", ",\"arCommit\":true}")));
+
+        // The phone waits for this acknowledgement before its first AR look: the bridge is
+        // started in manual mode, so the first look is a normal AR turn (D5 amendment).
+        JsonNode ready = json.readTree(allTexts(session).get(0));
+        assertThat(ready.path("type").asText()).isEqualTo("ready");
+        assertThat(ready.path("arCommit").asBoolean()).isTrue();
+
+        JsonNode hello = json.readTree(bridge.sent.get(0));
+        assertThat(hello.path("type").asText()).isEqualTo("hello");
+        assertThat(hello.path("ar").asBoolean()).isTrue();
+        assertThat(hello.path("arCommit").asBoolean()).isTrue();
+        verify(session, never()).close(any());
+    }
+
+    @Test
+    void aHelloWithoutArCommitKeepsTheGuardAndSaysSoInReady() throws Exception {
+        WebSocketSession session = session("s1", null, null);
+        handler = handler(5000);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session, new TextMessage(HELLO_AR));
+
+        JsonNode ready = json.readTree(allTexts(session).get(0));
+        assertThat(ready.path("arCommit").asBoolean()).isFalse();
+        assertThat(json.readTree(bridge.sent.get(0)).path("arCommit").asBoolean()).isFalse();
+    }
+
+    @Test
     void anArFrameAfterHelloIsForwardedToTheBridge() throws Exception {
         WebSocketSession session = opened();
 

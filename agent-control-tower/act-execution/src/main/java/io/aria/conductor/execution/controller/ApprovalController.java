@@ -207,12 +207,22 @@ public class ApprovalController {
         // legacy gate approval, while an ACP ask carries its own payload (F7).
         String toolName = tc != null ? tc.getToolName() : a.getToolName();
         String arguments = CredentialRedactor.redact(tc != null ? tc.getArguments() : a.getArguments());
-        String riskTier = toolName != null
-                ? toolRiskResolver.resolve(toolName).name()
-                : a.getRiskTier();
         // Authority is a second axis: the same catalog classification the tier comes from,
         // reported as the reviewed policy name (null for an unclassified tool).
         ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
+        // Same precedence as ApprovalQueryService: a name the catalog does not know (the
+        // live-only write tools) would resolve READ, so the row's own reviewed tier wins;
+        // a legacy row without one keeps the resolver's default.
+        String riskTier;
+        if (toolName == null) {
+            riskTier = a.getRiskTier();
+        } else if (policy != null) {
+            riskTier = toolRiskResolver.resolve(toolName).name();
+        } else {
+            riskTier = a.getRiskTier() != null
+                    ? a.getRiskTier()
+                    : toolRiskResolver.resolve(toolName).name();
+        }
         String toolPolicy = policy != null ? policy.name() : null;
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),

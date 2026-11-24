@@ -72,12 +72,22 @@ public class ApprovalQueryService {
         // persisted before the redaction existed can never leak a credential.
         String toolName = tc != null ? tc.getToolName() : a.getToolName();
         String arguments = CredentialRedactor.redact(tc != null ? tc.getArguments() : a.getArguments());
-        String riskTier = toolName != null
-                ? toolRiskResolver.resolve(toolName).name()
-                : a.getRiskTier();
         // B1 (spec §5.3): authority alongside blast radius, from the one catalog. Null for an
         // unclassified tool name rather than a guessed policy.
         ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
+        // The tier follows the same classification: a name the catalog does not know (the
+        // live-only write tools) would otherwise resolve READ, so the row's own reviewed
+        // tier is shown instead; a legacy row without one keeps the resolver's default.
+        String riskTier;
+        if (toolName == null) {
+            riskTier = a.getRiskTier();
+        } else if (policy != null) {
+            riskTier = toolRiskResolver.resolve(toolName).name();
+        } else {
+            riskTier = a.getRiskTier() != null
+                    ? a.getRiskTier()
+                    : toolRiskResolver.resolve(toolName).name();
+        }
         String toolPolicy = policy != null ? policy.name() : null;
         return new ApprovalController.ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),

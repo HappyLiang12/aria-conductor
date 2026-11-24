@@ -33,7 +33,7 @@
 
 - Phone default `ttlMs` 8000, clamped 1–60 s; `safetyAlert` optional `{level,text}`; `coord` must be `normalized`.
 - At most one render per turn; unique `renderId` per render; unknown `type`/`v≠1`/unknown `coord` are dropped by the phone.
-- **Open conflict in the phone contract:** X12's example carries `runId`, X13 says `highlight_target` is display-only with **no run**. Aria's proposal: omit `runId` for a display-only render (the phone must accept its absence); if the turn already has a lazy live run for an ops tool call, carry that runId. The phone must confirm which.
+- **Decided (operator, 2026-11-24):** a display-only render **omits `runId`**; if the turn already has a lazy live run for an ops tool call, that runId is carried. The phone accepts its absence.
 
 ### D2 — `highlight_target` is executed by the bridge (no run, no approval)
 
@@ -54,9 +54,21 @@ Instruction added to the live session (Cantonese): 「有圖嘅時候，用戶�
 
 Model `box_2d:[y0,x0,y1,x1]` on a 0–1000 grid → `bbox=[x0,y0,x1-x0,y1-y0]/1000`, clamped to `[0,1]`, width/height > 0. Invalid/empty boxes are not rendered; the model is told to say it cannot see. No `box_2d` or `ttlMs` field reaches the phone.
 
-### D4 — AR grace (X16)
+### D4 — AR grace (X16) — decided from a live probe
 
-The bridge sets `turn_detection.create_response=false` (shape to be proven against the SG endpoint) and, after `speech_end`, waits at most 300 ms for a `frame`; then it sends an explicit `response.create`. If the provider rejects that configuration, the fallback is the current auto-response behaviour: the frame may miss the turn, the model says 睇唔到 rather than guessing, and A1 is degraded — a recorded deviation, not a silent one.
+Probe on the SG endpoint (2026-11-24, real key, audio question + red JPEG):
+
+| Variant | Result |
+|---|---|
+| `semantic_vad_ec` + `create_response:false`, image appended after the auto-commit | session.update accepted, but **no commit and no response**; the image turn never answers |
+| `turn_detection:null`, explicit `input_audio_buffer.commit` **after** the image append, then `response.create` | **works**: input transcript, committed, response, final text 「紅。」 |
+
+Decision:
+
+- **AR off** keeps `semantic_vad_ec` exactly as Phase 2 (server VAD, barge-in).
+- **AR on** switches the session to `turn_detection:null`. The phone sends `commit` at `speech_end` (a contract delta: AR-on uses the existing client `commit` event; the bridge no longer relies on provider auto-commit), then the bridge waits at most 300 ms for a `frame`, appends the image if one arrived, commits and asks `response.create`. No frame → commit without an image; the instruction makes the model say 睇唔到 rather than guess.
+- An `ar` toggle mid-session sends a new `session.update` with the matching `turn_detection` (to be proven; if the provider refuses a mid-session switch, the bridge reconnects silently and reseeds, as on a provider close).
+- Barge-in in AR is the phone's tap-to-interrupt (`cancel`); server VAD barge-in only exists in AR-off.
 
 ### D5 — Client `ar` event (X17)
 
@@ -64,11 +76,11 @@ Accept `{"type":"ar","v":1,"on":true|false}` (before or after `hello`), remember
 
 ### D6 — DeepSeek direct locator (X14)
 
-New Aria service (act-aria, no new module): stateless `POST https://api.deepseek.com/chat/completions`, model `deepseek-flash`, key from `LLM_API_KEY` (never argv/logs), prompt asks for strict JSON `{"box_2d":[y0,x0,y1,x1],"confidence":0..1}` with **no prose**, 1.5 s budget, no retries. Trigger: **backup only** — when a live turn carried an image and a look-intent input transcript (`睇下|邊度|邊個`) and Qwen finished without a `highlight_target` render. The locator emits one `ar_render` v2 (ttl 8000) on the same live socket; it never delays the spoken answer (best-effort overlay after the line), degrades silently, and never runs for text-only turns. Privacy: only counts/latency logged; request/response bodies never.
+New Aria service (act-aria, no new module): stateless `POST https://api.deepseek.com/chat/completions`, model `deepseek-flash`, key from `LLM_API_KEY` (never argv/logs), prompt asks for strict JSON `{"box_2d":[y0,x0,y1,x1],"confidence":0..1}` with **no prose**, 1.5 s budget, no retries. Trigger: **backup only** — when a live turn carried an image and a look-intent input transcript (`睇下|邊度|邊個`) and Qwen finished without a `highlight_target` render. The locator emits one `ar_render` v2 (ttl 8000) on the same live socket; it never delays the spoken answer (best-effort overlay after the line — accepted by the operator; the primary Qwen path is the one that meets A1), degrades silently, and never runs for text-only turns. Privacy: only counts/latency logged; request/response bodies never.
 
 ### D7 — Ops tool tiers (X15)
 
-Authoritative list (see the plan's table): the seven read-only tools plus `list_skills`, `list_runs`, `get_agent` (read, direct); `start_agent_run` (catalog `run_agent`: `{agentId, prompt, maxIterations?}`) and `run_skill` (`{skillId, prompt?}`, new) are write tools: every call returns `PENDING_APPROVAL`, creates the approval on the turn's lazy live run, emits `approval_required{runId}`, and executes only after the existing REST decision; the result is injected as `[tower] …`. `approve`, `finalize`, `answer` and every other operator-decision tool are never declared. **Open question:** `run_skill` does not exist in the catalog; confirm a new tool versus `assign_skill` + `run_agent` (two approvals).
+Authoritative list (see the plan's table): the seven read-only tools plus `list_skills`, `list_runs`, `get_agent` (read, direct); `start_agent_run` (catalog `run_agent`: `{agentId, prompt, maxIterations?}`) and `run_skill` (`{skillId, prompt?}`, new) are write tools: every call returns `PENDING_APPROVAL`, creates the approval on the turn's lazy live run, emits `approval_required{runId}`, and executes only after the existing REST decision; the result is injected as `[tower] …`. `approve`, `finalize`, `answer` and every other operator-decision tool are never declared. **Decided (operator, 2026-11-24):** `run_skill` is a new Aria-side write tool — it resolves the skill and starts the Aria run with that skill applied, one approval. It does not compose `assign_skill` + `run_agent`.
 
 ### D8 — Frame ingest enforcement (X10)
 
@@ -78,9 +90,9 @@ At most one frame per turn; `frame` still ≤256 KB base64, JPEG only. A `commit
 
 Overlay rendering/state, tracker correction, safety-banner UX and HUD metrics on the phone; world-locked AR; async TOWER runs beyond the existing live-run approval path.
 
-## Open items for the phone
+## Remaining phone deltas (decided here; phone adapts)
 
-1. `ar_render` v2 `runId`: omitted for display-only renders (D1) — confirm the phone accepts that.
-2. The phone's `LiveProtocol` must add the `ar_render` event; confirm its `render.bbox`/`ttlMs`/`safetyAlert` handling matches §D1.
-3. `run_skill`: new tool or `assign_skill` + `run_agent`?
-4. DeepSeek backup timing: a render after the spoken line is acceptable as best-effort (it cannot meet A1 alone), correct?
+1. `ar_render` v2 has no `runId` for display-only renders (unless a turn run exists); `LiveProtocol` adds the event and accepts an absent `runId`.
+2. AR-on requires the phone's explicit `commit` at `speech_end`; AR-off is unchanged (`semantic_vad_ec`).
+3. The phone must add `{"type":"ar","v":1,"on":…}` (X17) and send `hello.ar` on reconnect.
+4. DeepSeek backup renders may appear after the spoken line; they are best-effort and do not promise A1.

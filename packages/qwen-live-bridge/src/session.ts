@@ -330,6 +330,12 @@ export function startSession(options: SessionOptions): LiveSession {
    * settle: an update the provider never answers is treated as refused.
    */
   let arUpdateInFlight: { target: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+  /**
+   * The mode the latest `ar` `session.update` carried. A `session.updated` that lands after
+   * the settle already counted that update as refused still proves the provider took it, so
+   * the acknowledgement repairs `arApplied` from here instead of landing on no branch.
+   */
+  let lastSentAr: boolean | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
@@ -421,6 +427,9 @@ export function startSession(options: SessionOptions): LiveSession {
       clearTimeout(arUpdateInFlight.timer);
       arUpdateInFlight = null;
     }
+    // A refusal or a dead socket also orphans the sent target: only a late acknowledgement
+    // of an update that did land may still read it.
+    lastSentAr = null;
   };
 
   /**
@@ -572,6 +581,7 @@ export function startSession(options: SessionOptions): LiveSession {
     // Even a frame the socket queues (it is going away) counts as in flight: the ack that
     // replays it, or the reopen's reset, is what settles it.
     arUpdateInFlight = { target, timer };
+    lastSentAr = target;
     send({ type: 'session.update', session: sessionConfig(target) });
   };
 
@@ -801,6 +811,13 @@ export function startSession(options: SessionOptions): LiveSession {
               clearTimeout(settled.timer);
               arApplied = settled.target;
               arUpdateInFlight = null;
+            } else if (lastSentAr !== null) {
+              // The provider answered an update the settle already counted as refused: it
+              // did land after all, so adopt the mode it proves and reconcile the phone's
+              // latest wish onto it (a no-op when the two already agree). No second refusal
+              // is counted: the settle's one already paid for this silence.
+              arApplied = lastSentAr;
+              lastSentAr = null;
             }
             // A mid-session `session.update` (an `ar` toggle, spec D4) is an update to a
             // session that already holds its context: re-seeding here would replay every

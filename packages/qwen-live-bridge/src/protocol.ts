@@ -217,6 +217,25 @@ export interface ResumedEvent {
 }
 
 /**
+ * One display instruction for the HUD (spec D1). The bridge builds it from the model's
+ * display-only `highlight_target` call; `bbox` is normalized `[x,y,w,h]` in `[0,1]` and
+ * a display-only render carries no `runId`, so the phone accepts its absence.
+ */
+export interface RenderEvent {
+  type: 'ar_render';
+  v: 1;
+  renderId: string;
+  render: {
+    primitive: 'highlight';
+    target: { label: string; bbox: [number, number, number, number] };
+    text: string;
+    ttlMs: number;
+    coord: 'normalized';
+    safetyAlert: null;
+  };
+}
+
+/**
  * The events this bridge produces. The remaining phone events (`tool_status`,
  * `approval_required`, `waiting_input`, `run_event`, `mode`) need store knowledge the
  * child does not have, so Aria's handler emits them (spec X7, X8).
@@ -228,4 +247,5 @@ export type PhoneEvent =
   | OutputTranscriptEvent
   | InterruptedEvent
   | ErrorEvent
-  | ResumedEvent;
+  | ResumedEvent
+  | RenderEvent;

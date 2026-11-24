@@ -1105,6 +1105,9 @@ describe('session: highlight_target', () => {
     fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 2 });
     highlightCall(fake, 'call_h2');
     await waitUntil(() => renderEvents(recorder.actions).length === 2, 'second utterance render');
+    // The render control reaches the recorder before the acknowledgement is written, so the
+    // provider-side receipt is what the assertion below actually waits on.
+    await waitUntil(() => injected(fake).length === 2, 'second acknowledgement');
 
     const [first, second] = renderEvents(recorder.actions);
     expect(first!.renderId).not.toBe(second!.renderId);

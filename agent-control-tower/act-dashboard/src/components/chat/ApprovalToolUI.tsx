@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { decideApproval } from '@/api/approvals';
+import { applyOperatorHeaders } from '@/api/operatorSession';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -141,6 +142,9 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
     inFlight.current = true;
     setState('submitting');
     try {
+      // The decision endpoint is operator-only and refuses the cookie-authenticated
+      // mutation without the session's CSRF header.
+      applyOperatorHeaders();
       await decideApproval(args.approvalId, { approved });
       setError(null);
       setState(approved ? 'allowed' : 'denied');

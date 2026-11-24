@@ -6,9 +6,11 @@ import { test, expect, type Page } from '@playwright/test';
  * Everything here runs against the real backend for the shell/theme/contrast
  * checks. The approval case is the one exception: the SSE turn is stubbed (the
  * backend's governed cores need a model/container, which CI does not have), so
- * the assertion is on the refreshed Aria page's own mapping of an
+ * the assertion covers the refreshed Aria page's own mapping of an
  * `approval_required` frame — the card must render inside the assistant-ui
- * thread and Allow must reach the decision endpoint with `{ approved: true }`.
+ * thread and Allow must POST the decision to the frame's ask with
+ * `{ approved: true }`. The request is answered by a stub, so this proves the
+ * request shape and the card's receipt, not that a live backend accepted it.
  */
 
 const ROUTES = [
@@ -106,10 +108,15 @@ test.describe('UI refresh acceptance', () => {
   test('an approval_required frame renders a card in the thread and Allow decides', async ({ page }) => {
     await stubAriaConversations(page);
 
-    const decisions: Array<Record<string, unknown>> = [];
+    const decisions: Array<{ method: string; pathname: string; body: unknown }> = [];
     await page.route('**/api/v1/approvals/apr-ui-refresh/decide', async (route) => {
-      decisions.push(route.request().postDataJSON() as Record<string, unknown>);
-      await route.fulfill({ json: { approvalId: 'apr-ui-refresh', approved: true, status: 'APPROVED' } });
+      const request = route.request();
+      decisions.push({
+        method: request.method(),
+        pathname: new URL(request.url()).pathname,
+        body: request.postDataJSON(),
+      });
+      await route.fulfill({ json: { approvalId: 'apr-ui-refresh', approved: true, status: 'processed' } });
     });
 
     const body = [
@@ -146,9 +153,12 @@ test.describe('UI refresh acceptance', () => {
 
     await page.locator('.mc-stack').getByRole('button', { name: 'Allow' }).click();
 
-    // Allow posted the decision the backend's endpoint accepts.
+    // Allow posted the decision to the frame's own ask. The ask id travels in the
+    // URL; the decision payload is the `{ approved }` the endpoint accepts.
     await expect.poll(() => decisions.length).toBe(1);
-    expect(decisions[0]).toEqual({ approved: true });
+    expect(decisions[0].method).toBe('POST');
+    expect(decisions[0].pathname).toBe('/api/v1/approvals/apr-ui-refresh/decide');
+    expect(decisions[0].body).toEqual({ approved: true });
     await expect(page.locator('.mc-stack').getByText('Allowed · write_file')).toBeVisible();
   });
 });

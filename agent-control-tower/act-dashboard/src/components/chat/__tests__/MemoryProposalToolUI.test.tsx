@@ -1,11 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { MemoryProposalView } from '../../../api/memory';
+import { applyOperatorHeaders } from '../../../api/operatorSession';
 import { MemoryProposalToolUI } from '../MemoryProposalToolUI';
 
 vi.mock('../../../api/memory', () => ({ decideMemoryProposal: vi.fn().mockResolvedValue({}) }));
+// Keep the real session helpers; only the header application is spied so the
+// card's "operator headers before the decision" ordering is observable.
+vi.mock('../../../api/operatorSession', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/operatorSession')>();
+  return { ...actual, applyOperatorHeaders: vi.fn() };
+});
+
+const mockApplyHeaders = applyOperatorHeaders as Mock;
 
 describe('MemoryProposalToolUI', () => {
   const withArgs = (args: Record<string, unknown>) =>
@@ -25,6 +34,17 @@ describe('MemoryProposalToolUI', () => {
     await userEvent.click(screen.getByRole('button', { name: /approve/i }));
     await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('p1', 'APPROVE'));
     expect(screen.getByText(/remembered/i)).toBeInTheDocument();
+  });
+
+  it('applies the operator session headers before deciding', async () => {
+    const { decideMemoryProposal } = await import('../../../api/memory');
+    render(<MemoryProposalToolUI {...withArgs({ id: 'p1', valueText: 'Ships on Fridays' })} />);
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('p1', 'APPROVE'));
+    expect(mockApplyHeaders).toHaveBeenCalledTimes(1);
+    expect(mockApplyHeaders.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(decideMemoryProposal).mock.invocationCallOrder[0],
+    );
   });
 
   it('posts REJECT against the proposal id', async () => {

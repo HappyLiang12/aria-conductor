@@ -40,7 +40,9 @@ public class AdkProviderController {
      *
      * <p>Task 18 cutover: the inventory is the production core catalog (exactly
      * {@code opencode} and {@code qoder}) — the cores admission accepts — and never
-     * a provider bean list. The configured default is the documented default core.
+     * a provider bean list. {@code adk.default-provider} only decides which entry
+     * carries {@code isDefault}; admission resolves an omitted core to
+     * {@code opencode} regardless of it.
      */
     @GetMapping("/providers")
     public ResponseEntity<List<Map<String, Object>>> listProviders() {

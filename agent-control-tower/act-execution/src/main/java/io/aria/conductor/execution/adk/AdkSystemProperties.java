@@ -15,6 +15,12 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "adk")
 public class AdkSystemProperties {
 
-    /** Default provider used when an agent does not specify one. */
+    /**
+     * Which core {@code GET /api/v1/adk/providers} marks {@code isDefault} in the
+     * provider inventory the UI renders. This is a display preselection only: it
+     * does not feed admission. An agent created without an explicit core always
+     * resolves to {@code opencode} in {@code DefaultAgentExecutionPolicy},
+     * whatever this value is.
+     */
     private String defaultProvider = "opencode";
 }

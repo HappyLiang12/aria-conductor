@@ -51,10 +51,11 @@ test('ADK providers: Providers page renders provider table + Per-Agent Backends'
   await expect(qoderRow).toContainText('qoder');
 
   // Exactly ONE row carries the Default badge and it is one of the two known
-  // backends. WHICH one is a stack-config decision (the production default is
-  // opencode; `adk.default-provider` can pin the other core), so assert the
-  // marker semantics rather than a specific provider — extra/absent non-default
-  // rows are tolerated. The removed langchain row is not part of either core.
+  // backends. WHICH one is a stack-config decision (`adk.default-provider` moves
+  // the badge only; admission still resolves an omitted core to opencode), so
+  // assert the marker semantics rather than a specific provider — extra/absent
+  // non-default rows are tolerated. The removed langchain row is not part of
+  // either core.
   const defaultRow = providerTable.locator('tbody tr').filter({
     has: page.locator('span.type-badge', { hasText: /^Default$/ }),
   });

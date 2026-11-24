@@ -26,6 +26,10 @@ import java.util.Objects;
  * credential never causes a core or mode substitution. Git-level repository and
  * base-ref resolution belongs to workspace admission, so this policy only
  * rejects structurally contradictory workspace fields.
+ *
+ * <p>{@code adk.default-provider} does not feed this policy: that property only
+ * picks which core the provider inventory marks as default for display, so it
+ * can never substitute the core an agent is admitted with.
  */
 public final class DefaultAgentExecutionPolicy implements AgentExecutionPolicy {
 

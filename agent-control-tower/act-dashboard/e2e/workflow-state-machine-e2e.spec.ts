@@ -82,6 +82,16 @@ async function waitForStepStatus(page: Page, wfId: string, stepIndex: number, ta
   return data.steps[stepIndex]?.status ?? 'UNKNOWN';
 }
 
+/**
+ * The no-LLM stack fails a step run fast, so every later test starts from a FAILED
+ * chain. On a stack with a live LLM the chain can still be RUNNING when the budget
+ * runs out — skip with the observed state instead of passing with zero assertions.
+ */
+async function requireFailedChain(page: Page, wfId: string): Promise<void> {
+  const status = await waitForStatus(page, wfId, 'FAILED');
+  test.skip(status !== 'FAILED', `needs a chain that reaches FAILED; observed ${status}`);
+}
+
 let agentId: string;
 
 test('0. setup — create test agent', async ({ page }) => {
@@ -138,152 +148,139 @@ test('3. CANCELLED → cancel rejected (400+)', async ({ page }) => {
 // ── 4. FAILED → retry step 0 → RUNNING ─────────────────────────────
 test('4. FAILED → retry step 0 → RUNNING', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
-  const finalStatus = await waitForStatus(page, wf.id, 'FAILED');
-
-  if (finalStatus === 'FAILED') {
-    // Also wait for the step itself to be FAILED
-    await waitForStepStatus(page, wf.id, 0, 'FAILED');
-    const { status, data } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, { stepIndex: 0 });
-    expect(status).toBe(200);
-    expect(data.status).toBe('RUNNING');
-    expect(data.completedAt).toBeNull();
-    // Step 0 should be back to RUNNING or PENDING
-    expect(['RUNNING', 'PENDING']).toContain(data.steps[0].status);
-  } else {
-    // Still RUNNING — skip (can't retry non-FAILED)
-    test.skip();
-  }
+  await requireFailedChain(page, wf.id);
+  // Also wait for the step itself to be FAILED
+  await waitForStepStatus(page, wf.id, 0, 'FAILED');
+  const { status, data } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, { stepIndex: 0 });
+  expect(status).toBe(200);
+  expect(data.status).toBe('RUNNING');
+  expect(data.completedAt).toBeNull();
+  // Step 0 should be back to RUNNING or PENDING
+  expect(['RUNNING', 'PENDING']).toContain(data.steps[0].status);
 });
 
 // ── 5. retry with out-of-range stepIndex → 400 ─────────────────────
 test('5. FAILED → retry out-of-range stepIndex → 400+', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
-  await waitForStatus(page, wf.id, 'FAILED');
+  await requireFailedChain(page, wf.id);
+  await waitForStepStatus(page, wf.id, 0, 'FAILED');
 
-  const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status === 'FAILED') {
-    await waitForStepStatus(page, wf.id, 0, 'FAILED');
-    const { status } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, { stepIndex: 99 });
-    expect(status).toBeGreaterThanOrEqual(400);
-  }
+  const { status } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, { stepIndex: 99 });
+  expect(status).toBeGreaterThanOrEqual(400);
 });
 
 // ── 6. retry non-FAILED step → 400 ─────────────────────────────────
 test('6. FAILED → retry non-failed step → 400+', async ({ page }) => {
   // Create 2-step workflow
   const wf = await createWorkflow(page, agentId, 2);
-  await waitForStatus(page, wf.id, 'FAILED');
+  await requireFailedChain(page, wf.id);
+  // Wait for step 0 to be FAILED first
+  await waitForStepStatus(page, wf.id, 0, 'FAILED');
 
   const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status === 'FAILED') {
-    // Find a step that is NOT FAILED (e.g. PENDING step 1)
-    const nonFailedStep = current.steps.find((s: any) => s.status !== 'FAILED');
-    if (nonFailedStep) {
-      // Wait for step 0 to be FAILED first
-      await waitForStepStatus(page, wf.id, 0, 'FAILED');
-      const { status } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, {
-        stepIndex: nonFailedStep.index,
-      });
-      expect(status).toBeGreaterThanOrEqual(400);
-    }
-  }
+  // A chain that stopped at step 0 must leave the later step untouched.
+  const nonFailedStep = current.steps.find((s: any) => s.status !== 'FAILED');
+  expect(nonFailedStep, 'a chain stopped at step 0 must leave a later step non-failed').toBeDefined();
+
+  const { status } = await apiCall(page, 'POST', `/workflows/${wf.id}/retry`, {
+    stepIndex: nonFailedStep.index,
+  });
+  expect(status).toBeGreaterThanOrEqual(400);
 });
 
 // ── 7. FAILED → update name → success ──────────────────────────────
 test('7. FAILED → update name → success', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
-  await waitForStatus(page, wf.id, 'FAILED');
+  await requireFailedChain(page, wf.id);
 
-  const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status === 'FAILED') {
-    const { status, data } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, {
-      name: 'Updated After Failure',
-      description: 'Failure description',
-    });
-    expect(status).toBe(200);
-    expect(data.name).toBe('Updated After Failure');
-    expect(data.description).toBe('Failure description');
-  }
+  const { status, data } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, {
+    name: 'Updated After Failure',
+    description: 'Failure description',
+  });
+  expect(status).toBe(200);
+  expect(data.name).toBe('Updated After Failure');
+  expect(data.description).toBe('Failure description');
 });
 
 // ── 8. FAILED → append steps → totalSteps increases ────────────────
 test('8. FAILED → append steps → totalSteps increases', async ({ page }) => {
   const wf = await createWorkflow(page, agentId, 1);
-  await waitForStatus(page, wf.id, 'FAILED');
+  await requireFailedChain(page, wf.id);
 
   const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status === 'FAILED') {
-    const originalSteps = current.totalSteps;
-    const { status, data } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, {
-      steps: [{ agentId, promptTemplate: 'Appended step', maxIterations: 2 }],
-    });
-    expect(status).toBe(200);
-    expect(data.totalSteps).toBe(originalSteps + 1);
-    expect(data.steps[data.steps.length - 1].promptTemplate).toContain('Appended step');
-  }
+  const originalSteps = current.totalSteps;
+  const { status, data } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, {
+    steps: [{ agentId, promptTemplate: 'Appended step', maxIterations: 2 }],
+  });
+  expect(status).toBe(200);
+  expect(data.totalSteps).toBe(originalSteps + 1);
+  expect(data.steps[data.steps.length - 1].promptTemplate).toContain('Appended step');
 });
 
 // ── 9. RUNNING → update rejected ───────────────────────────────────
 test('9. RUNNING → update rejected (400+)', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
-  // Try update immediately — if still RUNNING, should fail
-  // But due to timing, it might already be FAILED (no LLM)
   const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status === 'RUNNING') {
-    const { status, data: updated } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, { name: 'Should Fail' });
-    // Either rejected (400+) if still RUNNING, or accepted (200) if already FAILED
-    // Both are valid — the key is no 500 error
+  test.skip(current.status !== 'RUNNING',
+    `needs a chain still RUNNING when updated; the no-LLM stack already settled it as ${current.status}`);
+
+  const { status, data: updated } = await apiCall(page, 'PUT', `/workflows/${wf.id}`, { name: 'Should Fail' });
+  if (status >= 400) {
+    // The RUNNING refusal is a client error, not a crash.
     expect(status).toBeLessThan(500);
+  } else {
+    // The chain reached FAILED between the read and the update: an update now is
+    // legal. Assert that this is what happened rather than passing silently.
+    const { data: after } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
+    expect(after.status).toBe('FAILED');
+    expect(updated.name).toBe('Should Fail');
   }
-  // If FAILED, update is allowed — that's correct behavior
 });
 
 // ── 10. non-RUNNING → delete → 204 → GET 404 ──────────────────────
 test('10. non-RUNNING → delete → 204 → GET 404', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
-  await waitForStatus(page, wf.id, 'FAILED');
+  const finalStatus = await waitForStatus(page, wf.id, 'FAILED');
+  test.skip(finalStatus === 'RUNNING',
+    'needs the chain to settle before the delete; it is still RUNNING on this stack');
 
-  const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-  if (current.status !== 'RUNNING') {
-    const { status } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
-    expect(status).toBe(204);
-    const { status: gs } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-    expect(gs).toBeGreaterThanOrEqual(400);
-  }
+  const { status } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
+  expect(status).toBe(204);
+  const { status: gs } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
+  expect(gs).toBeGreaterThanOrEqual(400);
 });
 
 // ── 11. RUNNING → delete rejected → cancel → delete ────────────────
 test('11. RUNNING → delete rejected → cancel → delete', async ({ page }) => {
   const wf = await createWorkflow(page, agentId);
   const { data: current } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
+  test.skip(current.status !== 'RUNNING',
+    `needs a chain still RUNNING when deleted; the no-LLM stack already settled it as ${current.status}`);
 
-  if (current.status === 'RUNNING') {
-    // No LLM key: the step run fails fast, so the chain can flip RUNNING -> FAILED
-    // between any two calls below. Re-check the contract against the live state
-    // instead of assuming the status read above still holds.
-    const { status: delStatus } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
-    if (delStatus < 400) {
-      // The chain failed before the delete: a legal delete. The rejected-while-
-      // RUNNING contract could not be exercised; the terminal path is test 10.
-      return;
-    }
-
-    // Cancel then delete
-    const { status: cancelStatus } = await apiCall(page, 'POST', `/workflows/${wf.id}/cancel`, {});
-    if (cancelStatus !== 200) {
-      // A rejected cancel is valid only if the chain already reached a terminal
-      // state during this test; a RUNNING chain must always cancel (200).
-      const { data: afterCancel } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
-      expect(['FAILED', 'CANCELLED']).toContain(afterCancel.status);
-    }
-
-    const { status: delStatus2 } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
-    expect(delStatus2).toBe(204);
-  } else {
-    // Already FAILED — just delete
-    const { status } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
-    expect(status).toBe(204);
+  // No LLM key: the step run fails fast, so the chain can flip RUNNING -> FAILED
+  // between any two calls below. Re-check the contract against the live state
+  // instead of assuming the status read above still holds.
+  const { status: delStatus } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
+  if (delStatus < 400) {
+    // The chain settled before the delete was admitted: a legal delete. Assert it
+    // and its 404 instead of returning with nothing checked.
+    expect(delStatus).toBe(204);
+    const { status: afterDelete } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
+    expect(afterDelete).toBeGreaterThanOrEqual(400);
+    return;
   }
+
+  // Cancel then delete
+  const { status: cancelStatus } = await apiCall(page, 'POST', `/workflows/${wf.id}/cancel`, {});
+  if (cancelStatus !== 200) {
+    // A rejected cancel is valid only if the chain already reached a terminal
+    // state during this test; a RUNNING chain must always cancel (200).
+    const { data: afterCancel } = await apiCall(page, 'GET', `/workflows/${wf.id}`);
+    expect(['FAILED', 'CANCELLED']).toContain(afterCancel.status);
+  }
+
+  const { status: delStatus2 } = await apiCall(page, 'DELETE', `/workflows/${wf.id}`);
+  expect(delStatus2).toBe(204);
 });
 
 // ── 12. Non-existent ID → 404 for GET/cancel/delete ────────────────

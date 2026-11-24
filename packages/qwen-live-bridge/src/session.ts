@@ -327,13 +327,20 @@ export function startSession(options: SessionOptions): LiveSession {
    * latest wish waits in `arDesired`, so a rapid off→on→off cannot overwrite the state a
    * refusal has to revert to — the provider answers one update at a time, and
    * `reconcileAr` sends whatever still differs afterwards. The timer is the bounded
-   * settle: an update the provider never answers is treated as refused.
+   * settle: an update the provider never answers is re-sent once, and only a second
+   * silence is treated as refused.
    */
   let arUpdateInFlight: { target: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
   /**
+   * The phone's current wish already went out twice without an answer. A timeout is not
+   * proof of refusal (the provider may just be slow), so the first silence spends this
+   * retry and the second gives the wish up.
+   */
+  let arRetried = false;
+  /**
    * The mode the latest `ar` `session.update` carried. A `session.updated` that lands after
-   * the settle already counted that update as refused still proves the provider took it, so
-   * the acknowledgement repairs `arApplied` from here instead of landing on no branch.
+   * the settle already gave that update up still proves the provider took it, so the
+   * acknowledgement repairs `arApplied` from here instead of landing on no branch.
    */
   let lastSentAr: boolean | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
@@ -430,6 +437,8 @@ export function startSession(options: SessionOptions): LiveSession {
     // A refusal or a dead socket also orphans the sent target: only a late acknowledgement
     // of an update that did land may still read it.
     lastSentAr = null;
+    // The abandoned (or answered) send no longer holds the wish's one retry.
+    arRetried = false;
   };
 
   /**
@@ -449,18 +458,33 @@ export function startSession(options: SessionOptions): LiveSession {
   };
 
   /**
-   * Settles an `ar` update the provider never answered as a refusal: it still runs
-   * `arApplied`, so the wish collapses onto that mode and one switch is counted (the
-   * shutdown metadata line, never a provider frame). Reconcile then finds nothing to
-   * send — a settled switch is not retried automatically; the next `setAr` asks again.
+   * The settle of one `ar` update expired. A timeout is not proof of refusal: the provider
+   * may still acknowledge the update it holds, and that acknowledgement must land on the
+   * mode the phone asked for. So the phone's current wish is re-sent once (the retry keeps
+   * `lastSentAr` on it, so either send's late ack adopts it) and `arDesired` is never
+   * reverted while a retry can still prove it. Only a second unanswered send gives the wish
+   * up — one switch counted and the wish collapsed onto `arApplied`, exactly as an explicit
+   * refusal does, so a later `setAr` asks again instead of being swallowed.
    */
   const settleArUpdate = () => {
     if (arUpdateInFlight === null) {
       return;
     }
+    clearTimeout(arUpdateInFlight.timer);
     arUpdateInFlight = null;
+    if (arDesired === arApplied) {
+      // The phone went back to the applied mode while this update was in flight: nothing
+      // is left to retry and no switch was refused.
+      return;
+    }
+    if (!arRetried && configured && !closing && !fataled) {
+      arRetried = true;
+      reconcileAr();
+      return;
+    }
     refusedArSwitches += 1;
     arDesired = arApplied;
+    arRetried = false;
     reconcileAr();
   };
 
@@ -566,7 +590,8 @@ export function startSession(options: SessionOptions): LiveSession {
    * the state a refusal has to revert to. Nothing crosses while the session rebuilds: the
    * handshake's own config carries `arDesired` and the ack re-conciles. Every update carries
    * a bounded settle, so one the provider silently drops cannot pin `arUpdateInFlight`
-   * forever and swallow every later `setAr`.
+   * forever and swallow every later `setAr`; the first silence re-sends the wish, the second
+   * gives it up.
    */
   const reconcileAr = () => {
     if (arUpdateInFlight !== null || !configured || closing || fataled) {
@@ -676,8 +701,9 @@ export function startSession(options: SessionOptions): LiveSession {
       // mid-session reconfiguration, so it is still running the last applied mode. Revert
       // to that mode (the error itself reaches the phone through the translator unchanged)
       // and count the refusal for the metadata line — the provider's text is never logged,
-      // because it can quote the request. A refused switch is never retried: the phone's
-      // wish collapses onto what the provider really runs, and a later toggle asks again.
+      // because it can quote the request. Unlike a silent settle, an explicit refusal is
+      // proof: it is never retried. The phone's wish collapses onto what the provider really
+      // runs, and a later toggle asks again.
       forgetArUpdate();
       arDesired = arApplied;
       refusedArSwitches += 1;
@@ -806,16 +832,20 @@ export function startSession(options: SessionOptions): LiveSession {
             } else if (arUpdateInFlight !== null) {
               // The `ar` reconfiguration that went out is acknowledged: it is the applied
               // mode now, whatever the phone asked for in the meantime, and its settle is
-              // disarmed so it cannot fire against the next one.
+              // disarmed so it cannot fire against the next one. (A retried wish is answered
+              // on this same branch: the ack proves the retry the settle sent did land.)
               const settled = arUpdateInFlight;
               clearTimeout(settled.timer);
               arApplied = settled.target;
               arUpdateInFlight = null;
+              arRetried = false;
+              lastSentAr = null;
             } else if (lastSentAr !== null) {
-              // The provider answered an update the settle already counted as refused: it
-              // did land after all, so adopt the mode it proves and reconcile the phone's
-              // latest wish onto it (a no-op when the two already agree). No second refusal
-              // is counted: the settle's one already paid for this silence.
+              // The provider answered an update the settle already gave up on: it did land
+              // after all, so adopt the mode it proves (the latest sent target — on a retry,
+              // the wish, never the mode it left) and reconcile the phone's latest wish onto
+              // it (a no-op when the two already agree). No second refusal is counted: the
+              // settle's one already paid for this silence.
               arApplied = lastSentAr;
               lastSentAr = null;
             }
@@ -1004,6 +1034,8 @@ export function startSession(options: SessionOptions): LiveSession {
       // (re)configuring, `reconcileAr` sends it after `session.updated`, so the rebuilt
       // session's own config is never the stale one.
       arDesired = next;
+      // A new wish gets its own retry: only this wish's sends spend it.
+      arRetried = false;
       if (!next) {
         // Leaving AR with a commit held for a frame that may never come: the utterance is
         // due now rather than stranded when the grace timer is dropped.

@@ -24,7 +24,7 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar';
 
-const GROUPS = [
+export const NAV_GROUPS = [
   {
     label: 'Operate',
     items: [
@@ -94,7 +94,7 @@ export function AppSidebar() {
     // the same contract for destinations.
     <Sidebar collapsible="icon" className={RAIL_CONTAINER}>
       <SidebarContent>
-        {GROUPS.map((group) => (
+        {NAV_GROUPS.map((group) => (
           <SidebarGroup key={group.label}>
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarMenu>

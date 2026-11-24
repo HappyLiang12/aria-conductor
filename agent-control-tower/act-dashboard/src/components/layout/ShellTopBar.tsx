@@ -193,7 +193,7 @@ export function ShellTopBar() {
         <span className="truncate text-[10px] text-muted-foreground">Local</span>
       </div>
 
-      <div className="ml-2 flex items-center gap-1.5">
+      <div className="ml-2 flex min-w-0 flex-wrap items-center gap-1.5">
         <Badge variant="outline" data-testid="runtime-badge" title="Default agent core from the provider catalog">
           {runtimeLabel}
         </Badge>
@@ -239,7 +239,9 @@ export function ShellTopBar() {
         </DropdownMenu>
       </div>
 
-      <div className="ml-auto flex items-center gap-1">
+      {/* Counters need ~460px; below `md` the row would push the document
+          wider than the viewport, so they live on the desktop shell only. */}
+      <div className="ml-auto hidden items-center gap-1 md:flex">
         <Kpi testId="kpi-active-agents" label="Active Agents" value={kpiValue(summaryPhase, activeAgents)} title={kpiDetail} />
         <Kpi testId="kpi-running-runs" label="Running Runs" value={kpiValue(summaryPhase, runningRuns)} title={kpiDetail} />
         <Kpi testId="kpi-pending-approvals" label="Approvals Pending" value={kpiValue(summaryPhase, pendingApprovals)} title={kpiDetail} />

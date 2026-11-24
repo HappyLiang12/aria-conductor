@@ -26,7 +26,10 @@ import java.util.List;
  * <p>
  * Only the {@code knowledge-verified} collection is queried; the client enforces both
  * the collection allow-list and the sensitivity ceiling on every hit. A clean empty
- * result yields no section rather than the irrelevant newest-five.
+ * scoped result yields no section rather than the irrelevant newest-five. An unscoped
+ * clean empty result keeps the newest-five: every vault knowledge record is
+ * project-scoped, so an unscoped query cannot match one and its empty result says
+ * nothing about relevance.
  */
 @Component
 public class KnowledgeContextContributor implements ContextContributor {
@@ -89,17 +92,24 @@ public class KnowledgeContextContributor implements ContextContributor {
         if (text.isBlank()) {
             return List.of();
         }
+        String scope = scopeOf(request);
         QmdResult result = qmd.query(new QmdQuery(url, collections, text,
-                scopeOf(request), request.maxSensitivity(),
+                scope, request.maxSensitivity(),
                 maxResults, minScore, timeoutMillis, vaultDir));
         if (result.degradedReason() == null) {
+            if (result.hits().isEmpty() && scope == null) {
+                // Every vault knowledge record is project-scoped, so an unscoped query can
+                // never match one. An empty unscoped result means "unfiltered", not "nothing
+                // relevant": keep the newest-five instead of silently deleting knowledge.
+                return knowledgeService.buildKnowledgeSections(LIMIT, request.maxSensitivity());
+            }
             return QmdSectionRenderer.render(SECTION_ID, TITLE, result, MAX_CONTENT_CHARS)
                     .map(List::of).orElseGet(List::of);
         }
         List<ContextSection> sections = new ArrayList<>(
                 knowledgeService.buildKnowledgeSections(LIMIT, request.maxSensitivity()));
         sections.add(new ContextSection(SECTION_ID, TITLE, "", Sensitivity.INTERNAL,
-                List.of(), false, result.degradedReason()));
+                List.of(), false, "knowledge-recall-degraded"));
         return sections;
     }
 

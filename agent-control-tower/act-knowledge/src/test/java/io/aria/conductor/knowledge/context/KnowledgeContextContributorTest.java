@@ -73,6 +73,31 @@ class KnowledgeContextContributorTest {
         verifyNoInteractions(knowledgeService);
     }
 
+    /**
+     * Every vault knowledge record is project-scoped, so a query without a project scope
+     * cannot match any of them; its empty result means "not filtered", not "nothing
+     * relevant". Treating that as a relevance-aware clean miss would delete the whole
+     * knowledge injection for a real run, whose workspaceRef is {@code MODE@baseRef}.
+     */
+    @Test
+    void unscopedEmptyQmdKeepsTheNewestFive() {
+        ContextSection fallback = new ContextSection("knowledge:1", "deploy", "blue-green",
+                Sensitivity.INTERNAL, List.of(UUID.randomUUID().toString()), false, null);
+        when(qmd.query(any())).thenReturn(QmdResult.empty());
+        when(knowledgeService.buildKnowledgeSections(5, Sensitivity.INTERNAL))
+                .thenReturn(List.of(fallback));
+
+        ContextRequest request = new ContextRequest(UUID.randomUUID(), "conv-1",
+                UUID.randomUUID(), ContextAdapter.SYNC, 1, "ship it",
+                null, Sensitivity.INTERNAL, 24_000, "HOST@main", "", List.of());
+
+        assertThat(contributor(true).contribute(request)).containsExactly(fallback);
+
+        ArgumentCaptor<QmdQuery> query = ArgumentCaptor.forClass(QmdQuery.class);
+        verify(qmd).query(query.capture());
+        assertThat(query.getValue().scope()).isNull();
+    }
+
     @Test
     void qmdFailureFallsBackAndReportsTheDegradation() {
         ContextSection fallback = new ContextSection("knowledge:1", "deploy", "blue-green",
@@ -86,7 +111,7 @@ class KnowledgeContextContributorTest {
         assertThat(sections).contains(fallback);
         assertThat(sections).anySatisfy(section -> {
             assertThat(section.id()).isEqualTo("knowledge:qmd");
-            assertThat(section.degradedReason()).isEqualTo("qmd-timeout");
+            assertThat(section.degradedReason()).isEqualTo("knowledge-recall-degraded");
         });
     }
 

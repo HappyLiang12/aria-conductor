@@ -1,3 +1,11 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "./tokens.css";
+
+@custom-variant dark (&:is(.dark *));
+
 /* ============================================================
    ACT Dashboard — Enterprise Design System
    Ported from plan/demo/enterprise-agent-dashboard-demo.html
@@ -2733,3 +2741,61 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .stat.clickable { cursor: pointer; transition: border-color .15s ease; }
 .stat.clickable:hover { border-color: var(--brand-2); }
 .stat.clickable:focus-visible { outline: 1px solid var(--brand-2); outline-offset: 1px; }
+
+/* ---------- shadcn/Tailwind theme bridge (Task 1) ----------
+   Maps the semantic tokens from src/styles/tokens.css onto Tailwind theme
+   names so generated `src/components/ui/*` utilities (bg-primary,
+   text-muted-foreground, rounded-lg, ...) compile. Legacy rules above stay
+   unlayered and therefore keep precedence until their page wave. */
+@theme inline {
+  /* The legacy design system's unlayered :root still owns --accent (a solid
+     colour used in its gradients) and --radius (14px) until the last wave
+     deletes it, so the shadcn accent surface is bridged to the muted token
+     here instead of emitting an invalid hsl() from a non-triple value. */
+  --color-accent: hsl(var(--muted));
+  --color-accent-foreground: hsl(var(--foreground));
+  --color-ring: hsl(var(--ring));
+  --color-input: hsl(var(--input));
+  --color-border: hsl(var(--border));
+  --color-destructive: hsl(var(--destructive));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card: hsl(var(--card));
+  --color-foreground: hsl(var(--foreground));
+  --color-background: hsl(var(--background));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  /* tokens.css has no --sidebar-* / --chart-* values; the sidebar surfaces map
+     onto the semantic tokens that do exist. */
+  --color-sidebar: hsl(var(--card));
+  --color-sidebar-foreground: hsl(var(--foreground));
+  --color-sidebar-primary: hsl(var(--primary));
+  --color-sidebar-primary-foreground: hsl(var(--primary-foreground));
+  --color-sidebar-accent: hsl(var(--muted));
+  --color-sidebar-accent-foreground: hsl(var(--foreground));
+  --color-sidebar-border: hsl(var(--border));
+  --color-sidebar-ring: hsl(var(--ring));
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

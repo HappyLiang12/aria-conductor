@@ -1,11 +1,14 @@
-import { defineConfig } from 'vite';
+import path from 'path';
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
 
 const backendPort = process.env.VITE_BACKEND_PORT || '8080';
 const frontendPort = parseInt(process.env.VITE_PORT || '5173', 10);
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     port: frontendPort,
     proxy: {

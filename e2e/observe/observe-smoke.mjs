@@ -66,6 +66,17 @@ function requireFrame(text, frame) {
   }
 }
 
+/**
+ * An SSE frame is only complete after its terminating blank line. The server
+ * may write `event:done` and `data:` in separate chunks; cancelling on the
+ * event line alone loses the done payload that follows.
+ */
+function frameComplete(text, frame) {
+  const normalized = text.replace(/\r\n/g, '\n');
+  const start = normalized.indexOf(`event:${frame}`);
+  return start !== -1 && normalized.indexOf('\n\n', start) !== -1;
+}
+
 async function streamObservation() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -94,7 +105,7 @@ async function streamObservation() {
         break;
       }
       text += decoder.decode(value, { stream: true });
-      if (text.includes('event:done') || text.includes('event:error')) {
+      if (frameComplete(text, 'done') || frameComplete(text, 'error')) {
         await reader.cancel();
         break;
       }

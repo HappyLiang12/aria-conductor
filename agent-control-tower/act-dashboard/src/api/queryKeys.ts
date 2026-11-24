@@ -5,7 +5,7 @@ export const queryKeys = {
   approvals: ['approvals'] as const,
   kanban: ['kanban-items'] as const,
   runs: ['runs'] as const,
-  run: (id: string) => ['run', id] as const,
+  run: (id: string) => ['runs', 'detail', id] as const,
   agents: ['agents'] as const,
   knowledge: ['knowledge'] as const,
   reports: ['reports'] as const,

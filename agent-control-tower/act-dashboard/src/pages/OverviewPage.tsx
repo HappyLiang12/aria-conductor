@@ -8,6 +8,7 @@ import MorningBriefing from '../components/MorningBriefing';
 import { DecisionQueue } from '../components/DecisionQueue';
 import { AttentionQueue } from '../components/AttentionQueue';
 import { ReviewWorkspace } from '../components/ReviewWorkspace';
+import { KpiRow } from '../components/overview/KpiRow';
 import { useDrawerContext } from '../components/DrawerContext';
 import { approveApproval, answerAsk, rejectApproval } from '../api/approvals';
 import { transitionKanbanItem } from '../api/kanban';
@@ -152,6 +153,15 @@ export default function OverviewPage() {
 
   return (
     <div className="view-zone" data-view="overview">
+      {/* Page frame: a token-styled title block above every section. The
+          decision-first queues keep their own contract inside the grid. */}
+      <header className="flex flex-col gap-0.5 px-4 pt-4">
+        <h1 className="text-2xl leading-8 font-semibold tracking-tight text-foreground">Overview</h1>
+        <p className="text-sm leading-5 text-muted-foreground">
+          Decisions first — what waits on you, then the board.
+        </p>
+      </header>
+      <KpiRow />
       <div className={reviewId ? 'layout overview-grid overview-grid--review' : 'layout overview-grid'}>
         <div className="col overview-main">
           {reviewId ? (

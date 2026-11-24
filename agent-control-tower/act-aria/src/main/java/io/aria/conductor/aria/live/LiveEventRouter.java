@@ -89,22 +89,31 @@ public class LiveEventRouter {
     private final LiveFrames frames;
     private final LiveApprovalService approvals;
     private final LiveRunPark park;
+    private final LiveDispatchService dispatches;
 
     @Autowired
     public LiveEventRouter(LiveRunService runs, LiveToolExecutor tools, LiveSessionRegistry sessions,
                            LiveFrames frames, LiveApprovalService approvals,
-                           ObjectProvider<LiveRunPark> park) {
-        this(runs, tools, sessions, frames, approvals, park.getIfAvailable(() -> LiveRunPark.NONE));
+                           ObjectProvider<LiveRunPark> park, LiveDispatchService dispatches) {
+        this(runs, tools, sessions, frames, approvals,
+                park.getIfAvailable(() -> LiveRunPark.NONE), dispatches);
     }
 
     LiveEventRouter(LiveRunService runs, LiveToolExecutor tools, LiveSessionRegistry sessions,
                     LiveFrames frames, LiveApprovalService approvals, LiveRunPark park) {
+        this(runs, tools, sessions, frames, approvals, park, new LiveDispatchService());
+    }
+
+    LiveEventRouter(LiveRunService runs, LiveToolExecutor tools, LiveSessionRegistry sessions,
+                    LiveFrames frames, LiveApprovalService approvals, LiveRunPark park,
+                    LiveDispatchService dispatches) {
         this.runs = runs;
         this.tools = tools;
         this.sessions = sessions;
         this.frames = frames;
         this.approvals = approvals;
         this.park = park;
+        this.dispatches = dispatches;
     }
 
     // --- parking --------------------------------------------------------------------------
@@ -324,6 +333,11 @@ public class LiveEventRouter {
     private void approve(LiveSession session, LivePendingToolCall call) {
         LiveToolExecutor.ToolOutcome outcome = tools.executeApproved(call.toolName(), call.arguments());
         boolean ok = outcome instanceof LiveToolExecutor.ToolOutcome.Value;
+        if (outcome instanceof LiveToolExecutor.ToolOutcome.Value value && value.childRunId() != null) {
+            // Phase 4: the dispatched run's lifecycle frames and outcome belong to this
+            // socket only; the registry is the routing table, not a run store.
+            dispatches.register(value.childRunId(), session, value.agentName());
+        }
         String output = switch (outcome) {
             case LiveToolExecutor.ToolOutcome.Value value -> value.json();
             case LiveToolExecutor.ToolOutcome.Failure failure -> failure.message();

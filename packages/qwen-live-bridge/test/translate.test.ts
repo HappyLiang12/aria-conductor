@@ -2,7 +2,7 @@
 // (spec X4-X6, X8). Every case here is a phone-facing claim: an event the bridge must
 // produce, an event it must not, or an ordering the phone's caption/playback relies on.
 import { describe, expect, it } from 'vitest';
-import { createTranslator, type Translation } from '../src/translate.js';
+import { createTranslator, parseHighlightCall, type Translation } from '../src/translate.js';
 
 const RECEIVED_AT = 1_732_435_200_123;
 
@@ -311,6 +311,63 @@ describe('translate: provider error', () => {
         },
       },
     ]);
+  });
+});
+
+describe('translate: highlight_target geometry', () => {
+  // The POC boxes (spec D3): the model answers [y0,x0,y1,x1] on a 0-1000 grid, the phone
+  // renders a normalized [x,y,w,h] in [0,1]. GT2 is 273 px tall and 351 px wide (the phone
+  // POC spec `2026-11-24-p3-grounding-poc.md`), so [586,508,859,859] is
+  // [0.508, 0.586, 0.351, 0.273] -- the height is y1-y0, not a repeat of the width.
+  const POC_BOX = [586, 508, 859, 859];
+
+  it('maps the POC box to a normalized [x,y,w,h] bbox', () => {
+    expect(
+      parseHighlightCall({ label: '5mm 六角匙', box_2d: POC_BOX, text: '5mm 六角匙' }),
+    ).toEqual({
+      label: '5mm 六角匙',
+      bbox: [0.508, 0.586, 0.351, 0.273],
+      text: '5mm 六角匙',
+    });
+  });
+
+  it('clamps a box that runs past the grid to the unit square', () => {
+    expect(parseHighlightCall({ label: 'a', box_2d: [900, 900, 1200, 1200], text: 'a' })).toEqual({
+      label: 'a',
+      bbox: [0.9, 0.9, 0.1, 0.1],
+      text: 'a',
+    });
+    expect(parseHighlightCall({ label: 'a', box_2d: [-20, -10, 400, 400], text: 'a' })).toEqual({
+      label: 'a',
+      bbox: [0, 0, 0.4, 0.4],
+      text: 'a',
+    });
+  });
+
+  it('refuses a box that is not exactly four finite numbers', () => {
+    expect(parseHighlightCall({ label: 'a', box_2d: [586, 508, 859], text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 'a', box_2d: [586, 508, 859, 859, 900], text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 'a', box_2d: ['586', 508, 859, 859], text: 'a' })).toBeNull();
+    expect(
+      parseHighlightCall({ label: 'a', box_2d: [586, Number.NaN, 859, 859], text: 'a' }),
+    ).toBeNull();
+    expect(parseHighlightCall({ label: 'a', box_2d: 'box', text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 'a', text: 'a' })).toBeNull();
+  });
+
+  it('refuses an inverted or zero-size box', () => {
+    // y1 < y0 and x1 < x0: the corners are swapped.
+    expect(parseHighlightCall({ label: 'a', box_2d: [859, 859, 586, 508], text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 'a', box_2d: [586, 508, 586, 859], text: 'a' })).toBeNull();
+    // A box clamped entirely outside the grid collapses to zero size.
+    expect(parseHighlightCall({ label: 'a', box_2d: [1200, 1200, 1400, 1400], text: 'a' })).toBeNull();
+  });
+
+  it('refuses a blank label or blank text', () => {
+    expect(parseHighlightCall({ label: '  ', box_2d: POC_BOX, text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 'a', box_2d: POC_BOX, text: '   ' })).toBeNull();
+    expect(parseHighlightCall({ box_2d: POC_BOX, text: 'a' })).toBeNull();
+    expect(parseHighlightCall({ label: 7, box_2d: POC_BOX, text: 'a' })).toBeNull();
   });
 });
 

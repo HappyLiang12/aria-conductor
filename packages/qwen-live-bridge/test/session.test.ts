@@ -173,7 +173,15 @@ describe('session: config and handshake', () => {
     // The P0-unverified point: the contract asks for server-side semantic turn detection.
     expect(config.turn_detection).toEqual({ type: 'semantic_vad_ec' });
     expect(config.tool_choice).toBe('auto');
-    const tools = config.tools as Array<{ type: string; function: { name: string; parameters: unknown } }>;
+    // The AR display tool and its Cantonese instruction (spec D2). The declaration is the
+    // verbatim contract the phone and the tool catalogue agree on.
+    expect(config.instructions).toContain(
+      '有圖嘅時候，用戶講『睇下／邊度／邊個』，先叫 highlight_target，再用一句最多 15 字講出答案。冇圖或者唔肯定，就講睇唔到，唔准估框。',
+    );
+    const tools = config.tools as Array<{
+      type: string;
+      function: { name: string; description: string; parameters: unknown };
+    }>;
     expect(tools.map((tool) => tool.function.name)).toEqual([
       'get_time',
       'get_run',
@@ -182,7 +190,24 @@ describe('session: config and handshake', () => {
       'list_agents',
       'get_dashboard_summary',
       'get_workflow',
+      'highlight_target',
     ]);
+    expect(tools.find((tool) => tool.function.name === 'highlight_target')).toEqual({
+      type: 'function',
+      function: {
+        name: 'highlight_target',
+        description: 'Point the HUD at exactly one object the wearer just asked about. Display only.',
+        parameters: {
+          type: 'object',
+          properties: {
+            label: { type: 'string' },
+            box_2d: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 },
+            text: { type: 'string' },
+          },
+          required: ['label', 'box_2d', 'text'],
+        },
+      },
+    });
     for (const tool of tools) {
       expect(tool.type).toBe('function');
       expect((tool.function.parameters as { type: string }).type).toBe('object');
@@ -504,6 +529,203 @@ describe('session: tools and TOWER', () => {
       () => fake.connections[0]!.messages.some((message) => message.type === 'response.cancel'),
       'cancel',
     );
+    await session.close();
+  });
+});
+
+describe('session: highlight_target', () => {
+  // The `ar_render` v2 control event the phone renders (spec D1). The bridge builds it
+  // from the model's display-only tool call; Java forwards the control line verbatim.
+  interface RenderEvent {
+    type: 'ar_render';
+    v: number;
+    renderId: string;
+    render: {
+      primitive: string;
+      target: { label: string; bbox: number[] };
+      text: string;
+      ttlMs: number;
+      coord: string;
+      safetyAlert: unknown;
+    };
+  }
+
+  const renderEvents = (actions: SessionAction[]): RenderEvent[] =>
+    actions
+      .filter(
+        (action) =>
+          action.kind === 'control' &&
+          (action as { event: { type: string } }).event.type === 'ar_render',
+      )
+      .map((action) => (action as unknown as { event: RenderEvent }).event);
+
+  /** The model's POC answer (spec D3): [y0,x0,y1,x1] on a 0-1000 grid. */
+  const POC_ARGUMENTS = JSON.stringify({
+    label: '5mm 六角匙',
+    box_2d: [586, 508, 859, 859],
+    text: '5mm 六角匙',
+  });
+
+  const highlightCall = (
+    fake: Awaited<ReturnType<typeof fakeQwen>>,
+    callId: string,
+    args = POC_ARGUMENTS,
+  ) =>
+    fake.send(0, {
+      type: 'response.function_call_arguments.done',
+      call_id: callId,
+      name: 'highlight_target',
+      arguments: args,
+    });
+
+  const injected = (fake: Awaited<ReturnType<typeof fakeQwen>>) =>
+    fake.connections[0]!.messages.filter((message) => message.type === 'conversation.item.create');
+
+  it('renders one ar_render control, acks the model and never forwards a tool_call', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+
+    highlightCall(fake, 'call_h1');
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'ar_render',
+    );
+
+    const [render] = renderEvents(recorder.actions);
+    expect(render).toBeDefined();
+    expect(render!.renderId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(render).toEqual({
+      type: 'ar_render',
+      v: 1,
+      renderId: render!.renderId,
+      render: {
+        primitive: 'highlight',
+        target: { label: '5mm 六角匙', bbox: [0.508, 0.586, 0.351, 0.273] },
+        text: '5mm 六角匙',
+        ttlMs: 8000,
+        coord: 'normalized',
+        safetyAlert: null,
+      },
+    });
+    // Exactly the contract's fields: a display-only render carries no runId (spec D1).
+    expect(Object.keys(render!).sort()).toEqual(['render', 'renderId', 'type', 'v']);
+    // The bridge executes it: Java is never asked to run a tool.
+    expect(recorder.actions.some((action) => action.kind === 'tool_call')).toBe(false);
+
+    await waitUntil(
+      () => fake.connections[0]!.messages.some((message) => message.type === 'response.create'),
+      'highlight acknowledgement',
+    );
+    const messages = fake.connections[0]!.messages;
+    expect(messages.at(-2)).toEqual({
+      type: 'conversation.item.create',
+      item: {
+        type: 'function_call_output',
+        call_id: 'call_h1',
+        output: JSON.stringify({ ack: true, renderId: render!.renderId }),
+      },
+    });
+    expect(messages.at(-1)).toEqual({ type: 'response.create' });
+    await session.close();
+  });
+
+  it.each([
+    ['three numbers', { label: 'a', box_2d: [586, 508, 859], text: 'a' }],
+    ['swapped corners', { label: 'a', box_2d: [859, 859, 586, 508], text: 'a' }],
+  ])('declines a %s box without rendering', async (_name, args) => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+
+    highlightCall(fake, 'call_bad', JSON.stringify(args));
+    await waitUntil(
+      () => fake.connections[0]!.messages.some((message) => message.type === 'response.create'),
+      'decline acknowledgement',
+    );
+
+    expect(renderEvents(recorder.actions)).toEqual([]);
+    expect(recorder.actions.some((action) => action.kind === 'tool_call')).toBe(false);
+    expect(injected(fake)).toEqual([
+      {
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: 'call_bad',
+          output: '{"ack":false}',
+        },
+      },
+    ]);
+    expect(fake.connections[0]!.messages.at(-1)).toEqual({ type: 'response.create' });
+    await session.close();
+  });
+
+  it('answers a second call in the same turn with ack:false and renders once per turn', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+
+    highlightCall(fake, 'call_h1');
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'ar_render',
+    );
+    highlightCall(fake, 'call_h2');
+    await waitUntil(() => injected(fake).length === 2, 'second acknowledgement');
+
+    expect(renderEvents(recorder.actions)).toHaveLength(1);
+    const outputs = injected(fake).map(
+      (message) => (message.item as { output: string }).output,
+    );
+    expect(outputs).toHaveLength(2);
+    expect(JSON.parse(outputs[0]!)).toEqual({
+      ack: true,
+      renderId: renderEvents(recorder.actions)[0]!.renderId,
+    });
+    expect(outputs[1]).toBe('{"ack":false}');
+
+    // The flag is per turn: once the response is done, the next turn may render again.
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
+    highlightCall(fake, 'call_h3');
+    await waitUntil(() => renderEvents(recorder.actions).length === 2, 'next-turn render');
+    await session.close();
+  });
+
+  it('queues the ack behind a Java tool call so one response.create answers the batch', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+
+    fake.send(0, {
+      type: 'response.function_call_arguments.done',
+      call_id: 'call_time',
+      name: 'get_time',
+      arguments: '{}',
+    });
+    highlightCall(fake, 'call_h1');
+    await waitUntil(
+      () => recorder.actions.some((action) => action.kind === 'tool_call'),
+      'java tool call',
+    );
+
+    // Only the read tool crosses to Java; the render is the bridge's own.
+    expect(
+      recorder.actions
+        .filter((action) => action.kind === 'tool_call')
+        .map((action) => (action as { id: string }).id),
+    ).toEqual(['call_time']);
+    expect(renderEvents(recorder.actions)).toHaveLength(1);
+    // The highlight answer waits for the earlier call: one continuation, in call order.
+    expect(injected(fake)).toEqual([]);
+
+    session.toolResult('call_time', true, 'time');
+    await waitUntil(
+      () => fake.connections[0]!.messages.some((message) => message.type === 'response.create'),
+      'continuation',
+    );
+    expect(injected(fake).map((message) => (message.item as { call_id: string }).call_id)).toEqual([
+      'call_time',
+      'call_h1',
+    ]);
+    expect(
+      fake.connections[0]!.messages.filter((message) => message.type === 'response.create'),
+    ).toHaveLength(1);
     await session.close();
   });
 });

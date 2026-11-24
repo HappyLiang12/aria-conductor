@@ -6,9 +6,11 @@
 //
 // The credentials arrive only as option values (the Java parent clears its environment
 // and passes exactly these), so nothing here reads or echoes the process environment.
+import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import type { ContextEntry, PhoneEvent } from './protocol.js';
-import { createTranslator, type Translator } from './translate.js';
+import { PROTOCOL_VERSION } from './protocol.js';
+import { createTranslator, parseHighlightCall, type Translator } from './translate.js';
 
 /** What the session asks the caller to write to stdout. */
 export type SessionAction =
@@ -140,9 +142,36 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       parameters: { type: 'object', properties: STRING_ID, required: ['id'] },
     },
   },
+  {
+    // The AR display tool (spec D2): the bridge executes it, so Java's tool executor
+    // never sees the name. The declaration is the verbatim phone/catalogue contract.
+    type: 'function',
+    function: {
+      name: 'highlight_target',
+      description: 'Point the HUD at exactly one object the wearer just asked about. Display only.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          box_2d: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 },
+          text: { type: 'string' },
+        },
+        required: ['label', 'box_2d', 'text'],
+      },
+    },
+  },
 ];
 
-/** Short and role-only: the phone speaks Cantonese and the tools carry the facts. */
+/** The display tool the bridge answers itself; every other call is Java's (spec D2). */
+const HIGHLIGHT_TOOL = 'highlight_target';
+/** How long the phone keeps a highlight on the HUD (spec D1). */
+const HIGHLIGHT_TTL_MS = 8000;
+
+/**
+ * Short and role-only: the phone speaks Cantonese and the tools carry the facts. The AR
+ * line is the only instruction about a picture (spec D2): answer a look question with a
+ * render, and say 睇唔到 rather than guessing a box when nothing can be placed.
+ */
 const INSTRUCTIONS = [
   '你是 Aria，香港廣東話語音助理。',
   '只可以用廣東話回答，句子要短，適合即時語音。',
@@ -150,6 +179,7 @@ const INSTRUCTIONS = [
   '問時間要用 get_time 嘅 now（本地時間），唔好自己推算時區。',
   '工具結果返嚟之後，用一句話講重點，唔需要讀出全部內容。',
   '[tower] 開頭嘅訊息係背景系統通知，用一句話講返俾用戶聽。',
+  '有圖嘅時候，用戶講『睇下／邊度／邊個』，先叫 highlight_target，再用一句最多 15 字講出答案。冇圖或者唔肯定，就講睇唔到，唔准估框。',
 ].join('\n');
 
 /** A reconnect that cannot reach the provider: the phone gets 4012, not a retry loop. */
@@ -184,6 +214,8 @@ export function startSession(options: SessionOptions): LiveSession {
   let callOrder: string[] = [];
   const outstandingCalls = new Set<string>();
   const answeredResults = new Map<string, Record<string, unknown>>();
+  /** A render already reached the phone in this turn (spec D1: at most one per turn). */
+  let renderedThisTurn = false;
   let refusedSends = 0;
   let droppedToolResults = 0;
 
@@ -252,6 +284,7 @@ export function startSession(options: SessionOptions): LiveSession {
     callOrder = [];
     outstandingCalls.clear();
     answeredResults.clear();
+    renderedThisTurn = false;
   };
 
   const clearReopen = () => {
@@ -315,6 +348,70 @@ export function startSession(options: SessionOptions): LiveSession {
     }
   };
 
+  /**
+   * Inject every answered call the conversation can already continue from, in the order
+   * the model issued them, then ask for one continuation once nothing is outstanding. A
+   * second `response.create` while the first is already answering is the double-request
+   * the phone would see as an error.
+   */
+  const flushAnsweredCalls = () => {
+    for (;;) {
+      const head = callOrder[0];
+      const item = head === undefined ? undefined : answeredResults.get(head);
+      if (head === undefined || item === undefined) {
+        break;
+      }
+      callOrder.shift();
+      answeredResults.delete(head);
+      outstandingCalls.delete(head);
+      send({ type: 'conversation.item.create', item });
+    }
+    if (outstandingCalls.size === 0) {
+      send({ type: 'response.create' });
+    }
+  };
+
+  /**
+   * Spec D2: `highlight_target` is the bridge's own display call, never Java's. A placeable
+   * box becomes one `ar_render` v2 control (spec D1: no `runId`, one per turn) and a
+   * `{ack:true,renderId}` answer; an unplaceable box, or a second call in the same turn,
+   * answers `{ack:false}` with no render so the model says 睇唔到. The answer joins the same
+   * ordered queue as Java's tool results.
+   */
+  const answerHighlight = (id: string, args: Record<string, unknown>) => {
+    const target = renderedThisTurn ? null : parseHighlightCall(args);
+    let output: Record<string, unknown> = { ack: false };
+    if (target !== null) {
+      renderedThisTurn = true;
+      const renderId = randomUUID();
+      emitEvent({
+        type: 'ar_render',
+        v: PROTOCOL_VERSION,
+        renderId,
+        render: {
+          primitive: 'highlight',
+          target: { label: target.label, bbox: target.bbox },
+          text: target.text,
+          ttlMs: HIGHLIGHT_TTL_MS,
+          coord: 'normalized',
+          safetyAlert: null,
+        },
+      });
+      output = { ack: true, renderId };
+    }
+    // Track it like a Java call so one `response.create` still closes the batch.
+    if (!outstandingCalls.has(id)) {
+      outstandingCalls.add(id);
+      callOrder.push(id);
+    }
+    answeredResults.set(id, {
+      type: 'function_call_output',
+      call_id: id,
+      output: JSON.stringify(output),
+    });
+    flushAnsweredCalls();
+  };
+
   /** Apply one provider event: the translator decides, this function obeys. */
   const dispatch = (event: Record<string, unknown>) => {
     if (event.type === 'input_audio_buffer.speech_stopped') {
@@ -322,17 +419,29 @@ export function startSession(options: SessionOptions): LiveSession {
       // follows must not ask for a second response (it would race the first).
       speechStoppedSinceCommit = true;
     }
+    // Spec D1: the once-per-turn render budget starts over when a turn ends.
+    if (event.type === 'response.done') {
+      renderedThisTurn = false;
+    }
     for (const translation of translator.onEvent(event)) {
       if (translation.kind === 'cancel') {
         send({ type: 'response.cancel' });
         continue;
       }
       if (translation.kind === 'tool_call') {
+        if (translation.name === HIGHLIGHT_TOOL) {
+          // Display only: the bridge answers it; Java must never see the call.
+          answerHighlight(translation.id, translation.arguments);
+          continue;
+        }
         // Track the call before the result can arrive, so an answer is never "unknown".
         if (!outstandingCalls.has(translation.id)) {
           outstandingCalls.add(translation.id);
           callOrder.push(translation.id);
         }
+      }
+      if (translation.kind === 'turn_done') {
+        renderedThisTurn = false;
       }
       emit(translation);
     }
@@ -563,22 +672,8 @@ export function startSession(options: SessionOptions): LiveSession {
       outstandingCalls.delete(id);
       answeredResults.set(id, { type: 'function_call_output', call_id: id, output });
       // Inject in the order the model issued the calls, even when Java answered out of
-      // order; a result whose turn has not come waits here.
-      for (;;) {
-        const head = callOrder[0];
-        const item = head === undefined ? undefined : answeredResults.get(head);
-        if (head === undefined || item === undefined) {
-          break;
-        }
-        callOrder.shift();
-        answeredResults.delete(head);
-        send({ type: 'conversation.item.create', item });
-      }
-      // One continuation for the whole batch: a second `response.create` while the first
-      // is already answering is the double-request the phone would see as an error.
-      if (outstandingCalls.size === 0) {
-        send({ type: 'response.create' });
-      }
+      // order; a result whose turn has not come waits in the queue.
+      flushAnsweredCalls();
     },
 
     tower(text) {

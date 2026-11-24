@@ -81,6 +81,65 @@ const parseArguments = (value: unknown): Record<string, unknown> => {
   return asObject(value) ?? {};
 };
 
+/** The grid the model reports boxes on (spec D3): a 0-1000 square over the image. */
+const HIGHLIGHT_GRID = 1000;
+
+/** A parsed `highlight_target` call, ready to become an `ar_render` v2 render. */
+export interface HighlightTarget {
+  label: string;
+  /** Normalized `[x,y,w,h]` in `[0,1]`, the phone's render contract. */
+  bbox: [number, number, number, number];
+  text: string;
+}
+
+const clampGrid = (value: number): number => Math.min(HIGHLIGHT_GRID, Math.max(0, value));
+
+/**
+ * Spec D3: the model answers `box_2d:[y0,x0,y1,x1]` on a 0-1000 grid; the phone renders
+ * `bbox=[x0,y0,x1-x0,y1-y0]/1000`. Both corners are clamped to the grid first, so the
+ * size is measured inside the frame and every component lands in `[0,1]`. Anything the
+ * bridge cannot place with a positive area — a short or non-numeric box, swapped corners,
+ * a box clamped to nothing, a blank label or text — is refused, and the model is told to
+ * say it cannot see.
+ */
+export function parseHighlightCall(args: Record<string, unknown>): HighlightTarget | null {
+  const label = args.label;
+  const text = args.text;
+  if (typeof label !== 'string' || label.trim() === '') {
+    return null;
+  }
+  if (typeof text !== 'string' || text.trim() === '') {
+    return null;
+  }
+  const box = args.box_2d;
+  if (!Array.isArray(box) || box.length !== 4) {
+    return null;
+  }
+  if (!box.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return null;
+  }
+  const [y0 = 0, x0 = 0, y1 = 0, x1 = 0] = box as number[];
+  if (x1 <= x0 || y1 <= y0) {
+    return null;
+  }
+  // Clamped corners, divided after the clamp, keep the sizes exact: a box that runs past
+  // the frame edge gives 0.1, not 0.09999999999999998.
+  const x0c = clampGrid(x0);
+  const y0c = clampGrid(y0);
+  const x1c = clampGrid(x1);
+  const y1c = clampGrid(y1);
+  const bbox: [number, number, number, number] = [
+    x0c / HIGHLIGHT_GRID,
+    y0c / HIGHLIGHT_GRID,
+    (x1c - x0c) / HIGHLIGHT_GRID,
+    (y1c - y0c) / HIGHLIGHT_GRID,
+  ];
+  if (bbox[2] <= 0 || bbox[3] <= 0) {
+    return null;
+  }
+  return { label, bbox, text };
+}
+
 interface ProviderFailure {
   code: ErrorCode;
   retryable: boolean;

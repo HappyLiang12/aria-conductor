@@ -48,7 +48,7 @@ public record LiveProperties(
     public static final int DEFAULT_MAX_SESSION_SECONDS = 7200;
     public static final String DEFAULT_DIRECT_BASE_URL = "https://api.deepseek.com";
     public static final String DEFAULT_DIRECT_MODEL = "deepseek-flash";
-    public static final long DEFAULT_DIRECT_TIMEOUT_MS = 1500L;
+    public static final long DEFAULT_DIRECT_TIMEOUT_MS = 2000L;
 
     public LiveProperties {
         bridgeScript = blank(bridgeScript) ? DEFAULT_BRIDGE_SCRIPT : bridgeScript.trim();

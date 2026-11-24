@@ -114,7 +114,7 @@ aria:
     direct-locator-enabled: ${ARIA_LIVE_DIRECT_LOCATOR_ENABLED:false}
     direct-base-url: ${ARIA_LIVE_DIRECT_BASE_URL:}
     direct-model: ${ARIA_LIVE_DIRECT_MODEL:}
-    direct-timeout-ms: ${ARIA_LIVE_DIRECT_TIMEOUT_MS:1500}
+    direct-timeout-ms: ${ARIA_LIVE_DIRECT_TIMEOUT_MS:2000}
   # Verified qmd read paths
   # (spec: docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both
   # blocks are opt-in: with `enabled: false` the contributors keep the pre-qmd

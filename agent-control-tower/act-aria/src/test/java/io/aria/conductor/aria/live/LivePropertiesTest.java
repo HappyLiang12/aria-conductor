@@ -21,11 +21,11 @@ class LivePropertiesTest {
         assertThat(properties.readyDeadlineMs()).isEqualTo(5000L);
         assertThat(properties.maxSessionSeconds()).isEqualTo(7200);
         // The direct locator is opt-in (spec D6): off, the documented origin, the vision
-        // model and the 1.5 s whole-call budget.
+        // model and the 2.0 s whole-call budget.
         assertThat(properties.directLocatorEnabled()).isFalse();
         assertThat(properties.directBaseUrl()).isEqualTo("https://api.deepseek.com");
         assertThat(properties.directModel()).isEqualTo("deepseek-flash");
-        assertThat(properties.directTimeoutMs()).isEqualTo(1500L);
+        assertThat(properties.directTimeoutMs()).isEqualTo(2000L);
     }
 
     @Test
@@ -49,9 +49,9 @@ class LivePropertiesTest {
     @Test
     void aNonPositiveDirectTimeoutFallsBackToTheBudget() {
         // A zero or negative budget would mean "no deadline", which the backup cannot
-        // honour: it must degrade within 1.5 s by default.
+        // honour: it must degrade within 2.0 s by default.
         assertThat(new LiveProperties(false, null, null, "", 0, 0, true, null, null, -5)
-                .directTimeoutMs()).isEqualTo(1500L);
+                .directTimeoutMs()).isEqualTo(2000L);
     }
 
     @Test

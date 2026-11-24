@@ -3,7 +3,8 @@ param(
     [string]$Profile = "h2",
     [switch]$SkipBuild,
     [string]$AdkProvider = "opencode",
-    [switch]$SkipSandbox
+    [switch]$SkipSandbox,
+    [switch]$WithMemoryHub
 )
 
 $ErrorActionPreference = "Stop"
@@ -243,6 +244,30 @@ if ($sandboxMode) {
 # ── LLM credentials (injected into sandbox env for opencode provider) ──
 if (-not $env:DEEPSEEK_API_KEY -and $env:LLM_API_KEY) {
     $env:DEEPSEEK_API_KEY = $env:LLM_API_KEY
+}
+
+if ($WithMemoryHub) {
+    $memoryHubVault = if ($env:ARIA_MEMORY_QMD_VAULT_DIR) {
+        $env:ARIA_MEMORY_QMD_VAULT_DIR
+    } else {
+        Join-Path $HOME "aria-memory-vault"
+    }
+    $memoryHubProject = if ($env:ARIA_MEMORY_QMD_PROJECT) { $env:ARIA_MEMORY_QMD_PROJECT } else { "aria-conductor" }
+    $env:ARIA_MEMORY_VAULT_DIR = $memoryHubVault
+    Write-Host "Starting qmd memory hub..." -ForegroundColor Cyan
+    & (Join-Path $ProjectRoot "scripts/qmd-runtime/start-qmd.ps1") start
+    if ($LASTEXITCODE -ne 0) { Write-Error "qmd memory hub failed to start"; exit 1 }
+    $env:ARIA_MEMORY_QMD_ENABLED = "true"
+    $env:ARIA_MEMORY_QMD_URL = "http://127.0.0.1:8181"
+    $env:ARIA_MEMORY_QMD_PROJECT = $memoryHubProject
+    $env:ARIA_MEMORY_QMD_VAULT_DIR = $memoryHubVault
+    $env:ARIA_KNOWLEDGE_QMD_ENABLED = "true"
+    $env:ARIA_KNOWLEDGE_QMD_URL = "http://127.0.0.1:8181"
+    $env:ARIA_KNOWLEDGE_QMD_PROJECT = $memoryHubProject
+    $env:ARIA_KNOWLEDGE_QMD_VAULT_DIR = $memoryHubVault
+    New-Item -ItemType Directory -Path (Join-Path $ProjectRoot ".run") -Force | Out-Null
+    Set-Content -Path (Join-Path $ProjectRoot ".run/memory-hub.started") -Value "aria-qmd"
+    Write-Host "  qmd memory hub: enabled (project $memoryHubProject)" -ForegroundColor DarkGray
 }
 
 Write-Host "Starting Aria Conductor backend..." -ForegroundColor Cyan

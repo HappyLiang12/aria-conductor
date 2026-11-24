@@ -69,7 +69,8 @@ switch ($Command) {
     throw "qmd did not become healthy; check: $PSCommandPath logs"
   }
   "stop" {
-    & $rt rm -f $Container
+    & $rt rm -f $Container *> $null
+    exit 0
   }
   "status" {
     & $rt ps --filter "name=$Container" --format "{{.Names}} {{.Status}}"

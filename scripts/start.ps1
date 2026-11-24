@@ -17,6 +17,7 @@ the repair this script exists to make, and without it the sandbox socket cannot 
 param(
     [switch]$DryRun,
     [switch]$NonInteractive,
+    [switch]$WithMemoryHub,
     # Test seam: defaults to the repository root.
     [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot)
 )
@@ -206,10 +207,12 @@ Write-Phase 5 $phaseTotal "Starting services"
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 $env:VITE_BACKEND_PORT = "$backendPort"
 
-$backend = Start-Process pwsh -ArgumentList @(
-        '-NoProfile', '-File', (Join-Path $PSScriptRoot 'start-backend.ps1'),
-        '-AdkProvider', 'opencode'
-    ) -NoNewWindow -PassThru `
+$backendArgs = @(
+    '-NoProfile', '-File', (Join-Path $PSScriptRoot 'start-backend.ps1'),
+    '-AdkProvider', 'opencode'
+)
+if ($WithMemoryHub) { $backendArgs += '-WithMemoryHub' }
+$backend = Start-Process pwsh -ArgumentList $backendArgs -NoNewWindow -PassThru `
     -RedirectStandardOutput (Join-Path $RunDir 'backend.log') `
     -RedirectStandardError (Join-Path $RunDir 'backend.err.log')
 Set-Content -Path (Join-Path $RunDir 'backend.pid') -Value $backend.Id

@@ -433,6 +433,49 @@ describe('TaskDrawer review decision zone', () => {
     expect(mockedApproveApproval).not.toHaveBeenCalled();
   });
 
+  it('a late opening-focus frame does not steal focus from the answer field', async () => {
+    // The heading focus is deferred to a requestAnimationFrame. On a slow runner
+    // that frame landed after the operator had started typing, pulling the caret
+    // to the heading so only part of the draft reached the mutation (CI observed
+    // "te" for "text" and "fi" for "fix the flaky test"). Capture the frame,
+    // type first, then fire it: focus and the draft must survive intact.
+    const frames: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const user = userEvent.setup();
+      mockedListAsks.mockResolvedValue([
+        mkAsk({ id: 'a2', askType: 'QUESTION', content: 'UTF-8 or BOM?' }),
+      ]);
+      renderDrawer();
+      openTaskDrawerEvent();
+
+      const zone = await screen.findByText(/NEEDS YOUR DECISION/);
+      const askCard = zone.closest('.decision-zone')!.querySelector('.ask-card') as HTMLElement;
+      const answer = within(askCard).getByLabelText('Answer for ask a2') as HTMLTextAreaElement;
+      await user.type(answer, 'text');
+
+      expect(frames.length).toBeGreaterThan(0);
+      act(() => frames.forEach((cb) => cb(0)));
+
+      expect(answer).toHaveFocus();
+      expect(screen.getByRole('heading', { name: 'Spec task' })).not.toHaveFocus();
+
+      await user.type(answer, ' more');
+      await user.click(within(askCard).getByRole('button', { name: 'Approve' }));
+      await waitFor(() =>
+        expect(mockedAnswerAsk).toHaveBeenCalledWith('a2', {
+          approved: true,
+          answer: 'text more',
+        }),
+      );
+    } finally {
+      rafSpy.mockRestore();
+    }
+  });
+
   it('Deny on an APPROVAL ask calls rejectApproval', async () => {
     const user = userEvent.setup();
     mockedListAsks.mockResolvedValue([

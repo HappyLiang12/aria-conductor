@@ -113,7 +113,26 @@ export function TaskDrawer() {
     if (active instanceof HTMLElement && active !== document.body) {
       openerRef.current = active;
     }
-    const raf = requestAnimationFrame(() => headingRef.current?.focus());
+    const raf = requestAnimationFrame(() => {
+      const heading = headingRef.current;
+      if (!heading) return;
+      // The frame is deferred, so an operator (or a slow CI runner's test) can
+      // reach a field inside the open drawer before it lands. Focusing the
+      // heading then would pull the caret out mid-draft and send the rest of
+      // the typing nowhere, so the frame yields to an already-focused control.
+      const drawer = heading.closest('.drawer.open');
+      const active = document.activeElement;
+      if (
+        drawer
+        && active instanceof HTMLElement
+        && active !== drawer
+        && active !== heading
+        && drawer.contains(active)
+      ) {
+        return;
+      }
+      heading.focus();
+    });
     return () => {
       cancelAnimationFrame(raf);
       const opener = openerRef.current;

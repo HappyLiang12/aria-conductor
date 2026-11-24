@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -24,9 +25,13 @@ vi.mock('../../api/skills', () => ({ listSkills: vi.fn().mockResolvedValue([]) }
 
 // The generated assistant-ui thread owns the transcript DOM (it has its own
 // test surface); the page owns the shell, the switcher, the composer, the stop
-// control and the empty state, so those stay real here.
+// control and the empty state, so those stay real here. The mock still renders
+// the `indicator` the page passes, so the live ProgressTimeline wiring is
+// exercised through the page instead of being swallowed by the stub.
 vi.mock('../../chat/AriaThread', () => ({
-  AriaThread: () => <div className="mc-stack">thread</div>,
+  AriaThread: ({ indicator }: { indicator?: ReactNode }) => (
+    <div className="mc-stack">thread{indicator}</div>
+  ),
 }));
 
 type WsHandler = (event: WsEvent) => void;
@@ -71,19 +76,34 @@ function renderPage(initialEntry = '/aria') {
   );
 }
 
-/** The page opens one SSE request per turn; hold it open until the turn is aborted. */
+/**
+ * The page opens one SSE request per turn; hold it open until the turn is
+ * aborted. The returned handle is the signal and per-turn options the page
+ * actually handed the stream, so a Stop can be proven to abort the client
+ * request (not merely call the server cancel) and to mark the turn cancelled.
+ */
 function holdStream() {
+  const held: {
+    signal?: AbortSignal;
+    options?: Parameters<typeof streamMessage>[5];
+  } = {};
   mockStream.mockImplementation((
     _conversationId: string,
     _message: string,
     _history: unknown,
     _callbacks: StreamCallbacks,
     signal?: AbortSignal,
-  ) => new Promise<void>((_resolve, reject) => {
-    signal?.addEventListener('abort', () => {
-      reject(new DOMException('aborted', 'AbortError'));
+    options?: Parameters<typeof streamMessage>[5],
+  ) => {
+    held.signal = signal;
+    held.options = options;
+    return new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        reject(new DOMException('aborted', 'AbortError'));
+      });
     });
-  }));
+  });
+  return held;
 }
 
 async function sendText(text: string) {
@@ -148,7 +168,7 @@ describe('MainChatPage', () => {
   });
 
   it('stops the turn through the server cancel path once the run id is known', async () => {
-    holdStream();
+    const held = holdStream();
     renderPage();
     await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
     const listCallsBeforeStop = mockList.mock.calls.length;
@@ -156,12 +176,66 @@ describe('MainChatPage', () => {
     await sendText('Long job');
     const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
     act(() => callbacks.onThinking?.('run-42'));
+    expect(held.options?.isCancelled?.()).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: /Stop the turn/i }));
 
+    // Stop must abort the one SSE request the page opened, not just ask the
+    // server to cancel the run: deleting `adapter.cancel()` has to fail here.
+    await waitFor(() => expect(held.signal?.aborted).toBe(true));
+    expect(held.options?.isCancelled?.()).toBe(true);
+    // The aborted turn settles, so the composer returns to Send.
+    expect(await screen.findByRole('button', { name: /Send message/i })).toBeTruthy();
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('run-42'));
     // The stopped turn's conversation exists server-side, so the switcher must
     // refresh once the cancel settles instead of waiting for a page reload.
     await waitFor(() => expect(mockList.mock.calls.length).toBeGreaterThan(listCallsBeforeStop));
+
+    // A cancelled turn must not poison the next one: the flag is cleared when a
+    // new turn opens, so a later close is not mistaken for a dropped connection.
+    const textarea = screen.getByPlaceholderText(/Ask Aria anything/);
+    fireEvent.change(textarea, { target: { value: 'Again' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
+    expect(held.options?.isCancelled?.()).toBe(false);
+  });
+
+  it('renders the live progress frames in the thread indicator', async () => {
+    holdStream();
+    renderPage();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+
+    await sendText('Long job');
+    const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
+    act(() => callbacks.onThinking?.('run-1'));
+    await screen.findByRole('button', { name: /Stop the turn/i });
+    await waitFor(() => expect(wsHandlers.length).toBeGreaterThan(0));
+
+    act(() => {
+      wsHandlers.forEach((handler) => handler({
+        type: 'run.progress',
+        payload: { runId: 'run-1', kind: 'TOOL_CALL', content: '', toolName: 'read_file', seq: 1, partId: 'p1' },
+        timestamp: '2026-11-20T10:00:01Z',
+      } as WsEvent));
+    });
+
+    // The page passes the live ProgressTimeline as the thread's indicator; the
+    // mocked thread renders it, so this is the page-level progress assertion.
+    expect(await screen.findByText('read_file')).toBeTruthy();
+    expect(screen.getByTestId('mc-progress')).toBeTruthy();
+  });
+
+  it('never replays a failed turn as assistant history', async () => {
+    holdStream();
+    mockTimeline.mockResolvedValue([
+      { role: 'user', content: 'Deploy the crew', timestamp: '2026-11-20T09:59:00Z', runId: 'run-0' },
+      { role: 'assistant', content: '回合執行失敗：boom', timestamp: '2026-11-20T10:00:00Z', runId: 'run-0', error: true },
+    ]);
+    renderPage();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+
+    await sendText('Status?');
+
+    expect(mockStream.mock.calls[0][2]).toEqual([{ role: 'user', content: 'Deploy the crew' }]);
   });
 
   it('keeps a failed server-side cancel visible in the state notice', async () => {

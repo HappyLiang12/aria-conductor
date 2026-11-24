@@ -45,9 +45,18 @@ function entryId(): string {
  * The prior-turn context of one request. The runtime appends the operator's
  * message before the adapter opens the stream and the turn travels as
  * `message`, so the trailing user row is never part of `history`.
+ *
+ * A failed turn's error text is an artefact of the error surface, not something
+ * Aria said: replaying it as assistant context would make the next turn answer
+ * its own failure. The pre-rebuild page dropped every errored timeline row; the
+ * runtime marks both those seeds and a live adapter failure `incomplete/error`,
+ * so that status is the same filter here.
  */
 function historyRows(messages: readonly MessageState[]): ChatHistoryRow[] {
-  const rows = messages.map((message) => ({
+  const rows = messages.filter((message) => {
+    if (message.role !== 'assistant' || message.status?.type !== 'incomplete') return true;
+    return message.status.reason !== 'error';
+  }).map((message) => ({
     role: message.role,
     content: message.content
       .filter((part) => part.type === 'text')
@@ -140,6 +149,10 @@ export default function MainChatPage() {
 
   const auiRef = useRef<AssistantClient | null>(null);
   const adapterRef = useRef<AriaAdapter | null>(null);
+  // Set by Stop, cleared when the next turn opens. `streamMessage` reads it on
+  // the close tail so a Stop racing the server's own close is not reported as
+  // "Connection closed unexpectedly".
+  const cancelledRef = useRef(false);
   const historyRef = useRef<ChatHistoryRow[]>([]);
   const conversationIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -278,6 +291,8 @@ export default function MainChatPage() {
    */
   const trackedStream = useCallback<typeof streamMessage>(
     (targetId, text, history, callbacks, signal, options) => {
+      // A new turn is not a stopped one: the close-tail check must start clear.
+      cancelledRef.current = false;
       const skillId = options?.skillId ?? pendingSkillIdRef.current ?? undefined;
       // Consumed by this turn only; a refused send must not leak the skill on.
       pendingSkillIdRef.current = null;
@@ -304,7 +319,7 @@ export default function MainChatPage() {
           },
         },
         signal,
-        { ...options, skillId },
+        { ...options, skillId, isCancelled: () => cancelledRef.current },
       );
     },
     [],
@@ -382,6 +397,9 @@ export default function MainChatPage() {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
+    // Read by the stream's close tail: a Stop must not surface as a dropped
+    // connection even when the server has already closed the response.
+    cancelledRef.current = true;
     // The adapter owns the one SSE request this turn opened.
     adapterRef.current?.cancel();
     const runId = activeRunIdRef.current;
@@ -501,11 +519,11 @@ export default function MainChatPage() {
           {notice && <StateNotice kind="error" title={notice.title} message={notice.message} />}
 
           {historyLoading ? (
-            <div className="mc-stack">
+            <div className="mc-stack" aria-live="polite" aria-relevant="additions">
               <div className="mc-sidebar-empty">Loading conversation…</div>
             </div>
           ) : showEmpty ? (
-            <div className="mc-stack">
+            <div className="mc-stack" aria-live="polite" aria-relevant="additions">
               <div className="mc-empty">
                 <div className="ai-empty-eyebrow">— operator copilot</div>
                 <div className="ai-empty-title">Ask Aria anything.</div>

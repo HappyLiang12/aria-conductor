@@ -19,7 +19,9 @@ export function AriaThread({ indicator }: { indicator?: ReactNode }) {
   }), [indicator]);
 
   return (
-    <div className="mc-stack">
+    // The transcript is the live region the pre-rebuild page had: a streaming
+    // answer is appended, so it is announced without stealing focus.
+    <div className="mc-stack" aria-live="polite" aria-relevant="additions">
       <Thread components={components} />
     </div>
   );

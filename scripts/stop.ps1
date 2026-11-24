@@ -53,6 +53,22 @@ foreach ($name in @('backend', 'frontend')) {
 }
 
 if (-not $SkipContainers) {
+    $memoryHubMarker = Join-Path $RunDir "memory-hub.started"
+    if (Test-Path -LiteralPath $memoryHubMarker) {
+        $qmdRuntime = Join-Path $ProjectRoot "scripts/qmd-runtime/start-qmd.ps1"
+        if (Test-Path -LiteralPath $qmdRuntime) {
+            & $qmdRuntime stop
+            if ($LASTEXITCODE -eq 0) {
+                Remove-Item -LiteralPath $memoryHubMarker -Force -ErrorAction SilentlyContinue
+                Write-Host "  stopped qmd memory hub" -ForegroundColor DarkGray
+            } else {
+                Write-Host "  WARNING: could not stop qmd memory hub (exit $LASTEXITCODE)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  WARNING: qmd runtime script not found; qmd memory hub was NOT stopped" -ForegroundColor Yellow
+        }
+    }
+
     # Resolved exactly as start.ps1 phase 1 resolves it - .env first, then podman when its CLI
     # is present, docker otherwise. Any other rule here would target a different engine than
     # the one that started the sandbox, and the stop would silently miss it.

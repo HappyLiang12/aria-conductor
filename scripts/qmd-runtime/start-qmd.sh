@@ -71,7 +71,7 @@ case "$cmd" in
     wait_health
     ;;
   stop)
-    "$RT" rm -f "$CONTAINER"
+    "$RT" rm -f "$CONTAINER" >/dev/null 2>&1 || true
     ;;
   status)
     "$RT" ps --filter "name=$CONTAINER" --format '{{.Names}} {{.Status}}'

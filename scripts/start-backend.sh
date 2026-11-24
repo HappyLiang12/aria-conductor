@@ -15,6 +15,7 @@ PROFILE="${SPRING_PROFILES_ACTIVE:-h2}"
 ADK_PROVIDER="${ADK_PROVIDER:-}"
 SKIP_SANDBOX="${SKIP_SANDBOX:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
+WITH_MEMORY_HUB="${WITH_MEMORY_HUB:-false}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -22,6 +23,7 @@ while [[ $# -gt 0 ]]; do
         --provider=*) ADK_PROVIDER="${1#*=}"; shift ;;
         --skip-sandbox) SKIP_SANDBOX="true"; shift ;;
         --skip-build) SKIP_BUILD="true"; shift ;;
+        --with-memory-hub) WITH_MEMORY_HUB="true"; shift ;;
         *) shift ;;
     esac
 done
@@ -231,6 +233,28 @@ echo "  ADK Provider: $ADK_PROVIDER"
 echo "  Port: 8080"
 if [ "$ADK_PROVIDER" = "opencode" ]; then
     echo "  OpenSandbox: ${OPENCODE_SANDBOX_SERVER_URL:-http://127.0.0.1:8090}"
+fi
+
+if [ "$WITH_MEMORY_HUB" = "true" ]; then
+    memory_hub_vault="${ARIA_MEMORY_QMD_VAULT_DIR:-${HOME}/aria-memory-vault}"
+    memory_hub_project="${ARIA_MEMORY_QMD_PROJECT:-aria-conductor}"
+    export ARIA_MEMORY_VAULT_DIR="$memory_hub_vault"
+    echo "Starting qmd memory hub..."
+    if ! bash "$SCRIPT_DIR/qmd-runtime/start-qmd.sh" start; then
+        echo "ERROR: qmd memory hub failed to start" >&2
+        exit 1
+    fi
+    export ARIA_MEMORY_QMD_ENABLED=true
+    export ARIA_MEMORY_QMD_URL="http://127.0.0.1:8181"
+    export ARIA_MEMORY_QMD_PROJECT="$memory_hub_project"
+    export ARIA_MEMORY_QMD_VAULT_DIR="$memory_hub_vault"
+    export ARIA_KNOWLEDGE_QMD_ENABLED=true
+    export ARIA_KNOWLEDGE_QMD_URL="http://127.0.0.1:8181"
+    export ARIA_KNOWLEDGE_QMD_PROJECT="$memory_hub_project"
+    export ARIA_KNOWLEDGE_QMD_VAULT_DIR="$memory_hub_vault"
+    mkdir -p "$PROJECT_ROOT/.run"
+    printf 'aria-qmd\n' > "$PROJECT_ROOT/.run/memory-hub.started"
+    echo "  qmd memory hub: enabled (project $memory_hub_project)"
 fi
 
 cd "$BACKEND_DIR"

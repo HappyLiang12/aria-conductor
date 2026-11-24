@@ -214,7 +214,7 @@ export function startSession(options: SessionOptions): LiveSession {
   let callOrder: string[] = [];
   const outstandingCalls = new Set<string>();
   const answeredResults = new Map<string, Record<string, unknown>>();
-  /** A render already reached the phone in this turn (spec D1: at most one per turn). */
+  /** A render already reached the phone in this utterance (spec D1: at most one per turn). */
   let renderedThisTurn = false;
   let refusedSends = 0;
   let droppedToolResults = 0;
@@ -373,10 +373,10 @@ export function startSession(options: SessionOptions): LiveSession {
 
   /**
    * Spec D2: `highlight_target` is the bridge's own display call, never Java's. A placeable
-   * box becomes one `ar_render` v2 control (spec D1: no `runId`, one per turn) and a
-   * `{ack:true,renderId}` answer; an unplaceable box, or a second call in the same turn,
-   * answers `{ack:false}` with no render so the model says 睇唔到. The answer joins the same
-   * ordered queue as Java's tool results.
+   * box becomes one `ar_render` v2 control (spec D1: no `runId`, one per utterance) and a
+   * `{ack:true,renderId}` answer; an unplaceable box, or a second call in the same
+   * utterance, answers `{ack:false}` with no render so the model says 睇唔到. The answer
+   * joins the same ordered queue as Java's tool results.
    */
   const answerHighlight = (id: string, args: Record<string, unknown>) => {
     const target = renderedThisTurn ? null : parseHighlightCall(args);
@@ -419,10 +419,6 @@ export function startSession(options: SessionOptions): LiveSession {
       // follows must not ask for a second response (it would race the first).
       speechStoppedSinceCommit = true;
     }
-    // Spec D1: the once-per-turn render budget starts over when a turn ends.
-    if (event.type === 'response.done') {
-      renderedThisTurn = false;
-    }
     for (const translation of translator.onEvent(event)) {
       if (translation.kind === 'cancel') {
         send({ type: 'response.cancel' });
@@ -440,7 +436,15 @@ export function startSession(options: SessionOptions): LiveSession {
           callOrder.push(translation.id);
         }
       }
+      if (translation.kind === 'control' && translation.event.type === 'speech_end') {
+        // Spec D1: one render per *utterance*, and the utterance starts at the translator's
+        // `speech_end` — the same boundary Java begins a turn on. `response.done` is not it:
+        // a highlight turn ends with the tool response, and the spoken answer is a second
+        // response in the same utterance.
+        renderedThisTurn = false;
+      }
       if (translation.kind === 'turn_done') {
+        // Backstop: a turn the provider ends without a further utterance still starts clean.
         renderedThisTurn = false;
       }
       emit(translation);

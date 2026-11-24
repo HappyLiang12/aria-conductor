@@ -659,7 +659,7 @@ describe('session: highlight_target', () => {
     await session.close();
   });
 
-  it('answers a second call in the same turn with ack:false and renders once per turn', async () => {
+  it('renders once per utterance: response.done between calls does not refill the budget', async () => {
     const fake = await fakeQwen();
     const { session, recorder } = await open(fake);
 
@@ -667,6 +667,9 @@ describe('session: highlight_target', () => {
     await recorder.waitFor(
       (action) => action.kind === 'control' && action.event.type === 'ar_render',
     );
+    // The highlight turn's own response ends here; the spoken answer is a *second* response
+    // in the same user utterance (spec D1). That end must not hand out a second render.
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
     highlightCall(fake, 'call_h2');
     await waitUntil(() => injected(fake).length === 2, 'second acknowledgement');
 
@@ -680,11 +683,33 @@ describe('session: highlight_target', () => {
       renderId: renderEvents(recorder.actions)[0]!.renderId,
     });
     expect(outputs[1]).toBe('{"ack":false}');
+    await session.close();
+  });
 
-    // The flag is per turn: once the response is done, the next turn may render again.
-    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
-    highlightCall(fake, 'call_h3');
-    await waitUntil(() => renderEvents(recorder.actions).length === 2, 'next-turn render');
+  it('refills the budget at the next utterance, with a fresh renderId', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake);
+
+    // Utterance one: the provider ends the speech, the model highlights once.
+    fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 1 });
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 1 });
+    highlightCall(fake, 'call_h1');
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'ar_render',
+    );
+
+    // Utterance two: the translator's speech_end is the boundary Java also begins a turn on.
+    fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 2 });
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 2 });
+    highlightCall(fake, 'call_h2');
+    await waitUntil(() => renderEvents(recorder.actions).length === 2, 'second utterance render');
+
+    const [first, second] = renderEvents(recorder.actions);
+    expect(first!.renderId).not.toBe(second!.renderId);
+    expect(injected(fake).map((message) => JSON.parse((message.item as { output: string }).output))).toEqual([
+      { ack: true, renderId: first!.renderId },
+      { ack: true, renderId: second!.renderId },
+    ]);
     await session.close();
   });
 

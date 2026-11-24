@@ -13,7 +13,7 @@ Success criteria:
 | id | Criterion | Evidence |
 |----|-----------|----------|
 | S1 | Shell, Overview, and Aria render against the live local stack with no browser console errors | Playwright run + console capture |
-| S2 | Aria parity: thinking/tool activity, final message, inline approval, waiting-input, and memory-proposal cards all render; Allow/Deny reach the backend | Real-stack run with a GATED ask |
+| S2 | Aria parity with today's page (conversation list, live tool/thinking activity, final message, stop, slash commands, delete), plus inline approval, waiting-input, and memory-proposal cards that reach the same decision endpoints AriaPanel uses today | Real-stack run with a GATED ask |
 | S3 | Stopping a run aborts the SSE request and leaves the conversation consistent | Playwright test + network log |
 | S4 | All 12 routes still load inside the new shell; legacy pages keep their behaviour | Route smoke test |
 | S5 | Dark and light themes both pass WCAG AA for body text and controls | Contrast measurement on painted elements |
@@ -172,11 +172,12 @@ Aria:
 
 | Block | Composition |
 |-------|-------------|
+| Conversation rail | `ConversationSidebar` from the main-chat work, restyled by tokens |
 | Thread | assistant-ui Thread primitives styled by tokens; Message Scroller behaviour |
-| Composer | assistant-ui Composer; attachments preserved from the current API |
-| Activity | tool cards, reasoning indicator |
-| Decisions | `__approval`, `__question`, `__memory` custom parts |
-| Run controls | stop via runtime cancel |
+| Composer | assistant-ui Composer; slash-command menu retained |
+| Activity | tool cards, reasoning indicator; live progress panel retained |
+| Decisions | `__approval`, `__question`, `__memory` custom tool UIs |
+| Run controls | stop, delete conversation, new conversation |
 
 ## 6. Migration
 
@@ -223,6 +224,8 @@ Acceptance is the S1–S7 table in section 1. Any criterion not exercised is rep
 - No SSE replay: a dropped stream is recovered by refetching the conversation and run; events between disconnect and refetch are not reconstructed.
 - Legacy pages look different from the new shell until their wave.
 - Custom tool-call parts (`__approval`, `__question`, `__memory`) depend on assistant-ui message-part contracts; the version is pinned and covered by adapter tests.
+- The Aria page transcript does not persist decision receipts. A decision is permanent in the approval/memory records and visible in the decision queue; the in-thread card resets on reload.
+- Attachment input stays in the Aria panel during Phase 1; the rebuilt Aria page is text-only, as it is today.
 - assistant-ui's built-in approval gate is intentionally not used; the server-driven flow above is the contract.
 
 ## 9. Preconditions

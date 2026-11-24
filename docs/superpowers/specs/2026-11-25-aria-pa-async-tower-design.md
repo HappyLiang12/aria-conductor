@@ -1,6 +1,13 @@
 # Aria PA — Async TOWER Dispatch (Phase 4) — Design (2026-11-25)
 
 Status: approved by the operator (2026-11-25), including the four defaults in §3.
+**Deployed 2026-11-25 on 8080** (Java `f5ad8328`, bridge dist with the tower modes). Verified
+live: an approved `start_agent_run` produced the child run's `run_event{origin:"dispatch"}`
+progress, the 20 s reminder fired, and the child's failure arrived as
+`run_event{state:"failed",origin:"dispatch"}` while the socket stayed open (the child cannot
+complete while the LLM gateway's model weights are missing). The deterministic integration
+test in the plan (Task 8) is still to land; the frames below are what the deployment sends.
+`tower{text,mode}` is Java→bridge only and never crosses to the phone.
 Scope: make a dispatched run non-blocking on the live (LIVE) channel: the voice turn ends
 after an immediate acknowledgement, the dispatched run's lifecycle reaches the phone, and
 its outcome comes back as a spoken TOWER notification. The SSE/chat path's parity is Phase 5

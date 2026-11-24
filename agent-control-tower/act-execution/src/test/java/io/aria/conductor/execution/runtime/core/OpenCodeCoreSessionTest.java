@@ -657,6 +657,50 @@ class OpenCodeCoreSessionTest {
         return (int) events.stream().filter(event -> "opencode.progress".equals(event.type())).count();
     }
 
+    /**
+     * A GATED turn blocks inside {@code POST /session/:id/message} until the
+     * operator decides. The session must surface the server's pending permission
+     * as a native ask and deliver the decided option back through the V1 reply
+     * route; otherwise the run parks forever with no decidable card.
+     */
+    @Test
+    void aPendingPermissionIsForwardedAndDecideRepliesToTheCore() throws Exception {
+        CountDownLatch releasePrompt = new CountDownLatch(1);
+        when(client.listMessages(SESSION)).thenReturn(new OpenCodeHttpClient.MessageListResult(List.of(), false));
+        when(client.listPermissions()).thenReturn(List.of(new OpenCodeHttpClient.PermissionSnapshot(
+                "per_1", SESSION, "write", List.of("gated.txt"),
+                "{\"id\":\"per_1\",\"sessionID\":\"sess-1\",\"permission\":\"write\","
+                        + "\"patterns\":[\"gated.txt\"],\"metadata\":{},\"always\":[],"
+                        + "\"tool\":{\"messageID\":\"msg_1\",\"callID\":\"call_1\"}}")));
+        when(client.sendPrompt(eq(SESSION), any(), anyList(), any())).thenAnswer(invocation -> {
+            releasePrompt.await(5, TimeUnit.SECONDS);
+            return new OpenCodeHttpClient.MessageResult(
+                    "{\"info\":{\"id\":\"a1\"},\"parts\":[]}", "a1", "done", 1L, 1L, "efficient", null);
+        });
+
+        CompletionStage<CoreResult> stage = session.prompt(task("prompt"), this::record);
+        await().atMost(Duration.ofSeconds(5))
+                .until(() -> events.stream().anyMatch(event -> "permission.request".equals(event.type())));
+
+        CoreEvent ask = events.stream()
+                .filter(event -> "permission.request".equals(event.type()))
+                .findFirst().orElseThrow();
+        JsonNode payload = JSON.readTree(ask.payloadJson());
+        assertThat(payload.path("requestId").asText()).isEqualTo("per_1");
+        assertThat(payload.path("toolName").asText()).isEqualTo("write");
+        assertThat(payload.path("options").findValuesAsText("optionId"))
+                .containsExactlyInAnyOrder("once", "reject");
+        assertThat(payload.path("options").findValuesAsText("kind"))
+                .containsExactlyInAnyOrder("allow_once", "reject_once");
+
+        session.decide(new io.aria.conductor.execution.approval.PermissionReply(
+                RUN, SESSION, "per_1", "once")).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        verify(client).replyPermission("per_1", "once");
+
+        releasePrompt.countDown();
+        stage.toCompletableFuture().get(10, TimeUnit.SECONDS);
+    }
+
     private static CoreTask task(String prompt) {
         return new CoreTask(null, List.of(), prompt);
     }

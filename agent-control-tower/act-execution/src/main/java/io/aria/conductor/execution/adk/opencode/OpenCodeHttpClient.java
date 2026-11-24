@@ -414,6 +414,68 @@ public class OpenCodeHttpClient implements AutoCloseable {
         return new MessageListResult(List.of(), true, cause);
     }
 
+    /** One pending native permission request from {@code GET /permission}. */
+    public record PermissionSnapshot(String id, String sessionId, String permission,
+                                     List<String> patterns, String rawJson) {
+    }
+
+    /**
+     * The server's pending native permission asks ({@code GET /permission}).
+     * Degradation is the same as {@link #listMessages}: a failed or malformed read
+     * yields an empty list rather than failing the prompt; a pending ask the
+     * watcher misses on one poll is picked up on the next.
+     */
+    public List<PermissionSnapshot> listPermissions() {
+        String path = "/permission";
+        try {
+            HttpResponse<String> resp = sendNoRetry("GET", path, null, LIST_MESSAGES_TIMEOUT);
+            if (resp.statusCode() / 100 != 2) {
+                log.debug("OpenCode listPermissions degraded: HTTP {} from GET {}", resp.statusCode(), path);
+                return List.of();
+            }
+            JsonNode root = objectMapper.readTree(resp.body());
+            if (!root.isArray()) {
+                log.debug("OpenCode listPermissions degraded: non-array body from GET {}", path);
+                return List.of();
+            }
+            List<PermissionSnapshot> out = new ArrayList<>();
+            for (JsonNode node : root) {
+                String id = node.path("id").asText(null);
+                if (id == null || id.isBlank()) {
+                    continue;
+                }
+                List<String> patterns = new ArrayList<>();
+                for (JsonNode pattern : node.path("patterns")) {
+                    if (pattern.isTextual()) {
+                        patterns.add(pattern.asText());
+                    }
+                }
+                out.add(new PermissionSnapshot(id, node.path("sessionID").asText(""),
+                        node.path("permission").asText(""), List.copyOf(patterns), node.toString()));
+            }
+            return out;
+        } catch (Exception e) {
+            log.debug("OpenCode listPermissions degraded: {} from GET {}", e.getMessage(), path);
+            return List.of();
+        }
+    }
+
+    /**
+     * Answers one native permission ask through the V1 route
+     * ({@code POST /permission/:id/reply}): {@code once}, {@code always} or
+     * {@code reject}. The reviewed server exposes this route; the run-owned
+     * permission coordinator names the choice it recorded.
+     */
+    public void replyPermission(String requestId, String reply) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("reply", reply);
+        String path = "/permission/" + requestId + "/reply";
+        HttpResponse<String> resp = sendNoRetry("POST", path, toJson(body), requestTimeout);
+        if (resp.statusCode() / 100 != 2) {
+            throw providerError("POST " + path + " returned status " + resp.statusCode());
+        }
+    }
+
     // ---- internal helpers ----
 
     /**

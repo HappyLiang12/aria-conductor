@@ -62,8 +62,17 @@ Each agent shows a health badge:
 ### Agent Capabilities
 An agent's tools come from its core (`opencode` or `qoder`) and, for platform operations,
 from the run-scoped Aria Conductor MCP endpoint. There is no per-agent tool assignment.
-In **HOST** mode an opencode agent is read-only (`edit`/`write`/`patch`/`bash` are refused, with no
-approval prompt); write tools are available to a **SANDBOX** worker inside its container.
+SANDBOX workers keep their workspace tools inside the run-owned container.
+
+### Host file access
+A HOST opencode run is governed by `aria.host.files`:
+- **GATED (default)**: the core is read-only, but each edit/write/patch/shell request becomes an
+  operator approval (Overview → Needs your decision).
+- **READ_ONLY**: those requests are auto-denied, with no prompt.
+- **FULL**: the core may edit, write and run shell commands as the backend user; this is a
+  full-filesystem grant and must be enabled deliberately.
+
+The qoder core in HOST still applies its own CLI tool defaults.
 
 ---
 

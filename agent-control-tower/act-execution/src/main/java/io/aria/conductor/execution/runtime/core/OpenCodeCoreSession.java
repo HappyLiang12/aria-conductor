@@ -22,8 +22,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -74,8 +77,10 @@ import java.util.function.Consumer;
  *       unsupported-mode evidence answers the pause route with 404), so the
  *       session refuses locally and reports the unchanged, unverified state --
  *       it never invents a call and never falls back by itself.</li>
- *   <li>The HTTP surface has no native permission reply channel: a decision is
- *       refused explicitly instead of being sent to an invented route.</li>
+ *   <li>The V1 server reports native permission asks through
+ *       {@code GET /permission}; while a prompt is blocked this session forwards
+ *       each new ask once and delivers the decision through
+ *       {@code POST /permission/:id/reply}.</li>
  * </ul>
  *
  * <p>The session allocates no container and no user workspace: it talks to the
@@ -86,6 +91,9 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
 
     /** Payload serializer of the progress fragments; no time types are involved. */
     private static final ObjectMapper PAYLOAD_MAPPER = new ObjectMapper();
+
+    /** How often a blocked prompt checks the V1 server for pending native asks. */
+    private static final long PERMISSION_POLL_MILLIS = 250;
 
     private final ExecutionSpec spec;
     private final OpenCodeHttpClient client;
@@ -186,6 +194,8 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
             // and this prompt refuses before any pump starts.
             CoreResult result = null;
             RuntimeException failure = null;
+            AtomicBoolean watching = new AtomicBoolean(false);
+            Thread permissionWatcher = null;
             try {
                 seedProgressBaseline();
                 // The turn budget is measured AFTER the progress baseline: the
@@ -207,6 +217,11 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                     progressPump = pump;
                     pump.start();
                 }
+                watching.set(true);
+                Set<String> seenAsks = ConcurrentHashMap.newKeySet();
+                permissionWatcher = Thread.ofVirtual()
+                        .name("opencode-permission-" + spec.runId())
+                        .start(() -> watchPermissions(events, watching, seenAsks));
                 // A text-only turn takes the text-only overload: the attachment list is
                 // forwarded only when the task actually carries one.
                 OpenCodeHttpClient.MessageResult message = task.attachments().isEmpty()
@@ -231,6 +246,10 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                 // stops the pump before the terminal result becomes visible, so
                 // no progress event can follow the future's completion.
                 pump.stop();
+                watching.set(false);
+                if (permissionWatcher != null) {
+                    permissionWatcher.interrupt();
+                }
                 synchronized (lifecycleLock) {
                     if (progressPump == pump) {
                         progressPump = null;
@@ -314,18 +333,57 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
     }
 
     /**
-     * Refused explicitly: this HTTP surface carries no native permission reply
-     * channel, and an approval is never delivered through an invented route.
-     * The run-bound decision belongs to the run policy and the permission
-     * coordinator, which own the write gate.
+     * Refused only when the server rejects the reply. The reviewed opencode V1
+     * server exposes {@code POST /permission/:id/reply}; the run-owned permission
+     * coordinator names the option it recorded.
      */
     @Override
     public CompletionStage<Void> decide(PermissionReply reply) {
         Objects.requireNonNull(reply, "reply");
-        return CompletableFuture.failedFuture(new IllegalStateException(
-                "The OpenCode HTTP surface exposes no native permission reply channel; request "
-                        + reply.requestId() + " cannot be answered natively and is delivered by the run policy, "
-                        + "never by an invented core route"));
+        try {
+            client.replyPermission(reply.requestId(), reply.optionId());
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /**
+     * The V1 server reports pending native asks through {@code GET /permission}
+     * rather than an event stream. While a prompt blocks inside its send, this
+     * watcher polls that list, forwards each new ask of this session exactly once
+     * as a {@code permission.request}, and stops with the prompt. A failed poll is
+     * retried on the next tick, so one transient read cannot lose the ask.
+     */
+    private void watchPermissions(Consumer<CoreEvent> events, AtomicBoolean watching, Set<String> seenAsks) {
+        while (watching.get() && !closed) {
+            for (OpenCodeHttpClient.PermissionSnapshot ask : client.listPermissions()) {
+                if (!sessionId.equals(ask.sessionId()) || !seenAsks.add(ask.id())) {
+                    continue;
+                }
+                events.accept(new CoreEvent("permission.request", spec.runId(), sessionId, ask.id(),
+                        permissionPayload(ask)));
+            }
+            try {
+                Thread.sleep(PERMISSION_POLL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /** The V1 ask as the coordinator's decidable envelope: allow once or reject. */
+    private static String permissionPayload(OpenCodeHttpClient.PermissionSnapshot ask) {
+        ObjectNode payload = PAYLOAD_MAPPER.createObjectNode();
+        payload.put("requestId", ask.id());
+        payload.put("toolName", ask.permission());
+        var options = payload.putArray("options");
+        options.addObject().put("optionId", "once").put("kind", "allow_once");
+        options.addObject().put("optionId", "reject").put("kind", "reject_once");
+        var patterns = payload.putArray("patterns");
+        ask.patterns().forEach(patterns::add);
+        return payload.toString();
     }
 
     @Override

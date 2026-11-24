@@ -54,18 +54,21 @@ import java.util.Set;
  * denied rather than auto-approved, only the classified read-only tools and the
  * governed web research tools are automatic, and every side-effecting tool --
  * file edits, shell execution, sub-agents, questions and directories outside
- * the workspace -- is refused in the core itself. There are two governed
- * exceptions. A SANDBOX worker run
+ * the workspace -- is refused in the core itself. Three governed policies open
+ * exactly what their boundary justifies. A SANDBOX worker run
  * ({@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}) receives its write and shell
  * tools because the run-owned container is the real boundary, and
  * {@code external_directory}, {@code task} and {@code question} stay denied. A
- * HOST run receives them only under the operator's opt-in
- * {@code aria.host.files=FULL} ({@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}),
- * because no container bounds it and the core runs as the backend user. Aria
- * stays read-only in a SANDBOX placement, and a worker run still receives no
- * platform MCP ({@code RunMcpWiring} stays Aria-only). A run-bound approve-once
- * decision is delivered by the run policy and the permission coordinator
- * (task 12) and is never implemented by relaxing this file back into allow-all.
+ * HOST run under the default {@code aria.host.files=GATED}
+ * ({@link #HOST_GATED_CONFIGURATION_TEMPLATE}) keeps the read-only core but
+ * offers edit/write/patch/bash and outside directories as operator asks;
+ * {@code READ_ONLY} denies those asks unattended, and the opt-in
+ * {@code FULL} ({@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}) auto-approves
+ * them because the operator accepted a full-filesystem grant. Aria stays
+ * read-only in a SANDBOX placement, and a worker run still receives no platform
+ * MCP ({@code RunMcpWiring} stays Aria-only). A run-bound approve-once decision
+ * is delivered by the run policy and the permission coordinator (task 12) and is
+ * never implemented by relaxing this file back into allow-all.
  *
  * <p>Capabilities come from the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}): both recorded
@@ -93,8 +96,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     /**
      * The governed permission policy plus the operator's model provider: the
      * filesystem stays read-only unless the placement renders
-     * {@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE} or the operator opted into
-     * {@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}, the two web research
+     * {@link #SANDBOX_WORKER_CONFIGURATION_TEMPLATE}, the default GATED posture
+     * renders {@link #HOST_GATED_CONFIGURATION_TEMPLATE} (write tools ask), or the
+     * operator opted into {@link #HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE}, the two web research
      * tools are allowed, and the run serves with the provider the operator
      * activated (never opencode's own default, whose free tier refuses this
      * consumer). Deny by default, explicit read-only allowances, explicit
@@ -115,9 +119,10 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * Conductor tools are not available in this session" while the endpoint was
      * connected).
      *
-     * <p>This blanket allowance stays (operator decision 2026-10-03): the
-     * reviewed core's HTTP surface has no permission reply channel, so the
-     * alternative is hiding the tools entirely, not a per-call ask. It only
+     * <p>This blanket allowance stays (operator decision 2026-10-03): the wired
+     * platform tools are already run-scoped and governed by the platform MCP
+     * policy, not by the HOST file-access permission ask; routing them through
+     * the native ask would hide the Conductor surface from the assistant. It only
      * matters for a platform-MCP-wired run; unwired runs have no such tools.
      *
      * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
@@ -258,6 +263,53 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "allow",
+                "aria-conductor*": "allow"
+              }%s,
+              "model": "%s/%s",
+              "provider": {
+                "%s": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "%s"
+                  },
+                  "models": {
+                    "%s": {
+                      "attachment": true,
+                      "modalities": { "input": ["text", "image"], "output": ["text"] }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+    /**
+     * The governed policy of a HOST run under {@code aria.host.files=GATED}: the
+     * workspace write tools are offered as operator asks rather than hidden or
+     * granted. opencode raises its native permission request for each edit,
+     * write, patch, shell command and directory boundary outside the workspace;
+     * the run-owned permission coordinator surfaces it and the run waits for the
+     * operator. No container bounds the core, so nothing is allowed silently.
+     */
+    private static final String HOST_GATED_CONFIGURATION_TEMPLATE = """
+            {
+              "$schema": "https://opencode.ai/config.json",
+              "permission": {
+                "*": "deny",
+                "read": "allow",
+                "list": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "edit": "ask",
+                "write": "ask",
+                "patch": "ask",
+                "bash": "ask",
+                "task": "deny",
+                "question": "deny",
+                "external_directory": "ask",
                 "aria-conductor*": "allow"
               }%s,
               "model": "%s/%s",
@@ -541,7 +593,8 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         boolean sandboxPlacement = SandboxBind.isSandboxProxy(environment);
         boolean sandboxWorker = sandboxPlacement && !AriaConstants.ARIA_AGENT_ID.equals(spec.agentId());
         boolean hostFullAccess = !sandboxPlacement && hostFiles.fullAccess();
-        writeGovernedConfiguration(configurationRoot, workerMcp, sandboxWorker, hostFullAccess);
+        boolean hostGated = !sandboxPlacement && hostFiles.gated();
+        writeGovernedConfiguration(configurationRoot, workerMcp, sandboxWorker, hostFullAccess, hostGated);
         // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
         // /workspace) and must not be host-absolutized: on Windows that turns it into
         // C:workspace, which the launch manifest rightly refuses.
@@ -746,7 +799,7 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     /** The governed configuration a launch pointing at {@code provider} writes. */
     public static String governedConfigurationJson(ModelProvider provider) {
         Objects.requireNonNull(provider, "provider");
-        return governedConfiguration(provider, "", false, false);
+        return governedConfiguration(provider, "", false, false, false);
     }
 
     /** The governed configuration of the documented fallback provider. */
@@ -755,11 +808,13 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     }
 
     private static String governedConfiguration(ModelProvider provider, String mcpBlock, boolean sandboxWorker,
-            boolean hostFull) {
+            boolean hostFull, boolean hostGated) {
         String providerKey = governedProviderKey(provider.providerId());
         String template = sandboxWorker
                 ? SANDBOX_WORKER_CONFIGURATION_TEMPLATE
-                : hostFull ? HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE : GOVERNED_CONFIGURATION_TEMPLATE;
+                : hostFull ? HOST_FULL_ACCESS_CONFIGURATION_TEMPLATE
+                : hostGated ? HOST_GATED_CONFIGURATION_TEMPLATE
+                : GOVERNED_CONFIGURATION_TEMPLATE;
         return template.formatted(mcpBlock,
                 providerKey, provider.model(),
                 providerKey, provider.baseUrl(), provider.model());
@@ -778,13 +833,13 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp,
-            boolean sandboxWorker, boolean hostFullAccess) {
+            boolean sandboxWorker, boolean hostFullAccess, boolean hostGated) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
         ModelProvider provider = modelProviders.resolve();
         String document = workerMcp
                 .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint), sandboxWorker,
-                        hostFullAccess))
-                .orElseGet(() -> governedConfiguration(provider, "", sandboxWorker, hostFullAccess));
+                        hostFullAccess, hostGated))
+                .orElseGet(() -> governedConfiguration(provider, "", sandboxWorker, hostFullAccess, hostGated));
         try {
             Files.createDirectories(target.getParent());
             Files.writeString(target, document, StandardCharsets.UTF_8);

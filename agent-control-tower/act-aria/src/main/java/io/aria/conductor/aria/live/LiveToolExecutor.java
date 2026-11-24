@@ -14,6 +14,7 @@ import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.RiskTier;
@@ -216,8 +217,8 @@ public class LiveToolExecutor {
         }
         try {
             ToolOutcome outcome = switch (name) {
-                case "start_agent_run" -> value(startAgentRun(args));
-                case "run_skill" -> value(runSkill(args));
+                case "start_agent_run" -> startAgentRun(args);
+                case "run_skill" -> runSkill(args);
                 default -> new ToolOutcome.Failure("Unknown live tool: " + name);
             };
             if (outcome instanceof ToolOutcome.Value result) {
@@ -259,7 +260,7 @@ public class LiveToolExecutor {
 
     // --- approved writes ------------------------------------------------------------------
 
-    private Map<String, Object> startAgentRun(JsonNode args) {
+    private ToolOutcome startAgentRun(JsonNode args) {
         UUID agentId = requireUuid(args, "agentId");
         String prompt = requireText(args, "prompt");
         Integer maxIterations = optionalPositiveInt(args, "maxIterations");
@@ -269,10 +270,10 @@ public class LiveToolExecutor {
         view.put("agentId", run.getAgentId());
         view.put("status", run.getStatus());
         view.put("maxIterations", run.getMaxIterations());
-        return view;
+        return valueForRun(view, run.getId(), agentName(agentId));
     }
 
-    private Map<String, Object> runSkill(JsonNode args) {
+    private ToolOutcome runSkill(JsonNode args) {
         String skillId = requireText(args, "skillId");
         String prompt = optionalText(args, "prompt");
         RunResponse run = writes.runSkill(skillId, prompt);
@@ -280,7 +281,22 @@ public class LiveToolExecutor {
         view.put("runId", run.getId());
         view.put("skillId", skillId);
         view.put("status", run.getStatus());
-        return view;
+        return valueForRun(view, run.getId(), agentName(run.getAgentId()));
+    }
+
+    /** The child run a dispatched write just started, typed for the router's registry. */
+    @SuppressWarnings("unchecked")
+    private ToolOutcome valueForRun(Object view, UUID childRunId, String agentName) {
+        // The approved path returns a map, not the raw projection: keep the JSON rules and
+        // attach the run so the router can route its lifecycle without parsing text.
+        Map<String, Object> map = view instanceof Map<?, ?> raw ? (Map<String, Object>) raw : null;
+        String json = map == null ? write(view) : write(map);
+        return new ToolOutcome.Value(bounded(json), childRunId, agentName);
+    }
+
+    private String agentName(UUID agentId) {
+        return agentId == null ? "" : agentRepository.findById(agentId)
+                .map(Agent::getName).orElse("");
     }
 
     private static String reasonOr(String message, String toolName) {
@@ -713,8 +729,15 @@ public class LiveToolExecutor {
     public sealed interface ToolOutcome
             permits ToolOutcome.Value, ToolOutcome.Failure, ToolOutcome.PendingApproval {
 
-        /** A compact JSON document (already bounded) to return to the model. */
-        record Value(String json) implements ToolOutcome {
+        /**
+         * A compact JSON document (already bounded) to return to the model. A dispatched
+         * write also names the child run and its display name, so the live socket can route
+         * that run's lifecycle frames back to the approving phone (Phase 4).
+         */
+        record Value(String json, UUID childRunId, String agentName) implements ToolOutcome {
+            Value(String json) {
+                this(json, null, null);
+            }
         }
 
         /** The call did not produce a value; the message says why (bounded, no stack). */

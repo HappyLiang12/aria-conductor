@@ -112,6 +112,31 @@ class LiveEventRouterTest {
                         .containsExactly("type", "v", "runId", "state", "summary"));
     }
 
+    /** Phase 4: an approved write's child run is routed to the socket that approved it. */
+    @Test
+    void anApprovedDispatchRegistersTheChildRunForThisSocket() {
+        LiveDispatchService dispatches = new LiveDispatchService();
+        LiveEventRouter withRegistry = new LiveEventRouter(runs, tools, registry, frames, approvals,
+                park, dispatches);
+        UUID child = UUID.randomUUID();
+        session.runId(runId);
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.WAITING_INPUT), eq("approval pending")))
+                .thenReturn(RunStatus.WAITING_INPUT);
+        withRegistry.parkForApproval(session, runId, approvalId, "start_agent_run",
+                "WRITE_LOCAL", "c1", arguments);
+        when(tools.executeApproved(eq("start_agent_run"), eq(arguments)))
+                .thenReturn(new LiveToolExecutor.ToolOutcome.Value(
+                        "{\"runId\":\"" + child + "\"}", child, "Analyst"));
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.COMPLETED), isNull()))
+                .thenReturn(RunStatus.COMPLETED);
+
+        withRegistry.onApprovalDecided(decided(ApprovalStatus.APPROVED));
+
+        assertThat(dispatches.find(child)).get()
+                .extracting(LiveDispatchService.Dispatch::agentName).isEqualTo("Analyst");
+        assertThat(dispatches.find(child).orElseThrow().session()).isSameAs(session);
+    }
+
     /**
      * The approved call runs once and its value answers the call it belongs to. One
      * message: the tool_result whose output is the tower sentence. A second (tower) message
@@ -568,6 +593,7 @@ class LiveEventRouterTest {
         context.registerBean(LiveFrames.class, () -> frames);
         context.registerBean(LiveApprovalService.class, () -> approvals);
         context.registerBean(LiveRunPark.class, () -> park);
+        context.registerBean(LiveDispatchService.class, LiveDispatchService::new);
         // What Boot's transaction auto-configuration supplies: without it every
         // @TransactionalEventListener becomes a plain synchronous listener.
         context.registerBean(TransactionalEventListenerFactory.class);

@@ -487,6 +487,11 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
                 // and the audio its image commit needs are both counted from here.
                 live.beginTurn();
             }
+            if ("ar_render".equals(type)) {
+                // The display tool's audit trace (spec D2): the render id and nothing else.
+                // The label, the caption and the box stay on the wire — never in a log line.
+                log.debug("aria live -> phone ar_render: renderId={}", renderId(payload));
+            }
             String code = errorCode(payload);
             if (code != null) {
                 lastErrorCode.set(code);
@@ -565,6 +570,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             return json.readTree(payload).path("type").asText("?");
         } catch (Exception e) {
             return "unparseable";
+        }
+    }
+
+    /** The {@code ar_render} audit id only: null when the line carries none. */
+    private String renderId(String payload) {
+        try {
+            JsonNode event = json.readTree(payload == null ? "" : payload);
+            return event == null ? null : event.path("renderId").asText(null);
+        } catch (IOException e) {
+            return null;
         }
     }
 

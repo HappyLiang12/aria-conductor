@@ -1,10 +1,15 @@
 package io.aria.conductor.aria.live;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -514,6 +519,43 @@ class LiveWebSocketHandlerTest {
         bridge.listener.onControl("{\"type\":\"speech_end\",\"tMs\":1}");
 
         assertThat(allTexts(session)).contains("{\"type\":\"speech_end\",\"tMs\":1}");
+    }
+
+    /**
+     * Spec D2: the display tool's audit trace names the render and nothing else. The label,
+     * the caption and the box travel to the phone and never into a log line.
+     */
+    @Test
+    void anArRenderIsAuditedByItsRenderIdAndNothingElse() throws Exception {
+        WebSocketSession session = opened();
+        String render = "{\"type\":\"ar_render\",\"v\":1,\"renderId\":\"3f1c2d5e-0000-4a4a-8a8a-001122334455\","
+                + "\"render\":{\"primitive\":\"highlight\",\"target\":{\"label\":\"5mm 六角匙\","
+                + "\"bbox\":[0.508,0.586,0.351,0.273]},\"text\":\"5mm 六角匙\",\"ttlMs\":8000,"
+                + "\"coord\":\"normalized\",\"safetyAlert\":null}}";
+        Logger logger = (Logger) LoggerFactory.getLogger(LiveWebSocketHandler.class);
+        Level previous = logger.getLevel();
+        ListAppender<ILoggingEvent> lines = new ListAppender<>();
+        lines.start();
+        logger.setLevel(Level.DEBUG);
+        logger.addAppender(lines);
+        try {
+            bridge.listener.onControl(render);
+        } finally {
+            logger.detachAppender(lines);
+            logger.setLevel(previous);
+        }
+
+        List<String> audit = lines.list.stream()
+                .map(event -> event.getFormattedMessage())
+                .filter(message -> message.contains("ar_render"))
+                .filter(message -> message.contains("renderId="))
+                .toList();
+        assertThat(audit).hasSize(1);
+        assertThat(audit.get(0)).isEqualTo(
+                "aria live -> phone ar_render: renderId=3f1c2d5e-0000-4a4a-8a8a-001122334455");
+        assertThat(audit.get(0)).doesNotContain("5mm").doesNotContain("0.508");
+        // The render itself still crosses verbatim.
+        assertThat(allTexts(session)).contains(render);
     }
 
     @Test

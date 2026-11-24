@@ -21,13 +21,20 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -61,6 +68,8 @@ class LiveWebSocketHandlerTest {
     private final CopyOnWriteArrayList<String> toolCalls = new CopyOnWriteArrayList<>();
     private final AtomicInteger turnEnds = new AtomicInteger();
     private final AtomicInteger sinkCloses = new AtomicInteger();
+    /** The direct backup locator (spec D6), stubbed per test. */
+    private final LiveLocator locator = mock(LiveLocator.class);
     /** The Task 4 sink: records every signal the handler must hand over. */
     private final LiveToolCallSink sink = new LiveToolCallSink() {
         @Override
@@ -117,7 +126,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource context = conversationId -> List.of(
                 new LiveContextSource.Entry("user", "earlier question"),
                 new LiveContextSource.Entry("assistant", "earlier answer"));
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200), bridges, json, context);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0), bridges, json, context);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -143,7 +152,7 @@ class LiveWebSocketHandlerTest {
             }
             return LiveBridge.NOOP;
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200), recording, json);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0), recording, json);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -154,7 +163,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void anUnavailableBridgeSaysWhyThenCloses1011() throws Exception {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
                 (live, listener) -> {
                     throw new LiveBridgeUnavailableException("live bridge disabled");
                 }, json);
@@ -176,7 +185,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aFactoryThatThrowsUnexpectedlyIsStillABridgeInternalClose() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
                 (live, listener) -> {
                     throw new IllegalStateException("process blew up");
                 }, json);
@@ -639,6 +648,202 @@ class LiveWebSocketHandlerTest {
         assertThat(allTexts(session)).contains(render);
     }
 
+    // --- the direct backup locator (spec D6) ----------------------------------------------
+
+    /**
+     * The backup's happy path: a look-intent question about a frame the bridge answered
+     * without a render gets exactly one render, in the bridge's own shape, after the turn.
+     */
+    @Test
+    void aLookIntentWithAFrameAndNoRenderGetsOneBackupRender() throws Exception {
+        when(locator.locate(anyString(), any())).thenReturn(Optional.of(
+                new LiveLocator.Render("5mm 六角匙", "5mm 六角匙", new double[] {0.2, 0.1, 0.2, 0.2})));
+        WebSocketSession session = openedWithLocator();
+        String question = "睇下個 5mm 六角匙喺邊";
+        String transcript = "{\"type\":\"input_transcript\",\"v\":1,\"seq\":3,\"text\":\"" + question
+                + "\",\"final\":true}";
+
+        handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+        bridge.listener.onControl(transcript);
+        bridge.listener.onTurnDone();
+
+        JsonNode render = awaitPhoneFrame(session, "ar_render");
+        assertThat(render.path("v").asInt()).isEqualTo(1);
+        UUID.fromString(render.path("renderId").asText()); // a render id, not a run id
+        assertThat(render.has("runId")).as("display-only renders carry no runId").isFalse();
+        JsonNode body = render.path("render");
+        assertThat(body.path("primitive").asText()).isEqualTo("highlight");
+        assertThat(body.path("target").path("label").asText()).isEqualTo("5mm 六角匙");
+        JsonNode bbox = body.path("target").path("bbox");
+        assertThat(bbox.get(0).asDouble()).isEqualTo(0.2);
+        assertThat(bbox.get(1).asDouble()).isEqualTo(0.1);
+        assertThat(bbox.get(2).asDouble()).isEqualTo(0.2);
+        assertThat(bbox.get(3).asDouble()).isEqualTo(0.2);
+        assertThat(body.path("text").asText()).isEqualTo("5mm 六角匙");
+        assertThat(body.path("ttlMs").asLong()).isEqualTo(8000L);
+        assertThat(body.path("coord").asText()).isEqualTo("normalized");
+        assertThat(body.has("safetyAlert")).isTrue();
+        assertThat(body.path("safetyAlert").isNull()).isTrue();
+
+        // The question was the turn's own final transcript and its own frame bytes.
+        ArgumentCaptor<byte[]> bytes = ArgumentCaptor.forClass(byte[].class);
+        verify(locator, timeout(1000)).locate(eq(question), bytes.capture());
+        assertThat(bytes.getValue()).isEqualTo("ar-jpeg".getBytes());
+
+        // The spoken turn is untouched: its control crossed verbatim and nothing new went
+        // down to the bridge (hello, the image and the commit only).
+        assertThat(allTexts(session)).contains(transcript);
+        assertThat(bridge.sent).hasSize(3);
+        verify(session, never()).close(any());
+    }
+
+    /** A render already forwarded this turn is the turn's overlay; the backup stays silent. */
+    @Test
+    void aBridgeRenderThisTurnSuppressesTheBackup() throws Exception {
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(AR_RENDER);
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).hasSize(1);
+        verify(session, never()).close(any());
+    }
+
+    /** No frame, no question: a text-only turn never reaches the direct provider. */
+    @Test
+    void aTextOnlyTurnNeverCallsTheLocator() throws Exception {
+        openedWithLocator();
+
+        bridge.listener.onControl(finalTranscript("邊度有廁所"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+    }
+
+    /** A frame without a look intent is not a locator question either. */
+    @Test
+    void aTranscriptThatIsNotALookIntentNeverCallsTheLocator() throws Exception {
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("今日天氣點呀"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+    }
+
+    /** A final transcript absent, or only a delta, is not a question. */
+    @Test
+    void anUnfinalisedTranscriptNeverCallsTheLocator() throws Exception {
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl("{\"type\":\"input_transcript\",\"v\":1,\"seq\":1,\"text\":\"睇下\",\"final\":false}");
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+    }
+
+    @Test
+    void aDisabledLocatorIsNeverAsked() throws Exception {
+        WebSocketSession session = openedWithLocator(false);
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+    }
+
+    /**
+     * One backup per turn, and the turn's frame dies with the turn: a second turn end and a
+     * later question with no new frame cannot draw again.
+     */
+    @Test
+    void atMostOneBackupRunsPerTurnAndTheFrameDiesWithIt() throws Exception {
+        when(locator.locate(anyString(), any())).thenReturn(Optional.of(
+                new LiveLocator.Render("六角匙", "六角匙", new double[] {0.2, 0.1, 0.2, 0.2})));
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+        awaitPhoneFrame(session, "ar_render");
+
+        bridge.listener.onTurnDone();
+        bridge.listener.onControl(finalTranscript("再睇下另一個"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).times(1)).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).hasSize(1);
+    }
+
+    /** A new utterance asks its own question: the previous one is not carried into it. */
+    @Test
+    void aNewUtteranceDropsThePreviousQuestion() throws Exception {
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        // The phone starts a second utterance with no question of its own: the first
+        // utterance's question does not carry over to it.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":false}"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+    }
+
+    /**
+     * A slow answer cannot draw over the next utterance: the turn it belonged to is over by
+     * the time it comes back, so it is dropped instead of painting a stale box.
+     */
+    @Test
+    void anAnswerThatArrivesAfterTheNextUtteranceIsDropped() throws Exception {
+        CountDownLatch answer = new CountDownLatch(1);
+        when(locator.locate(anyString(), any())).thenAnswer(invocation -> {
+            answer.await(2, TimeUnit.SECONDS);
+            return Optional.of(new LiveLocator.Render("六角匙", "六角匙", new double[] {0.2, 0.1, 0.2, 0.2}));
+        });
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+        verify(locator, timeout(1000)).locate(anyString(), any());
+
+        // The phone's next utterance begins before the provider answered.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":false}"));
+        answer.countDown();
+        sleep(300);
+
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+    }
+
+    /** A locator that fails is silent: no render, no error frame, no close. */
+    @Test
+    void aFailingLocatorIsSilent() throws Exception {
+        when(locator.locate(anyString(), any())).thenThrow(new IllegalStateException("provider down"));
+        WebSocketSession session = openedWithLocator();
+
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, timeout(1000)).locate(anyString(), any());
+        sleep(200);
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+        assertThat(allTexts(session)).noneMatch(text -> text.contains("\"error\""));
+        verify(session, never()).close(any());
+    }
+
     @Test
     void aBridgeToolCallIsHandedToTheListenerHook() throws Exception {
         WebSocketSession session = opened();
@@ -808,7 +1013,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource failing = conversationId -> {
             throw new IllegalStateException("no database");
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
                 bridges, json, failing);
         handler.afterConnectionEstablished(session);
 
@@ -822,7 +1027,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aContextSourceThatAnswersNullSeedsAnEmptyContext() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
                 bridges, json, conversationId -> null);
         handler.afterConnectionEstablished(session);
 
@@ -856,7 +1061,7 @@ class LiveWebSocketHandlerTest {
         // gone, so the child must not outlive it.
         WebSocketSession session = session("s1", null, null);
         RecordingBridge late = new RecordingBridge();
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
                 (live, listener) -> {
                     live.markClosed();
                     return late;
@@ -906,8 +1111,63 @@ class LiveWebSocketHandlerTest {
         return session;
     }
 
+    /** The same socket, with the direct backup locator wired in (spec D6). */
+    private WebSocketSession openedWithLocator() {
+        return openedWithLocator(true);
+    }
+
+    private WebSocketSession openedWithLocator(boolean locatorEnabled) {
+        WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200,
+                locatorEnabled, null, null, 0), bridges, json, conversationId -> List.of(),
+                new LiveSessionRegistry(), sink, new LiveFrames(json), locator);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(HELLO));
+        return session;
+    }
+
+    /** A final {@code input_transcript} control, exactly as the bridge emits it. */
+    private static String finalTranscript(String text) {
+        return "{\"type\":\"input_transcript\",\"v\":1,\"seq\":2,\"text\":\"" + text + "\",\"final\":true}";
+    }
+
+    /** The bridge's own render, as forwarded to the phone (spec D1). */
+    private static final String AR_RENDER = "{\"type\":\"ar_render\",\"v\":1,"
+            + "\"renderId\":\"5d0c9e0f-1111-4a4a-8a8a-001122334455\",\"render\":{\"primitive\":\"highlight\","
+            + "\"target\":{\"label\":\"六角匙\",\"bbox\":[0.4,0.5,0.1,0.1]},\"text\":\"六角匙\","
+            + "\"ttlMs\":8000,\"coord\":\"normalized\",\"safetyAlert\":null}}";
+
+    /** Every phone text frame of one type, in the order the socket saw them. */
+    private List<JsonNode> phoneFrames(WebSocketSession session, String type) throws Exception {
+        List<JsonNode> matched = new ArrayList<>();
+        for (String payload : allTexts(session)) {
+            JsonNode node = json.readTree(payload);
+            if (type.equals(node.path("type").asText())) {
+                matched.add(node);
+            }
+        }
+        return matched;
+    }
+
+    /** Waits for one phone frame of {@code type}: the backup's render is asynchronous. */
+    private JsonNode awaitPhoneFrame(WebSocketSession session, String type) throws Exception {
+        long deadline = System.currentTimeMillis() + 2000;
+        while (System.currentTimeMillis() < deadline) {
+            List<JsonNode> found = phoneFrames(session, type);
+            if (!found.isEmpty()) {
+                return found.get(0);
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("no " + type + " frame reached the phone within 2 s");
+    }
+
+    private static void sleep(long ms) throws InterruptedException {
+        Thread.sleep(ms);
+    }
+
     private LiveWebSocketHandler handler(long readyDeadlineMs) {
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200, false, null, null, 0),
                 bridges, json, conversationId -> List.of(), new LiveSessionRegistry(), sink);
         return handler;
     }

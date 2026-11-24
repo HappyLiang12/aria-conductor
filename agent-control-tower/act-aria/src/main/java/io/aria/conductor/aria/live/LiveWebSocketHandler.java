@@ -23,11 +23,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * The phone-facing end of the live socket (spec X1 / §"Endpoint and handshake", §"Bridge
@@ -65,6 +68,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * an {@code ar} after hello is forwarded so the bridge reconfigures in place. A malformed
  * {@code ar} is ignored — never an error, never a close — and the mode gates nothing here
  * beyond what the bridge does with it (spec D4).
+ *
+ * <p>The direct locator is the backup for a missed render (spec D6): when the bridge's turn
+ * ends after a turn that carried a frame and a look-intent transcript but emitted no
+ * {@code ar_render}, the turn's frame is asked about directly and, on an answer, one render
+ * is forwarded on this same socket. It runs after the turn, on its own threads, and only
+ * when {@code aria.live.direct-locator-enabled} is on; the key is the environment's
+ * {@code LLM_API_KEY} and never appears in a frame or a log line.
  *
  * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
  * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
@@ -126,6 +136,13 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private static final int CHANNELS = 1;
     private static final String AUDIO_FORMAT = "pcm16le";
 
+    /**
+     * A question that asks about something in view (spec D6): only these turns may get a
+     * backup render, so a conversation about anything else never calls the direct provider.
+     */
+    static final Pattern LOOK_INTENT =
+            Pattern.compile("睇下|睇吓|邊度|邊個|where|what.?s this", Pattern.CASE_INSENSITIVE);
+
     private static final Logger log = LoggerFactory.getLogger(LiveWebSocketHandler.class);
 
     private final LiveProperties properties;
@@ -135,39 +152,52 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private final LiveSessionRegistry registry;
     private final LiveToolCallSink toolCalls;
     private final LiveFrames frames;
+    private final LiveLocator locator;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "aria-live-hello-deadline");
         thread.setDaemon(true);
         return thread;
     });
+    /**
+     * The backup locator's own threads (spec D6): a 1.5 s direct provider call never runs
+     * on the bridge's reader thread, so the spoken turn cannot wait for it.
+     */
+    private final ExecutorService backups = Executors.newVirtualThreadPerTaskExecutor();
 
     @Autowired
     public LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry,
-            ObjectProvider<LiveToolCallSink> toolCalls, LiveFrames frames) {
+            ObjectProvider<LiveToolCallSink> toolCalls, LiveFrames frames, ObjectProvider<LiveLocator> locator) {
         this(properties, bridges, json, context, registry,
-                toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE), frames);
+                toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE), frames,
+                locator.getIfAvailable(() -> LiveLocator.NONE));
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json) {
         this(properties, bridges, json, conversationId -> List.of(), new LiveSessionRegistry(),
-                LiveToolCallSink.NONE, new LiveFrames(json));
+                LiveToolCallSink.NONE, new LiveFrames(json), LiveLocator.NONE);
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context) {
         this(properties, bridges, json, context, new LiveSessionRegistry(), LiveToolCallSink.NONE,
-                new LiveFrames(json));
+                new LiveFrames(json), LiveLocator.NONE);
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls) {
-        this(properties, bridges, json, context, registry, toolCalls, new LiveFrames(json));
+        this(properties, bridges, json, context, registry, toolCalls, new LiveFrames(json), LiveLocator.NONE);
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls,
             LiveFrames frames) {
+        this(properties, bridges, json, context, registry, toolCalls, frames, LiveLocator.NONE);
+    }
+
+    LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
+            LiveContextSource context, LiveSessionRegistry registry, LiveToolCallSink toolCalls,
+            LiveFrames frames, LiveLocator locator) {
         this.properties = properties;
         this.bridges = bridges;
         this.json = json;
@@ -175,6 +205,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         this.registry = registry;
         this.toolCalls = toolCalls;
         this.frames = frames;
+        this.locator = locator == null ? LiveLocator.NONE : locator;
     }
 
     @Override
@@ -297,6 +328,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     @PreDestroy
     void shutdown() {
         deadlines.shutdownNow();
+        backups.shutdownNow();
     }
 
     /** The registry this handler owns, so a later router can find a run's socket. */
@@ -316,8 +348,9 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             // keeps whatever an `ar` frame before it declared.
             live.arOn(ar.booleanValue());
         }
-        // The opening turn starts empty: no frame, no audio of its own.
+        // The opening turn starts empty: no frame, no audio of its own, no backup candidate.
         live.beginTurn();
+        live.beginBackupTurn();
         send(live, ready(live.id()));
         log.debug("aria live hello accepted");
         if (live.offerSubprotocol() != null && !PROTOCOL.equals(live.ws().getAcceptedProtocol())) {
@@ -437,6 +470,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             sendError(live, ERROR_FRAME_INVALID, false, ERROR_MESSAGE_FRAME_ONE_PER_TURN);
             return;
         }
+        if (properties.directLocatorEnabled()) {
+            // The direct locator's question (spec D6): the turn's own bytes, kept in memory
+            // only and dropped at the turn end. Storing them needs no second decode — the
+            // validator already decoded the frame it accepted.
+            live.backupFrame(result.jpeg());
+        }
         // Straight down: the bridge holds the pending image until the utterance's commit
         // (spec X10), so nothing is buffered here and an uncommitted frame dies with the
         // bridge's own turn.
@@ -482,8 +521,9 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private void commit(LiveSession live, JsonNode frame) {
         boolean wantsImage = frame.path("image").asBoolean(false);
         // The commit closes its turn whether or not it is forwarded: the audio it names
-        // belongs to the turn it ends.
+        // belongs to the turn it ends, and the utterance it starts owns its own question.
         boolean audioSeen = live.closeTurn();
+        live.beginUtterance();
         if (wantsImage && !audioSeen) {
             // The provider rejects an image-only commit (spec D4/D8). Nothing is forwarded:
             // neither the commit nor an image the bridge would append with no audio.
@@ -538,12 +578,21 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             String type = eventType(payload);
             if ("speech_end".equals(type)) {
                 // The bridge's turn end is the phone's next turn: the frame it may attach
-                // and the audio its image commit needs are both counted from here.
+                // and the audio its image commit needs are both counted from here. The next
+                // utterance also asks its own question, so the backup's transcript resets.
                 live.beginTurn();
+                live.beginUtterance();
+            }
+            if ("input_transcript".equals(type)) {
+                // The backup locator's question (spec D6): only the final transcript counts,
+                // and it is held on the socket, never logged.
+                finalTranscript(live, payload);
             }
             if ("ar_render".equals(type)) {
                 // The display tool's audit trace (spec D2): the render id and nothing else.
                 // The label, the caption and the box stay on the wire — never in a log line.
+                // This turn already has its render, so the direct backup must not add one.
+                live.renderForwarded();
                 log.debug("aria live -> phone ar_render: renderId={}", renderId(payload));
             }
             String code = errorCode(payload);
@@ -575,6 +624,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             } catch (RuntimeException e) {
                 log.debug("aria live turn-end sink failed: reason={}", e.getClass().getSimpleName());
             }
+            backup(live);
         }
 
         @Override
@@ -635,6 +685,61 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    // --- the direct backup locator (spec D6) ----------------------------------------------
+
+    /** Keeps the turn's final input transcript; deltas and unreadable controls are ignored. */
+    private void finalTranscript(LiveSession live, String payload) {
+        try {
+            JsonNode event = json.readTree(payload == null ? "" : payload);
+            if (event != null && event.path("final").asBoolean(false)) {
+                live.backupTranscript(event.path("text").asText(""));
+            }
+        } catch (IOException e) {
+            // Not a transcript this class can read: the backup simply does not arm.
+        }
+    }
+
+    /**
+     * The turn-end backup (spec D6): a turn that carried a frame and a look-intent question
+     * and rendered nothing gets one direct locator call, off the bridge's thread. The spoken
+     * turn is untouched — nothing here writes to the bridge, waits on the phone, or delays a
+     * control — and a failure, a timeout or a late answer is silent. The turn's own frame and
+     * transcript are dropped here whatever the outcome.
+     */
+    private void backup(LiveSession live) {
+        LiveSession.Backup pending = live.claimBackup();
+        try {
+            if (pending == null || !properties.directLocatorEnabled()
+                    || !LOOK_INTENT.matcher(pending.transcript()).find()) {
+                return;
+            }
+            backups.execute(() -> locate(live, pending));
+        } finally {
+            live.endBackupTurn();
+        }
+    }
+
+    /** Runs one direct lookup and, if it still belongs to the turn, forwards its render. */
+    private void locate(LiveSession live, LiveSession.Backup pending) {
+        long started = System.nanoTime();
+        Optional<LiveLocator.Render> render;
+        try {
+            render = locator.locate(pending.transcript(), pending.frame());
+        } catch (RuntimeException e) {
+            log.debug("aria live direct locator failed: reason={}", e.getClass().getSimpleName());
+            return;
+        }
+        if (render == null || render.isEmpty() || !live.claimBackupRender(pending.turn())) {
+            return;
+        }
+        String renderId = UUID.randomUUID().toString();
+        frames.toPhone(live, LiveFrames.arRender(renderId, render.get()));
+        // The backup's audit trace: its id, its source and its cost — never the box or the
+        // words, and never the provider's answer.
+        log.debug("aria live -> phone ar_render: renderId={} source=direct ms={}", renderId,
+                (System.nanoTime() - started) / 1_000_000);
     }
 
     private void sendRaw(LiveSession live, String payload) {

@@ -20,9 +20,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * that appears in {@code ready} or in a log line.
  *
  * <p>Frame ingest is turn-scoped (spec D8): one frame per turn, and an
- * {@code image} commit needs audio recorded after the turn boundary. The frame itself is
- * not held here — it reaches the bridge as it arrives and an uncommitted one is the
- * bridge's pending image; only the two counters live with the socket.
+ * {@code image} commit needs audio recorded after the turn boundary. The frame reaches the
+ * bridge as it arrives; its bytes are also kept here — in memory only, and only while the
+ * direct locator is on — as the backup's question (spec D6), and they are dropped at the
+ * turn end. An uncommitted frame is still the bridge's pending image.
  */
 public final class LiveSession {
 
@@ -46,6 +47,17 @@ public final class LiveSession {
     private boolean frameSeenThisTurn;
     /** PCM bytes sent to the provider since the turn boundary: an image commit needs some. */
     private long audioBytesSinceCommit;
+    /**
+     * This turn's backup-locator candidate (spec D6): the accepted frame's JPEG, the last
+     * final input transcript, whether an {@code ar_render} already crossed, and whether the
+     * one backup of the turn was already claimed. The frame lives here in memory only — it
+     * is dropped at the turn end and never written anywhere.
+     */
+    private byte[] backupFrame;
+    private String backupTranscript;
+    private long backupTurn;
+    private boolean backupClaimed;
+    private boolean renderThisTurn;
     private volatile ScheduledFuture<?> helloDeadline;
     /**
      * Gated tool calls waiting for the operator, by approval id. Remove-and-get is atomic,
@@ -228,6 +240,90 @@ public final class LiveSession {
     synchronized void beginTurn() {
         frameSeenThisTurn = false;
         audioBytesSinceCommit = 0;
+    }
+
+    // --- the backup locator's turn (spec D6) ----------------------------------------------
+
+    /**
+     * Starts the socket's first backup window ({@code hello}): nothing from an earlier
+     * connection may answer it.
+     */
+    synchronized void beginBackupTurn() {
+        backupFrame = null;
+        backupTranscript = null;
+        backupClaimed = false;
+        renderThisTurn = false;
+        backupTurn++;
+    }
+
+    /**
+     * Starts a new utterance's backup window — the phone's {@code commit} or the bridge's
+     * {@code speech_end}. The previous utterance's question and its render are dropped, but
+     * its frame is not: in the decided AR order (spec D4) the phone commits *before* it sends
+     * the frame this utterance names, and a frame sent before the commit is the same
+     * utterance's. The frame is dropped at the turn end instead.
+     */
+    synchronized void beginUtterance() {
+        backupTranscript = null;
+        backupClaimed = false;
+        renderThisTurn = false;
+        backupTurn++;
+    }
+
+    /** Keeps the turn's accepted frame for the backup only; nothing else reads it. */
+    synchronized void backupFrame(byte[] jpeg) {
+        backupFrame = jpeg;
+        // A new frame is a new question: whatever the last utterance asked does not apply.
+        backupTranscript = null;
+        renderThisTurn = false;
+    }
+
+    /** The turn's last final input transcript (deltas are ignored: the final one replaces). */
+    synchronized void backupTranscript(String text) {
+        backupTranscript = text;
+    }
+
+    /** An {@code ar_render} already crossed this turn: the backup must not add a second one. */
+    synchronized void renderForwarded() {
+        renderThisTurn = true;
+    }
+
+    /**
+     * Takes this turn's backup claim, once. Eligible only when a frame and a final
+     * transcript are both held and no render crossed; a second call (a second turn end, a
+     * retry) gets null.
+     */
+    synchronized Backup claimBackup() {
+        if (backupClaimed || renderThisTurn || backupFrame == null || backupTranscript == null
+                || backupTranscript.isBlank()) {
+            return null;
+        }
+        backupClaimed = true;
+        return new Backup(backupFrame, backupTranscript, backupTurn);
+    }
+
+    /**
+     * The claim on forwarding a locator's answer: false when a later utterance has already
+     * started (the answer belongs to a turn that is over), when a render already crossed, or
+     * when the socket is closed — so a slow answer can never overwrite a later turn's overlay.
+     */
+    synchronized boolean claimBackupRender(long turn) {
+        if (closed() || turn != backupTurn || renderThisTurn) {
+            return false;
+        }
+        renderThisTurn = true;
+        return true;
+    }
+
+    /** The turn ended: the stored frame and transcript are dropped (spec D6/D8). */
+    synchronized void endBackupTurn() {
+        backupFrame = null;
+        backupTranscript = null;
+        renderThisTurn = false;
+    }
+
+    /** One turn's backup question: the frame's bytes and the transcript that asked it. */
+    record Backup(byte[] frame, String transcript, long turn) {
     }
 
     void helloDeadline(ScheduledFuture<?> helloDeadline) {

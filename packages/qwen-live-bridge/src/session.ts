@@ -84,6 +84,15 @@ export const AR_FRAME_GRACE_MS = 300;
  * flight forever and every later `setAr` would only move the wish.
  */
 export const AR_UPDATE_SETTLE_MS = 2_000;
+/**
+ * Spec D4: AR-on has no provider turn detection, so the bridge ends the utterance itself
+ * from the phone's PCM. Speech is any sample at/above this amplitude (s16le); an utterance
+ * that carried at least {@link AR_EOS_SPEECH_MS} of it ends after
+ * {@link AR_EOS_SILENCE_MS} of samples below it.
+ */
+export const AR_EOS_SPEECH_PEAK = 1_200;
+export const AR_EOS_SPEECH_MS = 200;
+export const AR_EOS_SILENCE_MS = 600;
 /** How long a close frame may take before the socket is torn down. */
 const CLOSE_GRACE_MS = 500;
 /** The fixed read errors' arg names mirror `LiveToolExecutor` (`id`). */
@@ -376,6 +385,29 @@ export function startSession(options: SessionOptions): LiveSession {
   let lastSentAr: boolean | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
+  /**
+   * Spec D4: the provider refuses a `turn_detection` change while input audio is pending
+   * (`Cannot change turn_detection while input audio is pending`, probed live 2026-11-24),
+   * and the phone streams continuously. So an `ar` update pauses the phone's audio for its
+   * acknowledgement; the held chunks replay, in order, once the mode settles. `null` means
+   * the gate is open.
+   */
+  let audioGate: string[] | null = null;
+  /**
+   * Spec D4: with no turn detection the provider ends no utterance, so the bridge's own
+   * audio-energy EOS is the phone's only `speech_end`. `eosSpeechMs` proves this utterance
+   * carried speech, `eosSilenceMs` counts the trailing silence, `eosEnded` keeps it to one
+   * `speech_end` until speech starts again.
+   */
+  let eosSpeechMs = 0;
+  let eosSilenceMs = 0;
+  let eosEnded = false;
+  /**
+   * Uncommitted audio since the provider's last commit included speech. A mode switch
+   * clears the buffer to stop the provider refusing it, which would drop that speech, so
+   * the switch waits for the commit that empties the buffer instead.
+   */
+  let pendingLoud = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
   let pendingSends: Array<Record<string, unknown>> = [];
   let pendingAudio = 0;
@@ -452,6 +484,80 @@ export function startSession(options: SessionOptions): LiveSession {
     }
   };
 
+  /**
+   * Spec D4: pause the phone's audio for the one in-flight `ar` update. The provider
+   * refuses the switch while its input buffer holds pending audio, and the phone streams
+   * continuously, so the buffer is kept empty until the mode settles.
+   */
+  const gateAudio = () => {
+    if (audioGate === null) {
+      audioGate = [];
+    }
+  };
+
+  /** The mode settled and the session survives: every held chunk crosses, in order. */
+  const releaseAudioGate = () => {
+    const held = audioGate;
+    audioGate = null;
+    if (held === null) {
+      return;
+    }
+    for (const chunk of held) {
+      send({ type: 'input_audio_buffer.append', audio: chunk }, true);
+    }
+  };
+
+  /**
+   * Spec D4: AR-on runs with no turn detection, so the provider never ends the utterance.
+   * The phone's PCM decides: enough speech, then enough silence, is the one `speech_end`
+   * that turn is owed. The translator keeps it to one per utterance and re-arms when
+   * speech starts again; the echoed `input_audio_buffer.committed` stays silent.
+   */
+  /** The peak s16le sample of one phone chunk and its duration (the contract is 16 kHz). */
+  const audioEnergy = (dataBase64: string) => {
+    const bytes = Buffer.from(dataBase64, 'base64');
+    let peak = 0;
+    for (let at = 0; at + 1 < bytes.length; at += 2) {
+      const value = Math.abs(bytes.readInt16LE(at));
+      if (value > peak) {
+        peak = value;
+      }
+    }
+    return { peak, ms: (Math.floor(bytes.length / 2) * 1000) / 16000 };
+  };
+
+  const trackEos = (peak: number, ms: number) => {
+    if (!configured || closing || fataled || arApplied !== true) {
+      return;
+    }
+    if (peak >= AR_EOS_SPEECH_PEAK) {
+      if (eosSpeechMs === 0) {
+        // A new utterance begins: the previous one's `speech_end` (the VAD's or this
+        // detector's) must not silence this one.
+        translator.beginUtterance();
+        eosEnded = false;
+      }
+      eosSpeechMs += ms;
+      eosSilenceMs = 0;
+      return;
+    }
+    if (eosEnded || eosSpeechMs < AR_EOS_SPEECH_MS) {
+      return;
+    }
+    eosSilenceMs += ms;
+    if (eosSilenceMs < AR_EOS_SILENCE_MS) {
+      return;
+    }
+    eosEnded = true;
+    eosSpeechMs = 0;
+    eosSilenceMs = 0;
+    for (const action of translator.syntheticSpeechEnd()) {
+      if (action.kind === 'control') {
+        emit(action);
+      }
+    }
+  };
+
   /** Forgets a held AR commit without sending it: the socket it was for is gone. */
   const cancelDeferredCommit = () => {
     if (deferredCommit !== null) {
@@ -508,6 +614,7 @@ export function startSession(options: SessionOptions): LiveSession {
     if (effectiveAr() === arApplied) {
       // The phone went back to the applied mode while this update was in flight: nothing
       // is left to retry and no switch was refused.
+      releaseAudioGate();
       flushDeferredCommit();
       return;
     }
@@ -519,6 +626,7 @@ export function startSession(options: SessionOptions): LiveSession {
     refusedArSwitches += 1;
     arDesired = arApplied;
     arRetried = false;
+    releaseAudioGate();
     reconcileAr();
     // The wish was given up: a commit held for it falls back to the VAD path.
     flushDeferredCommit();
@@ -527,6 +635,12 @@ export function startSession(options: SessionOptions): LiveSession {
   /** Nothing about the previous provider session survives into the next one. */
   const resetProviderState = () => {
     pendingImage = null;
+    // The chunks held for a switch died with the socket they would have joined.
+    audioGate = null;
+    eosSpeechMs = 0;
+    eosSilenceMs = 0;
+    eosEnded = false;
+    pendingLoud = false;
     // Spec D8: an image held for a commit that will never reach this session is dropped,
     // and an AR commit still waiting for its frame dies with the session it belonged to.
     cancelDeferredCommit();
@@ -573,24 +687,29 @@ export function startSession(options: SessionOptions): LiveSession {
     arCommitted = true;
     const image = held.image ? pendingImage : null;
     pendingImage = null;
+    // The VAD may have answered this utterance before the mode was applied: the provider
+    // already committed it, so an empty commit is an error and a second `response.create`
+    // would race the answer it already asked for. The phone's commit still proves the AR
+    // mode; its image belonged to an answered turn and is dropped, not leaked into the
+    // next commit.
+    const vadAnswered = speechStoppedSinceCommit;
+    speechStoppedSinceCommit = false;
+    if (vadAnswered) {
+      return;
+    }
     if (image !== null) {
       send({ type: 'input_image_buffer.append', image });
     }
-    // The VAD may have answered this utterance before the mode was applied: the commit
-    // still crosses (the phone ended its speech), but a second `response.create` would
-    // race the answer the provider already asked for.
-    const vadAnswered = speechStoppedSinceCommit;
-    speechStoppedSinceCommit = false;
-    if ((!held.awaitMode || arApplied) && !vadAnswered) {
+    if (!eosEnded) {
       // The AR turn re-arms the translator's one `speech_end` per utterance first: with no
-      // turn detection the provider never sends `speech_started`. A VAD-ended utterance
-      // already has its `speech_end`, so re-arming here would emit a second one.
+      // turn detection the provider never sends `speech_started`. When the bridge's own
+      // energy EOS already sent this utterance's `speech_end`, re-arming here would emit a
+      // second one on the provider's echoed commit.
       translator.beginUtterance();
     }
     send({ type: 'input_audio_buffer.commit' });
-    if (image !== null || !vadAnswered) {
-      send({ type: 'response.create' });
-    }
+    pendingLoud = false;
+    send({ type: 'response.create' });
   };
 
   const clearReopen = () => {
@@ -662,12 +781,24 @@ export function startSession(options: SessionOptions): LiveSession {
     if (target === arApplied) {
       return;
     }
+    if (pendingLoud) {
+      // The switch drops the provider's uncommitted audio, and that tail holds speech: wait
+      // for the commit that ends the utterance (the VAD's own or the phone's, which calls
+      // back here) so nothing the user said is thrown away.
+      return;
+    }
     const timer = setTimeout(settleArUpdate, AR_UPDATE_SETTLE_MS);
     timer.unref?.();
     // Even a frame the socket queues (it is going away) counts as in flight: the ack that
     // replays it, or the reopen's reset, is what settles it.
     arUpdateInFlight = { target, timer };
     lastSentAr = target;
+    // The provider refuses a `turn_detection` change while audio is pending, and the phone
+    // streams continuously: the stream is held and the silent tail that is already there is
+    // cleared, so the switch reaches an empty buffer. The phone's held turn still carries
+    // its own committed audio.
+    gateAudio();
+    send({ type: 'input_audio_buffer.clear' });
     send({ type: 'session.update', session: sessionConfig(target) });
   };
 
@@ -752,6 +883,11 @@ export function startSession(options: SessionOptions): LiveSession {
 
   /** Apply one provider event: the translator decides, this function obeys. */
   const dispatch = (event: Record<string, unknown>) => {
+    if (event.type === 'input_audio_buffer.committed') {
+      // The provider's buffer is empty: a switch it held back may go now.
+      pendingLoud = false;
+      reconcileAr();
+    }
     if (event.type === 'input_audio_buffer.speech_stopped') {
       // With `semantic_vad_ec` the provider answers this itself; a phone commit that
       // follows must not ask for a second response (it would race the first).
@@ -768,8 +904,10 @@ export function startSession(options: SessionOptions): LiveSession {
       forgetArUpdate();
       arDesired = arApplied;
       refusedArSwitches += 1;
-      // A commit held for this mode now falls back to the VAD path rather than waiting for
-      // an acknowledgement that will never come.
+      // The provider runs the old mode again: its audio stream resumes, and a commit held
+      // for this mode falls back to the VAD path rather than waiting for an acknowledgement
+      // that will never come.
+      releaseAudioGate();
       flushDeferredCommit();
     }
     for (const translation of translator.onEvent(event)) {
@@ -913,6 +1051,9 @@ export function startSession(options: SessionOptions): LiveSession {
               arApplied = lastSentAr;
               lastSentAr = null;
             }
+            // The switch settled: the phone's audio was held so the provider saw an empty
+            // buffer. It crosses now, in order, before the commit a held AR turn sends.
+            releaseAudioGate();
             // A mid-session `session.update` (an `ar` toggle, spec D4) is an update to a
             // session that already holds its context: re-seeding here would replay every
             // seeded turn into the live conversation. A wish that arrived while this one
@@ -1024,6 +1165,19 @@ export function startSession(options: SessionOptions): LiveSession {
     ready: () => startup,
 
     appendAudio(dataBase64) {
+      if (audioGate !== null) {
+        if (audioGate.length >= MAX_PENDING_AUDIO) {
+          refusedSends += 1;
+          return;
+        }
+        audioGate.push(dataBase64);
+        return;
+      }
+      const { peak, ms } = audioEnergy(dataBase64);
+      if (peak >= AR_EOS_SPEECH_PEAK) {
+        pendingLoud = true;
+      }
+      trackEos(peak, ms);
       send({ type: 'input_audio_buffer.append', audio: dataBase64 }, true);
     },
 

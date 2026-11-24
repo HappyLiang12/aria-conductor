@@ -55,6 +55,12 @@ export interface Translator {
    * `speech_end` per utterance right before it commits the audio explicitly.
    */
   beginUtterance(): void;
+  /**
+   * Spec D4: in AR-on the provider runs with no turn detection, so it never ends an
+   * utterance itself. The bridge's own audio-energy end-of-speech asks for the one
+   * `speech_end` this utterance is owed; a silent `[]` when it was already sent.
+   */
+  syntheticSpeechEnd(): Translation[];
   /** Aria's own `ready` shape; see {@link ReadyEvent}. */
   readyEvent(): ReadyEvent;
   /** `session_expired` is an error code, not an event type (phone contract). */
@@ -386,6 +392,19 @@ function transcriptText(raw: string, final: boolean): string {
 
     beginUtterance() {
       speechEnded = false;
+    },
+
+    syntheticSpeechEnd() {
+      if (speechEnded) {
+        return [];
+      }
+      speechEnded = true;
+      const speechEnd: SpeechEndEvent = {
+        type: 'speech_end',
+        v: PROTOCOL_VERSION,
+        tMs: clock(),
+      };
+      return control(speechEnd);
     },
 
     expiredEvent() {

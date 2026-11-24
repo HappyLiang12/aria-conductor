@@ -283,9 +283,17 @@ const INSTRUCTIONS = [
   '時間、run、approval、agent、workflow 等事實一定要用工具查，唔准靠記憶或者估計。',
   '問時間要用 get_time 嘅 now（本地時間），唔好自己推算時區。',
   '工具結果返嚟之後，用一句話講重點，唔需要讀出全部內容。',
-  '[tower] 開頭嘅訊息係背景系統通知，用一句話講返俾用戶聽。',
+  '[tower] 開頭嘅文字（訊息或者工具結果）都係背景系統通知，用一句話講返俾用戶聽。',
   '有圖嘅時候，用戶講『睇下／邊度／邊個』，先叫 highlight_target，再用一句最多 15 字講出答案。冇圖或者唔肯定，就講睇唔到，唔准估框。',
 ].join('\n');
+
+/** A phone commit held in AR: the frame side (`due`) and the mode side (`awaitMode`). */
+interface DeferredCommit {
+  image: boolean;
+  timer: ReturnType<typeof setTimeout>;
+  awaitMode: boolean;
+  due: boolean;
+}
 
 /** A reconnect that cannot reach the provider: the phone gets 4012, not a retry loop. */
 class OpenFailure extends Error {
@@ -330,8 +338,13 @@ export function startSession(options: SessionOptions): LiveSession {
    * never claim a mode the provider is not running.
    */
   let arApplied = effectiveAr();
-  /** AR-on: the phone's commit, held for the frame that may still be behind it. */
-  let deferredCommit: { image: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+  /**
+   * AR-on: the phone's commit, held for the frame that may still be behind it and, for the
+   * commit that lifts the commit guard, for the `ar` update that proves the mode.
+   * `due` is the frame side (the grace elapsed or the frame arrived); the mode side is
+   * `awaitMode` against `arApplied`.
+   */
+  let deferredCommit: DeferredCommit | null = null;
   /**
    * AR-on: this utterance's commit already went out, so a frame that arrives now belongs
    * to no turn (spec D8). It lifts at the next turn boundary (`turn_done`) or commit.
@@ -492,6 +505,7 @@ export function startSession(options: SessionOptions): LiveSession {
     if (effectiveAr() === arApplied) {
       // The phone went back to the applied mode while this update was in flight: nothing
       // is left to retry and no switch was refused.
+      flushDeferredCommit();
       return;
     }
     if (!arRetried && configured && !closing && !fataled) {
@@ -503,6 +517,8 @@ export function startSession(options: SessionOptions): LiveSession {
     arDesired = arApplied;
     arRetried = false;
     reconcileAr();
+    // The wish was given up: a commit held for it falls back to the VAD path.
+    flushDeferredCommit();
   };
 
   /** Nothing about the previous provider session survives into the next one. */
@@ -530,10 +546,22 @@ export function startSession(options: SessionOptions): LiveSession {
    * response. `beginUtterance` re-arms the translator's `speech_end` first: with no turn
    * detection the provider never sends `speech_started`, so without it the second
    * utterance's commit would produce no `speech_end` at all.
+   *
+   * The commit that lifts the guard (spec D5) is held past the frame grace until the
+   * provider answers the `ar` update: the provider may still be on the server VAD and
+   * have auto-committed and answered that utterance, so a flush would commit an empty
+   * buffer or ask for a second answer. When the update is refused or given up, the
+   * utterance falls back to the AR-off path — the commit, and a response only when the
+   * VAD has not already asked for one — instead of erroring.
    */
   const flushDeferredCommit = () => {
     const held = deferredCommit;
-    if (held === null) {
+    if (held === null || !held.due) {
+      return;
+    }
+    if (held.awaitMode && !arApplied && effectiveAr()) {
+      // The mode this commit belongs to is still unproven: the acknowledgement (or the
+      // refusal that collapses the wish) flushes it, never the provider's VAD race.
       return;
     }
     clearTimeout(held.timer);
@@ -544,9 +572,20 @@ export function startSession(options: SessionOptions): LiveSession {
     if (image !== null) {
       send({ type: 'input_image_buffer.append', image });
     }
-    translator.beginUtterance();
+    if (!held.awaitMode || arApplied) {
+      translator.beginUtterance();
+      send({ type: 'input_audio_buffer.commit' });
+      send({ type: 'response.create' });
+      return;
+    }
+    // The guard's mode never applied: the provider still runs `semantic_vad_ec` and has
+    // already answered on `speech_stopped`, so only the commit may cross.
+    const askForResponse = image !== null || !speechStoppedSinceCommit;
+    speechStoppedSinceCommit = false;
     send({ type: 'input_audio_buffer.commit' });
-    send({ type: 'response.create' });
+    if (askForResponse) {
+      send({ type: 'response.create' });
+    }
   };
 
   const clearReopen = () => {
@@ -724,6 +763,9 @@ export function startSession(options: SessionOptions): LiveSession {
       forgetArUpdate();
       arDesired = arApplied;
       refusedArSwitches += 1;
+      // A commit held for this mode now falls back to the VAD path rather than waiting for
+      // an acknowledgement that will never come.
+      flushDeferredCommit();
     }
     for (const translation of translator.onEvent(event)) {
       if (translation.kind === 'cancel') {
@@ -871,6 +913,8 @@ export function startSession(options: SessionOptions): LiveSession {
             // seeded turn into the live conversation. A wish that arrived while this one
             // was in flight (or while the session rebuilt) crosses now, one at a time.
             reconcileAr();
+            // The acknowledgement may be the proof a held commit was waiting for (spec D5).
+            flushDeferredCommit();
             return;
           default:
             if (configured) {
@@ -996,17 +1040,19 @@ export function startSession(options: SessionOptions): LiveSession {
       // and the provider's image buffer must see the same order (spec X10).
       pendingImage = dataBase64;
       if (deferredCommit !== null) {
-        // The frame the held commit is waiting for: flush now rather than at the grace's
-        // end (spec D4 allows either as the trigger).
+        // The frame the held commit is waiting for: the frame side of the hold is due now,
+        // so flush at once unless the mode it belongs to is still unproven (spec D4/D5).
+        deferredCommit.due = true;
         flushDeferredCommit();
       }
     },
 
     commit(commitOptions = {}) {
       const asksForImage = commitOptions.image === true;
-      if (!commitObserved) {
+      const liftsGuard = !commitObserved;
+      if (liftsGuard) {
         // Spec D5: this phone drives its own turns, so the guard lifts. An AR-on wish that
-        // was held on the VAD crosses now, before the commit is held for its frame.
+        // was held on the VAD crosses now; the commit below then waits for its proof.
         commitObserved = true;
         if (arDesired) {
           reconcileAr();
@@ -1025,9 +1071,22 @@ export function startSession(options: SessionOptions): LiveSession {
           // sent (spec X10).
           pendingImage = null;
         }
-        const timer = setTimeout(flushDeferredCommit, AR_FRAME_GRACE_MS);
-        timer.unref?.();
-        deferredCommit = { image: asksForImage, timer };
+        const held = {
+          image: asksForImage,
+          // A guard-lifting commit belongs to the mode its `ar` update is proving: it must
+          // not reach a provider that may still be on the VAD (spec D5).
+          awaitMode: liftsGuard,
+          due: false,
+        } as DeferredCommit;
+        held.timer = setTimeout(() => {
+          if (deferredCommit !== held) {
+            return;
+          }
+          held.due = true;
+          flushDeferredCommit();
+        }, AR_FRAME_GRACE_MS);
+        held.timer.unref?.();
+        deferredCommit = held;
         return;
       }
       const image = commitOptions.image === true ? pendingImage : null;
@@ -1069,6 +1128,9 @@ export function startSession(options: SessionOptions): LiveSession {
       if (!next) {
         // Leaving AR with a commit held for a frame that may never come: the utterance is
         // due now rather than stranded when the grace timer is dropped.
+        if (deferredCommit !== null) {
+          deferredCommit.due = true;
+        }
         flushDeferredCommit();
       }
       reconcileAr();

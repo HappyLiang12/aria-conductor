@@ -186,6 +186,11 @@ describe('session: config and handshake', () => {
     expect(config.instructions).toContain(
       '有圖嘅時候，用戶講『睇下／邊度／邊個』，先叫 highlight_target，再用一句最多 15 字講出答案。冇圖或者唔肯定，就講睇唔到，唔准估框。',
     );
+    // Writer results travel as `function_call_output`, so the tower line names tool outputs
+    // too — a `[tower]` result must be spoken like a `[tower]` message.
+    expect(config.instructions).toContain(
+      '[tower] 開頭嘅文字（訊息或者工具結果）都係背景系統通知，用一句話講返俾用戶聽。',
+    );
     const tools = config.tools as Array<{
       type: string;
       function: { name: string; description: string; parameters: unknown };
@@ -461,6 +466,78 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
       () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
       'the deferred commit',
     );
+    await session.close();
+  });
+
+  it('holds the guard-lifting commit until the provider acknowledges the AR mode', async () => {
+    fakeGraceTimers();
+    // Only the handshake is answered: the null update's acknowledgement belongs to the test.
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.attachImage('ARIMAGE');
+    session.commit({ image: true });
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
+
+    // The frame grace alone proves nothing: the provider may still be on the VAD and may
+    // already have answered this utterance, so no commit and no image cross yet.
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    expect(typesOf(0, fake)).not.toContain('input_image_buffer.append');
+    expect(typesOf(0, fake)).not.toContain('response.create');
+
+    // The acknowledgement is the proof: the one held commit flushes as an AR turn now.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the held AR commit');
+    const types = typesOf(0, fake);
+    const image = types.indexOf('input_image_buffer.append');
+    expect(types.slice(image)).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    expect(types.filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    expect(types.filter((type) => type === 'response.create')).toHaveLength(1);
+
+    // Held once: a late second grace flushes nothing.
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await session.close();
+  });
+
+  it('falls back to the VAD commit path when the provider refuses the guard ar update', async () => {
+    fakeGraceTimers();
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session, recorder } = await open(fake, { ar: true });
+
+    // The provider's own VAD has already ended (and answered) this utterance.
+    fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 0 });
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 100 });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+
+    session.appendAudio('AAAA');
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+
+    // The provider refuses AR's no-detection mode: the turn still commits, under the VAD
+    // it really runs, and asks for no second answer (the VAD's own already ran).
+    fake.send(0, {
+      type: 'error',
+      error: { code: 'invalid_value', message: 'turn_detection refused' },
+    });
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the commit');
+    expect(session.stats().refusedArSwitches).toBe(1);
+    expect(typesOf(0, fake).filter((type) => type === 'response.create')).toEqual([]);
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
     await session.close();
   });
 
@@ -1369,6 +1446,9 @@ describe('session: highlight_target', () => {
         .filter((action) => action.kind === 'tool_call')
         .map((action) => (action as { id: string }).id),
     ).toEqual(['call_time']);
+    // The render travels in a second provider frame: wait for it rather than assume the
+    // tool call's frame and this one were translated in the same turn.
+    await waitUntil(() => renderEvents(recorder.actions).length === 1, 'the render');
     expect(renderEvents(recorder.actions)).toHaveLength(1);
     // The highlight answer waits for the earlier call: one continuation, in call order.
     expect(injected(fake)).toEqual([]);

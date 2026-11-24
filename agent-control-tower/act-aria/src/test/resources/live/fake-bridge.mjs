@@ -26,6 +26,12 @@
 //                                  and privacy assertions read.
 //   FAKE_BRIDGE_FATAL_CODE         the fatal's close code (default 4012).
 //   FAKE_BRIDGE_FATAL_PRIOR_ERROR  "0" suppresses the prior `session_expired` error (default on).
+//   FAKE_BRIDGE_QUESTION           the scripted turn's final input transcript (default
+//                                  "what is the time?"); the delta before it is the same text.
+//   FAKE_BRIDGE_HIGHLIGHT          "1" makes the scripted turn answer a `highlight_target`
+//                                  call the way the real bridge translates it (spec D2/D3):
+//                                  one `ar_render` v2 control, display-only (no runId), before
+//                                  the speech it precedes.
 
 import { renameSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -39,6 +45,8 @@ const mode = process.env.FAKE_BRIDGE_MODE || 'plain';
 const receiptPath = process.env.FAKE_BRIDGE_RECEIPT || '';
 const fatalCode = Number(process.env.FAKE_BRIDGE_FATAL_CODE || '4012');
 const fatalPriorError = (process.env.FAKE_BRIDGE_FATAL_PRIOR_ERROR || '1') !== '0';
+const question = process.env.FAKE_BRIDGE_QUESTION || 'what is the time?';
+const highlight = (process.env.FAKE_BRIDGE_HIGHLIGHT || '0') === '1';
 /** The exit code Java's close must see as "the child gave up", not as a phone close. */
 let fatalExit = 0;
 
@@ -136,6 +144,37 @@ process.stderr.write('fake-bridge stderr key=' + key + ' payload=' + 'A'.repeat(
 
 const SCRIPTED_CALL_ID = 'call-scripted-1';
 const SCRIPTED_STEP_MS = 30;
+/**
+ * The scripted `highlight_target` answer (spec D2/D3). The fake *is* the bridge here, so it
+ * emits the translated control directly instead of declaring the tool to a provider; the box
+ * below is on the model's 0-1000 `[y0,x0,y1,x1]` grid and becomes the phone's normalized
+ * `[x,y,w,h]` — [0.34, 0.12, 0.44, 0.44] — by the same arithmetic as the real translator.
+ */
+const HIGHLIGHT_RENDER_ID = 'r-scripted-3b7f';
+const HIGHLIGHT_LABEL = '5mm hex key 3B7F';
+const HIGHLIGHT_TEXT = '5mm 六角匙 3B7F';
+const HIGHLIGHT_BOX = [120, 340, 560, 780];
+
+const clampGrid = (value) => Math.min(1000, Math.max(0, value));
+const bboxOf = ([y0, x0, y1, x1]) => {
+  const [top, left, bottom, right] = [y0, x0, y1, x1].map(clampGrid);
+  return [left / 1000, top / 1000, (right - left) / 1000, (bottom - top) / 1000];
+};
+
+/** The `ar_render` v2 control the real bridge emits for one accepted `highlight_target`. */
+const highlightRender = () => ({
+  type: 'ar_render',
+  v: 1,
+  renderId: HIGHLIGHT_RENDER_ID,
+  render: {
+    primitive: 'highlight',
+    target: { label: HIGHLIGHT_LABEL, bbox: bboxOf(HIGHLIGHT_BOX) },
+    text: HIGHLIGHT_TEXT,
+    ttlMs: 8000,
+    coord: 'normalized',
+    safetyAlert: null,
+  },
+});
 
 const control = (event) => ({ type: 'control', event });
 const audioOut = (fill, bytes) => ({
@@ -200,9 +239,15 @@ const scripted = async () => {
   await sleep(SCRIPTED_STEP_MS);
   write(control({ type: 'speech_end', v: 1, tMs: Date.now() }));
   await sleep(SCRIPTED_STEP_MS);
-  write(control({ type: 'input_transcript', v: 1, seq: 1, text: 'what is the time', final: false }));
-  write(control({ type: 'input_transcript', v: 1, seq: 2, text: 'what is the time?', final: true }));
+  write(control({ type: 'input_transcript', v: 1, seq: 1, text: question, final: false }));
+  write(control({ type: 'input_transcript', v: 1, seq: 2, text: question, final: true }));
   await sleep(SCRIPTED_STEP_MS);
+  if (highlight) {
+    // The display tool answers before the line that introduces the object (spec D2): the
+    // overlay is on screen by the time the model says what it is.
+    write(control(highlightRender()));
+    await sleep(SCRIPTED_STEP_MS);
+  }
   write(control({ type: 'output_transcript', v: 1, seq: 1, text: 'Let me check', final: false }));
   write(control({ type: 'output_transcript', v: 1, seq: 2, text: 'Let me check the clock.', final: true }));
   await sleep(SCRIPTED_STEP_MS);

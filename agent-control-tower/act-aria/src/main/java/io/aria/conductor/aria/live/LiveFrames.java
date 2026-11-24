@@ -10,6 +10,7 @@ import org.springframework.web.socket.TextMessage;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -32,6 +33,7 @@ public class LiveFrames {
     static final String TYPE_APPROVAL_REQUIRED = "approval_required";
     static final String TYPE_TOOL_RESULT = "tool_result";
     static final String TYPE_TOWER = "tower";
+    static final String TYPE_AR_RENDER = "ar_render";
 
     /** The wire version every phone frame (and the hello/ready handshake) carries. */
     static final int VERSION = 1;
@@ -161,4 +163,35 @@ public class LiveFrames {
         injection.put("text", text);
         return injection;
     }
+
+    /**
+     * The backup locator's render (spec D1/D6), in exactly the shape the bridge emits for
+     * {@code highlight_target}: {@code {"type":"ar_render","v":1,"renderId":…,"render":{…}}}
+     * with {@code ttlMs} 8000 and {@code coord} {@code normalized}. Display-only, so it
+     * carries no {@code runId}. The bbox is normalized {@code [x,y,w,h]} in {@code [0,1]}.
+     */
+    static Map<String, Object> arRender(String renderId, LiveLocator.Render render) {
+        double[] box = render.bbox();
+        Map<String, Object> target = new LinkedHashMap<>();
+        target.put("label", render.label());
+        target.put("bbox", List.of(box[0], box[1], box[2], box[3]));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("primitive", "highlight");
+        body.put("target", target);
+        body.put("text", render.text());
+        body.put("ttlMs", RENDER_TTL_MS);
+        body.put("coord", COORD_NORMALIZED);
+        body.put("safetyAlert", null);
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", TYPE_AR_RENDER);
+        event.put("v", VERSION);
+        event.put("renderId", renderId);
+        event.put("render", body);
+        return event;
+    }
+
+    /** The phone's default overlay life for a render (spec D1). */
+    static final long RENDER_TTL_MS = 8000L;
+    /** The only coordinate space the phone accepts (spec D1). */
+    static final String COORD_NORMALIZED = "normalized";
 }

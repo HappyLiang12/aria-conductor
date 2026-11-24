@@ -113,7 +113,7 @@ class LiveCredentialsTest {
     void theConfiguredPathIsExpandedFromTheHomeDirectory() {
         Path home = Path.of(System.getProperty("user.home"));
         LiveProperties properties = new LiveProperties(true, null,
-                "~/.aria-conductor/qwen-live.env", "", 0, 0);
+                "~/.aria-conductor/qwen-live.env", "", 0, 0, false, null, null, 0);
 
         assertThat(LiveCredentials.expand(properties.credentialsFile(), home))
                 .isEqualTo(home.resolve(".aria-conductor/qwen-live.env"));

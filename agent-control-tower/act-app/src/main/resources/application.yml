@@ -104,6 +104,16 @@ aria:
     ready-deadline-ms: ${ARIA_LIVE_READY_DEADLINE_MS:5000}
     max-session-seconds: ${ARIA_LIVE_MAX_SESSION_SECONDS:7200}
     realtime-url: ${ARIA_LIVE_REALTIME_URL:}
+    # DeepSeek direct locator (spec D6): the backup that draws a box when the live turn's
+    # own `highlight_target` render was missed. Off by default — no direct provider call is
+    # made until a deployment turns it on. The key is never a property here: it is read from
+    # DEEPSEEK_API_KEY in the Aria environment (aria.live.direct.api-key is an optional
+    # override for a harness) and is never logged. direct-timeout-ms is the whole call's
+    # budget, and direct-base-url gets /chat/completions appended.
+    direct-locator-enabled: ${ARIA_LIVE_DIRECT_LOCATOR_ENABLED:false}
+    direct-base-url: ${ARIA_LIVE_DIRECT_BASE_URL:}
+    direct-model: ${ARIA_LIVE_DIRECT_MODEL:}
+    direct-timeout-ms: ${ARIA_LIVE_DIRECT_TIMEOUT_MS:1500}
   # Verified qmd read paths
   # (spec: docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both
   # blocks are opt-in: with `enabled: false` the contributors keep the pre-qmd

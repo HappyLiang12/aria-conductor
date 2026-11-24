@@ -34,7 +34,7 @@ class QwenLiveBridgeFactoryTest {
     @Test
     void aFullyConfiguredPathStartsTheChild() {
         LiveProperties properties = new LiveProperties(true, FAKE_BRIDGE.toString(),
-                credentials().toString(), "", 0, 0);
+                credentials().toString(), "", 0, 0, false, null, null, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 
@@ -51,7 +51,7 @@ class QwenLiveBridgeFactoryTest {
     void theConfiguredRealtimeUrlReachesTheChild() throws Exception {
         String url = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime";
         LiveProperties properties = new LiveProperties(true, FAKE_BRIDGE.toString(),
-                credentials().toString(), url, 0, 0);
+                credentials().toString(), url, 0, 0, false, null, null, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
         EnvListener listener = new EnvListener();
@@ -69,7 +69,7 @@ class QwenLiveBridgeFactoryTest {
     @Test
     void aMissingScriptIsUnavailable() {
         LiveProperties properties = new LiveProperties(true, dir.resolve("no-such-bridge.js").toString(),
-                credentials().toString(), "", 0, 0);
+                credentials().toString(), "", 0, 0, false, null, null, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 

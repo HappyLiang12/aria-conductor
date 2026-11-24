@@ -177,7 +177,7 @@ class LiveSessionLimitTest {
             return bridge;
         };
         handler = new LiveWebSocketHandler(
-                new LiveProperties(false, null, null, "", readyDeadlineMs, 7200), factory, json);
+                new LiveProperties(false, null, null, "", readyDeadlineMs, 7200, false, null, null, 0), factory, json);
         return handler;
     }
 

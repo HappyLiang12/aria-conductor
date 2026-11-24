@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { answerAsk } from '@/api/approvals';
 import { Button } from '@/components/ui/button';
@@ -16,12 +16,21 @@ export interface ClarificationArgs {
 
 export const ClarificationToolUI: ToolCallMessagePartComponent<ClarificationArgs> = ({ args }) => {
   const [answer, setAnswer] = useState('');
-  const [state, setState] = useState<'pending' | 'answered' | 'error'>('pending');
+  const [state, setState] = useState<'pending' | 'submitting' | 'answered' | 'error'>('pending');
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Synchronous in-flight guard: two clicks can land before React re-renders,
+   * and the backend rejects the second overlapping answer with a 409 — which
+   * would replace the landed receipt with an error card. The ref settles that
+   * race; `state === 'submitting'` keeps Send disabled for the user.
+   */
+  const inFlight = useRef(false);
 
   const submit = async () => {
     const text = answer.trim();
-    if (text === '') return;
+    if (text === '' || inFlight.current) return;
+    inFlight.current = true;
+    setState('submitting');
     try {
       await answerAsk(args.approvalId, { approved: true, answer: text });
       setError(null);
@@ -29,6 +38,8 @@ export const ClarificationToolUI: ToolCallMessagePartComponent<ClarificationArgs
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       setState('error');
+    } finally {
+      inFlight.current = false;
     }
   };
 
@@ -52,10 +63,15 @@ export const ClarificationToolUI: ToolCallMessagePartComponent<ClarificationArgs
         rows={3}
         aria-label="Your answer"
         value={answer}
+        disabled={state === 'submitting'}
         onChange={(event) => setAnswer(event.target.value)}
       />
       <div className="mt-3">
-        <Button size="sm" disabled={answer.trim() === ''} onClick={() => void submit()}>
+        <Button
+          size="sm"
+          disabled={state === 'submitting' || answer.trim() === ''}
+          onClick={() => void submit()}
+        >
           Send
         </Button>
       </div>

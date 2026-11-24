@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Approval } from '../../../types';
 import { ClarificationToolUI } from '../ClarificationToolUI';
 
 vi.mock('../../../api/approvals', () => ({ answerAsk: vi.fn().mockResolvedValue({}) }));
@@ -32,6 +33,28 @@ describe('ClarificationToolUI', () => {
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Your answer'), '   ');
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+  });
+
+  it('posts one answer when Send is double-clicked, and still shows the receipt', async () => {
+    const { answerAsk } = await import('../../../api/approvals');
+    // Hold the request open so the second click lands while the card is submitting.
+    let settle!: (ask: Approval) => void;
+    vi.mocked(answerAsk).mockImplementationOnce(
+      () =>
+        new Promise<Approval>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<ClarificationToolUI {...withArgs({ approvalId: 'a2', question: 'Which PR?' })} />);
+    await userEvent.type(screen.getByLabelText('Your answer'), '#131');
+    const send = screen.getByRole('button', { name: /send/i });
+    await userEvent.dblClick(send);
+    expect(answerAsk).toHaveBeenCalledTimes(1);
+    expect(send).toBeDisabled();
+    settle({} as Approval);
+    expect(await screen.findByText(/answered/i)).toBeInTheDocument();
+    expect(answerAsk).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('surfaces a failed answer', async () => {

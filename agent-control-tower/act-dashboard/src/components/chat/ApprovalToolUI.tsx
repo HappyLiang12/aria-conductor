@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { decideApproval } from '@/api/approvals';
 import { Button } from '@/components/ui/button';
@@ -124,11 +124,22 @@ function parseOptions(optionsJson: string | undefined): OfferedOption[] {
 }
 
 export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ args }) => {
-  const [state, setState] = useState<'pending' | 'allowed' | 'denied' | 'error'>('pending');
+  const [state, setState] = useState<'pending' | 'submitting' | 'allowed' | 'denied' | 'error'>('pending');
   const [error, setError] = useState<string | null>(null);
   const offered = useMemo(() => parseOptions(args.optionsJson), [args.optionsJson]);
+  /**
+   * Synchronous in-flight guard: a double-click can dispatch two clicks before
+   * React re-renders, and the backend rejects the second overlapping decision
+   * with a 409 — which would replace the landed receipt with an error card.
+   * The ref settles that race; `state === 'submitting'` keeps the controls
+   * disabled for the user.
+   */
+  const inFlight = useRef(false);
 
   async function decide(approved: boolean) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setState('submitting');
     try {
       await decideApproval(args.approvalId, { approved });
       setError(null);
@@ -136,6 +147,8 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       setState('error');
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -173,7 +186,7 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
               key={`${index}-${option.label}`}
               size="sm"
               variant={option.approved === true ? 'default' : 'outline'}
-              disabled={option.approved === null}
+              disabled={option.approved === null || state === 'submitting'}
               title={
                 option.approved === null
                   ? 'This offered option cannot be expressed as a single approve/deny decision.'
@@ -186,10 +199,15 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
           ))
         ) : (
           <>
-            <Button size="sm" onClick={() => void decide(true)}>
+            <Button size="sm" disabled={state === 'submitting'} onClick={() => void decide(true)}>
               Allow
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void decide(false)}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={state === 'submitting'}
+              onClick={() => void decide(false)}
+            >
               Deny
             </Button>
           </>

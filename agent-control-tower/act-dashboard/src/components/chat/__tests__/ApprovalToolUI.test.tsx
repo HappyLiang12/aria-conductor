@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApprovalDecisionReceipt } from '../../../types';
 import { ApprovalToolUI } from '../ApprovalToolUI';
 
 vi.mock('../../../api/approvals', () => ({ decideApproval: vi.fn().mockResolvedValue({}) }));
@@ -37,6 +38,27 @@ describe('ApprovalToolUI', () => {
     render(<ApprovalToolUI {...props} />);
     await userEvent.click(screen.getByRole('button', { name: /deny/i }));
     await waitFor(() => expect(decideApproval).toHaveBeenCalledWith('a1', { approved: false }));
+  });
+
+  it('posts one decision when Allow is double-clicked, and still shows the receipt', async () => {
+    const { decideApproval } = await import('../../../api/approvals');
+    // Hold the request open so the second click lands while the card is submitting.
+    let settle!: (receipt: ApprovalDecisionReceipt) => void;
+    vi.mocked(decideApproval).mockImplementationOnce(
+      () =>
+        new Promise<ApprovalDecisionReceipt>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<ApprovalToolUI {...props} />);
+    const allow = screen.getByRole('button', { name: /^allow$/i });
+    await userEvent.dblClick(allow);
+    expect(decideApproval).toHaveBeenCalledTimes(1);
+    expect(allow).toBeDisabled();
+    settle({} as ApprovalDecisionReceipt);
+    expect(await screen.findByText(/allowed/i)).toBeInTheDocument();
+    expect(decideApproval).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows the governed tool name, risk tier and expiry', () => {

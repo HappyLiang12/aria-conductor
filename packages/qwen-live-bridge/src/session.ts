@@ -287,7 +287,10 @@ const INSTRUCTIONS = [
   '有圖嘅時候，用戶講『睇下／邊度／邊個』，先叫 highlight_target，再用一句最多 15 字講出答案。冇圖或者唔肯定，就講睇唔到，唔准估框。',
 ].join('\n');
 
-/** A phone commit held in AR: the frame side (`due`) and the mode side (`awaitMode`). */
+/**
+ * A phone commit held in AR: the frame side (`due`) and the mode side (`awaitMode`, set
+ * while the mode the commit belongs to is not yet applied).
+ */
 interface DeferredCommit {
   image: boolean;
   timer: ReturnType<typeof setTimeout>;
@@ -339,8 +342,8 @@ export function startSession(options: SessionOptions): LiveSession {
    */
   let arApplied = effectiveAr();
   /**
-   * AR-on: the phone's commit, held for the frame that may still be behind it and, for the
-   * commit that lifts the commit guard, for the `ar` update that proves the mode.
+   * AR-on: the phone's commit, held for the frame that may still be behind it and, while the
+   * session's mode is not yet what the provider runs, for the `ar` update that proves it.
    * `due` is the frame side (the grace elapsed or the frame arrived); the mode side is
    * `awaitMode` against `arApplied`.
    */
@@ -547,12 +550,13 @@ export function startSession(options: SessionOptions): LiveSession {
    * detection the provider never sends `speech_started`, so without it the second
    * utterance's commit would produce no `speech_end` at all.
    *
-   * The commit that lifts the guard (spec D5) is held past the frame grace until the
-   * provider answers the `ar` update: the provider may still be on the server VAD and
-   * have auto-committed and answered that utterance, so a flush would commit an empty
-   * buffer or ask for a second answer. When the update is refused or given up, the
-   * utterance falls back to the AR-off path — the commit, and a response only when the
-   * VAD has not already asked for one — instead of erroring.
+   * Every commit whose mode is not yet what the provider runs is held past the frame grace
+   * until the provider answers the `ar` update: until then the provider may still be on the
+   * server VAD and have auto-committed and answered that utterance, so a flush would commit
+   * an empty buffer or ask for a second answer. A later commit replaces the held one but
+   * belongs to that same unproven mode, so it cannot overtake the update either. When the
+   * update is refused or given up, the utterance falls back to the AR-off path — the commit,
+   * and a response only when the VAD has not already asked for one — instead of erroring.
    */
   const flushDeferredCommit = () => {
     const held = deferredCommit;
@@ -572,18 +576,19 @@ export function startSession(options: SessionOptions): LiveSession {
     if (image !== null) {
       send({ type: 'input_image_buffer.append', image });
     }
-    if (!held.awaitMode || arApplied) {
-      translator.beginUtterance();
-      send({ type: 'input_audio_buffer.commit' });
-      send({ type: 'response.create' });
-      return;
-    }
-    // The guard's mode never applied: the provider still runs `semantic_vad_ec` and has
-    // already answered on `speech_stopped`, so only the commit may cross.
-    const askForResponse = image !== null || !speechStoppedSinceCommit;
+    // The VAD may have answered this utterance before the mode was applied: the commit
+    // still crosses (the phone ended its speech), but a second `response.create` would
+    // race the answer the provider already asked for.
+    const vadAnswered = speechStoppedSinceCommit;
     speechStoppedSinceCommit = false;
+    if ((!held.awaitMode || arApplied) && !vadAnswered) {
+      // The AR turn re-arms the translator's one `speech_end` per utterance first: with no
+      // turn detection the provider never sends `speech_started`. A VAD-ended utterance
+      // already has its `speech_end`, so re-arming here would emit a second one.
+      translator.beginUtterance();
+    }
     send({ type: 'input_audio_buffer.commit' });
-    if (askForResponse) {
+    if (image !== null || !vadAnswered) {
       send({ type: 'response.create' });
     }
   };
@@ -1073,9 +1078,10 @@ export function startSession(options: SessionOptions): LiveSession {
         }
         const held = {
           image: asksForImage,
-          // A guard-lifting commit belongs to the mode its `ar` update is proving: it must
-          // not reach a provider that may still be on the VAD (spec D5).
-          awaitMode: liftsGuard,
+          // Any commit belongs to the mode the session wants, which the provider may not
+          // hold yet: it waits for that mode's proof (spec D5), so a second commit cannot
+          // overtake the `ar` update the guard-lifting one sent.
+          awaitMode: effectiveAr() !== arApplied,
           due: false,
         } as DeferredCommit;
         held.timer = setTimeout(() => {

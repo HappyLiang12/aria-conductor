@@ -115,6 +115,11 @@ aria:
     direct-base-url: ${ARIA_LIVE_DIRECT_BASE_URL:}
     direct-model: ${ARIA_LIVE_DIRECT_MODEL:}
     direct-timeout-ms: ${ARIA_LIVE_DIRECT_TIMEOUT_MS:2000}
+    # Async TOWER dispatch (spec 2026-11-25-aria-pa-async-tower-design.md): one reminder after
+    # this long, and a hard timeout when the dispatched run carries no deadline of its own.
+    dispatch-reminder-ms: ${ARIA_LIVE_DISPATCH_REMINDER_MS:20000}
+    dispatch-timeout-ms: ${ARIA_LIVE_DISPATCH_TIMEOUT_MS:600000}
+    dispatch-preview-chars: ${ARIA_LIVE_DISPATCH_PREVIEW_CHARS:500}
   # Verified qmd read paths
   # (spec: docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both
   # blocks are opt-in: with `enabled: false` the contributors keep the pre-qmd

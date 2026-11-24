@@ -311,7 +311,7 @@ class DeepSeekLocatorTest {
 
     private LiveLocator locator(boolean enabled, String apiKey, java.util.function.Supplier<String> envKey) {
         LiveProperties properties = new LiveProperties(false, null, null, "", 5000, 7200,
-                enabled, "http://127.0.0.1:" + server.getAddress().getPort(), null, 1500);
+                enabled, "http://127.0.0.1:" + server.getAddress().getPort(), null, 1500, 0, 0, 0);
         return new DeepSeekLocator(properties, json, apiKey, envKey);
     }
 

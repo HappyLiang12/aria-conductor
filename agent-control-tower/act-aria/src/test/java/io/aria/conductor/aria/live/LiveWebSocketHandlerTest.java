@@ -126,7 +126,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource context = conversationId -> List.of(
                 new LiveContextSource.Entry("user", "earlier question"),
                 new LiveContextSource.Entry("assistant", "earlier answer"));
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0), bridges, json, context);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0), bridges, json, context);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -152,7 +152,7 @@ class LiveWebSocketHandlerTest {
             }
             return LiveBridge.NOOP;
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0), recording, json);
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0), recording, json);
         handler.afterConnectionEstablished(session);
 
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -163,7 +163,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void anUnavailableBridgeSaysWhyThenCloses1011() throws Exception {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0),
                 (live, listener) -> {
                     throw new LiveBridgeUnavailableException("live bridge disabled");
                 }, json);
@@ -185,7 +185,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aFactoryThatThrowsUnexpectedlyIsStillABridgeInternalClose() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0),
                 (live, listener) -> {
                     throw new IllegalStateException("process blew up");
                 }, json);
@@ -1082,7 +1082,7 @@ class LiveWebSocketHandlerTest {
         LiveContextSource failing = conversationId -> {
             throw new IllegalStateException("no database");
         };
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0),
                 bridges, json, failing);
         handler.afterConnectionEstablished(session);
 
@@ -1096,7 +1096,7 @@ class LiveWebSocketHandlerTest {
     @Test
     void aContextSourceThatAnswersNullSeedsAnEmptyContext() throws Exception {
         WebSocketSession session = session("s1", null, null);
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0),
                 bridges, json, conversationId -> null);
         handler.afterConnectionEstablished(session);
 
@@ -1130,7 +1130,7 @@ class LiveWebSocketHandlerTest {
         // gone, so the child must not outlive it.
         WebSocketSession session = session("s1", null, null);
         RecordingBridge late = new RecordingBridge();
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200, false, null, null, 0, 0, 0, 0),
                 (live, listener) -> {
                     live.markClosed();
                     return late;
@@ -1188,7 +1188,7 @@ class LiveWebSocketHandlerTest {
     private WebSocketSession openedWithLocator(boolean locatorEnabled) {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
         handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", 5000, 7200,
-                locatorEnabled, null, null, 0), bridges, json, conversationId -> List.of(),
+                locatorEnabled, null, null, 0, 0, 0, 0), bridges, json, conversationId -> List.of(),
                 new LiveSessionRegistry(), sink, new LiveFrames(json), locator);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage(HELLO));
@@ -1236,7 +1236,7 @@ class LiveWebSocketHandlerTest {
     }
 
     private LiveWebSocketHandler handler(long readyDeadlineMs) {
-        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200, false, null, null, 0),
+        handler = new LiveWebSocketHandler(new LiveProperties(false, null, null, "", readyDeadlineMs, 7200, false, null, null, 0, 0, 0, 0),
                 bridges, json, conversationId -> List.of(), new LiveSessionRegistry(), sink);
         return handler;
     }

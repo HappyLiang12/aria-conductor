@@ -40,7 +40,10 @@ public record LiveProperties(
         boolean directLocatorEnabled,
         String directBaseUrl,
         String directModel,
-        long directTimeoutMs) {
+        long directTimeoutMs,
+        long dispatchReminderMs,
+        long dispatchTimeoutMs,
+        int dispatchPreviewChars) {
 
     public static final String DEFAULT_BRIDGE_SCRIPT = "packages/qwen-live-bridge/dist/index.js";
     public static final String DEFAULT_CREDENTIALS_FILE = "~/.aria-conductor/qwen-live.env";
@@ -49,6 +52,9 @@ public record LiveProperties(
     public static final String DEFAULT_DIRECT_BASE_URL = "https://api.deepseek.com";
     public static final String DEFAULT_DIRECT_MODEL = "deepseek-flash";
     public static final long DEFAULT_DIRECT_TIMEOUT_MS = 2000L;
+    public static final long DEFAULT_DISPATCH_REMINDER_MS = 20_000L;
+    public static final long DEFAULT_DISPATCH_TIMEOUT_MS = 600_000L;
+    public static final int DEFAULT_DISPATCH_PREVIEW_CHARS = 500;
 
     public LiveProperties {
         bridgeScript = blank(bridgeScript) ? DEFAULT_BRIDGE_SCRIPT : bridgeScript.trim();
@@ -59,6 +65,9 @@ public record LiveProperties(
         directBaseUrl = blank(directBaseUrl) ? DEFAULT_DIRECT_BASE_URL : directBaseUrl.trim();
         directModel = blank(directModel) ? DEFAULT_DIRECT_MODEL : directModel.trim();
         directTimeoutMs = directTimeoutMs <= 0 ? DEFAULT_DIRECT_TIMEOUT_MS : directTimeoutMs;
+        dispatchReminderMs = dispatchReminderMs <= 0 ? DEFAULT_DISPATCH_REMINDER_MS : dispatchReminderMs;
+        dispatchTimeoutMs = dispatchTimeoutMs <= 0 ? DEFAULT_DISPATCH_TIMEOUT_MS : dispatchTimeoutMs;
+        dispatchPreviewChars = dispatchPreviewChars <= 0 ? DEFAULT_DISPATCH_PREVIEW_CHARS : dispatchPreviewChars;
     }
 
     private static boolean blank(String value) {

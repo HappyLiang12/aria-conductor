@@ -12,7 +12,7 @@ class LivePropertiesTest {
 
     @Test
     void absentValuesFallBackToTheDocumentedDefaults() {
-        LiveProperties properties = new LiveProperties(false, null, "  ", null, 0, 0, false, " ", "  ", 0);
+        LiveProperties properties = new LiveProperties(false, null, "  ", null, 0, 0, false, " ", "  ", 0, 0, 0, 0);
 
         assertThat(properties.enabled()).isFalse();
         assertThat(properties.bridgeScript()).isEqualTo(LiveProperties.DEFAULT_BRIDGE_SCRIPT);
@@ -26,13 +26,33 @@ class LivePropertiesTest {
         assertThat(properties.directBaseUrl()).isEqualTo("https://api.deepseek.com");
         assertThat(properties.directModel()).isEqualTo("deepseek-flash");
         assertThat(properties.directTimeoutMs()).isEqualTo(2000L);
+        // Async TOWER dispatch (Phase 4): one 20 s reminder, a 10 min hard timeout and a
+        // bounded spoken preview when the deployment sets nothing.
+        assertThat(properties.dispatchReminderMs()).isEqualTo(20_000L);
+        assertThat(properties.dispatchTimeoutMs()).isEqualTo(600_000L);
+        assertThat(properties.dispatchPreviewChars()).isEqualTo(500);
+    }
+
+    @Test
+    void dispatchValuesAreConfigurableAndNonPositiveFallsBack() {
+        LiveProperties custom = new LiveProperties(false, null, null, "", 0, 0, false, null, null, 0,
+                5_000, 60_000, 120);
+        assertThat(custom.dispatchReminderMs()).isEqualTo(5_000L);
+        assertThat(custom.dispatchTimeoutMs()).isEqualTo(60_000L);
+        assertThat(custom.dispatchPreviewChars()).isEqualTo(120);
+
+        LiveProperties negative = new LiveProperties(false, null, null, "", 0, 0, false, null, null, 0,
+                -1, -1, -1);
+        assertThat(negative.dispatchReminderMs()).isEqualTo(20_000L);
+        assertThat(negative.dispatchTimeoutMs()).isEqualTo(600_000L);
+        assertThat(negative.dispatchPreviewChars()).isEqualTo(500);
     }
 
     @Test
     void explicitValuesAreKeptAndTrimmed() {
         LiveProperties properties = new LiveProperties(true, " packages/bridge/dist/index.js ",
                 " ~/.aria-conductor/live.env ", " wss://example.invalid/api-ws/v1/realtime ", 200, 3600,
-                true, " http://127.0.0.1:9 ", " custom-vision ", 800);
+                true, " http://127.0.0.1:9 ", " custom-vision ", 800, 0, 0, 0);
 
         assertThat(properties.enabled()).isTrue();
         assertThat(properties.bridgeScript()).isEqualTo("packages/bridge/dist/index.js");
@@ -50,7 +70,7 @@ class LivePropertiesTest {
     void aNonPositiveDirectTimeoutFallsBackToTheBudget() {
         // A zero or negative budget would mean "no deadline", which the backup cannot
         // honour: it must degrade within 2.0 s by default.
-        assertThat(new LiveProperties(false, null, null, "", 0, 0, true, null, null, -5)
+        assertThat(new LiveProperties(false, null, null, "", 0, 0, true, null, null, -5, 0, 0, 0)
                 .directTimeoutMs()).isEqualTo(2000L);
     }
 
@@ -58,12 +78,12 @@ class LivePropertiesTest {
     void aBlankRealtimeUrlIsEmptyNotNull() {
         // Empty means "the child derives its own endpoint" (Task 5), never a blank value
         // handed to the child as QWEN_REALTIME_URL.
-        assertThat(new LiveProperties(false, null, null, "   ", 0, 0, false, null, null, 0).realtimeUrl()).isEmpty();
+        assertThat(new LiveProperties(false, null, null, "   ", 0, 0, false, null, null, 0, 0, 0, 0).realtimeUrl()).isEmpty();
     }
 
     @Test
     void aDisabledLivePathCannotOpenABridge() {
-        LiveProperties properties = new LiveProperties(false, null, null, "", 0, 0, false, null, null, 0);
+        LiveProperties properties = new LiveProperties(false, null, null, "", 0, 0, false, null, null, 0, 0, 0, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 
@@ -74,7 +94,7 @@ class LivePropertiesTest {
     @Test
     void anEnabledLivePathWithoutCredentialsCannotOpenABridge() {
         LiveProperties properties = new LiveProperties(true, null,
-                " ~/.aria-conductor/does-not-exist-anywhere.env ", "", 0, 0, false, null, null, 0);
+                " ~/.aria-conductor/does-not-exist-anywhere.env ", "", 0, 0, false, null, null, 0, 0, 0, 0);
         QwenLiveBridgeFactory factory = new QwenLiveBridgeFactory(
                 properties, new LiveCredentials(properties), new ObjectMapper());
 

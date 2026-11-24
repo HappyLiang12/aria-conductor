@@ -125,6 +125,13 @@ public class LiveWriteService {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Skill " + skillId + " is unknown, disabled or not a SKILL"));
+        // A SKILL row without a template has no instruction to inject. Interpolating the
+        // null would put the literal text "null" into the model's system message and start
+        // a run that cannot do the skill, so the approved write is refused instead.
+        String template = skill.template();
+        if (template == null || template.isBlank()) {
+            throw new IllegalArgumentException("Skill " + skillId + " has no template");
+        }
         Agent aria = agentRepository.findById(ARIA_AGENT_ID)
                 .orElseThrow(() -> new IllegalStateException("Aria agent not found"));
         int maxIterations = AgentLoopEngine.parseMaxIterationsFromConfig(aria, 0);
@@ -139,7 +146,7 @@ public class LiveWriteService {
                 .build();
         Run saved = runRepository.save(run);
         // The exact directive the chat surface injects for an active slash-command skill.
-        String directive = "## Active Skill: " + skill.name() + "\n" + skill.template();
+        String directive = "## Active Skill: " + skill.name() + "\n" + template;
         return new PreparedRun(saved.getId(), maxIterations, skill.stage(), directive);
     }
 

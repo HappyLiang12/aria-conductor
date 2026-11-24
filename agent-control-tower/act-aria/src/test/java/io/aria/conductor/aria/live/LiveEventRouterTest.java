@@ -59,8 +59,9 @@ class LiveEventRouterTest {
     private final RecordingBridge bridge = new RecordingBridge();
     private final LiveRunService runs = mock(LiveRunService.class);
     private final LiveToolExecutor tools = mock(LiveToolExecutor.class);
+    private final LiveApprovalService approvals = mock(LiveApprovalService.class);
     private final LiveSessionRegistry registry = new LiveSessionRegistry();
-    private final LiveEventRouter router = new LiveEventRouter(runs, tools, registry, frames, park);
+    private final LiveEventRouter router = new LiveEventRouter(runs, tools, registry, frames, approvals, park);
 
     private final WebSocketSession ws = mock(WebSocketSession.class);
     private LiveSession session;
@@ -130,6 +131,29 @@ class LiveEventRouterTest {
                 && frame.path("state").asText().equals("finished")
                 && frame.path("summary").asText().equals("finished"));
         assertThat(park.parked(runId)).isFalse();
+    }
+
+    /**
+     * The approved call ran and failed: the model asked for this write and must hear that
+     * it did not happen. The phone keeps the stable summary; the tower carries the reason.
+     */
+    @Test
+    void anApprovedCallThatFailsInjectsAFailedTower() {
+        park();
+        when(tools.executeApproved(eq("get_run"), eq(arguments)))
+                .thenReturn(new LiveToolExecutor.ToolOutcome.Failure("Tool get_run failed"));
+        when(runs.settle(eq(session), eq(runId), eq(RunStatus.FAILED), eq("Tool get_run failed")))
+                .thenReturn(RunStatus.FAILED);
+
+        router.onApprovalDecided(decided(ApprovalStatus.APPROVED));
+
+        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
+                && line.contains("\"id\":\"c1\"") && line.contains("\"ok\":false"));
+        assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
+                && line.contains(LiveEventRouter.TOWER_FAILED) && line.contains("Tool get_run failed"));
+        assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
+                && frame.path("state").asText().equals("failed")
+                && frame.path("summary").asText().equals("failed: tool call failed"));
     }
 
     @Test
@@ -218,7 +242,7 @@ class LiveEventRouterTest {
     @Test
     void aFinalizeThatWinsTheRaceLeavesExactlyOneTower() {
         FinalizeWinsPark racing = new FinalizeWinsPark();
-        LiveEventRouter racingRouter = new LiveEventRouter(runs, tools, registry, frames, racing);
+        LiveEventRouter racingRouter = new LiveEventRouter(runs, tools, registry, frames, approvals, racing);
         session.runId(runId);
         when(runs.settle(eq(session), eq(runId), eq(RunStatus.WAITING_INPUT), eq("approval pending")))
                 .thenReturn(RunStatus.WAITING_INPUT);
@@ -306,6 +330,7 @@ class LiveEventRouterTest {
         assertThat(park.parked(runId)).isFalse();
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq("Live session closed while waiting for an approval"));
+        verify(approvals).release(approvalId);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: " + LiveEventRouter.SESSION_CLOSED_REASON));
@@ -335,6 +360,8 @@ class LiveEventRouterTest {
 
         verify(runs).settle(eq(session), eq(runId), eq(RunStatus.ABORTED),
                 eq("Operator finalized the live run"));
+        // The finalized turn can no longer take a decision: its ask must not stay PENDING.
+        verify(approvals).release(approvalId);
         assertThat(bridge.lines()).anyMatch(line -> line.contains("\"type\":\"tower\"")
                 && line.contains("[tower] finalized"));
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
@@ -383,6 +410,8 @@ class LiveEventRouterTest {
         router.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.CANCELLED));
 
         assertThat(park.parked(runId)).isFalse();
+        // Cancelled elsewhere: the ask has no run left to act on, so it is expired too.
+        verify(approvals).release(approvalId);
         assertThat(phone()).anyMatch(frame -> frame.path("type").asText().equals("run_event")
                 && frame.path("state").asText().equals("failed")
                 && frame.path("summary").asText().equals("failed: cancelled"));
@@ -459,6 +488,7 @@ class LiveEventRouterTest {
         context.registerBean(LiveToolExecutor.class, () -> tools);
         context.registerBean(LiveSessionRegistry.class, () -> registry);
         context.registerBean(LiveFrames.class, () -> frames);
+        context.registerBean(LiveApprovalService.class, () -> approvals);
         context.registerBean(LiveRunPark.class, () -> park);
         // What Boot's transaction auto-configuration supplies: without it every
         // @TransactionalEventListener becomes a plain synchronous listener.

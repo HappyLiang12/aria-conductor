@@ -45,6 +45,12 @@ import java.util.UUID;
  * committed, so nothing written here can roll the operator's own decision back. And a park
  * is the claim on a pending call: whoever releases it (the finalize, a close, the decision)
  * owns the outcome, so a call reaches the model exactly once.
+ *
+ * <p>A release of the park that is <em>not</em> a decision (a finalize, a close, a run
+ * settled elsewhere) must also release the ask itself: the live approval row carries no
+ * expiry, so the PENDING sweep will never collect it, and {@code cancelPendingForRun}
+ * only covers ACP asks. Left alone it would stay an actionable ask on a run nobody can
+ * answer, so every one of those paths expires it through {@link LiveApprovalService}.
  */
 @Slf4j
 @Component
@@ -68,25 +74,30 @@ public class LiveEventRouter {
     static final String ASKED_AGAIN = "Tool is still gated";
     /** The phone's summary reason when an approved call ran and failed; no output in it. */
     static final String TOOL_FAILED_REASON = "tool call failed";
+    /** What the model is told when the approved call ran and failed; the reason follows. */
+    static final String TOWER_FAILED = "[tower] tool call failed";
 
     private final LiveRunService runs;
     private final LiveToolExecutor tools;
     private final LiveSessionRegistry sessions;
     private final LiveFrames frames;
+    private final LiveApprovalService approvals;
     private final LiveRunPark park;
 
     @Autowired
     public LiveEventRouter(LiveRunService runs, LiveToolExecutor tools, LiveSessionRegistry sessions,
-                           LiveFrames frames, ObjectProvider<LiveRunPark> park) {
-        this(runs, tools, sessions, frames, park.getIfAvailable(() -> LiveRunPark.NONE));
+                           LiveFrames frames, LiveApprovalService approvals,
+                           ObjectProvider<LiveRunPark> park) {
+        this(runs, tools, sessions, frames, approvals, park.getIfAvailable(() -> LiveRunPark.NONE));
     }
 
     LiveEventRouter(LiveRunService runs, LiveToolExecutor tools, LiveSessionRegistry sessions,
-                    LiveFrames frames, LiveRunPark park) {
+                    LiveFrames frames, LiveApprovalService approvals, LiveRunPark park) {
         this.runs = runs;
         this.tools = tools;
         this.sessions = sessions;
         this.frames = frames;
+        this.approvals = approvals;
         this.park = park;
     }
 
@@ -132,10 +143,13 @@ public class LiveEventRouter {
 
     /**
      * What {@code POST /runs/{id}/finalize} runs on a live park. The coordinator removed
-     * the park before calling this, so the same request can never run it twice.
+     * the park before calling this, so the same request can never run it twice. The ask
+     * this call created is expired as well: the turn it belonged to is over, and a
+     * PENDING row would stay an actionable decision on a run that can no longer take it.
      */
     private void onFinalize(LiveSession session, LivePendingToolCall call) {
         session.takePendingCall(call.approvalId());
+        approvals.release(call.approvalId());
         runs.settle(session, call.runId(), RunStatus.ABORTED, FINALIZE_REASON);
         frames.toPhone(session, runEvent(call.runId(), RunStatus.ABORTED, FINALIZE_REASON));
         frames.toBridge(session, LiveFrames.tower(TOWER_FINALIZED));
@@ -193,7 +207,11 @@ public class LiveEventRouter {
                 continue;
             }
             park.unpark(owned);
-            session.takePendingCalls().forEach(call -> park.unpark(call.runId()));
+            session.takePendingCalls().forEach(call -> {
+                park.unpark(call.runId());
+                // The run ended elsewhere, so no decision can reach this ask any more.
+                approvals.release(call.approvalId());
+            });
             session.clearRunSlot(owned);
             frames.toPhone(session, runEvent(owned, event.getStatus(), statusReason(event.getStatus())));
             log.debug("live run completed elsewhere: id={} state={}", owned, state(event.getStatus()));
@@ -217,7 +235,11 @@ public class LiveEventRouter {
             return;
         }
         RunStatus settled = runs.settle(session, runId, RunStatus.COMPLETED, null);
-        session.takePendingCalls().forEach(call -> park.unpark(call.runId()));
+        session.takePendingCalls().forEach(call -> {
+            park.unpark(call.runId());
+            // A pending ask whose turn already ended is no longer answerable.
+            approvals.release(call.approvalId());
+        });
         frames.toPhone(session, runEvent(runId, settled, null));
         log.debug("live turn finished: id={} state={}", runId, state(settled));
     }
@@ -239,6 +261,9 @@ public class LiveEventRouter {
         UUID parkedRun = session.runId();
         boolean released = parkedRun != null && park.unpark(parkedRun);
         for (LivePendingToolCall call : session.takePendingCalls()) {
+            // Every held call dies with the socket, whether or not its park was still
+            // standing: its ask is expired so no operator is offered a dead decision.
+            approvals.release(call.approvalId());
             if (park.unpark(call.runId())) {
                 released = true;
                 parkedRun = call.runId();
@@ -257,7 +282,9 @@ public class LiveEventRouter {
     /**
      * The approved call runs once through the approved-write path — a read re-executes,
      * a gated write performs its action with no second ask — and its value answers the
-     * bridge and is injected as TOWER.
+     * bridge and is injected as TOWER. A failure is injected too: the turn is waiting on
+     * this call, and a silent result would leave the model talking about an action whose
+     * outcome it never learned.
      */
     private void approve(LiveSession session, LivePendingToolCall call) {
         LiveToolExecutor.ToolOutcome outcome = tools.executeApproved(call.toolName(), call.arguments());
@@ -273,6 +300,10 @@ public class LiveEventRouter {
         frames.toPhone(session, LiveFrames.toolStatus(call.toolName(), "done"));
         if (ok) {
             frames.toBridge(session, LiveFrames.tower("[tower] " + output));
+        } else {
+            // The model asked for this write and must hear that it did not happen; the
+            // failure sentence is stable tool text, never an exception's own message.
+            frames.toBridge(session, LiveFrames.tower(TOWER_FAILED + ": " + output));
         }
         RunStatus settled = runs.settle(session, call.runId(), ok ? RunStatus.COMPLETED : RunStatus.FAILED,
                 ok ? null : output);

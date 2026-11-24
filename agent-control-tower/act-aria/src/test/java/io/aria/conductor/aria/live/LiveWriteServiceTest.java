@@ -149,6 +149,19 @@ class LiveWriteServiceTest {
     }
 
     @Test
+    void aSkillWithoutATemplateStartsNothingAndNeverInjectsNull() {
+        when(skillContextProvider.getEnabledSkillsByIds(List.of(SKILL_ID))).thenReturn(List.of(
+                new SkillContext(SKILL_ID, "Deploy", null, null, "SKILL")));
+
+        assertThatThrownBy(() -> service.runSkill(SKILL_ID, "go"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(SKILL_ID)
+                .hasMessageContaining("template");
+        verify(runRepository, never()).save(any());
+        verifyNoInteractions(agentRepository, agentLoopEngine);
+    }
+
+    @Test
     void anUnknownOrDisabledSkillStartsNothing() {
         when(skillContextProvider.getEnabledSkillsByIds(List.of("missing"))).thenReturn(List.of());
 

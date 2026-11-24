@@ -73,9 +73,12 @@ public class LiveApprovalService {
     }
 
     /**
-     * Releases a PENDING ask whose run could not take the park (a cancel or a close won
-     * the race). Without this the row would wait for an operator on a run the phone was
-     * already told failed.
+     * Releases a PENDING ask whose run can no longer take the decision: the park was
+     * refused (a cancel or a close won the race), the turn was finalized, the socket
+     * closed, or the run ended elsewhere. Without this the row would stay an actionable
+     * ask for an operator on a run the phone was already told failed — the live row has
+     * no expiry, so no sweep would ever collect it. Idempotent: a decided row is never
+     * touched.
      */
     public void release(UUID approvalId) {
         if (approvalId == null) {

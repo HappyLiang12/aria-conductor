@@ -102,6 +102,32 @@ class ApprovalControllerTest extends WebMvcTestBase {
     }
 
     /**
+     * A live-only tool name has no catalog entry, so the resolver's default is READ. The
+     * row's own stored tier is the reviewed classification and must win, or an approved
+     * voice write would be displayed as a read.
+     */
+    @Test
+    void listApprovals_readsTheStoredTierForAToolTheCatalogDoesNotKnow() throws Exception {
+        UUID toolCallId = UUID.randomUUID();
+        Approval liveWrite = anApproval().withToolCallId(toolCallId).build();
+        liveWrite.setRiskTier("WRITE_LOCAL");
+        ToolCall toolCall = aToolCall().withId(toolCallId)
+                .withToolName("start_agent_run").withArguments("{\"prompt\":\"ship it\"}").build();
+
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(liveWrite)));
+        when(toolCallRepository.findAllById(List.of(toolCallId))).thenReturn(List.of(toolCall));
+        when(toolRiskResolver.policyOf("start_agent_run")).thenReturn(null);
+        when(toolRiskResolver.resolve("start_agent_run")).thenReturn(RiskTier.READ);
+
+        mvc.perform(get("/api/v1/approvals"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].toolName").value("start_agent_run"))
+                .andExpect(jsonPath("$[0].riskTier").value("WRITE_LOCAL"))
+                .andExpect(jsonPath("$[0].toolPolicy").isEmpty());
+    }
+
+    /**
      * F7: an ACP permission ask has no ToolCall row. The approval itself now
      * carries the tool identity, arguments and risk tier, and the API must
      * surface them; credential-shaped values are redacted even if a row was

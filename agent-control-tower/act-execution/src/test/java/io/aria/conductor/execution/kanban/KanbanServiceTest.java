@@ -139,7 +139,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, "starting");
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.IN_PROGRESS);
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
     }
@@ -149,7 +149,7 @@ class KanbanServiceTest {
         stored.setStatus(KanbanStatus.DONE);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, null))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.IN_PROGRESS))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid kanban transition");
 
@@ -161,7 +161,7 @@ class KanbanServiceTest {
         stored.setStatus(KanbanStatus.CANCELLED);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.TODO, null))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.TODO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -171,7 +171,7 @@ class KanbanServiceTest {
         stored.setStatus(KanbanStatus.BLOCKED);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.TODO, "unblocked"))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.TODO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid kanban transition");
     }
@@ -182,7 +182,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.REVIEW, "waiting for approval");
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.REVIEW);
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.REVIEW);
     }
@@ -193,7 +193,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, "approved");
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.IN_PROGRESS);
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
     }
@@ -204,7 +204,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE, "approved");
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE);
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.DONE);
     }
@@ -306,7 +306,7 @@ class KanbanServiceTest {
                 Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE, "ask approved");
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE);
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.DONE);
     }
@@ -323,7 +323,7 @@ class KanbanServiceTest {
         when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
                 Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "approved anyway"))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE))
                 .isInstanceOf(PickupRejectedException.class)
                 .satisfies(e -> assertThat(((PickupRejectedException) e).code())
                         .isEqualTo("LINKED_RUN_ACTIVE"));
@@ -341,7 +341,7 @@ class KanbanServiceTest {
         when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
                 Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "done"))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE))
                 .isInstanceOf(PickupRejectedException.class)
                 .satisfies(e -> assertThat(((PickupRejectedException) e).code())
                         .isEqualTo("LINKED_RUN_ACTIVE"));
@@ -363,7 +363,7 @@ class KanbanServiceTest {
         when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
                 Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "approved"))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE))
                 .isInstanceOf(PickupRejectedException.class)
                 .satisfies(e -> assertThat(((PickupRejectedException) e).code())
                         .isEqualTo("LINKED_RUN_ACTIVE"));
@@ -389,7 +389,7 @@ class KanbanServiceTest {
         stored.setLinkedRunId("not-a-run-id");
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.REVIEW, null))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.REVIEW))
                 .isInstanceOf(PickupRejectedException.class)
                 .satisfies(e -> assertThat(((PickupRejectedException) e).code()).isEqualTo("CORRUPT_RUN_LINK"))
                 .satisfies(e -> assertThat(((PickupRejectedException) e).details())
@@ -410,7 +410,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        assertThat(service.transition(stored.getId(), KanbanStatus.REVIEW, null).getStatus())
+        assertThat(service.transition(stored.getId(), KanbanStatus.REVIEW).getStatus())
                 .isEqualTo(KanbanStatus.REVIEW);
     }
 
@@ -422,7 +422,7 @@ class KanbanServiceTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        assertThat(service.transition(stored.getId(), KanbanStatus.REVIEW, null).getStatus())
+        assertThat(service.transition(stored.getId(), KanbanStatus.REVIEW).getStatus())
                 .isEqualTo(KanbanStatus.REVIEW);
     }
 
@@ -431,7 +431,7 @@ class KanbanServiceTest {
         stored.setStatus(KanbanStatus.TODO);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.REVIEW, null))
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.REVIEW))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid kanban transition");
 

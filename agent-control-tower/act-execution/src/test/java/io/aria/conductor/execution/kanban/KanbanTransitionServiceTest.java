@@ -101,7 +101,7 @@ class KanbanTransitionServiceTest {
                 .status(KanbanStatus.TODO).priority(KanbanPriority.MEDIUM).build();
         when(kanbanRepository.findById("c1")).thenReturn(Optional.of(card));
         when(kanbanRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(kanbanService.transition(any(), any(), any())).thenAnswer(inv -> {
+        when(kanbanService.transition(any(), any())).thenAnswer(inv -> {
             card.setStatus(inv.getArgument(1));
             return card;
         });
@@ -180,7 +180,7 @@ class KanbanTransitionServiceTest {
         // The created run is linked back onto the card before the IN_PROGRESS move.
         assertThat(card.getLinkedRunId()).isEqualTo(RUN_ID.toString());
 
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     @Test
@@ -208,7 +208,7 @@ class KanbanTransitionServiceTest {
         verify(eventPublisher, never()).publishEvent(any(KanbanItemAssigningEvent.class));
         verify(agentPicker, never()).pick(any(), any(), any());
         verify(runService).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     @Test
@@ -227,7 +227,7 @@ class KanbanTransitionServiceTest {
         assertThat(result.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
         assertThat(result.getAssignee()).isEqualTo("BA Agent");
         verify(runService).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     // ---- behavior 2: ineligible agent is rejected before createRun is crossed ----
@@ -251,7 +251,7 @@ class KanbanTransitionServiceTest {
         // The transaction proxy must never be crossed with a doomed request, and a
         // synchronous rejection is answered by the response — not by the card.
         verify(runService, never()).createRun(any(CreateRunRequest.class));
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
         verify(kanbanRepository, never()).save(any());
     }
 
@@ -305,7 +305,7 @@ class KanbanTransitionServiceTest {
                 .hasMessage("db connection lost");
 
         // Unexpected failures roll the whole transition back: no IN_PROGRESS move.
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.TODO);
     }
 
@@ -329,7 +329,7 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).createRun(any(CreateRunRequest.class));
         // No IN_PROGRESS transition after the failed assign phase, and nothing
         // recorded on the card: the caller got the answer in the response.
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
         verify(kanbanRepository, never()).save(any());
     }
 
@@ -350,7 +350,7 @@ class KanbanTransitionServiceTest {
         // Truly no-op: no pause, no run dispatch, no card transition, and
         // lastError is not cleared either.
         verifyNoInteractions(runService, agentPicker);
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
         verify(eventPublisher, never()).publishEvent(any());
         assertThat(card.getLastError()).isEqualTo("previous pickup hiccup");
     }
@@ -373,10 +373,10 @@ class KanbanTransitionServiceTest {
                 .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.BACKLOG).comment("reprioritise").build());
+                .status(KanbanStatus.BACKLOG).build());
 
         verify(runService).pauseRun(RUN_ID);
-        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, "reprioritise");
+        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG);
     }
 
     @Test
@@ -387,7 +387,7 @@ class KanbanTransitionServiceTest {
                 .status(KanbanStatus.BACKLOG).build());
 
         verify(runService, never()).pauseRun(any());
-        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, null);
+        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG);
     }
 
     @Test
@@ -398,10 +398,10 @@ class KanbanTransitionServiceTest {
                 .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.TODO).comment("needs rework").build());
+                .status(KanbanStatus.TODO).build());
 
         verify(runService).pauseRun(RUN_ID);
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, "needs rework");
+        verify(kanbanService).transition("c1", KanbanStatus.TODO);
         // Dragging back must not dispatch a new run.
         verify(runService, never()).createRun(any(CreateRunRequest.class));
     }
@@ -534,7 +534,7 @@ class KanbanTransitionServiceTest {
         RunKanbanAutoCreator autoCreator = newAutoCreator();
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.BACKLOG).comment("park it").build());
+                .status(KanbanStatus.BACKLOG).build());
 
         // The stop cancelled the not-yet-running run — that cancellation is the
         // event the card would be re-targeted by.
@@ -544,7 +544,7 @@ class KanbanTransitionServiceTest {
         autoCreator.onRunCompleted(new RunCompletedEvent(this, runId, AGENT_ID, RunStatus.CANCELLED));
 
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.BACKLOG);
-        verify(kanbanService, never()).transition(eq("c1"), eq(KanbanStatus.CANCELLED), anyString());
+        verify(kanbanService, never()).transition(eq("c1"), eq(KanbanStatus.CANCELLED));
     }
 
     /**
@@ -590,15 +590,15 @@ class KanbanTransitionServiceTest {
                 .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.TODO).comment("redo after demo").build());
+                .status(KanbanStatus.TODO).build());
 
         // The completed run is never paused/resumed; a NEW run carries the redo.
         verify(runService, never()).pauseRun(any());
         verify(runService, never()).resumeRun(any());
         verify(runService).createRun(any(CreateRunRequest.class));
         assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, "redo after demo");
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "redo after demo");
+        verify(kanbanService).transition("c1", KanbanStatus.TODO);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     @Test
@@ -609,11 +609,11 @@ class KanbanTransitionServiceTest {
                 .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.BACKLOG).comment("park it").build());
+                .status(KanbanStatus.BACKLOG).build());
 
         verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(runService, never()).pauseRun(any());
-        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, "park it");
+        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG);
     }
 
     @Test
@@ -649,13 +649,13 @@ class KanbanTransitionServiceTest {
                 .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.TODO).comment("ready now").build());
+                .status(KanbanStatus.TODO).build());
 
         // Intermediate BACKLOG -> TODO normalization precedes the pickup's
         // TODO -> IN_PROGRESS dispatch step.
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, "ready now");
+        verify(kanbanService).transition("c1", KanbanStatus.TODO);
         verify(runService).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "ready now");
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     @Test
@@ -669,7 +669,7 @@ class KanbanTransitionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Route the card through Todo first — Backlog items do not dispatch directly");
 
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
         verify(runService, never()).createRun(any(CreateRunRequest.class));
     }
 
@@ -683,7 +683,7 @@ class KanbanTransitionServiceTest {
                 .hasMessage("Invalid kanban transition: CANCELLED -> TODO");
 
         verify(runService, never()).createRun(any(CreateRunRequest.class));
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     // ---- behavior 5: cancel ----
@@ -700,7 +700,7 @@ class KanbanTransitionServiceTest {
 
         verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("task cancelled"), any());
         verify(runService).cancelRun(RUN_ID);
-        verify(kanbanService).transition("c1", KanbanStatus.CANCELLED, null);
+        verify(kanbanService).transition("c1", KanbanStatus.CANCELLED);
     }
 
     @Test
@@ -716,7 +716,7 @@ class KanbanTransitionServiceTest {
         // The card must land on CANCELLED before any listener racing the run
         // cancellation can observe the card mid-flight.
         InOrder inOrder = inOrder(kanbanService, runService);
-        inOrder.verify(kanbanService).transition("c1", KanbanStatus.CANCELLED, null);
+        inOrder.verify(kanbanService).transition("c1", KanbanStatus.CANCELLED);
         inOrder.verify(runService).cancelRun(RUN_ID);
     }
 
@@ -732,7 +732,7 @@ class KanbanTransitionServiceTest {
 
         verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("task cancelled"), any());
         verify(runService, never()).cancelRun(any());
-        verify(kanbanService).transition("c1", KanbanStatus.CANCELLED, null);
+        verify(kanbanService).transition("c1", KanbanStatus.CANCELLED);
     }
 
     // ---- behavior 6: request changes ----
@@ -744,14 +744,14 @@ class KanbanTransitionServiceTest {
         card.setLinkedAgentId(AGENT_ID.toString());
 
         service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.TODO).feedback("use semicolons").comment("changes requested").build());
+                .status(KanbanStatus.TODO).feedback("use semicolons").build());
 
         verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("superseded by request changes"), any());
         ArgumentCaptor<CreateRunRequest> runCaptor = ArgumentCaptor.forClass(CreateRunRequest.class);
         verify(runService).createRun(runCaptor.capture());
         assertThat(runCaptor.getValue().getPromptSeed()).contains("use semicolons");
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, "changes requested");
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "changes requested");
+        verify(kanbanService).transition("c1", KanbanStatus.TODO);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     @Test
@@ -766,8 +766,8 @@ class KanbanTransitionServiceTest {
 
         verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("superseded by request changes"), any());
         assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService).transition("c1", KanbanStatus.TODO);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     // ---- behavior 7: REVIEW -> IN_PROGRESS (approve & continue) ----
@@ -791,7 +791,7 @@ class KanbanTransitionServiceTest {
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         assertThat(card.getLastError()).isNull();
         verify(runService, never()).resumeRun(any());
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     @Test
@@ -806,7 +806,7 @@ class KanbanTransitionServiceTest {
 
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         verify(runRepository, never()).findById(any());
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     @Test
@@ -823,7 +823,7 @@ class KanbanTransitionServiceTest {
 
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         verify(runRepository, never()).findById(any());
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     @Test
@@ -843,7 +843,7 @@ class KanbanTransitionServiceTest {
                 });
 
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
-        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanService, never()).transition(any(), any());
     }
 
     @Test
@@ -860,7 +860,7 @@ class KanbanTransitionServiceTest {
         assertThat(moved.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
         verify(runService).resumeRun(UUID.fromString("00000000-0000-0000-0000-0000000000ac"));
         verify(runService, never()).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS);
     }
 
     // ---- behavior 8: prompt seed caps ----

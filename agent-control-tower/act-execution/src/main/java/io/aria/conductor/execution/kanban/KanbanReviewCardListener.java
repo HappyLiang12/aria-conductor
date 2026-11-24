@@ -201,23 +201,11 @@ public class KanbanReviewCardListener {
             if (card == null || card.getStatus() != KanbanStatus.REVIEW) {
                 return; // the settle listener got there first, or the operator moved it
             }
-            KanbanStatus target;
-            String comment;
-            switch (current.getStatus()) {
-                case APPROVED -> {
-                    target = KanbanStatus.DONE;
-                    comment = "ask approved";
-                }
-                case EXPIRED -> {
-                    target = KanbanStatus.CANCELLED;
-                    comment = "ask expired";
-                }
-                default -> {
-                    target = KanbanStatus.CANCELLED;
-                    comment = "ask denied";
-                }
-            }
-            kanbanService.transition(cardId, target, comment);
+            KanbanStatus target = switch (current.getStatus()) {
+                case APPROVED -> KanbanStatus.DONE;
+                default -> KanbanStatus.CANCELLED;
+            };
+            kanbanService.transition(cardId, target);
         } catch (RuntimeException e) {
             log.warn("Ask {} settled while its review card {} was being mirrored, but the card could not be settled: {}",
                     approvalId, cardId, e.getMessage());

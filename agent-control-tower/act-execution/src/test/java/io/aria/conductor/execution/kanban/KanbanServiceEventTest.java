@@ -106,7 +106,7 @@ class KanbanServiceEventTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, "starting");
+        service.transition(stored.getId(), KanbanStatus.IN_PROGRESS);
 
         ArgumentCaptor<KanbanItemTransitionedEvent> captor =
                 ArgumentCaptor.forClass(KanbanItemTransitionedEvent.class);
@@ -123,7 +123,7 @@ class KanbanServiceEventTest {
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
         try {
-            service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, null);
+            service.transition(stored.getId(), KanbanStatus.IN_PROGRESS);
         } catch (IllegalArgumentException expected) {
             // expected
         }

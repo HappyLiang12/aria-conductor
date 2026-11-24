@@ -221,7 +221,7 @@ public class KanbanService {
     }
 
     @Transactional
-    public KanbanItem transition(String id, KanbanStatus toStatus, String comment) {
+    public KanbanItem transition(String id, KanbanStatus toStatus) {
         MDC.put("operation", "kanban.transition");
         MDC.put("entityId", id);
         long start = System.currentTimeMillis();

@@ -2,7 +2,6 @@ package io.aria.conductor.execution.llm;
 
 import io.aria.conductor.agent.service.SystemConfigService;
 import lombok.extern.slf4j.Slf4j;
-import reactor.core.publisher.Flux;
 
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -67,13 +66,6 @@ public class LlmClientRetryDecorator implements LlmClient {
             }
         }
         throw new IllegalStateException("unreachable");
-    }
-
-    @Override
-    public Flux<String> stream(LlmRequest request) {
-        // Streaming bypasses retry by design: mid-stream failure leaves partial tokens already
-        // emitted, so a clean retry isn't possible. Callers needing resilience should use complete().
-        return delegate.stream(request);
     }
 
     private void refreshConfigIfNeeded() {

@@ -7,7 +7,6 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -28,11 +27,6 @@ public class NoopLlmTestConfig {
             @Override
             public LlmResponse complete(LlmRequest request) {
                 return new LlmResponse("Mock response for testing", 0, 0, "stop", List.of());
-            }
-
-            @Override
-            public Flux<String> stream(LlmRequest request) {
-                return Flux.just("Mock stream response for testing");
             }
         };
     }

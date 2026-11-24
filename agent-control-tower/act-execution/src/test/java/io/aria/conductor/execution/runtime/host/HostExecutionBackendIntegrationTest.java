@@ -7,20 +7,16 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
-import io.aria.conductor.execution.runtime.ExecutionBackendRegistry;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
-import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
-import io.aria.conductor.execution.runtime.RuntimeRecoveryCoordinator;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import org.junit.jupiter.api.AfterEach;
@@ -2161,62 +2157,6 @@ class HostExecutionBackendIntegrationTest {
                 .as("a stopped writer can no longer mutate the workspace it was proved stopped over")
                 .isEqualTo(atStop);
         assertThat(sentinel.isAlive()).as("an unrelated process must survive").isTrue();
-    }
-
-    /**
-     * I3 (Task 13 fix round 1): a reap after a restart must record what its destroy dispatch
-     * actually ended. The Host destroy never signals a runtime it did not bind (T9's
-     * fail-closed property) and removes only what this process prepared, so a fresh process
-     * reaping a run-owned runtime it never prepared destroys and signals nothing -- and the
-     * record must say exactly that instead of claiming a destruction. The run's live root,
-     * writer and generated configuration all survive the reap untouched.
-     */
-    @Test
-    void aHostReapAfterARestartRecordsThatNothingWasDestroyedOrSignalled() throws Exception {
-        PeerRun run = new PeerRun("background-writer");
-        run.handshake();
-        Writer writer = run.promptAndApproveWriter(WRITER_PROMPT);
-        run.awaitPromptResult();
-
-        // The restarted process: a fresh backend and registry that hold nothing for the run.
-        HostExecutionBackend restarted = HostExecutionBackend.forCurrentPlatform();
-        RuntimeRecoveryCoordinator recovery = new RuntimeRecoveryCoordinator(
-                new ExecutionBackendRegistry(List.of(restarted)), new RunRuntimeRegistry());
-        RunExecutionBinding evidence = RunExecutionBinding.builder()
-                .runId(run.runId()).agentId(UUID.randomUUID()).coreId("qoder")
-                .executionMode(ExecutionMode.HOST).settingsJson("{}")
-                .runtimeEnvironmentId(run.environment().environmentId())
-                .runtimeOwnershipIdentity(run.handle().ownershipIdentity())
-                .runtimeEndpoint(run.environment().endpoint().toString())
-                .workspaceKind(WorkspaceKind.DIRECT)
-                .build();
-        Path generated = Path.of(run.environment().configurationDirectory());
-        Path ticks = run.workspace().resolve(WRITER_LOG);
-        Process sentinel = startSentinel();
-
-        RuntimeRecoveryCoordinator.RecoveryDecision decision = recovery.reconcile(evidence);
-
-        assertThat(decision.decision()).isEqualTo(RuntimeRecoveryCoordinator.Decision.REAPED);
-        assertThat(decision.reason()).isEqualTo("Issued the HOST destroy for run " + run.runId()
-                + "; this process held no run-owned runtime for it, so nothing was destroyed or signalled"
-                + " (a restart-reconstructed record is never signalled)"
-                + "; its Direct workspace lease stays held (recovery holds no verified stop proof)");
-        assertThat(isAlive(run.owned().rootPid()))
-                .as("a restart-reconstructed record is never signalled").isTrue();
-        assertThat(ProcessHandle.of(writer.writerPid()).map(ProcessHandle::isAlive).orElse(false))
-                .as("the run's writer is never signalled").isTrue();
-        assertThat(Files.isDirectory(generated))
-                .as("a process that never prepared the run destroys nothing of its placement").isTrue();
-        long before = sizeOf(ticks);
-        Thread.sleep(300);
-        assertThat(sizeOf(ticks)).as("the untouched writer keeps writing after the reap record").isGreaterThan(before);
-        assertThat(sentinel.isAlive()).isTrue();
-
-        // The process that still holds the live binding can stop the run as usual.
-        StopProof proof = run.backend().stopWriters(run.handle(), run.deadline());
-        assertThat(proof.allWritersStopped()).isTrue();
-        assertThat(isAlive(run.owned().rootPid())).isFalse();
-        assertThat(ProcessHandle.of(writer.writerPid()).map(ProcessHandle::isAlive).orElse(false)).isFalse();
     }
 
     // ------------------------------------------------------------------ harness

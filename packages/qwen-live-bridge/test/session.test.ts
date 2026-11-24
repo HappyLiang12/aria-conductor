@@ -410,6 +410,19 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
   /** Only the grace timer is faked: the fake provider is real I/O, driven by `setImmediate`. */
   const fakeGraceTimers = () =>
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  /** Lift the guard with a plain commit and wait for it to cross, so AR-on is the applied mode. */
+  const appliedArOn = async (
+    fake: Awaited<ReturnType<typeof fakeQwen>>,
+    session: { commit(options?: { image?: boolean }): void },
+  ) => {
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the guard-lifting commit',
+    );
+  };
 
   it('keeps the server VAD for an AR-on phone that never committed, and drops it on the first commit', async () => {
     const fake = await fakeQwen();
@@ -684,6 +697,80 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the grace expiry');
     expect(typesOf(0, fake).slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
     expect(typesOf(0, fake)).not.toContain('input_image_buffer.append');
+    await session.close();
+  });
+
+  it('crosses an AR commit that already holds its frame without waiting the grace', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+    await appliedArOn(fake, session);
+    // The proof turn ends, so the next utterance's frame window is open again (D8).
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
+    await recorder.waitFor((action) => action.kind === 'turn_done');
+    const flushes = () => typesOf(0, fake).filter((type) => type === 'response.create').length;
+    const before = flushes();
+
+    // The phone's order here is frame, then commit: nothing is left for the grace to wait on.
+    session.appendAudio('AAAA');
+    session.attachImage('ARIMAGE');
+    session.commit({ image: true });
+
+    // No timer advances: the image, the commit and the response cross in one step.
+    await waitUntil(() => flushes() === before + 1, 'the immediate flush');
+    expect(typesOf(0, fake).slice(-3)).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    expect(appendsOf(fake)).toEqual([{ type: 'input_image_buffer.append', image: 'ARIMAGE' }]);
+    await session.close();
+  });
+
+  it('still holds a frame-less AR commit for the grace', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+    await appliedArOn(fake, session);
+    const commits = () =>
+      typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length;
+    const before = commits();
+
+    session.appendAudio('BBBB');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(commits()).toBe(before);
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(() => commits() === before + 1, 'the grace expiry');
+    expect(typesOf(0, fake)).not.toContain('input_image_buffer.append');
+    await session.close();
+  });
+
+  it('keeps an image-held commit behind the unproven mode and flushes on the ack', async () => {
+    fakeGraceTimers();
+    // Only the handshake is answered: the ar update's acknowledgement belongs to the test.
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.attachImage('ARIMAGE');
+    session.commit({ image: true });
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    // The held frame cannot overtake the mode proof, timer or no timer.
+    expect(typesOf(0, fake)).not.toContain('input_image_buffer.append');
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+
+    // The acknowledgement is the only thing left: it flushes the turn without the grace.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the mode-applied flush');
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    expect(typesOf(0, fake).slice(-3)).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
     await session.close();
   });
 

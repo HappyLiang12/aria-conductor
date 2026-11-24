@@ -1066,7 +1066,8 @@ export function startSession(options: SessionOptions): LiveSession {
       if (arDesired) {
         // Spec D4: the phone's commit ends its speech, not the turn — the frame it names
         // may still be ~150 ms behind, and the provider takes the image only before the
-        // commit. Hold it for the grace or for the frame, whichever comes first.
+        // commit. Hold it for the grace or for the frame, whichever comes first — a commit
+        // that arrives after its frame has nothing left to wait for (see below).
         if (deferredCommit !== null) {
           clearTimeout(deferredCommit.timer);
         }
@@ -1093,6 +1094,14 @@ export function startSession(options: SessionOptions): LiveSession {
         }, AR_FRAME_GRACE_MS);
         held.timer.unref?.();
         deferredCommit = held;
+        if (asksForImage && pendingImage !== null) {
+          // The phone already sent the frame ahead of this commit: the frame side of the
+          // hold is due at once instead of waiting out a grace that has nothing to arrive.
+          // Only an unproven mode can still hold it, and the acknowledgement flushes it
+          // then, so the 300 ms is never added on top of the mode proof.
+          held.due = true;
+          flushDeferredCommit();
+        }
         return;
       }
       const image = commitOptions.image === true ? pendingImage : null;

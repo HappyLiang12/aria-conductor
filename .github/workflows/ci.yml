@@ -33,6 +33,7 @@ jobs:
     name: Detect Changed Trees
     runs-on: ubuntu-latest
     outputs:
+      qwen_bridge: ${{ steps.filter.outputs.qwen_bridge }}
       frontend: ${{ steps.filter.outputs.frontend }}
       java: ${{ steps.filter.outputs.java }}
     steps:
@@ -41,6 +42,8 @@ jobs:
         id: filter
         with:
           filters: |
+            qwen_bridge:
+              - 'packages/qwen-live-bridge/**'
             frontend:
               - 'agent-control-tower/act-dashboard/**'
             java:
@@ -258,6 +261,27 @@ jobs:
       - name: Dump backend log tail (diagnose)
         if: failure()
         run: tail -n 300 backend.log || true
+
+
+
+  ts-qwen-live-bridge:
+    name: TS Qwen Live Bridge Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changes]
+    if: needs.changes.outputs.qwen_bridge == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: packages/qwen-live-bridge/pnpm-lock.yaml
+      - name: Test and build
+        run: cd packages/qwen-live-bridge && pnpm install --frozen-lockfile && pnpm test && pnpm build
 
   e2e-playwright:
     name: E2E Playwright (shard ${{ matrix.shard }}/4)

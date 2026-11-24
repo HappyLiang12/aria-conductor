@@ -555,7 +555,129 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     session.setAr(false);
     await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the upgrade');
     expect(typesOf(0, fake)).toContain('input_audio_buffer.commit');
+    // The config-switch half: the update that goes with the flush turns the provider's
+    // own VAD back on, so the provider and the bridge agree on AR-off.
+    await waitUntil(() => updatesOf(fake).length === 2, 'the semantic_vad_ec update');
+    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }]);
     await session.close();
+  });
+
+  it('keeps the frame a held commit waits for when the previous turn ends inside the grace', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+
+    // The Phase 2 order: audio, frame, commit. The frame is held for the commit.
+    session.appendAudio('AAAA');
+    session.attachImage('ARIMAGE');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(100);
+    // The overlapping response ending is not this utterance's boundary: wiping the held
+    // frame here would send the commit with no image.
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
+    await recorder.waitFor((action) => action.kind === 'turn_done');
+
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 100);
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the held commit');
+    expect(appendsOf(fake)).toEqual([{ type: 'input_image_buffer.append', image: 'ARIMAGE' }]);
+    const types = typesOf(0, fake);
+    expect(types.slice(types.indexOf('input_image_buffer.append'))).toEqual([
+      'input_image_buffer.append',
+      'input_audio_buffer.commit',
+      'response.create',
+    ]);
+    await session.close();
+  });
+
+  it('reverts an ar switch the provider refuses before session.updated', async () => {
+    fakeGraceTimers();
+    let updates = 0;
+    const fake = await fakeQwen({
+      // The handshake is answered; the mid-session switch is refused with an `error`.
+      respondToUpdate: () => {
+        updates += 1;
+        return updates === 1;
+      },
+    });
+    const { session, recorder } = await open(fake, { ar: false });
+
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 2, 'the refused update');
+    fake.send(0, {
+      type: 'error',
+      error: { code: 'invalid_value', message: 'turn_detection refused' },
+    });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'error',
+    );
+
+    // The provider still runs semantic_vad_ec, so the bridge must believe AR-off again:
+    // the next commit crosses at once instead of being held for a frame (nothing below
+    // advances the grace timer, so a deferral could never flush).
+    expect(session.stats().refusedArSwitches).toBe(1);
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the AR-off commit',
+    );
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await session.close();
+  });
+
+  it('keeps an acknowledged ar switch, so the next commit is held for its frame', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: false });
+
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 2, 'the AR-on update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
+
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the grace');
+    expect(session.stats().refusedArSwitches).toBe(0);
+    await session.close();
+  });
+
+  it('cancels a held commit when the session turns fatal', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session, fatal } = await open(fake, { ar: true });
+    /** A provider frame round-trip proves the rebuilt session is configured. */
+    const reconfigured = async (index: number) => {
+      await waitUntil(
+        () => fake.connections[index]?.messages.some((message) => message.type === 'session.update'),
+        `reopen ${index}`,
+      );
+      session.appendAudio('AAAA');
+      await waitUntil(
+        () => typesOf(index, fake).includes('input_audio_buffer.append'),
+        `reopen ${index} configured`,
+      );
+    };
+    // Three quick provider closes reopen in place; the fourth is the fatal one.
+    for (let index = 0; index < 3; index += 1) {
+      fake.connections[index]!.socket.terminate();
+      await reconfigured(index + 1);
+    }
+
+    const armedBeforeCommit = vi.getTimerCount();
+    session.commit({ image: true });
+    expect(vi.getTimerCount()).toBe(armedBeforeCommit + 1);
+
+    const before = fake.connections[3]!.messages.length;
+    fake.connections[3]!.socket.terminate();
+    await waitUntil(() => fatal.length === 1, 'the fatal');
+    expect(fatal).toEqual([1011]);
+
+    // The grace timer died with the session: nothing is left to fire into a dead socket.
+    expect(vi.getTimerCount()).toBe(armedBeforeCommit - 1);
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS + 50);
+    expect(fake.connections[3]!.messages).toHaveLength(before);
   });
 });
 

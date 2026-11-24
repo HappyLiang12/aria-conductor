@@ -101,6 +101,11 @@ async function main(): Promise<void> {
     if (refused > 0) {
       meter.record('send_refused', refused, 0, 0);
     }
+    // An `ar` switch the provider refused: a count only, never the provider's text.
+    const refusedAr = session?.stats().refusedArSwitches ?? 0;
+    if (refusedAr > 0) {
+      meter.record('ar_switch_refused', refusedAr, 0, 0);
+    }
     meter.flush('session');
     if (session !== null) {
       await session.close();

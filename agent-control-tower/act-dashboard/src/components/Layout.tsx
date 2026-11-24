@@ -1,7 +1,9 @@
 import { Outlet } from 'react-router-dom';
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { TopBar } from './TopBar';
-import { RailNav } from './RailNav';
+import { SidebarInset, SidebarProvider } from './ui/sidebar';
+import { AppSidebar } from './layout/AppSidebar';
+import { ShellTopBar } from './layout/ShellTopBar';
+import { AmbientInvalidation } from './layout/AmbientInvalidation';
 import { AriaPanel } from './AriaPanel';
 import { ConfigureModal } from './ConfigureModal';
 import { Toast } from './Toast';
@@ -72,8 +74,10 @@ export function ConnectionBanner() {
 }
 
 /**
- * Keep the rail's sticky offset in sync with the header stack, which grows when
- * the connection banner shows or the top bar wraps on narrow viewports.
+ * Publish the header stack height. The shadcn sidebar is fixed to the viewport
+ * and no longer needs it, but `styles/main-chat.css` sizes the chat surface with
+ * `calc(100vh - var(--top-stack-h, 67px))`, so the value must stay accurate
+ * while the connection banner can appear and disappear.
  */
 function useTopStackHeight(ref: React.RefObject<HTMLDivElement | null>) {
   useLayoutEffect(() => {
@@ -100,21 +104,24 @@ export function Layout() {
 
   return (
     <DrawerProvider>
-      <div className="top-stack" ref={stackRef}>
-        <TopBar />
-        <ConnectionBanner />
-      </div>
-      <div className="app-shell">
-        <RailNav />
-        <main className="content">
-          <Outlet />
-        </main>
-      </div>
+      <SidebarProvider>
+        <AppSidebar />
+        <SidebarInset>
+          <div className="top-stack" ref={stackRef}>
+            <ShellTopBar />
+            <ConnectionBanner />
+          </div>
+          <div className="content">
+            <Outlet />
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
       <AriaPanel />
       <ConfigureModal />
       <TaskDrawer />
       <AgentDrawer />
       <Toast />
+      <AmbientInvalidation />
     </DrawerProvider>
   );
 }

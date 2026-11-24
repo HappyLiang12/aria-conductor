@@ -67,7 +67,11 @@ Decision:
 
 - **AR off** keeps `semantic_vad_ec` exactly as Phase 2 (server VAD, barge-in).
 - **AR on** switches the session to `turn_detection:null`. The phone sends `commit` at `speech_end` (a contract delta: AR-on uses the existing client `commit` event; the bridge no longer relies on provider auto-commit), then the bridge waits at most 300 ms for a `frame`, appends the image if one arrived, commits and asks `response.create`. No frame → commit without an image; the instruction makes the model say 睇唔到 rather than guess.
-- An `ar` toggle mid-session sends a new `session.update` with the matching `turn_detection` (to be proven; if the provider refuses a mid-session switch, the bridge reconnects silently and reseeds, as on a provider close).
+- **Amended 2026-11-25 from the field defect and a live probe.**
+  - The provider refuses a `turn_detection` change while its input buffer is non-empty: `Cannot change turn_detection while input audio is pending` (`invalid_request_error`, param `session.turn_detection`). The phone streams continuously, so the guard-lifting switch failed in the field. The bridge now pauses the phone's audio for the switch, sends `input_audio_buffer.clear` for the silent tail already buffered, then the `session.update`, and replays the held audio after the acknowledgement. A switch whose pending tail contains speech waits for the commit that empties the buffer instead of clearing it.
+  - With no turn detection the provider never ends an utterance, so the server emits no `speech_end` on its own and a phone that waits for it deadlocks. **Deployed contract:** in AR-on the bridge's own audio-energy end-of-speech is the EOS. It counts ≥200 ms of speech (peak ≥1200 s16le) then 600 ms below it from the phone's PCM and emits exactly one `speech_end` per utterance; the provider's echoed `committed` does not emit a second. The phone keeps its current trigger (send `frame`, then `commit{image:true}` on `speech_end`). AR-off is unchanged.
+  - The first AR turn is still VAD-ended (the guard). Its provider commit already answered the utterance, so the phone's commit crossing then would be an empty-buffer provider error and a second response would race the live answer: the bridge consumes that commit as the mode proof, drops the image for that answered turn, and crosses nothing. From the next utterance the manual path is the deployed one.
+- An `ar` toggle mid-session sends a new `session.update` with the matching `turn_detection` (proven live; the buffer is emptied first as above). A refusal still reverts to the applied mode and is counted.
 - Barge-in in AR is the phone's tap-to-interrupt (`cancel`); server VAD barge-in only exists in AR-off.
 
 ### D5 — Client `ar` event (X17)
@@ -93,6 +97,6 @@ Overlay rendering/state, tracker correction, safety-banner UX and HUD metrics on
 ## Remaining phone deltas (decided here; phone adapts)
 
 1. `ar_render` v2 has no `runId` for display-only renders (unless a turn run exists); `LiveProtocol` adds the event and accepts an absent `runId`.
-2. AR-on requires the phone's explicit `commit` at `speech_end`; AR-off is unchanged (`semantic_vad_ec`).
+2. AR-on requires the phone's explicit `commit` at `speech_end`; AR-off is unchanged (`semantic_vad_ec`). In AR-on `speech_end` arrives from the bridge's audio-energy EOS (≈600 ms after the wearer stops), not from provider VAD; add ~600 ms to the first-audio budget.
 3. The phone must add `{"type":"ar","v":1,"on":…}` (X17) and send `hello.ar` on reconnect.
 4. DeepSeek backup renders may appear after the spoken line; they are best-effort and do not promise A1.

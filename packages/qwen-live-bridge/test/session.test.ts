@@ -521,7 +521,7 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
-  it('falls back to the VAD commit path when the provider refuses the guard ar update', async () => {
+  it('crosses nothing for a VAD-answered utterance when the provider refuses the guard ar update', async () => {
     fakeGraceTimers();
     let updates = 0;
     const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
@@ -540,17 +540,19 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
     expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
 
-    // The provider refuses AR's no-detection mode: the turn still commits, under the VAD
-    // it really runs, and asks for no second answer (the VAD's own already ran).
+    // The provider refuses AR's no-detection mode. The utterance the VAD already answered
+    // crosses nothing: an empty commit is a provider error and a second response would race
+    // the answer it already asked for. The mode stays on the VAD it really runs.
     fake.send(0, {
       type: 'error',
       error: { code: 'invalid_value', message: 'turn_detection refused' },
     });
-    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the commit');
+    await new Promise((resolve) => setImmediate(resolve));
     expect(session.stats().refusedArSwitches).toBe(1);
-    expect(typesOf(0, fake).filter((type) => type === 'response.create')).toEqual([]);
-    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
-    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS * 2);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    expect(typesOf(0, fake)).not.toContain('response.create');
     await session.close();
   });
 
@@ -589,7 +591,7 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
-  it('does not ask for a second answer when the VAD already answered before the ack', async () => {
+  it('does not commit an utterance the VAD answered before the ack', async () => {
     fakeGraceTimers();
     let updates = 0;
     const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
@@ -609,17 +611,117 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
 
-    // The acknowledgement lands after that answer: the commit still crosses (the phone
-    // ended its speech), but the utterance already has its one response.
+    // The acknowledgement lands after that answer. The provider already committed the
+    // utterance and asked for its response, so crossing an empty commit would be a
+    // provider error and a second `response.create` would race the live answer: the
+    // phone's commit proves the mode and nothing else crosses.
     fake.send(0, { type: 'session.updated', session: {} });
-    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the held commit');
-    expect(typesOf(0, fake).filter((type) => type === 'response.create')).toEqual([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    expect(typesOf(0, fake)).not.toContain('response.create');
 
-    // The VAD's `speech_end` stays the utterance's only one when the provider echoes
-    // the commit back.
+    // The VAD's `speech_end` stays the utterance's only one.
     fake.send(0, { type: 'input_audio_buffer.committed' });
     await new Promise((resolve) => setImmediate(resolve));
     expect(speechEnds(recorder)).toBe(1);
+    await session.close();
+  });
+
+  it('holds the phone audio across an ar switch and replays it after the ack', async () => {
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: true });
+
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    // The silent tail the provider already holds is cleared first: it refuses a switch
+    // while its buffer is non-empty.
+    const clearAt = typesOf(0, fake).indexOf('input_audio_buffer.clear');
+    const switchAt = fake.connections[0]!.messages.findIndex(
+      (message) => message.type === 'session.update' && (message.session as { turn_detection: unknown }).turn_detection === null,
+    );
+    expect(clearAt).toBeGreaterThanOrEqual(0);
+    expect(clearAt).toBeLessThan(switchAt);
+    // The phone streams continuously: the chunks are held, not forwarded, until the ack.
+    session.appendAudio('AAAA');
+    session.appendAudio('BBBB');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.append');
+
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.append').length === 2,
+      'the replayed audio',
+    );
+    const appends = fake.connections[0]!.messages.filter(
+      (message) => message.type === 'input_audio_buffer.append',
+    );
+    expect(appends.map((message) => message.audio)).toEqual(['AAAA', 'BBBB']);
+    // The held guard-lifting commit follows the replayed audio once its frame grace ends.
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the held guard-lifting commit',
+    );
+    expect(typesOf(0, fake).slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
+    await session.close();
+  });
+
+  it('ends an AR-on utterance from audio energy when the provider has no turn detection', async () => {
+    // 100 ms of s16le PCM at 16 kHz: a loud sample marks speech, zeros mark silence.
+    const chunk = (amplitude: number) => {
+      const bytes = Buffer.alloc(1600 * 2);
+      for (let at = 0; at < bytes.length; at += 2) bytes.writeInt16LE(amplitude, at);
+      return bytes.toString('base64');
+    };
+    const speech = chunk(4000);
+    const silence = chunk(0);
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+
+    // Lift the guard with a commit no VAD answered, so AR-on is the provider's mode.
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    fake.send(0, { type: 'session.updated', session: {} });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    session.appendAudio(speech);
+    session.appendAudio(speech);
+    for (let i = 0; i < 5; i += 1) session.appendAudio(silence);
+    await new Promise((resolve) => setImmediate(resolve));
+    // 500 ms of trailing silence is not yet the end of the utterance.
+    expect(speechEnds(recorder)).toBe(0);
+    session.appendAudio(silence);
+    await waitUntil(() => speechEnds(recorder) === 1, 'the energy speech_end');
+
+    // The end is one per utterance: more silence repeats nothing.
+    session.appendAudio(silence);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(speechEnds(recorder)).toBe(1);
+
+    // The commit this `speech_end` asked for crosses, and the provider's echoed committed
+    // does not produce a second `speech_end`.
+    session.commit();
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the commit');
+    fake.send(0, { type: 'input_audio_buffer.committed' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(speechEnds(recorder)).toBe(1);
+    await session.close();
+  });
+
+  it('never synthesises a speech_end while the guard keeps the server VAD', async () => {
+    const chunk = (amplitude: number) => {
+      const bytes = Buffer.alloc(1600 * 2);
+      for (let at = 0; at < bytes.length; at += 2) bytes.writeInt16LE(amplitude, at);
+      return bytes.toString('base64');
+    };
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+
+    session.appendAudio(chunk(4000));
+    for (let i = 0; i < 10; i += 1) session.appendAudio(chunk(0));
+    await new Promise((resolve) => setImmediate(resolve));
+    // The provider's VAD is still the utterance's end; the bridge's own EOS stays silent.
+    expect(speechEnds(recorder)).toBe(0);
     await session.close();
   });
 

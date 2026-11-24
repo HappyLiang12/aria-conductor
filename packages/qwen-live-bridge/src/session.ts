@@ -52,8 +52,11 @@ export interface LiveSession {
   toolResult(id: string, ok: boolean, output: string): void;
   tower(text: string): void;
   close(): Promise<void>;
-  /** Metadata only: frames refused while reconfiguring, results for unknown calls. */
-  stats(): { refusedSends: number; droppedToolResults: number };
+  /**
+   * Metadata only: frames refused while reconfiguring, results for unknown calls, and
+   * an `ar` switch the provider refused (the mode was reverted, never forwarded).
+   */
+  stats(): { refusedSends: number; droppedToolResults: number; refusedArSwitches: number };
 }
 
 /** The provider's cap is 120 minutes; the bridge leaves a minute to reopen (spec X9). */
@@ -225,6 +228,12 @@ export function startSession(options: SessionOptions): LiveSession {
    * to no turn (spec D8). It lifts at the next turn boundary (`turn_done`) or commit.
    */
   let arCommitted = false;
+  /**
+   * A mid-session `session.update` (the `ar` switch, spec D4) the provider has not
+   * acknowledged yet. A provider that refuses the new config answers with an `error`
+   * before `session.updated`; what it keeps running is the mode this field remembers.
+   */
+  let pendingArUpdate: { previous: boolean } | null = null;
   /** A `speech_stopped` since the previous commit already asked for the answer. */
   let speechStoppedSinceCommit = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
@@ -239,6 +248,7 @@ export function startSession(options: SessionOptions): LiveSession {
   let renderedThisTurn = false;
   let refusedSends = 0;
   let droppedToolResults = 0;
+  let refusedArSwitches = 0;
 
   const emit = (action: SessionAction) => {
     if (!fataled && !closing) {
@@ -262,27 +272,29 @@ export function startSession(options: SessionOptions): LiveSession {
     return true;
   };
 
-  const send = (payload: Record<string, unknown>, audio = false) => {
+  /** Returns whether the frame went out on this socket (false: held, refused or dead). */
+  const send = (payload: Record<string, unknown>, audio = false): boolean => {
     if (closing || fataled) {
-      return;
+      return false;
     }
     if (configured && transmit(payload)) {
-      return;
+      return true;
     }
     if (audio) {
       if (pendingAudio >= MAX_PENDING_AUDIO) {
         refusedSends += 1;
-        return;
+        return false;
       }
       pendingAudio += 1;
     } else {
       if (pendingOps >= MAX_PENDING_OPS) {
         refusedSends += 1;
-        return;
+        return false;
       }
       pendingOps += 1;
     }
     pendingSends.push(payload);
+    return false;
   };
 
   /** The new session is configured: everything held for it goes out, in arrival order. */
@@ -313,6 +325,9 @@ export function startSession(options: SessionOptions): LiveSession {
     // Spec D8: an image held for a commit that will never reach this session is dropped,
     // and an AR commit still waiting for its frame dies with the session it belonged to.
     cancelDeferredCommit();
+    // An unacknowledged `ar` update died with the socket it was sent on; the rebuilt
+    // session's own config already carries the current mode.
+    pendingArUpdate = null;
     speechStoppedSinceCommit = false;
     callOrder = [];
     outstandingCalls.clear();
@@ -358,6 +373,9 @@ export function startSession(options: SessionOptions): LiveSession {
     }
     fataled = true;
     clearReopen();
+    // The same teardown as close/reset: a held AR commit must not fire into a session
+    // that has no socket left to receive it.
+    resetProviderState();
     const dead = socket;
     socket = null;
     teardown(dead);
@@ -479,6 +497,16 @@ export function startSession(options: SessionOptions): LiveSession {
       // follows must not ask for a second response (it would race the first).
       speechStoppedSinceCommit = true;
     }
+    if (event.type === 'error' && pendingArUpdate !== null) {
+      // Spec D4: an `error` before `session.updated` is the provider refusing the
+      // mid-session reconfiguration, so it is still running the previous mode. Revert to
+      // that mode (the error itself reaches the phone through the translator unchanged)
+      // and count the refusal for the metadata line — the provider's text is never
+      // logged, because it can quote the request.
+      arEnabled = pendingArUpdate.previous;
+      pendingArUpdate = null;
+      refusedArSwitches += 1;
+    }
     for (const translation of translator.onEvent(event)) {
       if (translation.kind === 'cancel') {
         send({ type: 'response.cancel' });
@@ -507,9 +535,14 @@ export function startSession(options: SessionOptions): LiveSession {
         // Backstop: a turn the provider ends without a further utterance still starts clean.
         renderedThisTurn = false;
         // Spec D8: an image that never reached a commit belongs to the turn that just
-        // ended and is dropped, and AR's next-utterance frame window is open again.
-        pendingImage = null;
-        arCommitted = false;
+        // ended and is dropped, and AR's next-utterance frame window is open again — but
+        // only when no phone commit is held. A `response.done` that lands inside the
+        // grace belongs to the previous (or an overlapping) response, and clearing now
+        // would wipe the frame the held commit is waiting for.
+        if (deferredCommit === null) {
+          pendingImage = null;
+          arCommitted = false;
+        }
       }
       emit(translation);
     }
@@ -579,6 +612,9 @@ export function startSession(options: SessionOptions): LiveSession {
             transmit({ type: 'session.update', session: sessionConfig() });
             return;
           case 'session.updated':
+            // The update the mode was waiting on is acknowledged (or the rebuilt
+            // session's own config already carries the current mode): nothing to revert.
+            pendingArUpdate = null;
             if (!configured) {
               configured = true;
               seedContext();
@@ -764,17 +800,22 @@ export function startSession(options: SessionOptions): LiveSession {
         // A repeat is the same mode: no second reconfiguration crosses.
         return;
       }
+      // Spec D4: the switch is proven in place. A provider that refuses keeps the old
+      // config and answers with an `error` before `session.updated`, so the mode the
+      // bridge believes in is only settled by that acknowledgement: until then the old
+      // value is remembered and a refusal reverts to it.
+      const previous = arEnabled;
       arEnabled = next;
       if (!next) {
         // Leaving AR with a commit held for a frame that may never come: the utterance is
         // due now rather than stranded when the grace timer is dropped.
         flushDeferredCommit();
       }
-      // Spec D4: the switch is proven in place. A provider that refuses keeps the old
-      // config — its error is reported as it is, and this session goes on. While the
-      // session is (re)configuring, this waits with the other ops and lands after
-      // `session.updated`, so the handshake's own config is never the stale one.
-      send({ type: 'session.update', session: sessionConfig() });
+      // While the session is (re)configuring, this waits with the other ops and lands
+      // after `session.updated`, so the handshake's own config is never the stale one.
+      if (send({ type: 'session.update', session: sessionConfig() })) {
+        pendingArUpdate = { previous };
+      }
     },
 
     cancel() {
@@ -822,7 +863,7 @@ export function startSession(options: SessionOptions): LiveSession {
     },
 
     stats() {
-      return { refusedSends, droppedToolResults };
+      return { refusedSends, droppedToolResults, refusedArSwitches };
     },
   };
 

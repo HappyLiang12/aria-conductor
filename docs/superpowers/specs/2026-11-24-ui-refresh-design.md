@@ -115,7 +115,7 @@ The STOMP client no longer writes content state. Each event maps to Query keys:
 
 | Event family | Invalidates |
 |--------------|-------------|
-| Run lifecycle and progress events from `EventBroadcastListener` | `runs`, `run(id)`, overview summary |
+| Run lifecycle events (run.progress is excluded) | `runs`, `run(id)`, overview summary |
 | Approval requested/decided/expired | `approvals`, decision queue, `run(id)` |
 | Kanban created/transitioned/assigning | `kanban`, overview summary |
 | Knowledge submitted/approved/retired | `knowledge` |
@@ -123,6 +123,8 @@ The STOMP client no longer writes content state. Each event maps to Query keys:
 | Workflow advanced | `workflows` |
 | Agent created | `agents` |
 | Audit log, housekeeping progress | notifications only |
+
+Progress frames are run-scoped: `run.progress` never triggers list or overview-summary invalidation, only the active run detail consumes it.
 
 Reconnect behaviour: on STOMP reconnect, the app refetches the affected active queries. There is no event replay; a missed event between disconnect and reconnect is recovered by refetch, not by cursor.
 

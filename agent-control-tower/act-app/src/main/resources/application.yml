@@ -53,14 +53,6 @@ opencode:
     LLM_API_KEY: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
     GH_TOKEN: ${GITHUB_TOKEN:${GH_TOKEN:}}
 
-# Qoder provider (B4): OpenSandbox image with the pinned CLI, the compiled sandbox bridge
-# and the plugin bundle baked in. Mirrors the opencode connection config; the in-sandbox
-# bridge listens on 4097 (see agent-control-tower/qoder-sandbox/Dockerfile).
-qoder:
-  sandbox-server-url: http://127.0.0.1:8090
-  sandbox-api-key: ${OPENSANDBOX_API_KEY:}
-  image: aria-conductor/qoder-sandbox:1.0
-
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:
   # Mode-neutral run deadline of a coordinated execution attempt
@@ -96,7 +88,6 @@ aria:
     token: ${ARIA_MCP_TOKEN:}
     sandbox-host-address: ${ARIA_MCP_SANDBOX_HOST_ADDRESS:}
     port: ${ARIA_MCP_PORT:8080}
-    execd-ready-timeout-ms: ${ARIA_MCP_EXECD_READY_TIMEOUT_MS:15000}
   progress:
     retention-days: ${ARIA_PROGRESS_RETENTION_DAYS:7}
     cleanup-cron: ${ARIA_PROGRESS_CLEANUP_CRON:0 30 3 * * *}

@@ -97,11 +97,6 @@ class MigrationIntegrationTest extends BaseH2IntegrationTest {
                 + "VALUES (?, ?, 'legacy tool', 'ops', '{}', TRUE)", toolId, "v69-tool-" + toolId);
         jdbcTemplate.update("INSERT INTO skill_definitions (id, name, description, created_at) "
                 + "VALUES (?, ?, 'legacy skill', CURRENT_TIMESTAMP)", skillId, "v69-skill-" + skillId);
-        jdbcTemplate.update("INSERT INTO agent_tools (agent_id, tool_id) VALUES (?, ?)", agentId, toolId);
-        jdbcTemplate.update("INSERT INTO role_tool_templates (role, tool_id, is_default) "
-                + "VALUES ('v69-role', ?, TRUE)", toolId);
-        jdbcTemplate.update("INSERT INTO skill_tools (skill_id, tool_id) VALUES (?, ?)", skillId, toolId);
-
         UUID legacyAsk = insertAsk(runId, "APPROVAL", "LEGACY_GATE");
         UUID reviewAsk = insertAsk(runId, "REVIEW_REQUEST", "LEGACY_GATE");
         UUID clarificationAsk = insertAsk(runId, "QUESTION", "CLARIFICATION");
@@ -123,9 +118,6 @@ class MigrationIntegrationTest extends BaseH2IntegrationTest {
         assertThat(count("SELECT COUNT(*) FROM agents WHERE id = ? AND agent_type = 'ADK' "
                 + "AND tool_ids IS NULL AND skill_ids IS NULL", agentId)).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM tool_definitions WHERE enabled = TRUE")).isZero();
-        assertThat(count("SELECT COUNT(*) FROM agent_tools")).isZero();
-        assertThat(count("SELECT COUNT(*) FROM role_tool_templates")).isZero();
-        assertThat(count("SELECT COUNT(*) FROM skill_tools")).isZero();
         assertThat(count("SELECT COUNT(*) FROM knowledge_items WHERE id = ? AND status = 'RETIRED' "
                 + "AND retired_at IS NOT NULL", toolKnowledgeId)).isEqualTo(1);
 
@@ -166,8 +158,14 @@ class MigrationIntegrationTest extends BaseH2IntegrationTest {
         return Arrays.stream(withoutComments.split(";"))
                 .map(String::trim)
                 .filter(statement -> !statement.isBlank())
+                // V83 drops these tables, so the final schema cannot replay V69's deletes;
+                // v83_dropsRetiredLegacyTables asserts the drop itself.
+                .filter(statement -> !DROPPED_BY_V83.stream().anyMatch(statement::contains))
                 .toList();
     }
+
+    private static final List<String> DROPPED_BY_V83 =
+            List.of("agent_tools", "skill_tools", "role_tool_templates", "action_shadow_copies");
 
     /**
      * V60: approvals gain a provenance column. Legacy rows (created before the migration) must
@@ -189,5 +187,24 @@ class MigrationIntegrationTest extends BaseH2IntegrationTest {
                         "WHERE UPPER(TABLE_NAME) = 'APPROVALS' AND UPPER(COLUMN_NAME) = 'SOURCE'",
                 String.class);
         assertThat(isNullable).as("approvals.source must be NOT NULL").isEqualTo("NO");
+    }
+
+    /**
+     * V83 drops the storage V69 emptied plus the action-pipeline shadow copies, and
+     * removes the token-ceiling seed the removed clamp read. Asserted against the
+     * schema itself: a fresh database never creates rows here, so only the table
+     * list proves the drop.
+     */
+    @Test
+    void v83_dropsRetiredLegacyTables_andTheTokenCeilingSeed() {
+        for (String table : DROPPED_BY_V83) {
+            Integer tables = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE UPPER(TABLE_NAME) = ?",
+                    Integer.class, table.toUpperCase());
+            assertThat(tables).as("table %s must be dropped by V83", table).isZero();
+        }
+        assertThat(count("SELECT COUNT(*) FROM system_config WHERE config_key = 'llm.max.tokens.ceiling'"))
+                .as("the unused per-request token ceiling seed must be gone")
+                .isZero();
     }
 }

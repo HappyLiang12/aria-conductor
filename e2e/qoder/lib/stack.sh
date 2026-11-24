@@ -115,7 +115,7 @@ container_exists() { # id
 # e2e/qoder/slice-a/04-permissions.md records `/bin/sh: 1: ps: not found`), so
 # the authoritative check is a /proc scan on the process NAME (comm) — the
 # bridge spawns `qodercli --acp ...` without a shell
-# (qoder-sandbox/bridge/src/acp-client.ts:440-445). Matching comm avoids
+# (packages/qoder-acp-bridge/src/acp-client.ts:185-192). Matching comm avoids
 # matching this very probe's shell, whose argv contains the word "qodercli".
 qodercli_procs_in_container() { # container id -> matching lines (empty = none)
   "$CONTAINER_RUNTIME" exec "$1" sh -c '

@@ -15,6 +15,32 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **MCP Server** — Embedded Model Context Protocol server at `/mcp` (Java, `act-mcp`)
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
 
+## Dashboard
+
+![Dashboard shell with grouped navigation, the runtime badge, and the live connection indicator](docs/reviews/shots/ui-refresh-shell.png)
+
+![Overview: decision-first KPIs above the governed kanban board](docs/reviews/shots/ui-refresh-overview.png)
+
+![Aria chat in its empty state](docs/reviews/shots/ui-refresh-aria.png)
+
+A short tour of the refreshed surface:
+
+- **Grouped navigation** — Operate, Build, Chat and System rails keep runs, governed work,
+  conversation and configuration apart.
+- **Overview, decisions first** — the four KPIs (active agents, running runs, pending approvals,
+  recorded tokens), the "Needs your decision" queue and the recovery list sit above the governed
+  kanban board.
+- **Aria** — chat with send and stop controls; approval, clarification and memory-proposal asks
+  render as inline decision cards, next to the same decision queue on the Overview.
+- **Live progress** — a running turn streams its progress into the transcript.
+- **Theme toggle** — dark and light, remembered per browser.
+- **Runtime badge and connection indicator** — the topbar names the agent core (and its mode when
+  the app knows it) and shows whether the live event feed is connected.
+
+Phase 1 refreshes the shell, the Overview frame and KPIs, and Aria; the other pages retain their
+current styling until their rollout wave. To see it locally, follow [Quick Start](#quick-start) and
+open [http://localhost:5173](http://localhost:5173).
+
 ## Current limits
 
 - **No spend cap.** There is no per-run token or cost budget; a run is bounded by the configured

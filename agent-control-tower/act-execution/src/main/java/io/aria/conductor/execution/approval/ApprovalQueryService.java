@@ -75,13 +75,16 @@ public class ApprovalQueryService {
         // B1 (spec §5.3): authority alongside blast radius, from the one catalog. Null for an
         // unclassified tool name rather than a guessed policy.
         ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
-        // The tier follows the same classification: a name the catalog does not know (the
-        // live-only write tools) would otherwise resolve READ, so the row's own reviewed
-        // tier is shown instead; a legacy row without one keeps the resolver's default.
+        // The tier follows the same classification: only a name the resolver does not know at
+        // all (a live-only write tool) needs the row's own reviewed tier, because the resolver
+        // would otherwise resolve it READ. A name the resolver does know - a configured row, a
+        // catalog tool or a native bash/edit/write - keeps the resolver's tier, so a
+        // reclassification after the ask reaches the display and the queue rank instead of a
+        // stale stored tier winning. A legacy row with neither keeps the resolver's default.
         String riskTier;
         if (toolName == null) {
             riskTier = a.getRiskTier();
-        } else if (policy != null) {
+        } else if (toolRiskResolver.knows(toolName)) {
             riskTier = toolRiskResolver.resolve(toolName).name();
         } else {
             riskTier = a.getRiskTier() != null

@@ -96,6 +96,12 @@ public class ToolRiskResolver {
             .expireAfterWrite(Duration.ofMinutes(1))
             .build();
 
+    /** Same 1-minute TTL as the tier and policy caches so {@link #knows} agrees with {@link #resolve}. */
+    private final Cache<String, Boolean> knownCache = Caffeine.newBuilder()
+            .maximumSize(500)
+            .expireAfterWrite(Duration.ofMinutes(1))
+            .build();
+
     @Autowired
     public ToolRiskResolver(ToolDefinitionRepository toolRepo, ObjectProvider<ToolCatalogProvider> catalogs) {
         this(toolRepo, catalogs.getIfAvailable());
@@ -115,6 +121,33 @@ public class ToolRiskResolver {
         return cache.get(toolName, name -> toolRepo.findByName(name)
                 .map(ToolRiskResolver::configuredTier)
                 .orElseGet(() -> catalogTier(name).orElseGet(() -> nativeTier(name))));
+    }
+
+    /**
+     * Whether this resolver has any classification for the name at all: a configured
+     * {@code tool_definitions} row, a reviewed catalog policy, or a native ACP tier.
+     *
+     * <p>Callers that may prefer a persisted tier over the current one use this to tell
+     * "the resolver would reclassify the name" (so its tier is authoritative and a tier
+     * change after the ask still reaches them) from "the resolver has nothing to say"
+     * (only the persisted tier classifies a live-only name). A null policy alone cannot
+     * answer that: it is null for a native {@code bash}/{@code edit} too.
+     */
+    public boolean knows(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return false;
+        }
+        return knownCache.get(toolName, this::known);
+    }
+
+    private boolean known(String name) {
+        if (policyOf(name) != null) {
+            return true;
+        }
+        if (toolRepo.findByName(name).isPresent()) {
+            return true;
+        }
+        return NATIVE_TOOL_TIERS.containsKey(name.toLowerCase(Locale.ROOT));
     }
 
     /** The reviewed authority class of a tool, or null when the catalog does not know it. */

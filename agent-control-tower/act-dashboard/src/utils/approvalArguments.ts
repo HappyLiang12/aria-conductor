@@ -94,6 +94,78 @@ export function permissionRequestInput(envelope: Record<string, unknown>): unkno
   return envelope.input;
 }
 
+/**
+ * What an ACP envelope with no usable `input` says instead of a payload.
+ *
+ * The envelope class is shared by every approval surface
+ * (`isPermissionRequestEnvelope`), so the two cannot disagree about what an ACP
+ * ask's stored `arguments` are.
+ */
+export const ENVELOPE_WITHOUT_INPUT =
+  'This request carries no argument summary — the core sent no tool input.';
+
+export interface ArgumentView {
+  /** The compact `key: value` lines the card paints. */
+  summary: string;
+  /** The same payload as one string, for the element's tooltip. */
+  detail: string;
+}
+
+/** One `key: value` line per entry; JSON punctuation only is dropped. */
+function summarizeEntries(entries: Record<string, unknown>): string {
+  return Object.entries(entries)
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
+    .join('\n');
+}
+
+/** The tool's own input, as the summary lines the operator decides on. */
+function summarizeInput(input: unknown): string {
+  if (typeof input === 'string') return input.trim();
+  if (input !== null && typeof input === 'object' && !Array.isArray(input)) {
+    return summarizeEntries(input as Record<string, unknown>);
+  }
+  if (input === undefined || input === null) return '';
+  return JSON.stringify(input) ?? '';
+}
+
+/**
+ * The arguments as a compact, truthful summary (spec A3, T45 Item 3): a JSON
+ * object becomes one `key: value` line per entry, so a command and its target
+ * are legible at a glance; anything else is shown verbatim. Nothing is invented
+ * and nothing is dropped except JSON punctuation — the operator is approving
+ * this payload, not a paraphrase of it.
+ *
+ * ONE exception, because it is not the tool's argument object at all: an ACP
+ * `permission.request` envelope (F-B1). Its protocol fields — sequence number,
+ * timestamp, session and call ids, byte count, digest, raw provider options —
+ * are not things the operator can act on, and painting them into the transcript
+ * asks them to read transport plumbing. The envelope's `input` IS the payload
+ * the decision is about, so it is summarized in full and nothing else is shown.
+ */
+export function argumentView(args: string): ArgumentView {
+  const text = args.trim();
+  if (text === '') return { summary: '', detail: '' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { summary: text, detail: text }; // not JSON: the raw text IS the argument
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { summary: text, detail: text };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (isPermissionRequestEnvelope(record)) {
+    const input = permissionRequestInput(record);
+    const summary = summarizeInput(input);
+    if (summary === '') return { summary: ENVELOPE_WITHOUT_INPUT, detail: '' };
+    const detail = typeof input === 'string' ? input : JSON.stringify(input) ?? summary;
+    return { summary, detail };
+  }
+  const summary = summarizeEntries(record);
+  return summary === '' ? { summary: text, detail: text } : { summary, detail: text };
+}
+
 function bound(text: string): string {
   if (text.length <= MAX_ARGUMENTS_LENGTH) return text;
   return `${text.slice(0, MAX_ARGUMENTS_LENGTH)}…`;

@@ -86,6 +86,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(approvalRepository.findAll(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(withTool, withoutTool)));
         when(toolCallRepository.findAllById(List.of(toolCallId))).thenReturn(List.of(toolCall));
+        when(toolRiskResolver.knows("git_push")).thenReturn(true);
         when(toolRiskResolver.resolve("git_push")).thenReturn(RiskTier.PUSH);
 
         mvc.perform(get("/api/v1/approvals"))
@@ -117,6 +118,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(approvalRepository.findAll(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(liveWrite)));
         when(toolCallRepository.findAllById(List.of(toolCallId))).thenReturn(List.of(toolCall));
+        when(toolRiskResolver.knows("start_agent_run")).thenReturn(false);
         when(toolRiskResolver.policyOf("start_agent_run")).thenReturn(null);
         when(toolRiskResolver.resolve("start_agent_run")).thenReturn(RiskTier.READ);
 
@@ -145,6 +147,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(approvalRepository.findAll(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(acpAsk)));
         when(toolCallRepository.findAllById(List.of())).thenReturn(List.of());
+        when(toolRiskResolver.knows(tool)).thenReturn(true);
         when(toolRiskResolver.resolve(tool)).thenReturn(RiskTier.PUSH);
         when(toolRiskResolver.policyOf(tool)).thenReturn(ToolPolicy.WORKER_WRITE);
 
@@ -169,6 +172,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(approvalRepository.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(first, second)));
         when(toolCallRepository.findAllById(List.of(sharedToolCallId)))
                 .thenReturn(List.of(aToolCall().withId(sharedToolCallId).withToolName("read_file").build()));
+        when(toolRiskResolver.knows("read_file")).thenReturn(true);
         when(toolRiskResolver.resolve("read_file")).thenReturn(RiskTier.READ);
 
         mvc.perform(get("/api/v1/approvals"))
@@ -489,6 +493,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
         when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
         when(toolCallRepository.findById(toolCallId)).thenReturn(Optional.of(
                 aToolCall().withId(toolCallId).withToolName("delete_branch").withArguments("{}").build()));
+        when(toolRiskResolver.knows("delete_branch")).thenReturn(true);
         when(toolRiskResolver.resolve("delete_branch")).thenReturn(RiskTier.DESTRUCTIVE);
         when(toolRiskResolver.policyOf("delete_branch")).thenReturn(ToolPolicy.GATED);
 

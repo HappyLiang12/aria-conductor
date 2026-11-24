@@ -210,13 +210,15 @@ public class ApprovalController {
         // Authority is a second axis: the same catalog classification the tier comes from,
         // reported as the reviewed policy name (null for an unclassified tool).
         ToolPolicy policy = toolName != null ? toolRiskResolver.policyOf(toolName) : null;
-        // Same precedence as ApprovalQueryService: a name the catalog does not know (the
-        // live-only write tools) would resolve READ, so the row's own reviewed tier wins;
-        // a legacy row without one keeps the resolver's default.
+        // Same precedence as ApprovalQueryService: only a name the resolver does not know at
+        // all (a live-only write tool) falls back to the row's own reviewed tier; a known name
+        // (configured row, catalog or native bash/edit/write) keeps the resolver's tier so a
+        // reclassification after the ask is not masked by a stale stored tier. A legacy row
+        // without either keeps the resolver's default.
         String riskTier;
         if (toolName == null) {
             riskTier = a.getRiskTier();
-        } else if (policy != null) {
+        } else if (toolRiskResolver.knows(toolName)) {
             riskTier = toolRiskResolver.resolve(toolName).name();
         } else {
             riskTier = a.getRiskTier() != null

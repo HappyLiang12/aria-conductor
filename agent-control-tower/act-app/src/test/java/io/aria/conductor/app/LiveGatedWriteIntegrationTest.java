@@ -198,7 +198,12 @@ class LiveGatedWriteIntegrationTest extends BaseH2IntegrationTest {
 
     // --- harness ---------------------------------------------------------------------------
 
-    /** Drives the production sink exactly as the socket's reader does, then waits for the park. */
+    /**
+     * Drives the production sink exactly as the socket's reader does, then waits for the park.
+     * The ask row commits before {@code parkForApproval} sends its frames, so the frame check
+     * belongs inside the await: a caller that returned on the row alone could finalize or close
+     * the socket while the park was still emitting, and the park would then be raced by it.
+     */
     private UUID callStartAgentRun() {
         toolCalls.onToolCall(session, "{\"type\":\"tool_call\",\"id\":\"" + CALL_ID
                 + "\",\"name\":\"start_agent_run\",\"arguments\":{\"agentId\":\"" + targetAgentId
@@ -206,9 +211,10 @@ class LiveGatedWriteIntegrationTest extends BaseH2IntegrationTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(session.runId()).as("the tool call creates the turn's live run").isNotNull();
             assertThat(approvalRepository.findByRunId(session.runId())).hasSize(1);
+            assertThat(phone.frames).as("the park reached the phone before the helper returns")
+                    .anyMatch(frame -> frame.contains("\"type\":\"approval_required\"")
+                            && frame.contains("\"toolName\":\"start_agent_run\""));
         });
-        assertThat(phone.frames).anyMatch(frame -> frame.contains("\"type\":\"approval_required\"")
-                && frame.contains("\"toolName\":\"start_agent_run\""));
         return session.runId();
     }
 

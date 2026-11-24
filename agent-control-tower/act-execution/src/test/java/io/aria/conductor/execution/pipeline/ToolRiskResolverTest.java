@@ -213,4 +213,47 @@ class ToolRiskResolverTest {
         assertThat(resolver.resolve("mcp__aria-conductor__unknown_tool")).isEqualTo(RiskTier.READ);
         assertThat(resolver.policyOf("mcp__aria-conductor__unknown_tool")).isNull();
     }
+
+    // ---------------------------------------------------------------- knows (tier ownership)
+
+    /**
+     * A native tool has no catalog policy, yet the resolver still classifies it from the native
+     * map. {@code knows} must say so: a read path that keyed the stored tier off a null policy
+     * would let a stale row mask the native tier.
+     */
+    @Test
+    void knowsANativeToolThatHasNoCatalogPolicy() {
+        when(toolRepo.findByName("Edit")).thenReturn(Optional.empty());
+
+        assertThat(resolver.policyOf("Edit")).as("no reviewed catalog entry for a native tool").isNull();
+        assertThat(resolver.knows("Edit")).isTrue();
+        assertThat(resolver.knows("bash")).isTrue();
+    }
+
+    @Test
+    void knowsAConfiguredRowEvenWhenItsTierIsNull() {
+        ToolDefinition legacy = ToolDefinition.builder().name("live_write").build();
+        when(toolRepo.findByName("live_write")).thenReturn(Optional.of(legacy));
+
+        assertThat(resolver.knows("live_write")).isTrue();
+    }
+
+    @Test
+    void knowsACatalogTool() {
+        ToolCatalogProvider catalog = () -> List.of(
+                new ToolDescriptor("remember_fact", "d", ToolPolicy.WORKER_WRITE, false));
+        ToolRiskResolver resolver = new ToolRiskResolver(toolRepo, catalog);
+
+        assertThat(resolver.knows("mcp__aria-conductor__remember_fact")).isTrue();
+    }
+
+    /** A live-only name no layer classifies is the one case a stored tier still owns. */
+    @Test
+    void doesNotKnowATrulyUnknownName() {
+        when(toolRepo.findByName("start_agent_run")).thenReturn(Optional.empty());
+
+        assertThat(resolver.knows("start_agent_run")).isFalse();
+        assertThat(resolver.knows(null)).isFalse();
+        assertThat(resolver.knows("  ")).isFalse();
+    }
 }

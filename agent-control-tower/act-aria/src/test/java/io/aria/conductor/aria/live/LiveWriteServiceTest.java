@@ -16,6 +16,9 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -148,10 +151,17 @@ class LiveWriteServiceTest {
         assertThat(saved.getValue().getPromptSeed()).isEqualTo("Run the skill: Deploy");
     }
 
-    @Test
-    void aSkillWithoutATemplateStartsNothingAndNeverInjectsNull() {
+    /**
+     * A SKILL row with no usable template has nothing to inject. Both halves of "no
+     * template" are refused before the run row exists: null (no column value) and blank
+     * (a template the skill author emptied out).
+     */
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\n\t"})
+    void aSkillWithoutATemplateStartsNothingAndNeverInjectsNull(String template) {
         when(skillContextProvider.getEnabledSkillsByIds(List.of(SKILL_ID))).thenReturn(List.of(
-                new SkillContext(SKILL_ID, "Deploy", null, null, "SKILL")));
+                new SkillContext(SKILL_ID, "Deploy", null, template, "SKILL")));
 
         assertThatThrownBy(() -> service.runSkill(SKILL_ID, "go"))
                 .isInstanceOf(IllegalArgumentException.class)

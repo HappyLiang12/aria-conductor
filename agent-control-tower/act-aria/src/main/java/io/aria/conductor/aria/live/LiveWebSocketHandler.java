@@ -209,6 +209,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         if (!live.helloSeen()) {
+            if ("mic".equals(type)) {
+                // The phone mirrors its mic state before hello (observed live 2026-11-24).
+                // hello carries the authoritative mic flag, so the early frame is ignored
+                // rather than refused; every other non-hello frame still closes 4002.
+                return;
+            }
             if (!"hello".equals(type) || !live.claimHello() || !validHello(frame)) {
                 reject(live);
                 return;
@@ -432,6 +438,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             if (code != null) {
                 lastErrorCode.set(code);
             }
+            log.debug("aria live -> phone control: type={}", eventType(payload));
             sendRaw(live, payload);
         }
 
@@ -496,6 +503,16 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
 
     private void send(LiveSession live, Map<String, Object> payload) {
         frames.toPhone(live, payload);
+    }
+
+
+    /** The event type only: a log line never carries a payload. */
+    private String eventType(String payload) {
+        try {
+            return json.readTree(payload).path("type").asText("?");
+        } catch (Exception e) {
+            return "unparseable";
+        }
     }
 
     private void sendRaw(LiveSession live, String payload) {

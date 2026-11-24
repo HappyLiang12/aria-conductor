@@ -283,6 +283,22 @@ class LiveWebSocketHandlerTest {
     }
 
     @Test
+    void aMicFrameBeforeHelloIsIgnoredRatherThanRefused() throws Exception {
+        WebSocketSession session = session("s1", null, null);
+        handler = handler(5000);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"mic\",\"v\":1,\"on\":true}"));
+
+        verify(session, never()).sendMessage(any(TextMessage.class));
+
+        handler.handleTextMessage(session, new TextMessage(HELLO));
+
+        assertThat(json.readTree(allTexts(session).get(0)).path("type").asText()).isEqualTo("ready");
+        verify(session, never()).close(any());
+    }
+
+    @Test
     void aSocketThatStaysSilentSaysWhyThenClosesAtTheDeadline() throws Exception {
         WebSocketSession session = session("s1", LiveWebSocketHandler.PROTOCOL, LiveWebSocketHandler.PROTOCOL);
 

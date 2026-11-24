@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { TopBar } from '../TopBar';
-import { getSummary } from '../../api/dashboard';
-import { getAdkProviderHealth, listAdkProviders } from '../../api/adk';
-import type { AdkProviderHealth, AdkProviderInfo, DashboardSummary } from '../../types';
+import { SidebarProvider } from '@/components/ui/sidebar';
+import { ShellTopBar } from '../ShellTopBar';
+import { getSummary } from '@/api/dashboard';
+import { getAdkProviderHealth, listAdkProviders } from '@/api/adk';
+import type { AdkProviderHealth, AdkProviderInfo, DashboardSummary } from '@/types';
 
-vi.mock('../../api/dashboard', () => ({
+vi.mock('@/api/dashboard', () => ({
   getSummary: vi.fn(),
 }));
-vi.mock('../../api/adk', () => ({
+vi.mock('@/api/adk', () => ({
   listAdkProviders: vi.fn(),
   getAdkProviderHealth: vi.fn(),
 }));
@@ -47,45 +49,47 @@ function mockSummary(overrides: Partial<DashboardSummary>) {
   } as never);
 }
 
-function renderTopBar() {
+function renderShellTopBar() {
   // A fresh cache per test: the shared query keys would otherwise leak verdicts
   // from one case into the next.
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <TopBar />
+        <SidebarProvider>
+          <ShellTopBar />
+        </SidebarProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
   return { ...result, queryClient };
 }
 
-describe('TopBar health signals', () => {
+describe('ShellTopBar health signals', () => {
   it('does not claim System Healthy when every provider is unhealthy', async () => {
     mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: false });
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(document.body.textContent).toContain('Providers Unavailable'));
     expect(document.body.textContent).not.toContain('System Healthy');
   });
 
   it('does not claim the agent roster is Online', async () => {
     mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: false });
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(document.body.textContent).toContain('Agents'));
     expect(document.body.textContent).not.toContain('Agents Online');
   });
 
   it('reports the healthy count when a provider probe resolves healthy', async () => {
     mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: true });
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(document.body.textContent).toContain('1 of 1 Providers Healthy'));
     expect(document.body.textContent).not.toContain('Providers Unavailable');
   });
 
   it('claims neither health nor failure while a probe is still in flight', async () => {
     mockedGetAdkProviderHealth.mockReturnValue(pendingProbe());
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(document.body.textContent).toContain('Checking providers'));
     expect(document.body.textContent).not.toContain('Providers Unavailable');
     expect(document.body.textContent).not.toContain('Providers Healthy');
@@ -94,19 +98,19 @@ describe('TopBar health signals', () => {
   it('claims neither health nor failure while the provider list is still pending', async () => {
     mockedListAdkProviders.mockReturnValue(new Promise<AdkProviderInfo[]>(() => {}));
     mockedGetAdkProviderHealth.mockReturnValue(pendingProbe());
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(document.body.textContent).toContain('Checking providers'));
     expect(document.body.textContent).not.toContain('Providers Unavailable');
     expect(document.body.textContent).not.toContain('Providers Healthy');
   });
 });
 
-describe('TopBar KPI honesty', () => {
+describe('ShellTopBar KPI honesty', () => {
   const ids = ['kpi-active-agents', 'kpi-running-runs', 'kpi-pending-approvals', 'kpi-tokens'] as const;
 
   it('renders an em dash for every KPI while the summary is loading', () => {
     mockedGetSummary.mockReturnValue(new Promise(() => {}) as never);
-    renderTopBar();
+    renderShellTopBar();
     for (const id of ids) {
       expect(screen.getByTestId(id)).toHaveTextContent('—');
       expect(screen.getByTestId(id)).toHaveAttribute('title', 'Loading');
@@ -115,7 +119,7 @@ describe('TopBar KPI honesty', () => {
 
   it('renders an em dash and Unavailable for every KPI when the summary fails', async () => {
     mockedGetSummary.mockRejectedValue(new Error('summary down'));
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => {
       for (const id of ids) {
         expect(screen.getByTestId(id)).toHaveTextContent('—');
@@ -129,7 +133,7 @@ describe('TopBar KPI honesty', () => {
       activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
       runningRuns: 0, pendingApprovals: 0, totalTokensBurned: 0,
     } as never);
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => {
       for (const id of ids) expect(screen.getByTestId(id)).toHaveTextContent('0');
     });
@@ -140,7 +144,7 @@ describe('TopBar KPI honesty', () => {
     mockedGetSummary
       .mockResolvedValueOnce(SUMMARY as never)
       .mockRejectedValueOnce(new Error('refetch down'));
-    const { queryClient } = renderTopBar();
+    const { queryClient } = renderShellTopBar();
     await waitFor(() => expect(screen.getByTestId('kpi-active-agents')).toHaveTextContent('4'));
 
     await queryClient.refetchQueries({ queryKey: ['dashboard-summary'] });
@@ -151,16 +155,16 @@ describe('TopBar KPI honesty', () => {
   });
 
   it('labels the token KPI with retained-record scope, not a daily window', async () => {
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() => expect(screen.getByText('Recorded tokens')).toBeInTheDocument());
     expect(screen.queryByText('Tokens Today')).not.toBeInTheDocument();
   });
 });
 
-describe('TopBar usage truth', () => {
+describe('ShellTopBar usage truth', () => {
   it('shows not reported instead of a zero token cost', async () => {
     mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 9 });
-    renderTopBar();
+    renderShellTopBar();
     await waitFor(() =>
       expect(screen.getByTestId('kpi-tokens')).toHaveTextContent('not reported'),
     );
@@ -168,7 +172,7 @@ describe('TopBar usage truth', () => {
 
   it('shows the measured total when at least one run reported usage', async () => {
     mockSummary({ totalTokensBurned: 120, runsWithoutUsage: 1 });
-    renderTopBar();
+    renderShellTopBar();
     const kpi = screen.getByTestId('kpi-tokens');
     await waitFor(() => expect(kpi).toHaveTextContent('120'));
     expect(kpi).not.toHaveTextContent('not reported');
@@ -176,7 +180,7 @@ describe('TopBar usage truth', () => {
 
   it('discloses the silent runs beside a measured total', async () => {
     mockSummary({ totalTokensBurned: 120, runsWithoutUsage: 1 });
-    renderTopBar();
+    renderShellTopBar();
     const kpi = screen.getByTestId('kpi-tokens');
     await waitFor(() => expect(kpi).toHaveTextContent('120'));
     expect(kpi.getAttribute('title')).toContain('1 run reported no usage');
@@ -184,7 +188,7 @@ describe('TopBar usage truth', () => {
 
   it('keeps a real zero when no run was silent about usage', async () => {
     mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 0 });
-    renderTopBar();
+    renderShellTopBar();
     const kpi = screen.getByTestId('kpi-tokens');
     await waitFor(() => expect(kpi).toHaveTextContent('0'));
     expect(kpi).not.toHaveTextContent('not reported');
@@ -192,10 +196,27 @@ describe('TopBar usage truth', () => {
 
   it('names how many runs reported nothing in the token title', async () => {
     mockSummary({ totalTokensBurned: 0, runsWithoutUsage: 9 });
-    renderTopBar();
+    renderShellTopBar();
     const kpi = screen.getByTestId('kpi-tokens');
     await waitFor(() =>
       expect(kpi).toHaveAttribute('title', '9 runs reported no usage'),
     );
+  });
+});
+
+describe('ShellTopBar theme toggle', () => {
+  it('keeps the persisted light choice readable and writes it back', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem('aria-theme', 'light');
+    renderShellTopBar();
+    const toggle = screen.getByRole('button', { name: 'Toggle theme' });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'true'));
+    expect(document.body.classList.contains('light')).toBe(true);
+
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'));
+    expect(localStorage.getItem('aria-theme')).toBe('dark');
+    expect(document.body.classList.contains('light')).toBe(false);
+    localStorage.removeItem('aria-theme');
   });
 });

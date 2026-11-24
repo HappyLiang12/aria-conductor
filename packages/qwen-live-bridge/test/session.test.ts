@@ -751,6 +751,43 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
+  it('repairs the ar mode from an acknowledgement that lands after the settle', async () => {
+    fakeGraceTimers();
+    // Only the handshake is answered: every later update is answered by hand below, so the
+    // first one can be acknowledged after its settle already treated the silence as a refusal.
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: true });
+
+    session.setAr(false);
+    await waitUntil(() => updatesOf(fake).length === 2, 'the unanswered update');
+    await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS);
+    expect(session.stats().refusedArSwitches).toBe(1);
+    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }]);
+
+    // The provider took AR-off after all: the late acknowledgement repairs the applied mode
+    // instead of being discarded, so the phone's wish (AR-on) crosses once as a re-send.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => updatesOf(fake).length === 3, 'the repaired wish');
+    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }, null]);
+    expect(session.stats().refusedArSwitches).toBe(1);
+
+    // Acknowledged, AR-on is the applied mode again, and the next commit follows it: held for
+    // its frame (deferred), not crossing at once as an AR-off commit would.
+    fake.send(0, { type: 'session.updated', session: {} });
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the held commit',
+    );
+    expect(session.stats().refusedArSwitches).toBe(1);
+    await session.close();
+  });
+
   it('drops an ar update queued on a dying socket and reconciles the rebuilt session', async () => {
     // The handshake is answered on the first socket only; the rebuilt handshake is held so
     // a wish can arrive between `session.created` and its acknowledgement.

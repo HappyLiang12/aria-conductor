@@ -672,12 +672,12 @@ describe('session: lifecycle', () => {
     await session.close();
   });
 
-  it('reports fatal 1011 when the provider socket dies mid-session', async () => {
+  it('rebuilds the session when the provider socket dies mid-session', async () => {
     const fake = await fakeQwen();
     const { session, fatal } = await open(fake);
     fake.connections[0]!.socket.terminate();
-    await waitUntil(() => fatal.length > 0, 'fatal');
-    expect(fatal).toEqual([1011]);
+    await waitUntil(() => fake.connections.length === 2, 'silent reopen');
+    expect(fatal).toEqual([]);
     await session.close();
   });
 
@@ -687,5 +687,45 @@ describe('session: lifecycle', () => {
     await session.close();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(fatal).toEqual([]);
+  });
+});
+
+describe('session: provider-initiated close', () => {
+  const controlTypes = (actions: SessionAction[]) =>
+    actions
+      .filter((action) => action.kind === 'control')
+      .map((action) => (action as { event: { type: string } }).event.type);
+
+  it('rebuilds a provider-closed session in place without telling the phone', async () => {
+    const fake = await fakeQwen({
+      onConnection: (connection, index) => {
+        if (index === 0) setTimeout(() => connection.socket.close(), 50);
+      },
+    });
+    const { session, recorder, fatal } = await open(fake);
+
+    await waitUntil(() => fake.connections.length === 2, 'silent reopen');
+    const reopened = fake.connections[1]!;
+    await waitUntil(
+      () => reopened.messages.some((message) => message.type === 'session.update'),
+      'the second session is configured',
+    );
+
+    expect(fatal).toEqual([]);
+    expect(controlTypes(recorder.actions)).not.toContain('session_expired');
+    await session.close();
+  });
+
+  it('gives up with 1011 when the provider keeps closing immediately', async () => {
+    const fake = await fakeQwen({
+      onConnection: (connection) => setTimeout(() => connection.socket.close(), 20),
+    });
+    const { session, fatal } = await open(fake);
+
+    await waitUntil(() => fatal.length > 0, 'the reopen budget runs out');
+
+    expect(fatal).toEqual([1011]);
+    expect(fake.connections.length).toBeLessThanOrEqual(5);
+    await session.close();
   });
 });

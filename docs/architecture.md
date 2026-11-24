@@ -79,8 +79,10 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 
 ## Agent Cores and Execution Modes
 
-The supported cores are exactly `opencode` (default) and `qoder`; the `adk.default-provider`
-property (`opencode`) only selects the default for a new agent that omits the core. An unknown
+The supported cores are exactly `opencode` (default) and `qoder`. The `adk.default-provider`
+property only chooses which core the provider inventory marks as `Default` in the UI; it does
+not feed admission. An agent created without an explicit core always resolves to `opencode`
+(`DefaultAgentExecutionPolicy.DEFAULT_CORE_ID`), whatever that property says. An unknown
 or removed core is refused explicitly — there is no fallback and the removed LangChain runtime
 is neither selectable nor resolvable.
 

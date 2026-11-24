@@ -725,9 +725,9 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
-  it('settles an ar update the provider never answers and lets the phone ask again', async () => {
+  it('retries an ar update the provider never answers and only then lets it go', async () => {
     fakeGraceTimers();
-    // Only the handshake is answered: the mid-session switch is silently dropped.
+    // Only the handshake is answered: every mid-session switch is silently dropped.
     let updates = 0;
     const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
     const { session } = await open(fake, { ar: false });
@@ -737,24 +737,31 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS - 1);
     expect(session.stats().refusedArSwitches).toBe(0);
 
-    // The bounded settle treats silence as a refusal: the provider still runs its old
-    // mode, one switch is counted, and nothing is retried automatically.
+    // Silence is not a refusal: the wish is re-sent once, still AR-on, and nothing is
+    // counted against it yet.
     await vi.advanceTimersByTimeAsync(1);
-    expect(session.stats().refusedArSwitches).toBe(1);
-    await vi.advanceTimersByTimeAsync(30);
-    expect(updatesOf(fake)).toHaveLength(2);
-
-    // The in-flight marker is gone, so asking again crosses instead of being swallowed.
-    session.setAr(true);
-    await waitUntil(() => updatesOf(fake).length === 3, 'the fresh update');
+    await waitUntil(() => updatesOf(fake).length === 3, 'the retried update');
     expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null, null]);
+    expect(session.stats().refusedArSwitches).toBe(0);
+
+    // Only the second unanswered send gives the wish up: one refusal, and the bridge is back
+    // on the mode the provider really runs.
+    await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS);
+    expect(session.stats().refusedArSwitches).toBe(1);
+    expect(updatesOf(fake)).toHaveLength(3);
+
+    // The in-flight marker and the spent retry are gone, so asking again crosses instead of
+    // being swallowed.
+    session.setAr(true);
+    await waitUntil(() => updatesOf(fake).length === 4, 'the fresh update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null, null, null]);
     await session.close();
   });
 
-  it('repairs the ar mode from an acknowledgement that lands after the settle', async () => {
+  it('retries the wished ar mode and keeps it when the acknowledgement lands late', async () => {
     fakeGraceTimers();
-    // Only the handshake is answered: every later update is answered by hand below, so the
-    // first one can be acknowledged after its settle already treated the silence as a refusal.
+    // Only the handshake is answered: the AR-off switch is dropped, so its settle re-sends
+    // the same wish, and the acknowledgement below lands after that retry went out.
     let updates = 0;
     const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
     const { session } = await open(fake, { ar: true });
@@ -762,29 +769,33 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     session.setAr(false);
     await waitUntil(() => updatesOf(fake).length === 2, 'the unanswered update');
     await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS);
-    expect(session.stats().refusedArSwitches).toBe(1);
-    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }]);
+    await waitUntil(() => updatesOf(fake).length === 3, 'the retried wish');
+    // The retry carries the mode the phone asked for, never the one it asked to leave.
+    expect(updatesOf(fake)).toEqual([
+      null,
+      { type: 'semantic_vad_ec' },
+      { type: 'semantic_vad_ec' },
+    ]);
+    expect(session.stats().refusedArSwitches).toBe(0);
 
-    // The provider took AR-off after all: the late acknowledgement repairs the applied mode
-    // instead of being discarded, so the phone's wish (AR-on) crosses once as a re-send.
-    fake.send(0, { type: 'session.updated', session: {} });
-    await waitUntil(() => updatesOf(fake).length === 3, 'the repaired wish');
-    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }, null]);
-    expect(session.stats().refusedArSwitches).toBe(1);
-
-    // Acknowledged, AR-on is the applied mode again, and the next commit follows it: held for
-    // its frame (deferred), not crossing at once as an AR-off commit would.
+    // The provider took AR-off after all: the late acknowledgement settles the retry onto the
+    // wish and reconciles nothing, so no flip back to the previous mode is ever sent.
     fake.send(0, { type: 'session.updated', session: {} });
     session.appendAudio('AAAA');
-    session.commit({ image: true });
-    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
-    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
-    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.append'), 'the round-trip');
+    expect(updatesOf(fake)).toHaveLength(3);
+    expect(updatesOf(fake).at(-1)).toEqual({ type: 'semantic_vad_ec' });
+    expect(session.stats().refusedArSwitches).toBe(0);
+
+    // AR-off is the applied mode, so the next commit follows it at once: an AR-on commit
+    // would be held for its frame (the frozen grace timer would never flush it).
+    session.commit();
     await waitUntil(
       () => typesOf(0, fake).includes('input_audio_buffer.commit'),
-      'the held commit',
+      'the AR-off commit',
     );
-    expect(session.stats().refusedArSwitches).toBe(1);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    expect(session.stats().refusedArSwitches).toBe(0);
     await session.close();
   });
 

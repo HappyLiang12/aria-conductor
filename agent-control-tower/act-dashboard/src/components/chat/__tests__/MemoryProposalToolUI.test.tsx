@@ -36,15 +36,14 @@ describe('MemoryProposalToolUI', () => {
     expect(screen.getByText(/remembered/i)).toBeInTheDocument();
   });
 
-  it('applies the operator session headers before deciding', async () => {
+  it('does not re-apply operator headers the API module owns', async () => {
     const { decideMemoryProposal } = await import('../../../api/memory');
     render(<MemoryProposalToolUI {...withArgs({ id: 'p1', valueText: 'Ships on Fridays' })} />);
     await userEvent.click(screen.getByRole('button', { name: /approve/i }));
     await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('p1', 'APPROVE'));
-    expect(mockApplyHeaders).toHaveBeenCalledTimes(1);
-    expect(mockApplyHeaders.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(decideMemoryProposal).mock.invocationCallOrder[0],
-    );
+    // `decideMemoryProposal` (api/memory.ts) applies the session before posting,
+    // so a second call here would only mutate shared axios defaults twice.
+    expect(mockApplyHeaders).not.toHaveBeenCalled();
   });
 
   it('posts REJECT against the proposal id', async () => {
@@ -77,7 +76,9 @@ describe('MemoryProposalToolUI', () => {
 
   it('surfaces a failed decision and keeps the card retryable', async () => {
     const { decideMemoryProposal } = await import('../../../api/memory');
-    vi.mocked(decideMemoryProposal).mockRejectedValueOnce(new Error('proposal already decided'));
+    vi.mocked(decideMemoryProposal).mockRejectedValueOnce({
+      response: { status: 409, data: { message: 'proposal already decided' } },
+    });
     render(<MemoryProposalToolUI {...withArgs({ id: 'p1', factKey: 'deploy.day' })} />);
     await userEvent.click(screen.getByRole('button', { name: /approve/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('proposal already decided');

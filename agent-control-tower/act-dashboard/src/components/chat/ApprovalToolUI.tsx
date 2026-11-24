@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
-import { decideApproval } from '@/api/approvals';
+import { decideApproval, getApproval } from '@/api/approvals';
 import { applyOperatorHeaders } from '@/api/operatorSession';
+import type { Approval } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { decisionErrorMessage, isUnsettleableAsk } from './decisionToolkit';
 
 /**
  * Arguments of the reserved `__approval` tool call (spec Task 6 maps the SSE
@@ -124,10 +126,57 @@ function parseOptions(optionsJson: string | undefined): OfferedOption[] {
   });
 }
 
+/**
+ * The ask's arguments as compact `key: value` lines (the backend already
+ * redacted them). A JSON object becomes one line per entry so a command and its
+ * target are legible; anything else is shown verbatim. Nothing is paraphrased.
+ */
+function argumentsSummary(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === '') return '';
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.entries(parsed as Record<string, unknown>)
+        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value) ?? 'null'}`)
+        .join('\n');
+    }
+  } catch {
+    // not JSON: the raw text IS the argument
+  }
+  return trimmed;
+}
+
+function nonEmpty(value: string | undefined | null): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
 export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ args }) => {
-  const [state, setState] = useState<'pending' | 'submitting' | 'allowed' | 'denied' | 'error'>('pending');
+  const [state, setState] = useState<'pending' | 'submitting' | 'allowed' | 'denied' | 'error' | 'expired'>('pending');
   const [error, setError] = useState<string | null>(null);
+  /** Why a 409 settled the ask; the backend's own wording. */
+  const [settleReason, setSettleReason] = useState<string | null>(null);
+  const [approval, setApproval] = useState<Approval | null>(null);
+  const [detailState, setDetailState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const offered = useMemo(() => parseOptions(args.optionsJson), [args.optionsJson]);
+
+  // The SSE frame names the ask but carries neither its arguments nor its
+  // policy (spec A2), so the card reads the ask it names — the same read the
+  // legacy AriaApprovalCard performed. A failed read is reported, not guessed.
+  useEffect(() => {
+    let alive = true;
+    setDetailState('loading');
+    void getApproval(args.approvalId)
+      .then((detail) => {
+        if (!alive) return;
+        setApproval(detail);
+        setDetailState('ready');
+      })
+      .catch(() => {
+        if (alive) setDetailState('unavailable');
+      });
+    return () => { alive = false; };
+  }, [args.approvalId]);
   /**
    * Synchronous in-flight guard: a double-click can dispatch two clicks before
    * React re-renders, and the backend rejects the second overlapping decision
@@ -149,17 +198,47 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
       setError(null);
       setState(approved ? 'allowed' : 'denied');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (isUnsettleableAsk(failure)) {
+        // The ask can no longer be decided: show the backend's wording as a
+        // receipt, never as a still-pending error the operator could retry.
+        setSettleReason(decisionErrorMessage(
+          failure,
+          'Deciding this ask',
+          'This ask is no longer pending.',
+        ));
+        setState('expired');
+        return;
+      }
+      setError(decisionErrorMessage(
+        failure,
+        'Approving this ask',
+        'The decision could not be recorded — the ask is still pending; retry.',
+      ));
       setState('error');
     } finally {
       inFlight.current = false;
     }
   }
 
+  const toolName = nonEmpty(args.toolName) ?? nonEmpty(approval?.toolName) ?? 'tool';
+  // The frame may omit the tier/policy; the ask fetched on mount supplies them.
+  const riskTier = nonEmpty(approval?.riskTier) ?? nonEmpty(args.riskTier);
+  const toolPolicy = nonEmpty(approval?.toolPolicy) ?? nonEmpty(args.toolPolicy);
+  const expiresAt = args.expiresAt ?? approval?.expiresAt ?? undefined;
+  const argsText = argumentsSummary(approval?.arguments ?? '');
+
   if (state === 'allowed' || state === 'denied') {
     return (
       <p className="text-sm text-muted-foreground">
-        {state === 'allowed' ? 'Allowed' : 'Denied'} · {args.toolName}
+        {state === 'allowed' ? 'Allowed' : 'Denied'} · {toolName}
+      </p>
+    );
+  }
+  if (state === 'expired') {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Expired or decided elsewhere · {toolName}
+        {settleReason ? ` — ${settleReason}` : ''}
       </p>
     );
   }
@@ -167,17 +246,29 @@ export const ApprovalToolUI: ToolCallMessagePartComponent<ApprovalArgs> = ({ arg
   return (
     <div className="my-2 rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={args.riskTier === 'DESTRUCTIVE' ? 'destructive' : 'secondary'}>
-          {args.riskTier ?? 'REVIEW'}
+        {/* An absent tier is unclassified — never the invented REVIEW default. */}
+        <Badge variant={riskTier === 'DESTRUCTIVE' ? 'destructive' : 'secondary'}>
+          {riskTier ?? 'unclassified'}
         </Badge>
-        <span className="font-medium">Approve {args.toolName}?</span>
-        {args.toolPolicy && <Badge variant="outline">{args.toolPolicy}</Badge>}
+        <span className="font-medium">Approve {toolName}?</span>
+        {toolPolicy && <Badge variant="outline">{toolPolicy}</Badge>}
       </div>
-      {args.expiresAt && (
+      {expiresAt && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Expires {new Date(args.expiresAt).toLocaleTimeString()}
+          Expires {new Date(expiresAt).toLocaleTimeString()}
         </p>
       )}
+      {argsText !== '' ? (
+        <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 text-xs whitespace-pre-wrap text-foreground">
+          {argsText}
+        </pre>
+      ) : detailState === 'loading' ? (
+        <p className="mt-2 text-xs text-muted-foreground">Reading the arguments…</p>
+      ) : detailState === 'unavailable' ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          The arguments could not be read, so this ask is shown by tool name only.
+        </p>
+      ) : null}
       {error && (
         <p role="alert" className="mt-2 text-sm text-destructive">
           {error}

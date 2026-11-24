@@ -6,7 +6,10 @@ import type { ApprovalDecisionReceipt } from '../../../types';
 import { applyOperatorHeaders } from '../../../api/operatorSession';
 import { ApprovalToolUI } from '../ApprovalToolUI';
 
-vi.mock('../../../api/approvals', () => ({ decideApproval: vi.fn().mockResolvedValue({}) }));
+vi.mock('../../../api/approvals', () => ({
+  decideApproval: vi.fn().mockResolvedValue({}),
+  getApproval: vi.fn().mockResolvedValue({}),
+}));
 // Keep the real session helpers; only the header application is spied so the
 // card's "operator headers before the decision" ordering is observable.
 vi.mock('../../../api/operatorSession', async (importOriginal) => {
@@ -186,10 +189,56 @@ describe('ApprovalToolUI', () => {
 
   it('surfaces a failed decision and keeps the card retryable', async () => {
     const { decideApproval } = await import('../../../api/approvals');
-    vi.mocked(decideApproval).mockRejectedValueOnce(new Error('ask expired'));
+    vi.mocked(decideApproval).mockRejectedValueOnce({
+      response: { status: 500, data: { message: 'ask expired' } },
+    });
     render(<ApprovalToolUI {...props} />);
     await userEvent.click(screen.getByRole('button', { name: /allow/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('ask expired');
     expect(screen.getByRole('button', { name: /allow/i })).toBeInTheDocument();
+  });
+
+  it('settles a 409 as an expired/decided-elsewhere receipt, not a retryable error', async () => {
+    const { decideApproval } = await import('../../../api/approvals');
+    vi.mocked(decideApproval).mockRejectedValueOnce({
+      response: { status: 409, data: { error: 'Ask apr-already is already DECIDED' } },
+    });
+    render(<ApprovalToolUI {...props} />);
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }));
+    const receipt = await screen.findByRole('status');
+    expect(receipt).toHaveTextContent(/expired or decided elsewhere/i);
+    // The backend's own wording, not raw axios text.
+    expect(receipt).toHaveTextContent('Ask apr-already is already DECIDED');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /allow/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the redacted arguments of the ask it fetched', async () => {
+    const { getApproval } = await import('../../../api/approvals');
+    vi.mocked(getApproval).mockResolvedValueOnce({
+      id: 'a1',
+      arguments: '{"command":"ls -la","cwd":"/tmp"}',
+    } as never);
+    render(<ApprovalToolUI {...props} />);
+    expect(await screen.findByText(/command: ls -la/)).toBeInTheDocument();
+    expect(screen.getByText(/cwd: \/tmp/)).toBeInTheDocument();
+  });
+
+  it('says unclassified when the ask carries no risk tier', () => {
+    render(<ApprovalToolUI {...withArgs({ approvalId: 'a1', toolName: 'bash' })} />);
+    expect(screen.getByText('unclassified')).toBeInTheDocument();
+    expect(screen.queryByText('REVIEW')).not.toBeInTheDocument();
+  });
+
+  it('renders tool as the governed name when the frame carries none', () => {
+    render(<ApprovalToolUI {...withArgs({ approvalId: 'a1', toolName: '' })} />);
+    expect(screen.getByText('Approve tool?')).toBeInTheDocument();
+  });
+
+  it('reports an unreadable argument read instead of pretending there are none', async () => {
+    const { getApproval } = await import('../../../api/approvals');
+    vi.mocked(getApproval).mockRejectedValueOnce({ response: { status: 404 } });
+    render(<ApprovalToolUI {...props} />);
+    expect(await screen.findByText(/arguments could not be read/i)).toBeInTheDocument();
   });
 });

@@ -33,6 +33,15 @@ describe('useAmbientInvalidation', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ['dashboard-summary'] });
   });
 
+  it('leaves the run lists untouched for a progress frame', () => {
+    // `run.progress` streams while a run executes; invalidating the board from
+    // the globally mounted hook refetched every list once per frame.
+    const client = new QueryClient();
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    renderHook(() => useAmbientInvalidation(), { wrapper: wrapper(client, 'run.progress') });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('invalidates approvals for an approval event', () => {
     const client = new QueryClient();
     const spy = vi.spyOn(client, 'invalidateQueries');

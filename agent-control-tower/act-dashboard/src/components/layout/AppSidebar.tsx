@@ -74,7 +74,15 @@ function openConfigure() {
  * the specs click on stay in the DOM.
  */
 const RAIL_CONTAINER = 'rail fixed! top-0! h-svh! z-10! gap-0! p-0! bg-sidebar!';
-const RAIL_LINK = 'rail-btn flex-row! items-center! justify-start! gap-2! p-2! text-sm!';
+/**
+ * The link's colours are token `!` utilities too: `.rail-btn:hover` and
+ * `.rail-btn.active` paint an accent gradient, glow and hard-coded rgba text
+ * unlayered, so without `!` the active destination keeps the legacy chrome
+ * regardless of the theme tokens.
+ */
+const RAIL_LINK = 'rail-btn flex-row! items-center! justify-start! gap-2! p-2! text-sm! '
+  + 'border-transparent! shadow-none! hover:bg-accent! hover:text-accent-foreground!';
+const RAIL_ACTIVE = 'active bg-primary/20! text-foreground! hover:bg-primary/25! hover:text-foreground!';
 
 export function AppSidebar() {
   const { pathname } = useLocation();
@@ -99,7 +107,7 @@ export function AppSidebar() {
                         to={path}
                         data-view={view}
                         aria-current={active(path) ? 'page' : undefined}
-                        className={`${RAIL_LINK}${active(path) ? ' active' : ''}`}
+                        className={`${RAIL_LINK}${active(path) ? ` ${RAIL_ACTIVE}` : ''}`}
                       />
                     }
                   >

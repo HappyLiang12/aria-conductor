@@ -3,10 +3,12 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { ChevronDown, Moon, Sun } from 'lucide-react';
 import { getSummary } from '../../api/dashboard';
 import { getAdkProviderHealth, listAdkProviders } from '../../api/adk';
+import { listAgents } from '../../api/agents';
 import type { AdkProviderInfo, DashboardSummary } from '../../types';
 import { queryPhase, type QueryPhase } from '../../utils/queryState';
 import { formatClock } from '../../utils/formatTime';
 import { NotificationBell } from '../NotificationBell';
+import { useWebSocketContext } from '../Layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -64,6 +66,7 @@ function Kpi({ testId, label, value, title }: {
 
 export function ShellTopBar() {
   const [now, setNow] = useState<Date>(() => new Date());
+  const { isConnected } = useWebSocketContext();
   // M5: read the persisted theme so the choice survives a refresh.
   const [isLight, setIsLight] = useState<boolean>(() => {
     try {
@@ -83,6 +86,15 @@ export function ShellTopBar() {
     queryKey: ['adk-providers'],
     queryFn: listAdkProviders,
     refetchInterval: 15_000,
+  });
+
+  // There is no runtime endpoint in Phase 1. The fleet is uniform (the backend
+  // refuses a mixed runtime), so the first non-retired agent IS the runtime;
+  // the provider catalog supplies the core when no agent exists yet.
+  const { data: fleet } = useQuery({
+    queryKey: ['agents'],
+    queryFn: listAgents,
+    refetchInterval: 30_000,
   });
 
   const healthResults = useQueries({
@@ -159,8 +171,22 @@ export function ShellTopBar() {
     return result.data.healthy ? 'Healthy' : 'Unhealthy';
   };
 
+  // No runtime endpoint exists in Phase 1, so the badge reports what the app
+  // already knows: the fleet is uniform, so the first non-retired agent's frozen
+  // core/mode pair IS the runtime; the provider catalog is the fallback before
+  // any agent exists. A mode neither source declares is never guessed.
+  const defaultProvider = (providers ?? []).find((provider) => provider.isDefault) ?? providers?.[0];
+  const runtimeAgent = (fleet ?? []).find(
+    (agent) => agent.healthStatus !== 'RETIRED' && agent.adkProvider !== undefined,
+  );
+  const runtimeCore = runtimeAgent?.adkProvider ?? defaultProvider?.id;
+  const runtimeMode = runtimeAgent?.executionMode ?? defaultProvider?.executionModes?.[0];
+  const runtimeLabel = runtimeCore
+    ? `${runtimeCore}${runtimeMode ? `/${runtimeMode}` : ''}`
+    : 'runtime unknown';
+
   return (
-    <header className="topbar flex items-center gap-2 border-b border-border bg-background/80 px-3 py-1.5 backdrop-blur">
+    <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-background px-3 py-1.5">
       <SidebarTrigger />
       <div className="flex min-w-0 flex-col leading-tight">
         <span className="truncate text-sm font-semibold text-foreground">Aria Conductor</span>
@@ -168,6 +194,21 @@ export function ShellTopBar() {
       </div>
 
       <div className="ml-2 flex items-center gap-1.5">
+        <Badge variant="outline" data-testid="runtime-badge" title="Default agent core from the provider catalog">
+          {runtimeLabel}
+        </Badge>
+        <span
+          data-testid="ws-indicator"
+          role="status"
+          aria-label={isConnected ? 'Live feed connected' : 'Live feed offline'}
+          className="inline-flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground"
+        >
+          <span
+            aria-hidden="true"
+            className={`size-1.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'}`}
+          />
+          {isConnected ? 'Live' : 'Live feed offline'}
+        </span>
         <Badge variant="secondary">
           {activeAgents ?? '—'} {activeAgents === 1 ? 'Agent' : 'Agents'}
         </Badge>

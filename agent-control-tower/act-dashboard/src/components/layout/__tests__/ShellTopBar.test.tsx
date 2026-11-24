@@ -5,8 +5,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import { ShellTopBar } from '../ShellTopBar';
+import { WebSocketContext } from '@/components/Layout';
 import { getSummary } from '@/api/dashboard';
 import { getAdkProviderHealth, listAdkProviders } from '@/api/adk';
+import { listAgents } from '@/api/agents';
 import type { AdkProviderHealth, AdkProviderInfo, DashboardSummary } from '@/types';
 
 vi.mock('@/api/dashboard', () => ({
@@ -16,10 +18,12 @@ vi.mock('@/api/adk', () => ({
   listAdkProviders: vi.fn(),
   getAdkProviderHealth: vi.fn(),
 }));
+vi.mock('@/api/agents', () => ({ listAgents: vi.fn() }));
 
 const mockedGetSummary = vi.mocked(getSummary);
 const mockedListAdkProviders = vi.mocked(listAdkProviders);
 const mockedGetAdkProviderHealth = vi.mocked(getAdkProviderHealth);
+const mockedListAgents = vi.mocked(listAgents);
 
 const OPENCODE: AdkProviderInfo = {
   id: 'opencode', displayName: 'OpenCode', supportsTaskExecution: true, isDefault: true,
@@ -39,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedGetSummary.mockResolvedValue(SUMMARY as never);
   mockedListAdkProviders.mockResolvedValue([OPENCODE]);
+  mockedListAgents.mockResolvedValue([]);
 });
 
 function mockSummary(overrides: Partial<DashboardSummary>) {
@@ -49,17 +54,26 @@ function mockSummary(overrides: Partial<DashboardSummary>) {
   } as never);
 }
 
-function renderShellTopBar() {
+function renderShellTopBar(isConnected?: boolean) {
   // A fresh cache per test: the shared query keys would otherwise leak verdicts
   // from one case into the next.
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const bar = (
+    <MemoryRouter>
+      <SidebarProvider>
+        <ShellTopBar />
+      </SidebarProvider>
+    </MemoryRouter>
+  );
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <SidebarProvider>
-          <ShellTopBar />
-        </SidebarProvider>
-      </MemoryRouter>
+      {isConnected === undefined ? bar : (
+        <WebSocketContext.Provider
+          value={{ lastMessage: null, isConnected, subscribe: () => ({ unsubscribe: () => {} }) }}
+        >
+          {bar}
+        </WebSocketContext.Provider>
+      )}
     </QueryClientProvider>,
   );
   return { ...result, queryClient };
@@ -201,6 +215,45 @@ describe('ShellTopBar usage truth', () => {
     await waitFor(() =>
       expect(kpi).toHaveAttribute('title', '9 runs reported no usage'),
     );
+  });
+});
+
+describe('ShellTopBar live and runtime signals', () => {
+  it('reports the live feed state without inventing a connection', async () => {
+    mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: true });
+    const { unmount } = renderShellTopBar(false);
+    expect(screen.getByTestId('ws-indicator')).toHaveTextContent('Live feed offline');
+    expect(screen.getByTestId('ws-indicator')).toHaveAccessibleName('Live feed offline');
+    unmount();
+
+    renderShellTopBar(true);
+    expect(screen.getByTestId('ws-indicator')).toHaveTextContent('Live');
+    expect(screen.getByTestId('ws-indicator')).toHaveAccessibleName('Live feed connected');
+  });
+
+  it('shows the default core and its declared mode, never an undeclared one', async () => {
+    mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: true });
+    mockedListAdkProviders.mockResolvedValue([
+      { ...OPENCODE, executionModes: ['HOST', 'SANDBOX'] },
+    ]);
+    renderShellTopBar();
+    await waitFor(() => expect(screen.getByTestId('runtime-badge')).toHaveTextContent('opencode/HOST'));
+  });
+
+  it('reports the fleet runtime from the agents the app already knows', async () => {
+    mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: true });
+    mockedListAgents.mockResolvedValue([
+      { id: 'a1', name: 'Aria', healthStatus: 'HEALTHY', adkProvider: 'opencode', executionMode: 'SANDBOX' },
+    ] as never);
+    renderShellTopBar();
+    await waitFor(() => expect(screen.getByTestId('runtime-badge')).toHaveTextContent('opencode/SANDBOX'));
+  });
+
+  it('says runtime unknown when no provider catalog has loaded', async () => {
+    mockedGetAdkProviderHealth.mockResolvedValue({ providerId: 'opencode', healthy: true });
+    mockedListAdkProviders.mockReturnValue(new Promise<AdkProviderInfo[]>(() => {}));
+    renderShellTopBar();
+    expect(screen.getByTestId('runtime-badge')).toHaveTextContent('runtime unknown');
   });
 });
 

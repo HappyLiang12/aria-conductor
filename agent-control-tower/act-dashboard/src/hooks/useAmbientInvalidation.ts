@@ -2,12 +2,15 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocketContext } from '../components/Layout';
 import { queryKeys } from '../api/queryKeys';
+import { isRunLifecycleEvent } from '../utils/wsEvents';
 
-const RUN_EVENTS = ['run.started', 'run.completed', 'run.waiting_input', 'run.progress', 'run.iteration'];
 const APPROVAL_EVENTS = ['approval.requested', 'approval.decided', 'approval.expired'];
 
 export function keysForAmbientEvent(type: string): readonly (readonly unknown[])[] {
-  if (RUN_EVENTS.includes(type)) return [queryKeys.runs, queryKeys.summary];
+  // One whitelist for every surface: `isRunLifecycleEvent` keeps high-frequency
+  // `run.progress` frames run-scoped (AgentDrawer/RunDetailView), so the globally
+  // mounted hook cannot turn them into a board/list refetch storm.
+  if (isRunLifecycleEvent(type)) return [queryKeys.runs, queryKeys.summary];
   if (APPROVAL_EVENTS.includes(type)) return [queryKeys.approvals, queryKeys.summary];
   if (type.startsWith('kanban.')) return [queryKeys.kanban, queryKeys.summary];
   if (type.startsWith('knowledge.')) return [queryKeys.knowledge];

@@ -80,7 +80,9 @@ describe('ClarificationToolUI', () => {
 
   it('surfaces a failed answer', async () => {
     const { answerAsk } = await import('../../../api/approvals');
-    vi.mocked(answerAsk).mockRejectedValueOnce(new Error('run already finished'));
+    vi.mocked(answerAsk).mockRejectedValueOnce({
+      response: { status: 409, data: { message: 'run already finished' } },
+    });
     render(<ClarificationToolUI {...withArgs({ approvalId: 'a2', question: 'Which PR?' })} />);
     await userEvent.type(screen.getByLabelText('Your answer'), 'nope');
     await userEvent.click(screen.getByRole('button', { name: /send/i }));

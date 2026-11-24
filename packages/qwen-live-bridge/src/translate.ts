@@ -136,6 +136,8 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
   let suppressAudio = false;
   /** A tool call in the current response means this `response.done` is not the turn's end. */
   let toolCalled = false;
+  /** One utterance yields one `speech_end`, whether it ends by VAD or by the commit. */
+  let speechEnded = false;
 
   const inputTranscript = (text: string, final: boolean): InputTranscriptEvent => {
     lastInputText = text;
@@ -170,7 +172,13 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
   return {
     onEvent(event) {
       switch (event.type) {
-        case 'input_audio_buffer.speech_stopped': {
+        case 'input_audio_buffer.speech_stopped':
+        case 'input_audio_buffer.committed': {
+          // `semantic_vad_ec` ends an utterance with a commit and never sends
+          // `speech_stopped` (probed live 2026-11-24); a provider that sends both must
+          // still produce exactly one `speech_end`.
+          if (speechEnded) return [];
+          speechEnded = true;
           const speechEnd: SpeechEndEvent = {
             type: 'speech_end',
             v: PROTOCOL_VERSION,
@@ -179,6 +187,7 @@ export function createTranslator(options: TranslatorOptions = {}): Translator {
           return control(speechEnd);
         }
         case 'input_audio_buffer.speech_started': {
+          speechEnded = false;
           if (!responseActive) {
             return [];
           }

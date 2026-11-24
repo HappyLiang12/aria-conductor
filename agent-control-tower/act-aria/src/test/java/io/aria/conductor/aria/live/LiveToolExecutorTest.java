@@ -31,7 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -80,7 +80,7 @@ class LiveToolExecutorTest {
     void setUp() {
         executor = new LiveToolExecutor(runService, approvalQueryService, agentService, workflowService,
                 runRepository, agentRepository, approvalRepository,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneId.of("Asia/Hong_Kong")));
     }
 
     @Test
@@ -91,11 +91,12 @@ class LiveToolExecutorTest {
     }
 
     @Test
-    void getTimeReturnsAnIsoInstantFromTheInjectedClock() throws Exception {
+    void getTimeReturnsTheInjectedZoneAndTheSameUtcInstant() throws Exception {
         JsonNode value = value(executor.execute("get_time", json.readTree("{}")));
 
-        assertThat(value.path("now").asText()).isEqualTo(NOW.toString());
-        assertThat(Instant.parse(value.path("now").asText())).isEqualTo(NOW);
+        assertThat(value.path("now").asText()).isEqualTo("2026-11-23T17:15:00+08:00");
+        assertThat(value.path("zone").asText()).isEqualTo("Asia/Hong_Kong");
+        assertThat(Instant.parse(value.path("utc").asText())).isEqualTo(NOW);
     }
 
     @Test

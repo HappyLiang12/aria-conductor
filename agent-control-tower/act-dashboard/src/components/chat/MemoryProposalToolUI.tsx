@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react';
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { decideMemoryProposal, type MemoryProposalDecision } from '@/api/memory';
-import { applyOperatorHeaders } from '@/api/operatorSession';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { decisionErrorMessage } from './decisionToolkit';
 
 /**
  * Arguments of the reserved `__memory` tool call: a governed memory proposal
@@ -34,14 +34,17 @@ export const MemoryProposalToolUI: ToolCallMessagePartComponent<MemoryProposalAr
     inFlight.current = true;
     setState('submitting');
     try {
-      // The proposal decision is an operator-only mutation; the cookie needs the
-      // session's CSRF header.
-      applyOperatorHeaders();
+      // `decideMemoryProposal` applies the operator session headers itself, so
+      // the card must not repeat that mutation of the shared axios defaults.
       await decideMemoryProposal(args.id, decision);
       setError(null);
       setState(decision);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(decisionErrorMessage(
+        failure,
+        'Deciding this proposal',
+        'The decision could not be recorded — the proposal is still pending; retry.',
+      ));
       setState('error');
     } finally {
       inFlight.current = false;

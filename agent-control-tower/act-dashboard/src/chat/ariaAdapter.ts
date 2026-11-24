@@ -1,5 +1,5 @@
 import type { ChatModelAdapter, ChatModelRunResult } from '@assistant-ui/react';
-import { streamMessage, type StreamError } from '@/api/aria';
+import { streamMessage, type StreamError, type StreamErrorDetail } from '@/api/aria';
 
 type History = Array<{ role: string; content: string }>;
 
@@ -135,9 +135,30 @@ export function createAriaAdapter(options: {
         abortSignal.removeEventListener('abort', forwardAbort);
         if (current === controller) current = null;
       }
-      if (failure) throw failure;
+      if (failure) throw normalizedError(failure);
     },
   };
+}
+
+/**
+ * The runtime only understands `Error`, so the enriched terminal payload
+ * (`{message, turnFailed, runId, reason}`) must become one before it is thrown:
+ * passing the object through renders `[object Object]` in the thread. The copy
+ * keeps the operator's run id and the backend's own reason (legacy `errorCopy`,
+ * `MainChatPage` before the assistant-ui rebuild).
+ */
+export function normalizedError(failure: unknown): Error {
+  if (failure instanceof Error) return failure;
+  if (typeof failure === 'string') return new Error(failure);
+  const detail = (failure ?? {}) as StreamErrorDetail;
+  const run = detail.runId ? ` (Run ${detail.runId})` : '';
+  const human = detail.message?.trim() ?? '';
+  const reason = detail.reason?.trim() ?? '';
+  const summary = reason !== '' && reason !== human ? [human, reason].filter(Boolean).join(' — ') : human;
+  if (detail.turnFailed === true) {
+    return new Error(`This turn failed${run}: ${summary || 'the backend reported no reason'}`);
+  }
+  return new Error(`${summary || 'The stream ended with an error.'}${run}`);
 }
 
 function safeJson(value: string | undefined): unknown {

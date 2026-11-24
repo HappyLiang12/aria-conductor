@@ -79,6 +79,15 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /chat/i })).toHaveAttribute('aria-current', 'page');
   });
 
+  it('paints the active destination from tokens, over the legacy rail gradient', () => {
+    renderSidebar('/runs');
+    const active = screen.getByRole('link', { name: /runs/i });
+    // `!` utilities beat the unlayered `.rail-btn.active` gradient/glow.
+    expect(active).toHaveClass('bg-primary/20!', 'text-foreground!', 'shadow-none!');
+    expect(active).toHaveClass('hover:bg-primary/25!');
+    expect(screen.getByRole('link', { name: /overview/i })).not.toHaveClass('bg-primary/20!');
+  });
+
   it('keeps the existing rail classes and data-view hooks on the links', () => {
     renderSidebar();
     const overview = screen.getByRole('link', { name: /overview/i });

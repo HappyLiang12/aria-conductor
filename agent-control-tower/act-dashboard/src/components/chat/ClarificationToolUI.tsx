@@ -4,6 +4,7 @@ import { answerAsk } from '@/api/approvals';
 import { applyOperatorHeaders } from '@/api/operatorSession';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { decisionErrorMessage } from './decisionToolkit';
 
 /**
  * Arguments of the reserved `__question` tool call: the run is parked in
@@ -40,7 +41,11 @@ export const ClarificationToolUI: ToolCallMessagePartComponent<ClarificationArgs
       setError(null);
       setState('answered');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(decisionErrorMessage(
+        failure,
+        'Answering this ask',
+        'The answer could not be recorded — the run is still waiting; retry.',
+      ));
       setState('error');
     } finally {
       inFlight.current = false;

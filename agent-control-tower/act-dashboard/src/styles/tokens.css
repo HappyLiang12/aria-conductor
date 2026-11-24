@@ -21,6 +21,8 @@
     --radius: 8px;
     --success: 160 65% 52%;
     --warning: 43 90% 65%;
+    /* #4DA6D9: 6.79:1 on the card surface (#0d1426), 7.26:1 on #070b18. */
+    --link: 202 65% 58%;
   }
 
   body.light {
@@ -38,9 +40,16 @@
     --muted-foreground: 224 30% 38%;
     --accent: 219 60% 92%;
     --accent-foreground: 226 55% 13%;
-    --destructive: 353 100% 71%;
+    /* 353 75% 42%: 6.33:1 on white and 5.35:1 on its own 10% tint. The dark
+       value is 2.75:1 on white, so the light theme needs its own reading. */
+    --destructive: 353 75% 42%;
     --border: 219 42% 92%;
     --input: 219 42% 92%;
     --ring: 226 76% 56%;
+    /* Status text on white: success 5.89:1, warning 5.31:1. */
+    --success: 158 80% 25%;
+    --warning: 30 90% 34%;
+    /* #2552cf: 6.59:1 on white. */
+    --link: 224 70% 48%;
   }
 }

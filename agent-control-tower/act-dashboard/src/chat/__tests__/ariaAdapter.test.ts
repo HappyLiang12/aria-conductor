@@ -76,6 +76,34 @@ describe('createAriaAdapter', () => {
     expect(end.done).toBe(true);
   });
 
+  it('throws the enriched failed-turn payload as an Error, never [object Object]', async () => {
+    // assistant-ui only renders Error/string: the object the backend sends must
+    // become an Error whose copy names the human reason and the run to inspect.
+    const stream = async (_c: string, _m: string, _h: unknown, cb: any) => {
+      cb.onError({ message: 'The model declined the request', turnFailed: true, runId: 'run-42', reason: 'policy refusal' });
+    };
+    const adapter = createAriaAdapter({ conversationId: 'c1', getHistory: () => [], stream: stream as never });
+    const run = adapter.run({
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      abortSignal: new AbortController().signal,
+    } as never);
+
+    const failure = await (async () => {
+      try {
+        for await (const _chunk of run as AsyncIterable<unknown>) { /* drain */ }
+      } catch (error) {
+        return error;
+      }
+      return null;
+    })();
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('The model declined the request');
+    expect((failure as Error).message).toContain('run-42');
+    expect((failure as Error).message).toContain('policy refusal');
+    expect((failure as Error).message).not.toContain('[object Object]');
+  });
+
   it('does not open the request when the runtime signal is already aborted', async () => {
     let seenSignal: AbortSignal | undefined;
     const stream = (_c: string, _m: string, _h: unknown, _cb: unknown, signal?: AbortSignal) => {

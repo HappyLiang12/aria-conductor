@@ -47,6 +47,57 @@ async function stubAriaConversations(page: Page) {
     route.fulfill({ json: [] }));
 }
 
+/** The ask the cards read on mount; the SSE frame names the same id. */
+const APPROVAL_DETAIL = {
+  id: 'apr-ui-refresh',
+  runId: 'run-ui-refresh',
+  toolCallId: null,
+  status: 'PENDING',
+  reason: 'write_file',
+  requestedAt: '2026-11-24T10:00:00Z',
+  decidedAt: null,
+  expiresAt: null,
+  toolName: 'write_file',
+  arguments: '{"path":"RELEASE.md","content":"# 0.1.0"}',
+  riskTier: 'REVIEW',
+  toolPolicy: 'WORKER_WRITE',
+};
+
+async function stubApprovalDetail(page: Page) {
+  await page.route('**/api/v1/approvals/apr-ui-refresh', (route) =>
+    route.fulfill({ json: APPROVAL_DETAIL }));
+}
+
+/** The one-turn SSE script every approval case replays. */
+const APPROVAL_TURN = [
+  'event: thinking',
+  'data: {"status":"processing","runId":"run-ui-refresh","mode":"core"}',
+  '',
+  'event: approval_required',
+  'data: {"runId":"run-ui-refresh","approvalId":"apr-ui-refresh","toolName":"write_file","riskTier":"REVIEW","toolPolicy":"WORKER_WRITE"}',
+  '',
+  'event: message',
+  'data: {"content":"Waiting on your decision."}',
+  '',
+  'event: done',
+  'data: {"runId":"run-ui-refresh","conversationId":"conv-ui-refresh","intent":"write"}',
+  '',
+  '',
+].join('\n');
+
+async function sendApprovalTurn(page: Page) {
+  await page.route('**/api/v1/aria/chat/stream', (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+      body: APPROVAL_TURN,
+    }));
+  await page.goto('/aria');
+  await page.getByRole('textbox').fill('Write the release notes to RELEASE.md');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.mc-stack').getByText('Approve write_file?')).toBeVisible({ timeout: 15_000 });
+}
+
 test.describe('UI refresh acceptance', () => {
   test('every route renders in the new shell without console errors', async ({ page }) => {
     const errors: string[] = [];
@@ -105,8 +156,37 @@ test.describe('UI refresh acceptance', () => {
     expect(lightControl, 'light rail control').toBeGreaterThanOrEqual(4.5);
   });
 
+  test('a failed turn shows the human reason and run id, never [object Object]', async ({ page }) => {
+    await stubAriaConversations(page);
+    const body = [
+      'event: thinking',
+      'data: {"status":"processing","runId":"run-ui-refresh","mode":"core"}',
+      '',
+      'event: error',
+      'data: {"message":"The model declined the request","turnFailed":true,"runId":"run-ui-refresh","reason":"policy refusal"}',
+      '',
+      '',
+    ].join('\n');
+    await page.route('**/api/v1/aria/chat/stream', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body,
+      }));
+
+    await page.goto('/aria');
+    await page.getByRole('textbox').fill('Draft the policy summary');
+    await page.getByRole('button', { name: 'Send message' }).click();
+
+    const errorBox = page.locator('.aui-message-error-root').first();
+    await expect(errorBox).toContainText('The model declined the request', { timeout: 15_000 });
+    await expect(errorBox).toContainText('run-ui-refresh');
+    await expect(page.locator('.mc-stack')).not.toContainText('[object Object]');
+  });
+
   test('an approval_required frame renders a card in the thread and Allow decides', async ({ page }) => {
     await stubAriaConversations(page);
+    await stubApprovalDetail(page);
 
     const decisions: Array<{ method: string; pathname: string; body: unknown }> = [];
     await page.route('**/api/v1/approvals/apr-ui-refresh/decide', async (route) => {
@@ -119,37 +199,16 @@ test.describe('UI refresh acceptance', () => {
       await route.fulfill({ json: { approvalId: 'apr-ui-refresh', approved: true, status: 'processed' } });
     });
 
-    const body = [
-      'event: thinking',
-      'data: {"status":"processing","runId":"run-ui-refresh","mode":"core"}',
-      '',
-      'event: approval_required',
-      'data: {"runId":"run-ui-refresh","approvalId":"apr-ui-refresh","toolName":"write_file","riskTier":"REVIEW","toolPolicy":"WORKER_WRITE"}',
-      '',
-      'event: message',
-      'data: {"content":"Waiting on your decision."}',
-      '',
-      'event: done',
-      'data: {"runId":"run-ui-refresh","conversationId":"conv-ui-refresh","intent":"write"}',
-      '',
-      '',
-    ].join('\n');
-    await page.route('**/api/v1/aria/chat/stream', (route) =>
-      route.fulfill({
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-        body,
-      }));
-
-    await page.goto('/aria');
-    await page.getByRole('textbox').fill('Write the release notes to RELEASE.md');
-    await page.getByRole('button', { name: 'Send message' }).click();
+    await sendApprovalTurn(page);
 
     // The card is a standalone part of the assistant-ui thread, not a panel
-    // overlay and not a tool disclosure the operator has to expand.
+    // overlay and not a tool disclosure the operator has to expand. It reads the
+    // ask it names, so the redacted arguments and policy are on screen.
     const card = page.locator('.mc-stack').getByText('Approve write_file?');
-    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card).toBeVisible();
     await expect(page.locator('.mc-stack').getByText('WORKER_WRITE')).toBeVisible();
+    await expect(page.locator('.mc-stack')).toContainText('path: RELEASE.md');
+    await expect(page.locator('.mc-stack')).toContainText('content: # 0.1.0');
 
     await page.locator('.mc-stack').getByRole('button', { name: 'Allow' }).click();
 
@@ -160,6 +219,34 @@ test.describe('UI refresh acceptance', () => {
     expect(decisions[0].pathname).toBe('/api/v1/approvals/apr-ui-refresh/decide');
     expect(decisions[0].body).toEqual({ approved: true });
     await expect(page.locator('.mc-stack').getByText('Allowed · write_file')).toBeVisible();
+  });
+
+  test('a refused decision names its error, and that text meets AA in both themes', async ({ page }) => {
+    await stubAriaConversations(page);
+    await stubApprovalDetail(page);
+    await page.route('**/api/v1/approvals/apr-ui-refresh/decide', (route) =>
+      route.fulfill({
+        status: 500,
+        json: { message: 'The decision store is unavailable' },
+      }));
+
+    await sendApprovalTurn(page);
+    await page.locator('.mc-stack').getByRole('button', { name: 'Allow' }).click();
+
+    const alert = page.locator('.mc-stack [role="alert"]');
+    await expect(alert).toContainText('The decision store is unavailable');
+    // The error text is `text-destructive`; the old 71%-lightness red measured
+    // 2.75:1 on white, so both themes are measured on the card background.
+    await page.addStyleTag({ content: '* { transition: none !important; }' });
+    const darkError = await contrast(page, '.mc-stack [role="alert"]');
+    console.log(`contrast dark decision error: ${darkError.toFixed(2)}`);
+    expect(darkError, 'dark decision error').toBeGreaterThanOrEqual(4.5);
+
+    await page.getByRole('button', { name: 'Toggle theme' }).click();
+    await expect(page.locator('body')).toHaveClass(/light/);
+    const lightError = await contrast(page, '.mc-stack [role="alert"]');
+    console.log(`contrast light decision error: ${lightError.toFixed(2)}`);
+    expect(lightError, 'light decision error').toBeGreaterThanOrEqual(4.5);
   });
 });
 

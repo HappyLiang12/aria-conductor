@@ -2750,9 +2750,10 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
    unlayered and therefore keep precedence until their page wave. */
 @theme inline {
   /* The legacy design system's unlayered :root still owns --accent (a solid
-     colour used in its gradients) and --radius (14px) until the last wave
-     deletes it, so the shadcn accent surface is bridged to the muted token
-     here instead of emitting an invalid hsl() from a non-triple value. */
+     colour used in its gradients) until the last wave deletes it, so the
+     shadcn accent surface is bridged to the muted token here instead of
+     emitting an invalid hsl() from a non-triple value. --radius is 8px in
+     both roots; the bridge below only derives the scale from it. */
   --color-accent: hsl(var(--muted));
   --color-accent-foreground: hsl(var(--foreground));
   --color-ring: hsl(var(--ring));
@@ -2773,6 +2774,7 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
   --color-background: hsl(var(--background));
   --color-success: hsl(var(--success));
   --color-warning: hsl(var(--warning));
+  --color-link: hsl(var(--link));
   /* tokens.css has no --sidebar-* / --chart-* values; the sidebar surfaces map
      onto the semantic tokens that do exist. */
   --color-sidebar: hsl(var(--card));

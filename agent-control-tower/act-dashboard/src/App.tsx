@@ -1,10 +1,10 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WebSocketProvider, Layout } from './components/Layout';
 import OverviewPage from './pages/OverviewPage';
 import CrewPage from './pages/CrewPage';
 import ChatPage from './pages/ChatPage';
-import MainChatPage from './pages/MainChatPage';
 import OpsPage from './pages/OpsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { MemoryPage } from './pages/MemoryPage';
@@ -14,6 +14,10 @@ import { ScheduledJobsPage } from './pages/ScheduledJobsPage';
 import { RunsPage } from './pages/RunsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
 import NotFoundPage from './pages/NotFoundPage';
+
+/** The Aria surface carries assistant-ui and its registry; load it on demand so
+ *  the shell and the other eleven routes do not pay for it up front. */
+const MainChatPage = lazy(() => import('./pages/MainChatPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,7 +42,14 @@ export default function App() {
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/memory" element={<MemoryPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/aria" element={<MainChatPage />} />
+              <Route
+                path="/aria"
+                element={(
+                  <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading Aria…</div>}>
+                    <MainChatPage />
+                  </Suspense>
+                )}
+              />
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/workflows" element={<WorkflowsPage />} />
               <Route path="/ops" element={<OpsPage />} />

@@ -238,6 +238,55 @@ Acceptance is the S1–S7 table in section 1. Any criterion not exercised is rep
 
 - Backend endpoint changes, AG-UI, SSE replay, token streaming.
 - New product features or permission semantics.
+
+## 11. Delivery status
+
+Measured on `feat/ui-refresh` at the final-fix commit, against the local stack
+(backend health UP, dashboard on `:5174`).
+
+| Criterion | Verdict | Evidence |
+|-----------|---------|----------|
+| S1 shell/Overview/Aria render without console errors | PASS | `e2e/ui-refresh.spec.ts` route smoke + console capture, 6/6 green |
+| S4 all 12 routes load in the new shell | PASS | same route smoke |
+| S5 dark/light AA on body text, rail controls, decision errors | PASS (measured surfaces) | `ui-refresh.spec.ts` contrast assertions: dark body 7.93 / rail 7.51, light body 6.98 / rail 8.79, decision error dark 6.63 / light 6.35 |
+| S6 no new backend process, no Spring change | PASS | `git diff main...HEAD -- agent-control-tower/act-*` has no backend module change |
+| S7 bundle delta measured | PASS | entry 1,915.86 kB → 948.12 kB (gzip 584.82 → 297.09); Aria is its own lazy chunk (968.31 kB / 288.18 gzip) |
+| S2-live Aria parity with a GATED ask | NOT VERIFIED (release gate) | needs a governed core + model; the live GATED ask was not executed in this wave |
+| S3-network stop aborts SSE with a network log | NOT VERIFIED (release gate) | needs a live stream; covered only by the adapter's abort unit test |
+
+Phase 1 Overview is delivered as the frame plus `KpiRow`: the legacy decision
+queue, recovery, kanban and activity sections are retained unchanged and move
+to the Wave 2 restyle. `src/styles/main-chat.css` is kept (Aria still imports
+it); it is deleted with the last wave.
+
+Screenshot evidence (captured from the running app, not asserted in CI):
+`docs/reviews/shots/ui-refresh-shell.png`, `ui-refresh-overview.png`,
+`ui-refresh-aria.png`.
+
+### Deviations
+
+- Runtime badge: there is no runtime endpoint in Phase 1. The badge reads the
+  first non-retired agent's stored core/mode (`GET /api/v1/agents`, already used
+  by the app) and falls back to the provider catalog on the bar. The local
+  database serves `executionMode: null` for every agent and the provider list
+  declares no `executionModes`, so the badge renders the core (`opencode`) and
+  never invents a mode. When the data carries a mode the badge renders
+  `core/MODE`.
+- The 409/403/operator remedies for the in-thread cards live in
+  `src/components/chat/decisionToolkit.tsx` (shared by all three cards); the
+  underlying `apiErrorMessage` / `isCrossOriginRejection` / `isOperatorRejection`
+  helpers are imported from `src/api/operatorSession.ts`, which
+  `errorPresentation.ts` re-uses. `AriaApprovalCard` keeps its local copy for
+  the AriaPanel surface, which is outside this wave.
+- `MemoryProposalToolUI` no longer applies operator headers itself;
+  `decideMemoryProposal` (`src/api/memory.ts`) already does, so the second call
+  only mutated the shared axios defaults twice.
+- `decision-first-overview.spec.ts` at 1024×768 fails `mainBox.width > 800`
+  because the refreshed shell's expanded sidebar leaves the main lane ~768 px.
+  Verified on the pre-fix HEAD (`cb96ebc3`) with the same failure: it is a
+  pre-existing expectation from the 84 px rail, not a regression of this wave.
+- `mobile-flows.spec.ts` fails on the known Sheet/`.rail` gap (the rail is not
+  reachable below the mobile breakpoint); mobile is out of this wave.
 - URL or deep-link changes.
 - Mobile/native layouts.
 - Removal of legacy CSS before its page wave.

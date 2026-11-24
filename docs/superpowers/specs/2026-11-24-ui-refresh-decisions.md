@@ -48,6 +48,20 @@ Sidebar groups: Operate, Build, Chat, System. Route paths and deep links are unc
 
 Legacy flow CSS stays unlayered, which gives it precedence over layered Tailwind output under the CSS cascade. This contains preflight regressions during the wave migration; the 12-route smoke test verifies that containment.
 
+## D9 Runtime badge reads fleet data, not a runtime endpoint
+
+Chosen: the topbar badge derives `core/MODE` from the first non-retired agent
+(`GET /api/v1/agents`, already used by Crew and the drawers) and falls back to
+the provider catalog already on the bar. No runtime endpoint exists in Phase 1,
+and adding one would break S6 (no Spring change).
+
+Alternatives: invent a literal `opencode/HOST` (rejected: the local backend
+serves `executionMode: null` and no `executionModes`, so the mode would be a
+claim, not a measurement); omit the badge (rejected: the spec requires runtime
+visibility). When neither source carries a mode the badge renders the core
+alone; a mode is never guessed. The deviation is recorded in the design's
+Delivery status.
+
 ## Deferred with reasons
 
 | Item | Reason |

@@ -79,10 +79,11 @@ export interface StreamCallbacks {
    * A live `tool_call` frame (`runId`, `name`, `toolCallId`, `args`). `args` is
    * the redacted text the audit row stores — rendered as received; the client
    * does not redact again and must not log the raw value. Absent (an older
-   * backend, or a call with no input) is not an error.
+   * backend, or a call with no input) is not an error. `toolCallId` pairs the
+   * call with its result: absent on an older backend or a frame with no id.
    */
-  onToolCall?: (name: string, args?: string) => void;
-  onToolResult?: (name: string, result: string, ok: boolean) => void;
+  onToolCall?: (name: string, args?: string, toolCallId?: string) => void;
+  onToolResult?: (name: string, result: string, ok: boolean, toolCallId?: string) => void;
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
   onError?: (error: StreamError) => void;
@@ -236,14 +237,19 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
     case 'tool_call':
       // The producer redacts `args` before it leaves the server (T44), so this is
       // rendered verbatim: absent/null/blank means "no argument to show", never an error.
-      cb.onToolCall?.(String(p.name ?? 'tool'), optionalText(p.args));
+      cb.onToolCall?.(String(p.name ?? 'tool'), optionalText(p.args), optionalText(p.toolCallId));
       break;
     case 'tool_result':
       // `ok` is `!isError` from the core payload and is always present on the
       // producer (CoreEventTelemetry#streamSignal in act-execution). An absent
       // field means an older backend answered, so it is read as success — never
       // as a measured failure; an explicit `false` is the only error signal.
-      cb.onToolResult?.(String(p.name ?? 'tool'), String(p.result ?? ''), p.ok !== false);
+      cb.onToolResult?.(
+        String(p.name ?? 'tool'),
+        String(p.result ?? ''),
+        p.ok !== false,
+        optionalText(p.toolCallId),
+      );
       break;
     case 'message':
       cb.onMessage?.(String(p.content ?? ''));

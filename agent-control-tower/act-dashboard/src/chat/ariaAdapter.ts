@@ -1,0 +1,118 @@
+import type { ChatModelAdapter, ChatModelRunResult } from '@assistant-ui/react';
+import { streamMessage, type StreamError } from '@/api/aria';
+
+type History = Array<{ role: string; content: string }>;
+
+interface Part {
+  type: 'text' | 'tool-call';
+  text?: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  argsText?: string;
+  result?: unknown;
+  isError?: boolean;
+}
+
+export interface AriaAdapter extends ChatModelAdapter {
+  /** Abort the in-flight SSE request (the page's stop control). */
+  cancel: () => void;
+}
+
+/**
+ * Runs one Aria turn on assistant-ui's `ChatModelAdapter` contract: the turn's
+ * SSE frames become cumulative message content, one chunk per event, and the
+ * adapter owns the single `AbortController` behind both `cancel()` and the
+ * runtime's abort signal. No second request is opened here.
+ */
+export function createAriaAdapter(options: {
+  conversationId: string;
+  getHistory: () => History;
+  stream?: typeof streamMessage;
+}): AriaAdapter {
+  const stream = options.stream ?? streamMessage;
+  let current: AbortController | null = null;
+  return {
+    cancel() { current?.abort(); },
+    async *run({ messages, abortSignal }) {
+      const controller = new AbortController();
+      current = controller;
+      const forwardAbort = () => controller.abort();
+      abortSignal.addEventListener('abort', forwardAbort);
+
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+      const text = lastUser?.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n') ?? '';
+      let output = '';
+      const tools = new Map<string, Part>();
+      let finished = false;
+      let failure: StreamError | null = null;
+      let wake: (() => void) | null = null;
+      const snapshot = (): Part[] => [
+        ...[...tools.values()].map((p) => ({ ...p })),
+        ...(output ? [{ type: 'text' as const, text: output }] : []),
+      ];
+      const notify = () => { const w = wake; wake = null; w?.(); };
+
+      void stream(options.conversationId, text, options.getHistory(), {
+        onToolCall: (name, args, toolCallId) => {
+          const id = toolCallId ?? `call-${tools.size}`;
+          tools.set(id, { type: 'tool-call', toolCallId: id, toolName: name, argsText: args ?? '', args: safeJson(args) });
+          notify();
+        },
+        onToolResult: (name, result, ok, toolCallId) => {
+          const id = toolCallId ?? [...tools].find(([, p]) => p.toolName === name)?.[0];
+          if (!id) return;
+          tools.set(id, { ...(tools.get(id) ?? { type: 'tool-call', toolCallId: id, toolName: name }), result: safeJson(result), isError: !ok });
+          notify();
+        },
+        onApprovalRequired: (ask) => {
+          tools.set(`approval-${ask.approvalId}`, { type: 'tool-call', toolCallId: `approval-${ask.approvalId}`, toolName: '__approval', args: ask, argsText: '' });
+          notify();
+        },
+        onWaitingInput: (ask) => {
+          tools.set(`question-${ask.approvalId}`, { type: 'tool-call', toolCallId: `question-${ask.approvalId}`, toolName: '__question', args: ask, argsText: '' });
+          notify();
+        },
+        onMemoryProposal: (proposal) => {
+          tools.set(`memory-${proposal.id}`, { type: 'tool-call', toolCallId: `memory-${proposal.id}`, toolName: '__memory', args: proposal, argsText: '' });
+          notify();
+        },
+        onMessage: (content) => { output = content; notify(); },
+        onDone: () => { finished = true; notify(); },
+        onError: (error) => { failure = error; finished = true; notify(); },
+      }, controller.signal)
+        .catch((error: unknown) => {
+          if ((error as DOMException)?.name !== 'AbortError') {
+            failure = error instanceof Error ? error.message : String(error);
+          }
+        })
+        .finally(() => {
+          // `streamMessage` returns (instead of throwing) when the request is
+          // aborted, so a settled promise with no terminal frame must release
+          // the loop too — otherwise `cancel()` leaves the run suspended.
+          finished = true;
+          notify();
+        });
+
+      try {
+        while (true) {
+          // The parts mirror the wire frames; assistant-ui declares its content
+          // union with literal discriminants, so the projection is asserted once.
+          const content = snapshot() as unknown as NonNullable<ChatModelRunResult['content']>;
+          if (content.length > 0) yield { content };
+          if (finished) break;
+          await new Promise<void>((resolve) => { wake = resolve; });
+        }
+      } finally {
+        abortSignal.removeEventListener('abort', forwardAbort);
+        if (current === controller) current = null;
+      }
+      if (failure) throw failure;
+    },
+  };
+}
+
+function safeJson(value: string | undefined): unknown {
+  if (value === undefined) return undefined;
+  try { return JSON.parse(value); } catch { return value; }
+}

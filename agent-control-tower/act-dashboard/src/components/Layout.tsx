@@ -12,6 +12,7 @@ import { DrawerProvider } from './DrawerContext';
 import { TaskDrawer } from './TaskDrawer';
 import { AgentDrawer } from './AgentDrawer';
 import { useWebSocket, type WsSubscription } from '../hooks/useWebSocket';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import type { WsEvent } from '../types';
 
 interface WebSocketContextType {
@@ -99,13 +100,42 @@ function useTopStackHeight(ref: React.RefObject<HTMLDivElement | null>) {
   }, [ref]);
 }
 
+/**
+ * The grouped nav costs 16rem of the main lane. Below this width the sidebar
+ * starts on its icon rail so the decision-first template keeps its own column;
+ * at 1100px and wider the full grouped nav starts open.
+ */
+const WIDE_DESKTOP_QUERY = '(min-width: 1100px)';
+
+/**
+ * The shadcn sidebar's default follows the viewport, not the persisted cookie:
+ * collapsed below `WIDE_DESKTOP_QUERY`, open at or above it. `useMediaQuery`
+ * reads `matchMedia` during the first render, so the initial paint is already
+ * the right state (no expanded flash at 1024). An operator's explicit toggle
+ * survives until the viewport crosses the breakpoint again.
+ */
+function useSidebarOpen() {
+  const isWide = useMediaQuery(WIDE_DESKTOP_QUERY);
+  const [open, setOpen] = useState(isWide);
+  const wasWide = useRef(isWide);
+
+  useEffect(() => {
+    if (wasWide.current === isWide) return;
+    wasWide.current = isWide;
+    setOpen(isWide);
+  }, [isWide]);
+
+  return [open, setOpen] as const;
+}
+
 export function Layout() {
   const stackRef = useRef<HTMLDivElement>(null);
   useTopStackHeight(stackRef);
+  const [sidebarOpen, setSidebarOpen] = useSidebarOpen();
 
   return (
     <DrawerProvider>
-      <SidebarProvider>
+      <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen}>
         <AppSidebar />
         <SidebarInset>
           <div className="top-stack" ref={stackRef}>

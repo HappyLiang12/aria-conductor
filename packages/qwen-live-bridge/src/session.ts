@@ -52,7 +52,7 @@ export interface LiveSession {
   setAr(on: boolean): void;
   cancel(): void;
   toolResult(id: string, ok: boolean, output: string): void;
-  tower(text: string): void;
+  tower(text: string, mode?: 'idle' | 'interrupt'): void;
   close(): Promise<void>;
   /**
    * Metadata only: frames refused while reconfiguring, results for unknown calls, an
@@ -414,6 +414,10 @@ export function startSession(options: SessionOptions): LiveSession {
   let pendingLoud = false;
   /** Frames held while the session (re)configures; replayed after `session.updated`. */
   let pendingSends: Array<Record<string, unknown>> = [];
+  /** A response is streaming right now: an idle TOWER waits for its `response.done`. */
+  let responseActive = false;
+  /** TOWER texts that asked for idle: injected one at a time whenever nothing is speaking. */
+  let pendingTowers: string[] = [];
   let pendingAudio = 0;
   let pendingOps = 0;
   /** Calls issued to Java and not yet answered, in the order the model issued them. */
@@ -644,6 +648,8 @@ export function startSession(options: SessionOptions): LiveSession {
     pendingImage = null;
     // The chunks held for a switch died with the socket they would have joined.
     audioGate = null;
+    pendingTowers = [];
+    responseActive = false;
     eosSpeechMs = 0;
     eosSilenceMs = 0;
     eosEnded = false;
@@ -833,6 +839,30 @@ export function startSession(options: SessionOptions): LiveSession {
    * second `response.create` while the first is already answering is the double-request
    * the phone would see as an error.
    */
+  /** One TOWER message: a user item the model answers, exactly one response per message. */
+  const injectTower = (text: string) => {
+    send({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+    });
+    send({ type: 'response.create' });
+  };
+
+  /**
+   * Phase 4: an idle TOWER waits for the answer already streaming to finish, and for a
+   * held AR commit to cross (its image belongs to that turn). It never stacks a second
+   * `response.create` on a live response.
+   */
+  const flushIdleTowers = () => {
+    if (responseActive || deferredCommit !== null || pendingTowers.length === 0) {
+      return;
+    }
+    const next = pendingTowers.shift();
+    if (next !== undefined) {
+      injectTower(next);
+    }
+  };
+
   const flushAnsweredCalls = () => {
     for (;;) {
       const head = callOrder[0];
@@ -893,6 +923,9 @@ export function startSession(options: SessionOptions): LiveSession {
 
   /** Apply one provider event: the translator decides, this function obeys. */
   const dispatch = (event: Record<string, unknown>) => {
+    if (event.type === 'response.created') {
+      responseActive = true;
+    }
     if (event.type === 'input_audio_buffer.committed') {
       // The provider's buffer is empty: a switch it held back may go now.
       pendingLoud = false;
@@ -958,6 +991,10 @@ export function startSession(options: SessionOptions): LiveSession {
         }
       }
       emit(translation);
+    }
+    if (event.type === 'response.done') {
+      responseActive = false;
+      flushIdleTowers();
     }
   };
 
@@ -1353,12 +1390,18 @@ export function startSession(options: SessionOptions): LiveSession {
       flushAnsweredCalls();
     },
 
-    tower(text) {
-      send({
-        type: 'conversation.item.create',
-        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
-      });
-      send({ type: 'response.create' });
+    tower(text, mode) {
+      if (mode === 'idle') {
+        pendingTowers.push(text);
+        flushIdleTowers();
+        return;
+      }
+      if (responseActive) {
+        // A failure or safety outcome replaces what the model was in the middle of saying:
+        // the provider stops, then the one TOWER message is answered.
+        send({ type: 'response.cancel' });
+      }
+      injectTower(text);
     },
 
     async close() {

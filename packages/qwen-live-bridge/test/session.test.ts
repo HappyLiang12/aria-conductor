@@ -541,6 +541,75 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await session.close();
   });
 
+  it('holds a second commit behind the same pending AR mode and flushes it once', async () => {
+    fakeGraceTimers();
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    // A second commit does not lift the guard, but it belongs to the same unproven mode:
+    // replacing the held commit must not drop its mode side.
+    session.appendAudio('BBBB');
+    session.commit();
+
+    // Both frame graces pass: the provider is still on the VAD, so neither commit crosses.
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS * 2);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    expect(typesOf(0, fake)).not.toContain('response.create');
+
+    // The acknowledgement proves the mode: the one held turn flushes, commit then answer.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the held commit');
+    const types = typesOf(0, fake);
+    expect(types.slice(-2)).toEqual(['input_audio_buffer.commit', 'response.create']);
+    expect(types.filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    expect(types.filter((type) => type === 'response.create')).toHaveLength(1);
+
+    // The hold is spent: a later grace flushes no duplicate.
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await session.close();
+  });
+
+  it('does not ask for a second answer when the VAD already answered before the ack', async () => {
+    fakeGraceTimers();
+    let updates = 0;
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const { session, recorder } = await open(fake, { ar: true });
+
+    session.appendAudio('AAAA');
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    // Still on the VAD: the provider ends this utterance itself and answers it.
+    fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 0 });
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 100 });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+
+    // The acknowledgement lands after that answer: the commit still crosses (the phone
+    // ended its speech), but the utterance already has its one response.
+    fake.send(0, { type: 'session.updated', session: {} });
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the held commit');
+    expect(typesOf(0, fake).filter((type) => type === 'response.create')).toEqual([]);
+
+    // The VAD's `speech_end` stays the utterance's only one when the provider echoes
+    // the commit back.
+    fake.send(0, { type: 'input_audio_buffer.committed' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(speechEnds(recorder)).toBe(1);
+    await session.close();
+  });
+
   it('reconfigures a live session in place on an ar toggle and never reseeds the context', async () => {
     const fake = await fakeQwen();
     const { session } = await open(fake, { ar: true, context: [{ role: 'user', text: '早' }] });

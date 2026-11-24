@@ -6,13 +6,16 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.AuditEventRepository;
+import io.aria.conductor.aria.live.LiveProperties;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.AuditEvent;
 import io.aria.conductor.common.model.HealthStatus;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +29,9 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
@@ -48,7 +53,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
@@ -67,6 +75,12 @@ import static org.assertj.core.api.Assertions.fail;
  * order at the child, the {@code interrupted}-before-audio rule, the fatal close codes, and a
  * privacy scan of every log line and of the child's own receipt.
  *
+ * <p>Phase 3's AR seam (spec D1-D6) is proved here too: the scripted bridge emits one
+ * translated {@code highlight_target} as an {@code ar_render} v2 control (no {@code runId},
+ * ttl 8000, normalized bbox), and a look-intent turn that rendered nothing is backed up by a
+ * JDK {@code HttpServer} standing in for DeepSeek — whose key, question and bodies must stay
+ * out of every log line, as must the render's label and caption.
+ *
  * <p>The child's switches cannot travel through its environment the way the real deployment
  * would: {@code QwenLiveBridgeProcess} clears the parent environment on purpose (spec L2), so
  * a generated driver sets the fake's {@code FAKE_BRIDGE_*} variables from a per-test config
@@ -80,6 +94,22 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     /** Synthetic values: the privacy scan proves neither ever reaches a log line or receipt. */
     static final String BRIDGE_KEY = "sk-live-e2e-0123456789abcdef0123456789abcdef";
     static final String BRIDGE_WORKSPACE = "ws-live-e2e-singapore-0001";
+    /** The backup locator's key (a synthetic property override, never the real one). */
+    static final String DEEPSEEK_KEY = "sk-live-e2e-deepseek-9d2f4c0b";
+    /**
+     * A look-intent question that is also a unique sentinel: it travels in the DeepSeek
+     * stub's request body (as the question, and as the render's label/text), so its absence
+     * from every log line is evidence that no body is logged.
+     */
+    static final String LOOK_TRANSCRIPT = "邊度係個 5mm 六角匙？ LIVE-E2E-LOCATOR-SENTINEL-7C1D";
+    /** The scripted bridge's translated `highlight_target` (see `fake-bridge.mjs`). */
+    static final String HIGHLIGHT_RENDER_ID = "r-scripted-3b7f";
+    static final String HIGHLIGHT_LABEL = "5mm hex key 3B7F";
+    static final String HIGHLIGHT_TEXT = "5mm 六角匙 3B7F";
+    /** `[y0,x0,y1,x1]` = [120,340,560,780] on the model's grid → `[x,y,w,h]` normalized. */
+    private static final double[] HIGHLIGHT_BBOX = {0.34, 0.12, 0.44, 0.44};
+    /** No look intent: this turn must never call the backup. */
+    private static final String NON_LOOK_TRANSCRIPT = "what is the time?";
 
     private static final String PATH = "/api/v1/aria/live";
     private static final String PROTOCOL = "aria-live.v1";
@@ -110,6 +140,15 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     private static final Path CREDENTIALS = writeCredentials(HARNESS);
     private static final Path CONFIG = HARNESS.resolve("bridge-config.json");
 
+    /** What the stub answers for the locator's question: one box on the model's 0-1000 grid. */
+    private static final String LOCATOR_ANSWER = "{\"box_2d\":[120,340,560,780],\"confidence\":0.9}";
+    private static final AtomicInteger LOCATOR_REQUESTS = new AtomicInteger();
+    private static final AtomicReference<String> LOCATOR_PATH = new AtomicReference<>();
+    private static final AtomicReference<String> LOCATOR_AUTHORIZATION = new AtomicReference<>();
+    private static final AtomicReference<String> LOCATOR_BODY = new AtomicReference<>();
+    /** Started before the context loads: the base URL is a DynamicPropertySource value. */
+    private static final HttpServer LOCATOR_STUB = startLocatorStub();
+
     @LocalServerPort
     int port;
 
@@ -122,6 +161,10 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     @Autowired
     AuditEventRepository auditRepository;
 
+    /** The live properties the socket runs with: the seam asserts they point at this stub. */
+    @Autowired
+    LiveProperties liveProperties;
+
     private Logger liveLogger;
     private Level previousLevel;
     private LineCapture liveLines;
@@ -133,6 +176,16 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
         registry.add("aria.live.credentials-file", CREDENTIALS::toString);
         registry.add("aria.operator.bearer-token", () -> OPERATOR_CREDENTIAL);
         registry.add("aria.operator.trusted-proxies", () -> "127.0.0.1");
+        // The backup locator (spec D6) points at this class's stub, never at DeepSeek.
+        registry.add("aria.live.direct-locator-enabled", () -> "true");
+        registry.add("aria.live.direct-base-url",
+                () -> "http://127.0.0.1:" + LOCATOR_STUB.getAddress().getPort());
+        registry.add("aria.live.direct.api-key", () -> DEEPSEEK_KEY);
+    }
+
+    @AfterAll
+    static void stopLocatorStub() {
+        LOCATOR_STUB.stop(0);
     }
 
     /** {@code runs.agent_id} is a foreign key; the class cleanup truncates the Aria row. */
@@ -154,6 +207,11 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
         liveLines = new LineCapture();
         liveLines.start();
         liveLogger.addAppender(liveLines);
+        // Every stub answer is per test: one turn's lookups must not leak into the next.
+        LOCATOR_REQUESTS.set(0);
+        LOCATOR_PATH.set(null);
+        LOCATOR_AUTHORIZATION.set(null);
+        LOCATOR_BODY.set(null);
     }
 
     @AfterEach
@@ -206,6 +264,115 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
             assertReceiptHasNoPayload(receipt);
         } finally {
             socket.abort();
+        }
+    }
+
+    // --- the Phase 3 AR seam (spec D1-D6) ---------------------------------------------------
+
+    /**
+     * The seam Phase 3 adds: the bridge translates one {@code highlight_target} call into an
+     * {@code ar_render} v2 control (spec D1/D2), Java forwards it verbatim, and the phone sees
+     * it after the transcripts and before the line it introduces. A turn that rendered must
+     * never reach the DeepSeek backup (spec D6), even when the question asks to look.
+     */
+    @Test
+    void aHighlightRenderCrossesTheSeamInOrderWithoutABackup() throws Exception {
+        Recorder recorder = new Recorder();
+        Turn turn = scriptedTurn(recorder, LOOK_TRANSCRIPT, true);
+        try {
+            await("the turn's run to finish", () -> firstEvent(recorder, "run_event", event ->
+                    "finished".equals(event.path("state").asText())) != null);
+            await("the child's receipt to record the turn end",
+                    () -> "turn_done".equals(lastSentLabel(readReceipt(turn.receipt()))));
+
+            assertRenderShape(theOnlyRender(recorder), HIGHLIGHT_RENDER_ID, HIGHLIGHT_LABEL, HIGHLIGHT_TEXT);
+
+            List<Frame> frames = List.copyOf(recorder.frames);
+            int renderIndex = frameIndex(frames, "ar_render", event -> true);
+            int lastTranscript = lastFrameIndex(frames, "input_transcript");
+            int firstAnswer = frameIndex(frames, "output_transcript", event -> true);
+            assertThat(renderIndex).as("the overlay follows the wearer's words").isGreaterThan(lastTranscript);
+            assertThat(renderIndex).as("and precedes the line it belongs to").isLessThan(firstAnswer);
+
+            // The phone never sees the turn-end literal, so the bridge's own receipt carries
+            // the other half of the order (spec X18: the render is inside the turn).
+            List<String> labels = sentLabels(turn.receipt());
+            int sentRender = labels.indexOf("ar_render");
+            assertThat(sentRender).isGreaterThan(labels.lastIndexOf("input_transcript"));
+            assertThat(sentRender).isLessThan(labels.indexOf("output_transcript"));
+            assertThat(sentRender).isLessThan(labels.lastIndexOf("turn_done"));
+
+            settle();
+            assertThat(LOCATOR_REQUESTS.get()).as("a rendered turn asks no backup").isZero();
+            assertNoSecrets(liveLines.lines);
+            assertReceiptHasNoPayload(turn.receipt());
+        } finally {
+            turn.socket().abort();
+        }
+    }
+
+    /**
+     * The backup seam (spec D6): a look-intent turn that carried a frame and got no
+     * {@code highlight_target} render gets exactly one direct locator call, whose answer
+     * crosses the same socket as one more {@code ar_render} after the spoken frames.
+     */
+    @Test
+    void aMissedRenderOnALookIntentTurnIsBackedUpOnce() throws Exception {
+        Recorder recorder = new Recorder();
+        Turn turn = scriptedTurn(recorder, LOOK_TRANSCRIPT, false);
+        try {
+            assertThat(liveProperties.directLocatorEnabled()).as("the seam runs with the backup on").isTrue();
+            assertThat(liveProperties.directBaseUrl()).as("and against this class's stub")
+                    .isEqualTo("http://127.0.0.1:" + LOCATOR_STUB.getAddress().getPort());
+            await("the backup render", () -> firstEvent(recorder, "ar_render") != null);
+            await("the turn's run to finish", () -> firstEvent(recorder, "run_event", event ->
+                    "finished".equals(event.path("state").asText())) != null);
+
+            // The direct answer carries the wearer's own words: it names no object of its own.
+            JsonNode render = theOnlyRender(recorder);
+            assertRenderShape(render, null, LOOK_TRANSCRIPT, LOOK_TRANSCRIPT);
+
+            List<Frame> frames = List.copyOf(recorder.frames);
+            int renderIndex = frameIndex(frames, "ar_render", event -> true);
+            int lastSpoken = lastIndexOfTyped(frames, frame -> frame.audio() != null);
+            int lastAnswer = lastFrameIndex(frames, "output_transcript");
+            assertThat(renderIndex).as("the backup is an overlay after the spoken answer")
+                    .isGreaterThan(lastSpoken);
+            assertThat(renderIndex).isGreaterThan(lastAnswer);
+
+            assertThat(LOCATOR_REQUESTS.get()).as("one question, one answer, no retry").isEqualTo(1);
+            assertThat(LOCATOR_PATH.get()).isEqualTo("/chat/completions");
+            assertThat(LOCATOR_AUTHORIZATION.get()).isEqualTo("Bearer " + DEEPSEEK_KEY);
+            // The stub's body really carried the question and the frame, so the log
+            // assertions below are about something that exists rather than its absence.
+            assertThat(LOCATOR_BODY.get()).contains(LOOK_TRANSCRIPT)
+                    .contains("data:image/jpeg;base64,")
+                    .contains(SENTINEL_BASE64);
+
+            assertNoSecrets(liveLines.lines);
+            assertReceiptHasNoPayload(turn.receipt());
+        } finally {
+            turn.socket().abort();
+        }
+    }
+
+    /** No look intent, no backup (spec D6): the direct provider is never asked. */
+    @Test
+    void aTurnWithoutLookIntentNeverAsksTheBackup() throws Exception {
+        Recorder recorder = new Recorder();
+        Turn turn = scriptedTurn(recorder, NON_LOOK_TRANSCRIPT, false);
+        try {
+            await("the turn's run to finish", () -> firstEvent(recorder, "run_event", event ->
+                    "finished".equals(event.path("state").asText())) != null);
+            await("the child's receipt to record the turn end",
+                    () -> "turn_done".equals(lastSentLabel(readReceipt(turn.receipt()))));
+            settle();
+            assertThat(events(recorder, "ar_render")).isEmpty();
+            assertThat(LOCATOR_REQUESTS.get()).isZero();
+            assertNoSecrets(liveLines.lines);
+            assertReceiptHasNoPayload(turn.receipt());
+        } finally {
+            turn.socket().abort();
         }
     }
 
@@ -433,6 +600,65 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
                 && "Run started (live tool turn)".equals(event.getDetails()));
     }
 
+    /** The one render a turn may carry (spec D1), or a failure naming what arrived instead. */
+    private static JsonNode theOnlyRender(Recorder recorder) {
+        List<JsonNode> renders = events(recorder, "ar_render");
+        assertThat(renders).as("exactly one render per turn (spec D1)").hasSize(1);
+        return renders.get(0);
+    }
+
+    /**
+     * The phone's render contract (spec D1): v2's {@code v:1}, a render id, no {@code runId}
+     * for a display-only render, the {@code highlight} primitive, ttl 8000, normalized
+     * coordinates, a null safety alert, and the bbox translated from the 0-1000 grid (D3).
+     */
+    private static void assertRenderShape(JsonNode render, String expectedId, String label, String text) {
+        assertThat(render.path("v").asInt()).isEqualTo(1);
+        assertThat(render.path("renderId").asText()).isNotBlank();
+        if (expectedId != null) {
+            assertThat(render.path("renderId").asText()).isEqualTo(expectedId);
+        }
+        assertThat(render.has("runId")).as("display-only renders omit runId (spec D1)").isFalse();
+        JsonNode body = render.path("render");
+        assertThat(body.path("primitive").asText()).isEqualTo("highlight");
+        assertThat(body.path("target").path("label").asText()).isEqualTo(label);
+        assertThat(body.path("text").asText()).isEqualTo(text);
+        assertThat(body.path("ttlMs").asLong()).as("the phone's default overlay life").isEqualTo(8000);
+        assertThat(body.path("coord").asText()).isEqualTo("normalized");
+        assertThat(body.path("safetyAlert").isNull()).isTrue();
+        assertThat(bbox(body)).containsExactly(HIGHLIGHT_BBOX[0], HIGHLIGHT_BBOX[1],
+                HIGHLIGHT_BBOX[2], HIGHLIGHT_BBOX[3]);
+    }
+
+    private static List<Double> bbox(JsonNode body) {
+        List<Double> box = new ArrayList<>();
+        body.path("target").path("bbox").forEach(node -> box.add(node.asDouble()));
+        return box;
+    }
+
+    /** The receipt's sent labels in order (the phone's turn-end literal is not among them). */
+    private static List<String> sentLabels(Path receipt) {
+        JsonNode receiptJson = readReceipt(receipt);
+        List<String> labels = new ArrayList<>();
+        if (receiptJson == null) {
+            return labels;
+        }
+        receiptJson.path("sent").forEach(entry -> labels.add(label(entry)));
+        return labels;
+    }
+
+    /**
+     * Lets a wrongly armed backup reach the stub before a "no call" assertion is made: the
+     * locator runs on its own thread after the turn end, so absence needs somewhere to land.
+     */
+    private static void settle() {
+        try {
+            Thread.sleep(400);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void assertNoSecrets(List<String> lines) {
         assertThat(lines).as("the backend's log tree is actually captured").isNotEmpty();
         // The guard proves itself: the sentinel really is inside the frame the turn uploaded,
@@ -448,6 +674,16 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
         assertThat(joined).doesNotContain(FRAME_SENTINEL);
         assertThat(joined).doesNotContain(SENTINEL_BASE64);
         assertThat(joined).doesNotContain(IMAGE_200_KIB.substring(0, 64));
+        // Phase 3 (spec D6): the backup's key, its question, its request body (the image as a
+        // data URL) and its strict-JSON answer are metadata-free; none may reach a log line.
+        assertThat(joined).doesNotContain(DEEPSEEK_KEY);
+        assertThat(joined).doesNotContain(LOOK_TRANSCRIPT);
+        assertThat(joined).doesNotContain("box_2d");
+        assertThat(joined).doesNotContain("data:image/jpeg;base64,");
+        assertThat(joined).doesNotContain("\"choices\"");
+        // And the render itself (spec D2): the label and the caption stay on the wire.
+        assertThat(joined).doesNotContain(HIGHLIGHT_LABEL);
+        assertThat(joined).doesNotContain(HIGHLIGHT_TEXT);
     }
 
     private void assertReceiptHasNoPayload(Path receipt) {
@@ -459,6 +695,10 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
         assertThat(text).doesNotContain(FRAME_SENTINEL);
         assertThat(text).doesNotContain(SENTINEL_BASE64);
         assertThat(text).doesNotContain(IMAGE_200_KIB.substring(0, 64));
+        assertThat(text).doesNotContain(DEEPSEEK_KEY);
+        assertThat(text).doesNotContain(LOOK_TRANSCRIPT);
+        assertThat(text).doesNotContain(HIGHLIGHT_LABEL);
+        assertThat(text).doesNotContain(HIGHLIGHT_TEXT);
     }
 
     /**
@@ -489,6 +729,34 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
             socket.abort();
         }
         return recorder;
+    }
+
+    /**
+     * Connects, handshakes, and drives a scripted turn's phone side: one audio frame, one
+     * frame, the image commit and a line. The fake's scripted mode then runs the provider
+     * half; the callers await its events.
+     */
+    private Turn scriptedTurn(Recorder recorder, String question, boolean highlight) throws Exception {
+        Map<String, String> env = new LinkedHashMap<>();
+        env.put("FAKE_BRIDGE_QUESTION", question);
+        if (highlight) {
+            env.put("FAKE_BRIDGE_HIGHLIGHT", "1");
+        }
+        Path receipt = configureBridge("scripted", env);
+        WebSocket socket = connect(recorder);
+        try {
+            socket.sendText(hello(newConversationId()), true).get(5, TimeUnit.SECONDS);
+            await("ready", () -> firstEvent(recorder, "ready") != null);
+            await("the bridge to report its environment", () -> firstEvent(recorder, "env") != null);
+            socket.sendBinary(ByteBuffer.wrap(new byte[640]), true).get(5, TimeUnit.SECONDS);
+            socket.sendText(frameMessage(IMAGE_200_KIB), true).get(5, TimeUnit.SECONDS);
+            socket.sendText("{\"type\":\"commit\",\"image\":true}", true).get(5, TimeUnit.SECONDS);
+            socket.sendText("{\"type\":\"text\",\"text\":\"ask\"}", true).get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            socket.abort();
+            throw e;
+        }
+        return new Turn(socket, receipt);
     }
 
     /** Writes the driver's per-test config; {@code env} carries every {@code FAKE_BRIDGE_*} switch. */
@@ -527,6 +795,10 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
                 + "\"mic\":true,\"ar\":false}";
     }
 
+    private static String newConversationId() {
+        return "live-e2e-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
     private static String frameMessage(String base64) {
         return "{\"type\":\"frame\",\"v\":1,\"mime\":\"image/jpeg\",\"dataBase64\":\"" + base64
                 + "\",\"capturedAtMs\":0}";
@@ -560,6 +832,22 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
             }
         }
         return -1;
+    }
+
+    private static <T> int lastIndexOfTyped(List<T> list, Predicate<? super T> test) {
+        int found = -1;
+        for (int index = 0; index < list.size(); index++) {
+            if (test.test(list.get(index))) {
+                found = index;
+            }
+        }
+        return found;
+    }
+
+    /** The index of the last received frame of {@code type} (or -1 when none arrived). */
+    private static int lastFrameIndex(List<Frame> frames, String type) {
+        return lastIndexOfTyped(frames, frame -> frame.event() != null
+                && type.equals(frame.event().path("type").asText()));
     }
 
     /** The index of the first received frame of {@code type} whose event also matches. */
@@ -641,6 +929,38 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     }
 
     /**
+     * The DeepSeek stub (spec D6): one OpenAI-shaped completion whose content is the strict
+     * JSON answer. It records the path, the authorization and the body so the seam can prove
+     * what the locator sent — and the privacy scan proves none of it is logged.
+     */
+    private static HttpServer startLocatorStub() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/chat/completions", exchange -> {
+                LOCATOR_REQUESTS.incrementAndGet();
+                LOCATOR_PATH.set(exchange.getRequestURI().getPath());
+                LOCATOR_AUTHORIZATION.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                LOCATOR_BODY.set(new String(exchange.getRequestBody().readAllBytes(),
+                        StandardCharsets.UTF_8));
+                String answer = MAPPER.writeValueAsString(LOCATOR_ANSWER);
+                byte[] body = ("{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":"
+                        + answer + "}}]}").getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, body.length);
+                try (OutputStream out = exchange.getResponseBody()) {
+                    out.write(body);
+                }
+            });
+            // Virtual threads are daemon threads: a forgotten stub can never pin the JVM.
+            server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+            server.start();
+            return server;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
      * The fake lives in act-aria's test resources, which are not on act-app's classpath; the
      * source tree is the only copy, so it is found from the working directory (the module
      * directory under Maven, or the reactor root when the lane is run from there).
@@ -693,6 +1013,10 @@ class LiveEndToEndIntegrationTest extends BaseH2IntegrationTest {
     }
 
     // --- recording ----------------------------------------------------------------------------
+
+    /** A scripted turn's open socket and the bridge receipt it is writing. */
+    record Turn(WebSocket socket, Path receipt) {
+    }
 
     /** One received frame: a phone event, one binary delta, or the close code. */
     record Frame(JsonNode event, byte[] audio, Integer closeCode) {

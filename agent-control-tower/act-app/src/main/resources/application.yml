@@ -104,6 +104,35 @@ aria:
     ready-deadline-ms: ${ARIA_LIVE_READY_DEADLINE_MS:5000}
     max-session-seconds: ${ARIA_LIVE_MAX_SESSION_SECONDS:7200}
     realtime-url: ${ARIA_LIVE_REALTIME_URL:}
+  # Verified qmd read paths (spec:
+  # docs/superpowers/specs/2026-11-24-memory-knowledge-hub-design.md). Both blocks are
+  # opt-in: with `enabled: false` the contributors keep the pre-qmd behaviour and never
+  # open a connection, so a CI box needs no running qmd. When enabled, an unreachable qmd
+  # degrades the section within `timeout-ms` instead of stalling the turn. `collections`
+  # is a comma-separated allow-list the client enforces on every hit, together with the
+  # request's sensitivity ceiling. `project` is the single-project vault scope: a run's
+  # workspaceRef is `MODE@baseRef` (for example `HOST@main`), so the derived scope is null
+  # and this override applies.
+  memory:
+    qmd:
+      enabled: ${ARIA_MEMORY_QMD_ENABLED:false}
+      url: ${ARIA_MEMORY_QMD_URL:http://127.0.0.1:8181}
+      collections: ${ARIA_MEMORY_QMD_COLLECTIONS:memory-verified}
+      project: ${ARIA_MEMORY_QMD_PROJECT:}
+      vault-dir: ${ARIA_MEMORY_QMD_VAULT_DIR:}
+      timeout-ms: ${ARIA_MEMORY_QMD_TIMEOUT_MS:1500}
+      max-results: ${ARIA_MEMORY_QMD_MAX_RESULTS:4}
+      min-score: ${ARIA_MEMORY_QMD_MIN_SCORE:0.15}
+  knowledge:
+    qmd:
+      enabled: ${ARIA_KNOWLEDGE_QMD_ENABLED:false}
+      url: ${ARIA_KNOWLEDGE_QMD_URL:http://127.0.0.1:8181}
+      collections: ${ARIA_KNOWLEDGE_QMD_COLLECTIONS:knowledge-verified}
+      project: ${ARIA_KNOWLEDGE_QMD_PROJECT:}
+      vault-dir: ${ARIA_KNOWLEDGE_QMD_VAULT_DIR:}
+      timeout-ms: ${ARIA_KNOWLEDGE_QMD_TIMEOUT_MS:1500}
+      max-results: ${ARIA_KNOWLEDGE_QMD_MAX_RESULTS:4}
+      min-score: ${ARIA_KNOWLEDGE_QMD_MIN_SCORE:0.15}
   # Per-core launch configuration. The Qoder bridge refuses a `--cli` that is not
   # an absolute existing executable and must be told files that exist, so a
   # configured value is resolved at launch and an unresolvable one refuses the

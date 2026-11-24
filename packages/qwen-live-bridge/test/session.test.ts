@@ -406,33 +406,89 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
   const fakeGraceTimers = () =>
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 
-  it('configures no turn detection when hello.ar is true and semantic_vad_ec when it is false', async () => {
-    const arFake = await fakeQwen();
-    const { session: arSession } = await open(arFake, { ar: true });
-    expect(updatesOf(arFake)).toEqual([null]);
-    await arSession.close();
+  it('keeps the server VAD for an AR-on phone that never committed, and drops it on the first commit', async () => {
+    const fake = await fakeQwen();
+    const { session, recorder } = await open(fake, { ar: true });
+    // Spec D5: `hello.ar` is a wish, not proof that the phone commits. Without the guard the
+    // shipped phone would run with no turn detection and no commit: a silent turn.
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }]);
+    expect(session.stats().arGuardHolds).toBe(1);
 
+    // A voice turn still answers: the provider's own VAD ends it and asks for the response.
+    fake.send(0, { type: 'input_audio_buffer.speech_started', audio_start_ms: 0 });
+    fake.send(0, { type: 'input_audio_buffer.speech_stopped', audio_end_ms: 100 });
+    await recorder.waitFor(
+      (action) => action.kind === 'control' && action.event.type === 'speech_end',
+    );
+
+    // The first phone commit proves the phone drives its own turns: AR-on crosses now.
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
+    expect(session.stats().arGuardHolds).toBe(1);
+
+    // AR-off is unchanged: the handshake already carries the VAD and a commit changes nothing.
     const offFake = await fakeQwen();
     const { session: offSession } = await open(offFake, { ar: false });
+    offSession.commit();
+    await waitUntil(
+      () => offFake.connections[0]!.messages.some((message) => message.type === 'input_audio_buffer.commit'),
+      'the AR-off commit',
+    );
     expect(updatesOf(offFake)).toEqual([{ type: 'semantic_vad_ec' }]);
+    expect(offSession.stats().arGuardHolds).toBe(0);
+    await session.close();
     await offSession.close();
+  });
+
+  it('defers the commits that follow the guard-lifting one per the frame grace', async () => {
+    fakeGraceTimers();
+    const fake = await fakeQwen();
+    const { session } = await open(fake, { ar: true });
+
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS);
+    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the first commit');
+
+    // AR is applied now, so the next commit is the AR one: held for the frame grace.
+    session.appendAudio('AAAA');
+    session.commit({ image: true });
+    await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      'the deferred commit',
+    );
+    await session.close();
   });
 
   it('reconfigures a live session in place on an ar toggle and never reseeds the context', async () => {
     const fake = await fakeQwen();
     const { session } = await open(fake, { ar: true, context: [{ role: 'user', text: '早' }] });
 
+    // Spec D5: the commit guard keeps the handshake on the VAD; this phone's first commit
+    // lifts it and AR-on crosses on the same socket.
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    // AR off: the VAD is back, on the same socket.
     session.setAr(false);
-    await waitUntil(() => updatesOf(fake).length === 2, 'the semantic_vad_ec update');
-    // AR back on: the no-turn-detection config again, on the same socket.
+    await waitUntil(() => updatesOf(fake).length === 3, 'the semantic_vad_ec update');
+    // AR back on: the no-turn-detection config again.
     session.setAr(true);
-    await waitUntil(() => updatesOf(fake).length === 3, 'the null update');
-    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }, null]);
+    await waitUntil(() => updatesOf(fake).length === 4, 'the null update');
+    expect(updatesOf(fake)).toEqual([
+      { type: 'semantic_vad_ec' },
+      null,
+      { type: 'semantic_vad_ec' },
+      null,
+    ]);
 
     // A duplicate declaration is the same mode: nothing new crosses.
     session.setAr(true);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(updatesOf(fake)).toHaveLength(3);
+    expect(updatesOf(fake)).toHaveLength(4);
     // The mid-session updates are reconfigurations, not handshakes: the seed is not replayed.
     expect(
       fake.connections[0]!.messages.filter(
@@ -562,10 +618,14 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     session.setAr(false);
     await waitUntil(() => typesOf(0, fake).includes('response.create'), 'the upgrade');
     expect(typesOf(0, fake)).toContain('input_audio_buffer.commit');
-    // The config-switch half: the update that goes with the flush turns the provider's
-    // own VAD back on, so the provider and the bridge agree on AR-off.
-    await waitUntil(() => updatesOf(fake).length === 2, 'the semantic_vad_ec update');
-    expect(updatesOf(fake)).toEqual([null, { type: 'semantic_vad_ec' }]);
+    // The commit's own proof update (AR-on) goes out first, then the config switch that
+    // turns the provider's VAD back on, so the provider and the bridge agree on AR-off.
+    await waitUntil(() => updatesOf(fake).length === 3, 'the semantic_vad_ec update');
+    expect(updatesOf(fake)).toEqual([
+      { type: 'semantic_vad_ec' },
+      null,
+      { type: 'semantic_vad_ec' },
+    ]);
     await session.close();
   });
 
@@ -608,6 +668,12 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     });
     const { session, recorder } = await open(fake, { ar: false });
 
+    // Spec D5: only a phone that commits may take AR's no-detection mode.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the proof commit',
+    );
     session.setAr(true);
     await waitUntil(() => updatesOf(fake).length === 2, 'the refused update');
     fake.send(0, {
@@ -651,6 +717,13 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
       await waitUntil(() => speechEnds(recorder) === before + 1, 'the round-trip');
     };
 
+    // Spec D5: the phone proves it commits before it may take AR's no-detection mode.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the proof commit',
+    );
+
     session.setAr(true);
     session.setAr(false);
     await waitUntil(() => updatesOf(fake).length >= 2, 'the AR-on update');
@@ -689,6 +762,13 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     });
     const { session, recorder } = await open(fake, { ar: false });
 
+    // Spec D5: the phone proves it commits before it may take AR's no-detection mode.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the proof commit',
+    );
+
     // off → on → off while the refused AR-on update is still in flight.
     session.setAr(true);
     session.setAr(false);
@@ -715,10 +795,10 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     session.appendAudio('AAAA');
     session.commit({ image: true });
     await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
-    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1);
     await waitUntil(
-      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 3,
       'the held commit',
     );
     expect(session.stats().refusedArSwitches).toBe(1);
@@ -731,6 +811,13 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     let updates = 0;
     const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
     const { session } = await open(fake, { ar: false });
+
+    // Spec D5: the phone proves it commits before it may take AR's no-detection mode.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the proof commit',
+    );
 
     session.setAr(true);
     await waitUntil(() => updatesOf(fake).length === 2, 'the unanswered update');
@@ -760,18 +847,25 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
 
   it('retries the wished ar mode and keeps it when the acknowledgement lands late', async () => {
     fakeGraceTimers();
-    // Only the handshake is answered: the AR-off switch is dropped, so its settle re-sends
-    // the same wish, and the acknowledgement below lands after that retry went out.
+    // The handshake and the commit guard's AR-on update are answered: the AR-off switch is
+    // dropped, so its settle re-sends the same wish, and the acknowledgement below lands
+    // after that retry went out.
     let updates = 0;
-    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) === 1 });
+    const fake = await fakeQwen({ respondToUpdate: () => (updates += 1) <= 2 });
     const { session } = await open(fake, { ar: true });
 
+    // Spec D5: the phone proves it commits, which carries AR-on.
+    session.commit();
+    await waitUntil(() => updatesOf(fake).length === 2, 'the post-commit AR-on update');
+    expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
+
     session.setAr(false);
-    await waitUntil(() => updatesOf(fake).length === 2, 'the unanswered update');
+    await waitUntil(() => updatesOf(fake).length === 3, 'the unanswered update');
     await vi.advanceTimersByTimeAsync(AR_UPDATE_SETTLE_MS);
-    await waitUntil(() => updatesOf(fake).length === 3, 'the retried wish');
+    await waitUntil(() => updatesOf(fake).length === 4, 'the retried wish');
     // The retry carries the mode the phone asked for, never the one it asked to leave.
     expect(updatesOf(fake)).toEqual([
+      { type: 'semantic_vad_ec' },
       null,
       { type: 'semantic_vad_ec' },
       { type: 'semantic_vad_ec' },
@@ -783,7 +877,7 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     fake.send(0, { type: 'session.updated', session: {} });
     session.appendAudio('AAAA');
     await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.append'), 'the round-trip');
-    expect(updatesOf(fake)).toHaveLength(3);
+    expect(updatesOf(fake)).toHaveLength(4);
     expect(updatesOf(fake).at(-1)).toEqual({ type: 'semantic_vad_ec' });
     expect(session.stats().refusedArSwitches).toBe(0);
 
@@ -791,10 +885,10 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     // would be held for its frame (the frozen grace timer would never flush it).
     session.commit();
     await waitUntil(
-      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
       'the AR-off commit',
     );
-    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(2);
     expect(session.stats().refusedArSwitches).toBe(0);
     await session.close();
   });
@@ -809,6 +903,10 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
         .map((message) => (message.session as { turn_detection: unknown }).turn_detection);
     const { session } = await open(fake, { ar: true });
 
+    // Spec D5: the phone proves it commits, which carries AR-on on this socket.
+    session.commit();
+    await waitUntil(() => updatesOn(0).length === 2, 'the post-commit AR-on update');
+
     // Pausing the server holds the close handshake open, so the client sits CLOSING while
     // the bridge still believes the session configured: the toggle below is queued, never
     // written, and the newer wish waits behind it.
@@ -818,7 +916,7 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     session.setAr(false);
     session.setAr(true);
-    expect(updatesOn(0)).toEqual([null]);
+    expect(updatesOn(0)).toEqual([{ type: 'semantic_vad_ec' }, null]);
 
     // Completing the close rebuilds the provider session in place.
     dying.socket.terminate();
@@ -842,6 +940,13 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     const fake = await fakeQwen();
     const { session } = await open(fake, { ar: false });
 
+    // Spec D5: the phone proves it commits before it may take AR's no-detection mode.
+    session.commit();
+    await waitUntil(
+      () => typesOf(0, fake).includes('input_audio_buffer.commit'),
+      'the proof commit',
+    );
+
     session.setAr(true);
     await waitUntil(() => updatesOf(fake).length === 2, 'the AR-on update');
     expect(updatesOf(fake)).toEqual([{ type: 'semantic_vad_ec' }, null]);
@@ -849,9 +954,13 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
     session.appendAudio('AAAA');
     session.commit({ image: true });
     await vi.advanceTimersByTimeAsync(AR_FRAME_GRACE_MS - 1);
-    expect(typesOf(0, fake)).not.toContain('input_audio_buffer.commit');
+    // Only the proof commit has crossed: the AR one still waits for its frame grace.
+    expect(typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit')).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
-    await waitUntil(() => typesOf(0, fake).includes('input_audio_buffer.commit'), 'the grace');
+    await waitUntil(
+      () => typesOf(0, fake).filter((type) => type === 'input_audio_buffer.commit').length === 2,
+      'the grace',
+    );
     expect(session.stats().refusedArSwitches).toBe(0);
     await session.close();
   });
@@ -880,7 +989,8 @@ describe('session: AR grace (D4) and the ar capability (D5)', () => {
 
     const armedBeforeCommit = vi.getTimerCount();
     session.commit({ image: true });
-    expect(vi.getTimerCount()).toBe(armedBeforeCommit + 1);
+    // The frame grace and the guard-lifting update's settle are both armed.
+    expect(vi.getTimerCount()).toBe(armedBeforeCommit + 2);
 
     const before = fake.connections[3]!.messages.length;
     fake.connections[3]!.socket.terminate();

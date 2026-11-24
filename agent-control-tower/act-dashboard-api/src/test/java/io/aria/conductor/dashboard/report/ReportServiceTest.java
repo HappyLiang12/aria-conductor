@@ -85,23 +85,6 @@ class ReportServiceTest {
     }
 
     @Test
-    void generate_whenLlmFails_usesPlaceholder() throws Exception {
-        when(llmClient.complete(any(LlmRequest.class))).thenThrow(new RuntimeException("offline"));
-
-        GenerateReportRequest request = GenerateReportRequest.builder()
-                .title("Outage Report")
-                .description("Fallback path")
-                .build();
-
-        ReportArtifact result = service.generate(request);
-
-        Path onDisk = Path.of(result.getHtmlPath());
-        String html = Files.readString(onDisk);
-        assertThat(html).contains("Report generation requires LLM connection");
-        assertThat(html).contains("Outage Report");
-    }
-
-    @Test
     void capture_storesContentVerbatimAndPublishesEvent() throws Exception {
         ReportArtifact result = service.capture("SDD QA Report", "owner-1", "# QA Report\n\nAll checks passed.");
 
@@ -307,7 +290,7 @@ class ReportServiceTest {
     }
 
     @Test
-    void generate_placeholderHtmlIsValidOnLlmException() {
+    void generate_whenLlmFails_persistsIncompleteNotGenerated() throws Exception {
         when(llmClient.complete(any(LlmRequest.class)))
                 .thenThrow(new RuntimeException("offline"));
 
@@ -318,9 +301,49 @@ class ReportServiceTest {
 
         ReportArtifact result = service.generate(request);
 
-        assertThat(result.getStatus()).isEqualTo("GENERATED");
+        // The placeholder is structurally valid HTML, but no LLM produced it: the
+        // status must not claim a generation that never happened.
+        assertThat(result.getStatus()).isEqualTo("INCOMPLETE");
         Path onDisk = Path.of(result.getHtmlPath());
         assertThat(onDisk).exists();
+        assertThat(Files.readString(onDisk)).contains("Report generation requires LLM connection");
+    }
+
+    @Test
+    void generate_whenLlmReturnsEmptyContent_persistsIncompleteNotGenerated() {
+        when(llmClient.complete(any(LlmRequest.class)))
+                .thenReturn(new LlmResponse("   ", 1, 1, "stop", null));
+
+        ReportArtifact result = service.generate(GenerateReportRequest.builder()
+                .title("Empty Response Report")
+                .description("Blank model answer")
+                .build());
+
+        assertThat(result.getStatus()).isEqualTo("INCOMPLETE");
+    }
+
+    @Test
+    void amend_whenLlmFails_doesNotClaimAmended() throws Exception {
+        ReportArtifact existing = ReportArtifact.builder()
+                .id("rpt-amend-fallback")
+                .title("Weekly")
+                .version(1)
+                .status("GENERATED")
+                .htmlPath(seedHtml("rpt-amend-fallback", 1,
+                        "<!DOCTYPE html><html><body><h1>Weekly Report</h1>"
+                                + "<p>This is the original report content with enough words to pass validation.</p>"
+                                + "</body></html>"))
+                .createdAt(java.time.Instant.now())
+                .amendmentHistory("[]")
+                .build();
+        when(repository.findById("rpt-amend-fallback")).thenReturn(Optional.of(existing));
+        when(llmClient.complete(any(LlmRequest.class)))
+                .thenThrow(new RuntimeException("offline"));
+
+        ReportArtifact result = service.amend("rpt-amend-fallback",
+                AmendReportRequest.builder().instruction("Add a blockers section").build());
+
+        assertThat(result.getStatus()).isEqualTo("INCOMPLETE");
     }
 
     @Test

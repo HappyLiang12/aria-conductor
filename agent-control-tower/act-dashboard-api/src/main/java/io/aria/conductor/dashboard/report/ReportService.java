@@ -37,7 +37,9 @@ import java.util.Map;
  *
  * <p>The LLM is best-effort: if the {@link LlmClient} call fails (no provider,
  * network error, etc.) we fall back to a small placeholder HTML so the rest
- * of the workflow keeps working.
+ * of the workflow keeps working. The placeholder passes the structural
+ * validation, so it is tracked separately: a report that no LLM produced is
+ * persisted as {@code INCOMPLETE}, never as {@code GENERATED}.
  */
 @Slf4j
 @Service
@@ -69,8 +71,10 @@ public class ReportService {
         try {
             String prompt = buildGeneratePrompt(request.getTitle(), request.getDataScope(), request.getDescription());
             int maxTokens = reportProperties.getGenerateMaxTokens();
-            String html = generateHtmlViaLlm(prompt, request.getTitle(), maxTokens);
-            String status = validateHtmlCompleteness(html).valid() ? "GENERATED" : "INCOMPLETE";
+            GeneratedHtml generated = generateHtmlViaLlm(prompt, request.getTitle(), maxTokens);
+            String html = generated.html();
+            String status = generated.llmProduced() && validateHtmlCompleteness(html).valid()
+                    ? "GENERATED" : "INCOMPLETE";
 
             ReportArtifact artifact = ReportArtifact.builder()
                     .title(request.getTitle())
@@ -147,8 +151,10 @@ public class ReportService {
             }
             String prompt = buildAmendPrompt(currentHtml, request.getInstruction());
             int maxTokens = reportProperties.getAmendMaxTokens();
-            String newHtml = generateHtmlViaLlm(prompt, existing.getTitle(), maxTokens);
-            String status = validateHtmlCompleteness(newHtml).valid() ? "AMENDED" : "INCOMPLETE";
+            GeneratedHtml generated = generateHtmlViaLlm(prompt, existing.getTitle(), maxTokens);
+            String newHtml = generated.html();
+            String status = generated.llmProduced() && validateHtmlCompleteness(newHtml).valid()
+                    ? "AMENDED" : "INCOMPLETE";
 
             int nextVersion = (existing.getVersion() == null ? 1 : existing.getVersion()) + 1;
             String path = saveHtml(existing.getId(), nextVersion, newHtml);
@@ -183,8 +189,10 @@ public class ReportService {
         String prompt = buildGeneratePrompt(existing.getTitle(), existing.getDataScope(),
                 "Regenerate from scratch using the original parameters.");
         int maxTokens = reportProperties.getGenerateMaxTokens();
-        String html = generateHtmlViaLlm(prompt, existing.getTitle(), maxTokens);
-        String status = validateHtmlCompleteness(html).valid() ? "AMENDED" : "INCOMPLETE";
+        GeneratedHtml generated = generateHtmlViaLlm(prompt, existing.getTitle(), maxTokens);
+        String html = generated.html();
+        String status = generated.llmProduced() && validateHtmlCompleteness(html).valid()
+                ? "AMENDED" : "INCOMPLETE";
 
         int nextVersion = (existing.getVersion() == null ? 1 : existing.getVersion()) + 1;
         String path = saveHtml(existing.getId(), nextVersion, html);
@@ -230,7 +238,15 @@ public class ReportService {
 
     // === LLM helpers ===
 
-    String generateHtmlViaLlm(String prompt, String title, int maxTokens) {
+    /**
+     * One generation attempt's outcome: the HTML to persist and whether an LLM
+     * actually produced it. The placeholder is well-formed enough to pass
+     * {@link #validateHtmlCompleteness}, so callers must take the status from
+     * this flag — validating the HTML alone would label a fallback GENERATED.
+     */
+    record GeneratedHtml(String html, boolean llmProduced) {}
+
+    GeneratedHtml generateHtmlViaLlm(String prompt, String title, int maxTokens) {
         try {
             LlmRequest request = LlmRequest.of(
                     null,
@@ -240,7 +256,7 @@ public class ReportService {
             String content = response == null ? null : response.content();
             if (content == null || content.isBlank()) {
                 log.warn("LLM returned empty content for report generation; using placeholder");
-                return placeholderHtml(title);
+                return new GeneratedHtml(placeholderHtml(title), false);
             }
             String html = stripFenceIfPresent(content.trim());
             ValidationResult vr = validateHtmlCompleteness(html);
@@ -248,7 +264,7 @@ public class ReportService {
                 int retryTokens = Math.min(maxTokens * 2, 131072);
                 if (retryTokens <= maxTokens) {
                     log.warn("HTML validation failed ({}) and maxTokens already at ceiling; returning partial HTML", vr.reason());
-                    return html;
+                    return new GeneratedHtml(html, true);
                 }
                 log.warn("HTML validation failed ({}), retrying with doubled tokens", vr.reason());
                 LlmRequest retryRequest = LlmRequest.of(
@@ -259,21 +275,21 @@ public class ReportService {
                 String retryContent = retryResponse == null ? null : retryResponse.content();
                 if (retryContent == null || retryContent.isBlank()) {
                     log.warn("Retry also returned empty content, returning partial original HTML");
-                    return html;
+                    return new GeneratedHtml(html, true);
                 }
                 String retryHtml = stripFenceIfPresent(retryContent.trim());
                 ValidationResult retryVr = validateHtmlCompleteness(retryHtml);
                 if (!retryVr.valid()) {
                     log.warn("Retry HTML also failed validation ({}), returning partial original HTML", retryVr.reason());
-                    return html;
+                    return new GeneratedHtml(html, true);
                 }
                 log.info("Retry with doubled tokens ({}) passed validation", retryTokens);
-                return retryHtml;
+                return new GeneratedHtml(retryHtml, true);
             }
-            return html;
+            return new GeneratedHtml(html, true);
         } catch (Exception e) {
             log.warn("LLM unavailable for report generation, using placeholder: {}", e.getMessage());
-            return placeholderHtml(title);
+            return new GeneratedHtml(placeholderHtml(title), false);
         }
     }
 

@@ -48,7 +48,8 @@ import static org.mockito.Mockito.when;
  * The gated-write lifecycle of a live turn, against the real database (spec X15): the
  * production tool-call sink receives {@code start_agent_run}, persists exactly one
  * PENDING approval on the turn's live run, and the operator's decision is what turns that
- * ask into exactly one engine run — or into none at all, plus {@code [tower] denied}.
+ * ask into exactly one engine run — or into none at all, plus a refusal sentence in the
+ * call's own result.
  *
  * <p>The approval row is the only handle the REST approval surface has, so this test
  * enters through the sink a socket uses ({@link LiveToolCallSink#onToolCall}), decides
@@ -146,10 +147,13 @@ class LiveGatedWriteIntegrationTest extends BaseH2IntegrationTest {
         assertThat(created).as("one approval starts exactly one run").hasSize(1);
         assertThat(created.get(0).getPromptSeed()).isEqualTo("ship it");
         assertThat(committedStatus(runId)).isEqualTo(RunStatus.COMPLETED);
-        assertThat(bridge.lines).anyMatch(line -> line.contains("\"type\":\"tool_result\"")
-                && line.contains("\"id\":\"" + CALL_ID + "\"") && line.contains("\"ok\":true"));
-        assertThat(bridge.lines).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains("[tower] {"));
+        // One message for the call: its result carries the tower sentence, so the bridge
+        // asks the provider exactly once.
+        assertThat(bridge.lines).filteredOn(line -> line.contains("\"id\":\"" + CALL_ID + "\""))
+                .singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":true")
+                .contains("[tower] {");
+        assertThat(bridge.lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
     }
 
     @Test
@@ -165,8 +169,11 @@ class LiveGatedWriteIntegrationTest extends BaseH2IntegrationTest {
                 .as("a denied approval performs nothing")
                 .isEmpty();
         assertThat(committedStatus(runId)).isEqualTo(RunStatus.FAILED);
-        assertThat(bridge.lines).anyMatch(line -> line.contains("\"type\":\"tower\"")
-                && line.contains(LiveEventRouter.TOWER_DENIED));
+        assertThat(bridge.lines).filteredOn(line -> line.contains("\"id\":\"" + CALL_ID + "\""))
+                .singleElement().asString()
+                .contains("\"type\":\"tool_result\"").contains("\"ok\":false")
+                .contains(LiveEventRouter.TOWER_DENIED);
+        assertThat(bridge.lines).noneMatch(line -> line.contains("\"type\":\"tower\""));
     }
 
     @Test

@@ -74,7 +74,7 @@ import java.util.regex.Pattern;
  * {@code ar_render}, the turn's frame is asked about directly and, on an answer, one render
  * is forwarded on this same socket. It runs after the turn, on its own threads, and only
  * when {@code aria.live.direct-locator-enabled} is on; the key is the environment's
- * {@code LLM_API_KEY} and never appears in a frame or a log line.
+ * {@code DEEPSEEK_API_KEY} and never appears in a frame or a log line.
  *
  * <p>The container's own text buffer ({@code LiveWebSocketConfig}, raised to 512 KiB for
  * this endpoint and its STOMP co-tenant {@code /ws/events}) is the hard ceiling: a frame
@@ -320,8 +320,10 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         }
         live.cancelHelloDeadline();
         live.markClosed();
-        reap(live);
+        // The park is released before the child is reaped: a call the bridge is waiting on
+        // is answered on its stdin, and closing the child first would drop that last line.
         releasePark(live);
+        reap(live);
         log.debug("aria live socket closed: code={}", status.getCode());
     }
 
@@ -522,6 +524,7 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         boolean wantsImage = frame.path("image").asBoolean(false);
         // The commit closes its turn whether or not it is forwarded: the audio it names
         // belongs to the turn it ends, and the utterance it starts owns its own question.
+        // In the AR order the frame follows this commit, so it is stamped to this utterance.
         boolean audioSeen = live.closeTurn();
         live.beginUtterance();
         if (wantsImage && !audioSeen) {
@@ -579,9 +582,11 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
             if ("speech_end".equals(type)) {
                 // The bridge's turn end is the phone's next turn: the frame it may attach
                 // and the audio its image commit needs are both counted from here. The next
-                // utterance also asks its own question, so the backup's transcript resets.
+                // utterance also asks its own question, so the backup's transcript resets —
+                // unless the phone's own commit already opened this utterance, in which case
+                // this is the same boundary and the commit's frame stays attached.
                 live.beginTurn();
-                live.beginUtterance();
+                live.speechEnded();
             }
             if ("input_transcript".equals(type)) {
                 // The backup locator's question (spec D6): only the final transcript counts,
@@ -827,8 +832,10 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         if (!live.markClosed()) {
             return;
         }
-        reap(live);
+        // As in the container's own close callback: answer the held call while the child
+        // can still read it, then reap.
         releasePark(live);
+        reap(live);
         try {
             live.ws().close(new CloseStatus(code, reason));
         } catch (IOException | IllegalStateException e) {

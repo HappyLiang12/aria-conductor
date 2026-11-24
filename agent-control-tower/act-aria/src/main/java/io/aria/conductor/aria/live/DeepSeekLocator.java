@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
@@ -36,17 +37,22 @@ import java.util.function.Supplier;
  * connect, request, body — is bounded by {@code aria.live.direct-timeout-ms} (1.5 s by
  * default) and is never retried: the backup exists to be quick or to be absent.
  *
- * <p>The key is the Aria environment's {@code LLM_API_KEY} (with
+ * <p>The key is the Aria environment's {@code DEEPSEEK_API_KEY} (with
  * {@code aria.live.direct.api-key} as an optional override) and it never leaves this class:
  * no log line carries the key, the question, the image or the provider's answer, and the
- * only things written down are the outcome and its cost.
+ * only things written down are the outcome and its cost. The generic {@code LLM_API_KEY} is
+ * deliberately not read: the backup must not spend the platform's agent key, and a
+ * deployment that sets only that key leaves the locator disabled.
  */
 @Component
 public class DeepSeekLocator implements LiveLocator {
 
     /** The Aria environment variable holding the DeepSeek key; never logged. */
-    static final String ENV_KEY = "LLM_API_KEY";
+    static final String ENV_KEY = "DEEPSEEK_API_KEY";
     static final String PATH = "/chat/completions";
+
+    /** The plan's floor: a box the model is not half sure of is no answer at all. */
+    static final double MIN_CONFIDENCE = 0.5;
 
     /** The one answer shape the prompt allows: JSON, no prose, no markdown. */
     static final String SYSTEM_PROMPT = """
@@ -70,6 +76,8 @@ public class DeepSeekLocator implements LiveLocator {
     private final ObjectMapper json;
     private final HttpClient client;
     private final URI endpoint;
+    /** One metadata line for a missing key, however many turns ask. */
+    private final AtomicBoolean missingKeyLogged = new AtomicBoolean();
 
     @Autowired
     public DeepSeekLocator(LiveProperties properties, ObjectMapper json,
@@ -105,7 +113,15 @@ public class DeepSeekLocator implements LiveLocator {
             return Optional.empty();
         }
         String key = key();
-        if (key == null || transcript == null || transcript.isBlank() || jpeg == null || jpeg.length == 0) {
+        if (key == null) {
+            // No DeepSeek key: the backup is off, said once as metadata (never the key) so a
+            // silent deployment is diagnosable. No request is made.
+            if (missingKeyLogged.compareAndSet(false, true)) {
+                log.debug("deepseek locator outcome=disabled reason=missing_key");
+            }
+            return Optional.empty();
+        }
+        if (transcript == null || transcript.isBlank() || jpeg == null || jpeg.length == 0) {
             return Optional.empty();
         }
         long started = System.nanoTime();
@@ -224,6 +240,11 @@ public class DeepSeekLocator implements LiveLocator {
         JsonNode confidence = answer.get("confidence");
         if (confidence != null && (!confidence.isNumber()
                 || confidence.asDouble() < 0 || confidence.asDouble() > 1)) {
+            return Optional.empty();
+        }
+        if (confidence != null && confidence.asDouble() < MIN_CONFIDENCE) {
+            // The plan says to ignore a low-confidence answer: a box the model is not half
+            // sure of would put the overlay on the wrong object, which is worse than none.
             return Optional.empty();
         }
         double y0 = clamp(grid[0]);

@@ -58,7 +58,7 @@
 ### Task 4: DeepSeek direct locator (X14)
 
 **Files:** `DeepSeekLocator.java` (new), `LiveWebSocketHandler.java`/`LiveEventRouter.java` trigger, tests with a JDK `HttpServer` stub.
-- `Optional<Render> locate(byte[] jpeg, String transcript)`; strict JSON `{box_2d,confidence}`; 1.5 s connect+read; no retry; key from `LLM_API_KEY`; never logs body.
+- `Optional<Render> locate(byte[] jpeg, String transcript)`; strict JSON `{box_2d,confidence}`; 1.5 s connect+read; no retry; key from `DEEPSEEK_API_KEY` only (no `LLM_API_KEY` fallback; absent → disabled); never logs body.
 - Trigger: on turn end (`turn_done`) when a frame was attached, the input transcript matches `睇下|邊度|邊個`, and no highlight render was emitted; emit one `ar_render` on the live socket; ignore low confidence; degrade silently.
 - Tests: stub returns a valid box → one render; slow stub (>1.5 s) → none; malformed JSON → none; text-only turn → no call; privacy scan.
 - Commit: `feat(live): add the DeepSeek direct locator as the AR backup`.

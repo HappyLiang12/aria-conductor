@@ -91,12 +91,27 @@ class DeepSeekLocatorTest {
     @Test
     void aBoxOutsideTheGridIsClampedToTheFrame() throws Exception {
         respond(exchange -> write(exchange,
-                completion("{\"box_2d\":[-40,-20,5000,4000],\"confidence\":0.4}")));
+                completion("{\"box_2d\":[-40,-20,5000,4000],\"confidence\":0.6}")));
 
         Optional<LiveLocator.Render> found = locator(true, KEY, () -> null).locate(TRANSCRIPT, JPEG);
 
         assertThat(found).isPresent();
         assertThat(found.get().bbox()).containsExactly(0.0, 0.0, 1.0, 1.0);
+    }
+
+    /** The plan says to ignore low confidence: a box the model is unsure of is no answer. */
+    @Test
+    void anAnswerBelowTheConfidenceFloorIsRefused() throws Exception {
+        AtomicReference<String> content = new AtomicReference<>();
+        respond(exchange -> write(exchange, completion(content.get())));
+        LiveLocator locator = locator(true, KEY, () -> null);
+
+        content.set("{\"box_2d\":[100,200,300,400],\"confidence\":0.4}");
+        assertThat(locator.locate(TRANSCRIPT, JPEG)).as("0.4 is below the 0.5 floor").isEmpty();
+        content.set("{\"box_2d\":[100,200,300,400],\"confidence\":0.0}");
+        assertThat(locator.locate(TRANSCRIPT, JPEG)).as("a zero-confidence box is no answer").isEmpty();
+        content.set("{\"box_2d\":[100,200,300,400],\"confidence\":0.5}");
+        assertThat(locator.locate(TRANSCRIPT, JPEG)).as("the floor itself still answers").isPresent();
     }
 
     @Test
@@ -165,6 +180,42 @@ class DeepSeekLocatorTest {
         assertThat(locator(true, "", () -> null).locate(TRANSCRIPT, JPEG)).isEmpty();
         assertThat(locator(true, "   ", () -> " ").locate(TRANSCRIPT, JPEG)).isEmpty();
         assertThat(requests.get()).isZero();
+    }
+
+    /**
+     * The locator's only environment source is {@code DEEPSEEK_API_KEY}: the generic
+     * {@code LLM_API_KEY} is not a fallback, so a deployment that never set the DeepSeek
+     * key leaves the backup disabled (and says so once, as metadata) instead of charging
+     * the platform's agent key.
+     */
+    @Test
+    void onlyTheDeepseekKeyIsRead() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        respond(exchange -> {
+            requests.incrementAndGet();
+            write(exchange, completion(VALID_ANSWER));
+        });
+        assertThat(DeepSeekLocator.ENV_KEY).isEqualTo("DEEPSEEK_API_KEY");
+
+        Logger logger = (Logger) LoggerFactory.getLogger(DeepSeekLocator.class);
+        Level previous = logger.getLevel();
+        ListAppender<ILoggingEvent> lines = new ListAppender<>();
+        lines.start();
+        logger.setLevel(Level.DEBUG);
+        logger.addAppender(lines);
+        try {
+            // The supplier is the whole environment the locator sees, and it holds no
+            // DEEPSEEK_API_KEY: the only key a deployment with LLM_API_KEY alone has.
+            assertThat(locator(true, "", () -> null).locate(TRANSCRIPT, JPEG)).isEmpty();
+        } finally {
+            logger.detachAppender(lines);
+            logger.setLevel(previous);
+        }
+
+        assertThat(requests.get()).as("no key, no call").isZero();
+        List<String> logged = lines.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(logged).anyMatch(message -> message.contains("outcome=disabled")
+                && message.contains("missing_key"));
     }
 
     @Test

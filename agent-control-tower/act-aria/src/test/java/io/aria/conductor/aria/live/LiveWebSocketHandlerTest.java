@@ -653,6 +653,8 @@ class LiveWebSocketHandlerTest {
     /**
      * The backup's happy path: a look-intent question about a frame the bridge answered
      * without a render gets exactly one render, in the bridge's own shape, after the turn.
+     * The phone commits before it sends the frame (the AR order, spec D4), so the frame is
+     * stamped to the utterance that asks.
      */
     @Test
     void aLookIntentWithAFrameAndNoRenderGetsOneBackupRender() throws Exception {
@@ -664,8 +666,8 @@ class LiveWebSocketHandlerTest {
                 + "\",\"final\":true}";
 
         handler.handleBinaryMessage(session, new BinaryMessage(ByteBuffer.wrap(new byte[] {1, 2, 3, 4})));
-        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":true}"));
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("ar-jpeg".getBytes()))));
         bridge.listener.onControl(transcript);
         bridge.listener.onTurnDone();
 
@@ -697,6 +699,38 @@ class LiveWebSocketHandlerTest {
         assertThat(allTexts(session)).contains(transcript);
         assertThat(bridge.sent).hasSize(3);
         verify(session, never()).close(any());
+    }
+
+    /**
+     * A frame belongs to the utterance it was attached in. One attached in an utterance
+     * that never got a turn end must not answer the next utterance's question; a frame
+     * attached in the asking utterance does.
+     */
+    @Test
+    void aFrameFromAnUtteranceThatNeverEndedIsNotReused() throws Exception {
+        when(locator.locate(anyString(), any())).thenReturn(Optional.of(
+                new LiveLocator.Render("六角匙", "六角匙", new double[] {0.2, 0.1, 0.2, 0.2})));
+        WebSocketSession session = openedWithLocator();
+
+        // Utterance A: one frame, and no turn end — the bridge answered nothing there.
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("a-jpeg".getBytes()))));
+        // Utterance B starts and asks to look, with no frame of its own.
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"commit\",\"image\":false}"));
+        bridge.listener.onControl(finalTranscript("睇下個六角匙"));
+        bridge.listener.onTurnDone();
+
+        verify(locator, after(400).never()).locate(anyString(), any());
+        assertThat(phoneFrames(session, "ar_render")).isEmpty();
+
+        // A later utterance attaches its own frame: that one is the question's frame.
+        handler.handleTextMessage(session, new TextMessage(frame(Base64.getEncoder().encodeToString("b-jpeg".getBytes()))));
+        bridge.listener.onControl(finalTranscript("再睇下個六角匙"));
+        bridge.listener.onTurnDone();
+
+        ArgumentCaptor<byte[]> bytes = ArgumentCaptor.forClass(byte[].class);
+        verify(locator, timeout(1000)).locate(eq("再睇下個六角匙"), bytes.capture());
+        assertThat(bytes.getValue()).isEqualTo("b-jpeg".getBytes());
+        assertThat(phoneFrames(session, "ar_render")).hasSize(1);
     }
 
     /** A render already forwarded this turn is the turn's overlay; the backup stays silent. */

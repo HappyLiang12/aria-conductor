@@ -106,6 +106,11 @@ async function main(): Promise<void> {
     if (refusedAr > 0) {
       meter.record('ar_switch_refused', refusedAr, 0, 0);
     }
+    // AR-on wishes the commit guard held on the VAD (a phone that never commits): counts only.
+    const guardHolds = session?.stats().arGuardHolds ?? 0;
+    if (guardHolds > 0) {
+      meter.record('ar_guard_hold', guardHolds, 0, 0);
+    }
     meter.flush('session');
     if (session !== null) {
       await session.close();

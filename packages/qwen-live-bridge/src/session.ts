@@ -53,11 +53,16 @@ export interface LiveSession {
   tower(text: string): void;
   close(): Promise<void>;
   /**
-   * Metadata only: frames refused while reconfiguring, results for unknown calls, and
-   * an `ar` switch the provider refused (or never answered within its settle window);
-   * the mode was reverted, never forwarded.
+   * Metadata only: frames refused while reconfiguring, results for unknown calls, an
+   * `ar` switch the provider refused (or never answered within its settle window); the
+   * mode was reverted, never forwarded, and AR-on wishes the commit guard held back.
    */
-  stats(): { refusedSends: number; droppedToolResults: number; refusedArSwitches: number };
+  stats(): {
+    refusedSends: number;
+    droppedToolResults: number;
+    refusedArSwitches: number;
+    arGuardHolds: number;
+  };
 }
 
 /** The provider's cap is 120 minutes; the bridge leaves a minute to reopen (spec X9). */
@@ -310,11 +315,21 @@ export function startSession(options: SessionOptions): LiveSession {
    */
   let arDesired = options.ar === true;
   /**
+   * Spec D5 compatibility guard: a phone that never sends a `commit` would get AR's
+   * no-detection mode and then silence, because its only speech-end signal is a frame.
+   * So an AR-on wish keeps the server VAD until one phone commit proves this session
+   * drives its own turns; a phone that never commits degrades to AR-off. It resets only
+   * with the bridge session, never with a provider reopen.
+   */
+  let commitObserved = false;
+  /** The mode the provider should run: the phone's wish, gated by the commit guard. */
+  const effectiveAr = () => arDesired && commitObserved;
+  /**
    * The mode the provider's live session is known to hold. Only the acknowledgement of a
    * `session.update` moves it forward and only a refusal moves it back, so the bridge can
    * never claim a mode the provider is not running.
    */
-  let arApplied = options.ar === true;
+  let arApplied = effectiveAr();
   /** AR-on: the phone's commit, held for the frame that may still be behind it. */
   let deferredCommit: { image: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
   /**
@@ -358,6 +373,8 @@ export function startSession(options: SessionOptions): LiveSession {
   let refusedSends = 0;
   let droppedToolResults = 0;
   let refusedArSwitches = 0;
+  /** AR-on wishes the commit guard kept on the server VAD (metadata only). */
+  let arGuardHolds = arDesired ? 1 : 0;
 
   const emit = (action: SessionAction) => {
     if (!fataled && !closing) {
@@ -472,7 +489,7 @@ export function startSession(options: SessionOptions): LiveSession {
     }
     clearTimeout(arUpdateInFlight.timer);
     arUpdateInFlight = null;
-    if (arDesired === arApplied) {
+    if (effectiveAr() === arApplied) {
       // The phone went back to the applied mode while this update was in flight: nothing
       // is left to retry and no switch was refused.
       return;
@@ -499,7 +516,7 @@ export function startSession(options: SessionOptions): LiveSession {
     // left to fire. A queued one is dropped rather than replayed into that handshake.
     forgetArUpdate();
     dropQueuedArUpdates();
-    arApplied = arDesired;
+    arApplied = effectiveAr();
     speechStoppedSinceCommit = false;
     callOrder = [];
     outstandingCalls.clear();
@@ -588,19 +605,19 @@ export function startSession(options: SessionOptions): LiveSession {
    * phone's latest wish; an acknowledgement settles the one that went out and this sends
    * whatever still differs, so off→on→off lands on the last mode instead of overwriting
    * the state a refusal has to revert to. Nothing crosses while the session rebuilds: the
-   * handshake's own config carries `arDesired` and the ack re-conciles. Every update carries
-   * a bounded settle, so one the provider silently drops cannot pin `arUpdateInFlight`
-   * forever and swallow every later `setAr`; the first silence re-sends the wish, the second
-   * gives it up.
+   * handshake's own config carries the effective mode and the ack re-conciles. Each
+   * update carries a bounded settle, so one the provider silently drops cannot pin
+   * `arUpdateInFlight` forever and swallow every later `setAr`; the first silence re-sends
+   * the wish, the second gives it up.
    */
   const reconcileAr = () => {
     if (arUpdateInFlight !== null || !configured || closing || fataled) {
       return;
     }
-    if (arDesired === arApplied) {
+    const target = effectiveAr();
+    if (target === arApplied) {
       return;
     }
-    const target = arDesired;
     const timer = setTimeout(settleArUpdate, AR_UPDATE_SETTLE_MS);
     timer.unref?.();
     // Even a frame the socket queues (it is going away) counts as in flight: the ack that
@@ -765,7 +782,7 @@ export function startSession(options: SessionOptions): LiveSession {
       socket = ws;
       configured = false;
       /** The mode this socket's handshake config carries; its ack makes it the applied one. */
-      let handshakeAr = arDesired;
+      let handshakeAr = effectiveAr();
 
       let settled = false;
       const timeout = setTimeout(() => {
@@ -814,7 +831,7 @@ export function startSession(options: SessionOptions): LiveSession {
             // Before `session.updated`: the one frame that must bypass the configured gate.
             // Its config carries the mode the phone wants right now, and its ack is what
             // makes that mode the applied one.
-            handshakeAr = arDesired;
+            handshakeAr = effectiveAr();
             transmit({ type: 'session.update', session: sessionConfig(handshakeAr) });
             return;
           case 'session.updated':
@@ -987,6 +1004,14 @@ export function startSession(options: SessionOptions): LiveSession {
 
     commit(commitOptions = {}) {
       const asksForImage = commitOptions.image === true;
+      if (!commitObserved) {
+        // Spec D5: this phone drives its own turns, so the guard lifts. An AR-on wish that
+        // was held on the VAD crosses now, before the commit is held for its frame.
+        commitObserved = true;
+        if (arDesired) {
+          reconcileAr();
+        }
+      }
       if (arDesired) {
         // Spec D4: the phone's commit ends its speech, not the turn — the frame it names
         // may still be ~150 ms behind, and the provider takes the image only before the
@@ -1036,6 +1061,11 @@ export function startSession(options: SessionOptions): LiveSession {
       arDesired = next;
       // A new wish gets its own retry: only this wish's sends spend it.
       arRetried = false;
+      if (next && !commitObserved) {
+        // Spec D5: the guard holds it on the server VAD until a phone commit proves the
+        // phone drives its own turns.
+        arGuardHolds += 1;
+      }
       if (!next) {
         // Leaving AR with a commit held for a frame that may never come: the utterance is
         // due now rather than stranded when the grace timer is dropped.
@@ -1089,7 +1119,7 @@ export function startSession(options: SessionOptions): LiveSession {
     },
 
     stats() {
-      return { refusedSends, droppedToolResults, refusedArSwitches };
+      return { refusedSends, droppedToolResults, refusedArSwitches, arGuardHolds };
     },
   };
 

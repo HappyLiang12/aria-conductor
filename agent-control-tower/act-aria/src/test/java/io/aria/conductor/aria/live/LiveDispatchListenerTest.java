@@ -128,6 +128,21 @@ class LiveDispatchListenerTest {
     }
 
     @Test
+    void aFailureWithoutACodeSaysFailedOnceNotTwice() {
+        UUID run = UUID.randomUUID();
+        dispatches.register(run, owner, "Analyst");
+
+        listener.onCompleted(new RunCompletedEvent(this, run, agent, RunStatus.FAILED));
+
+        ArgumentCaptor<Map<String, Object>> sent = capture();
+        verify(frames).toPhone(eq(owner), sent.capture());
+        assertThat(sent.getValue().get("summary")).isEqualTo("failed");
+        ArgumentCaptor<Map<String, Object>> tower = capture();
+        verify(frames).toBridge(eq(owner), tower.capture());
+        assertThat(tower.getValue().get("text")).isEqualTo("[tower] Analyst 失敗");
+    }
+
+    @Test
     void unknownRunsAndTheTurnRunAreIgnored() {
         UUID stranger = UUID.randomUUID();
 

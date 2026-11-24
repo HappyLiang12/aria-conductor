@@ -80,7 +80,7 @@ public class LiveDispatchListener {
         }
         boolean finished = event.getStatus() == RunStatus.COMPLETED;
         String state = finished ? "finished" : "failed";
-        String summary = finished ? "finished" : "failed: " + stableReason(event);
+        String summary = finished ? "finished" : failureSummary(event);
         LiveDispatchService.Dispatch dispatch = found.get();
         frames.toPhone(dispatch.session(),
                 LiveFrames.runEvent(event.getRunId(), state, summary, "dispatch"));
@@ -129,7 +129,8 @@ public class LiveDispatchListener {
     private String outcomeText(String agentName, boolean finished, RunCompletedEvent event) {
         String who = agentName == null || agentName.isBlank() ? "" : agentName + " ";
         if (!finished) {
-            return "[tower] " + who + "失敗：" + stableReason(event);
+            String code = failureCode(event);
+            return code == null ? "[tower] " + who + "失敗" : "[tower] " + who + "失敗：" + code;
         }
         String preview = preview(event.getFinalOutput());
         return preview.isEmpty()
@@ -147,11 +148,13 @@ public class LiveDispatchListener {
     }
 
     /** The stable failure identity; the operator-facing message is never forwarded. */
-    private static String stableReason(RunCompletedEvent event) {
+    private static String failureSummary(RunCompletedEvent event) {
+        String code = failureCode(event);
+        return code == null ? "failed" : "failed: " + code;
+    }
+
+    private static String failureCode(RunCompletedEvent event) {
         String code = event.getErrorCode();
-        if (code != null && !code.isBlank()) {
-            return code;
-        }
-        return event.getStatus() == null ? "failed" : event.getStatus().name().toLowerCase();
+        return code == null || code.isBlank() ? null : code;
     }
 }

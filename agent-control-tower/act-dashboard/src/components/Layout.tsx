@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import { SidebarInset, SidebarProvider } from './ui/sidebar';
 import { AppSidebar } from './layout/AppSidebar';
 import { ShellTopBar } from './layout/ShellTopBar';
+import { MobileNav } from './layout/MobileNav';
 import { AmbientInvalidation } from './layout/AmbientInvalidation';
 import { AriaPanel } from './AriaPanel';
 import { ConfigureModal } from './ConfigureModal';
@@ -109,6 +110,7 @@ export function Layout() {
         <SidebarInset>
           <div className="top-stack" ref={stackRef}>
             <ShellTopBar />
+            <MobileNav />
             <ConnectionBanner />
           </div>
           <div className="content">

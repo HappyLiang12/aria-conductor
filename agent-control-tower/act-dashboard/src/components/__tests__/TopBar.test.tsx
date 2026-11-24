@@ -24,7 +24,7 @@ const OPENCODE: AdkProviderInfo = {
 };
 
 const SUMMARY = {
-  activeAgents: 3, healthyAgents: 3, degradedAgents: 1,
+  activeAgents: 4, healthyAgents: 3, degradedAgents: 1,
   runningRuns: 0, pendingApprovals: 0, totalTokensBurned: 0,
 };
 
@@ -41,7 +41,7 @@ beforeEach(() => {
 
 function mockSummary(overrides: Partial<DashboardSummary>) {
   mockedGetSummary.mockResolvedValue({
-    activeAgents: 3, healthyAgents: 3, degradedAgents: 1,
+    activeAgents: 4, healthyAgents: 3, degradedAgents: 1,
     runningRuns: 0, pendingApprovals: 0, totalTokensBurned: 0, runsWithoutUsage: 0,
     ...overrides,
   } as never);
@@ -141,11 +141,11 @@ describe('TopBar KPI honesty', () => {
       .mockResolvedValueOnce(SUMMARY as never)
       .mockRejectedValueOnce(new Error('refetch down'));
     const { queryClient } = renderTopBar();
-    await waitFor(() => expect(screen.getByTestId('kpi-active-agents')).toHaveTextContent('3'));
+    await waitFor(() => expect(screen.getByTestId('kpi-active-agents')).toHaveTextContent('4'));
 
     await queryClient.refetchQueries({ queryKey: ['dashboard-summary'] });
     await waitFor(() => {
-      expect(screen.getByTestId('kpi-active-agents')).toHaveTextContent('3');
+      expect(screen.getByTestId('kpi-active-agents')).toHaveTextContent('4');
       expect(screen.getByTestId('kpi-active-agents')).toHaveAttribute('title', 'Last known data; refresh failed');
     });
   });

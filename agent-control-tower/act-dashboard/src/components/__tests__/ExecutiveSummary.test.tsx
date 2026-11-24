@@ -138,6 +138,20 @@ describe('ExecutiveSummary runtime card', () => {
 });
 
 describe('ExecutiveSummary honest states', () => {
+  it('headlines the live fleet and names the degraded part of it', async () => {
+    mockedSummary.mockResolvedValue({
+      activeAgents: 4, healthyAgents: 3, degradedAgents: 1, runningRuns: 0, totalTokensBurned: 0,
+    } as never);
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    const cell = (await screen.findByText('Active Agents')).closest('.stat') as HTMLElement;
+    await waitFor(() => expect(cell.querySelector('.v')).toHaveTextContent('4'));
+    // activeAgents includes the degraded agent, so the detail describes its own headline.
+    expect(cell).toHaveTextContent('Healthy · 1 degraded');
+  });
+
   it('does not claim health or an empty queue while the summary is loading', () => {
     mockedSummary.mockReturnValue(new Promise(() => {}) as never);
     mockedAgents.mockReturnValue(new Promise(() => {}) as never);

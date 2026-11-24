@@ -47,7 +47,8 @@ class DashboardToolsTest {
         String json = tools.getDashboardSummary();
 
         assertThat(json).contains("\"ok\":true")
-                .contains("\"activeAgents\":3")
+                // active = healthy + degraded, the same definition as the REST summary.
+                .contains("\"activeAgents\":4")
                 .contains("\"healthyAgents\":3")
                 .contains("\"degradedAgents\":1")
                 .contains("\"runningRuns\":3")

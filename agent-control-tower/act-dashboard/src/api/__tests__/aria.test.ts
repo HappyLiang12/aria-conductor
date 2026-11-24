@@ -213,7 +213,7 @@ describe('aria streamMessage tool call arguments', () => {
 
     // Verbatim: the server redacted the values (T44); the client renders what it
     // receives and adds no redaction of its own.
-    expect(onToolCall).toHaveBeenCalledWith('write_file', args);
+    expect(onToolCall).toHaveBeenCalledWith('write_file', args, 'tc-1');
   });
 
   it('still delivers a frame with no args, offering no argument to render', async () => {
@@ -234,6 +234,38 @@ describe('aria streamMessage tool call arguments', () => {
     expect(onToolCall.mock.calls[0][1]).toBeUndefined();
     expect(onToolCall.mock.calls[1][0]).toBe('list_runs');
     expect(onToolCall.mock.calls[1][1]).toBeUndefined();
+  });
+});
+
+describe('aria streamMessage tool call ids', () => {
+  // A turn can call the same tool more than once, so the call id — not the name
+  // — is what pairs a result with its call. The dispatcher used to drop
+  // `toolCallId`, leaving a consumer (assistant-ui's tool-call parts) unable to
+  // key the two frames together.
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('passes the toolCallId through to callers', async () => {
+    const onToolCall = vi.fn();
+    const onToolResult = vi.fn();
+    fetchMock.mockResolvedValue(sseResponse([
+      'event: tool_call\ndata: {"runId":"r1","name":"bash","toolCallId":"tc1","args":"{}"}\n\n',
+      'event: tool_result\ndata: {"runId":"r1","name":"bash","toolCallId":"tc1","result":"ok","ok":true}\n\n',
+      'event: done\ndata: {"runId":"r1","conversationId":"c1","intent":""}\n\n',
+    ]));
+
+    await streamMessage('c1', 'hi', [], { onToolCall, onToolResult });
+
+    expect(onToolCall).toHaveBeenCalledWith('bash', '{}', 'tc1');
+    expect(onToolResult).toHaveBeenCalledWith('bash', 'ok', true, 'tc1');
   });
 });
 
@@ -266,11 +298,11 @@ describe('aria streamMessage tool result success flag', () => {
 
     await streamMessage('c1', 'hi', [], { onToolResult });
 
-    expect(onToolResult).toHaveBeenNthCalledWith(1, 'write_file', 'denied by policy', false);
+    expect(onToolResult).toHaveBeenNthCalledWith(1, 'write_file', 'denied by policy', false, undefined);
     // Absent `ok`: an older backend, rendered as success rather than as an error
     // the frame never claimed.
-    expect(onToolResult).toHaveBeenNthCalledWith(2, 'read_file', '{}', true);
-    expect(onToolResult).toHaveBeenNthCalledWith(3, 'list_runs', '[]', true);
+    expect(onToolResult).toHaveBeenNthCalledWith(2, 'read_file', '{}', true, undefined);
+    expect(onToolResult).toHaveBeenNthCalledWith(3, 'list_runs', '[]', true, undefined);
   });
 });
 

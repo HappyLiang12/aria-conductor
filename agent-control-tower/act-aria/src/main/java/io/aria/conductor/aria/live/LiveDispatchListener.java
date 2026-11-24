@@ -6,6 +6,7 @@ import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.model.RunStatus;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +41,7 @@ public class LiveDispatchListener {
     private final Clock clock;
     private final Map<UUID, Instant> lastProgress = new ConcurrentHashMap<>();
 
+    @Autowired
     public LiveDispatchListener(LiveDispatchService dispatches, LiveFrames frames,
                                 LiveProperties properties) {
         this(dispatches, frames, properties, Clock.systemUTC());

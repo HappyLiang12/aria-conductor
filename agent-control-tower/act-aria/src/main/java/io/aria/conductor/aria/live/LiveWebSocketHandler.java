@@ -153,6 +153,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     private final LiveToolCallSink toolCalls;
     private final LiveFrames frames;
     private final LiveLocator locator;
+    /** Phase 4: the child runs this socket approved; null in the test seams that do not wire them. */
+    private LiveDispatchService dispatches;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "aria-live-hello-deadline");
         thread.setDaemon(true);
@@ -167,10 +169,12 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
     @Autowired
     public LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json,
             LiveContextSource context, LiveSessionRegistry registry,
-            ObjectProvider<LiveToolCallSink> toolCalls, LiveFrames frames, ObjectProvider<LiveLocator> locator) {
+            ObjectProvider<LiveToolCallSink> toolCalls, LiveFrames frames, ObjectProvider<LiveLocator> locator,
+            ObjectProvider<LiveDispatchService> dispatches) {
         this(properties, bridges, json, context, registry,
                 toolCalls.getIfAvailable(() -> LiveToolCallSink.NONE), frames,
                 locator.getIfAvailable(() -> LiveLocator.NONE));
+        this.dispatches = dispatches.getIfAvailable();
     }
 
     LiveWebSocketHandler(LiveProperties properties, LiveBridgeFactory bridges, ObjectMapper json) {
@@ -320,6 +324,11 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         }
         live.cancelHelloDeadline();
         live.markClosed();
+        if (dispatches != null) {
+            // The socket is gone: its child runs' frames have no reader, and their timers
+            // must not fire into a closed socket. The runs themselves keep going.
+            dispatches.removeSocket(live);
+        }
         // The park is released before the child is reaped: a call the bridge is waiting on
         // is answered on its stdin, and closing the child first would drop that last line.
         releasePark(live);

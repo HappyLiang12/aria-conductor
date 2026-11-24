@@ -1,6 +1,5 @@
 package io.aria.conductor.aria.live;
 
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -25,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class LiveDispatchService {
 
     /** One dispatched child run and the socket that owns it. */
-    @Getter
     public static class Dispatch {
         private final UUID runId;
         private final LiveSession session;
@@ -41,6 +39,22 @@ public class LiveDispatchService {
             this.session = session;
             this.agentName = agentName;
             this.startedAt = startedAt;
+        }
+
+        public UUID runId() {
+            return runId;
+        }
+
+        public LiveSession session() {
+            return session;
+        }
+
+        public String agentName() {
+            return agentName;
+        }
+
+        public Instant startedAt() {
+            return startedAt;
         }
 
         public boolean markReminderSent() {
@@ -80,7 +94,7 @@ public class LiveDispatchService {
 
     /** Every child run of this socket is forgotten: the socket can receive nothing more. */
     public void removeSocket(LiveSession session) {
-        byRun.values().removeIf(dispatch -> dispatch.getSession() == session);
+        byRun.values().removeIf(dispatch -> dispatch.session() == session);
     }
 
     public Set<UUID> runIds() {

@@ -3,6 +3,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "./tokens.css";
+@import "tw-shimmer";
 
 @custom-variant dark (&:where(body:not(.light) *));
 
@@ -2789,6 +2790,22 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  @keyframes collapsible-down {
+  from {
+    height: 0;
+    }
+  to {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  }
+  @keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  to {
+    height: 0;
+    }
+  }
 }
 
 @layer base {
@@ -2799,3 +2816,7 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
     @apply bg-background text-foreground;
   }
 }
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

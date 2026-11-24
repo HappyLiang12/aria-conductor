@@ -22,6 +22,13 @@ vi.mock('../../api/runs', () => ({
 }));
 vi.mock('../../api/skills', () => ({ listSkills: vi.fn().mockResolvedValue([]) }));
 
+// The generated assistant-ui thread owns the transcript DOM (it has its own
+// test surface); the page owns the shell, the switcher, the composer, the stop
+// control and the empty state, so those stay real here.
+vi.mock('../../chat/AriaThread', () => ({
+  AriaThread: () => <div className="mc-stack">thread</div>,
+}));
+
 type WsHandler = (event: WsEvent) => void;
 const wsHandlers: WsHandler[] = [];
 const wsContext = {
@@ -53,21 +60,37 @@ const mockDelete = deleteConversation as unknown as ReturnType<typeof vi.fn>;
 const mockCancel = cancelRun as unknown as ReturnType<typeof vi.fn>;
 const mockProgress = getRunProgress as unknown as ReturnType<typeof vi.fn>;
 
-function push(frame: Record<string, unknown>) {
-  act(() => {
-    wsHandlers.forEach((handler) => handler({ type: 'run.progress', payload: frame, timestamp: '2026-11-24T00:00:00Z' }));
-  });
-}
-
-function renderPage() {
+function renderPage(initialEntry = '/aria') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/aria']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <MainChatPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/** The page opens one SSE request per turn; hold it open until the turn is aborted. */
+function holdStream() {
+  mockStream.mockImplementation((
+    _conversationId: string,
+    _message: string,
+    _history: unknown,
+    _callbacks: StreamCallbacks,
+    signal?: AbortSignal,
+  ) => new Promise<void>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => {
+      reject(new DOMException('aborted', 'AbortError'));
+    });
+  }));
+}
+
+async function sendText(text: string) {
+  const textarea = screen.getByPlaceholderText(/Ask Aria anything/);
+  fireEvent.change(textarea, { target: { value: text } });
+  fireEvent.keyDown(textarea, { key: 'Enter' });
+  await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
 }
 
 beforeEach(() => {
@@ -82,72 +105,84 @@ beforeEach(() => {
     { role: 'assistant', content: 'Crew deployed.', timestamp: '2026-11-20T10:00:00Z', runId: 'run-0' },
   ]);
   mockProgress.mockResolvedValue([]);
+  mockStream.mockResolvedValue(undefined);
 });
 
 describe('MainChatPage', () => {
-  it('lists conversations, marks the latest as active and renders its timeline', async () => {
+  it('lists conversations, marks the latest as active and loads its timeline into the thread', async () => {
     renderPage();
 
     expect(await screen.findByRole('button', { name: /Delete conversation Deploy the crew/i })).toBeTruthy();
-    expect(await screen.findByText('Crew deployed.')).toBeTruthy();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
     expect(screen.getByRole('button', { name: 'Deploy the crew' }).getAttribute('aria-current')).toBe('true');
-    expect(mockTimeline).toHaveBeenCalledWith('conv-1');
+    // The thread owns the transcript; the page still hands it the history it loaded.
+    expect(await screen.findByText('thread')).toBeTruthy();
+    expect(screen.queryByText('Ask Aria anything.')).toBeNull();
   });
 
-  it('sends a turn over SSE, grows the live answer in place and keeps the final message authoritative', async () => {
+  it('sends the page-loaded history with the turn and replays progress when the run settles', async () => {
+    holdStream();
     renderPage();
-    await screen.findByText('Crew deployed.');
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
 
-    const textarea = screen.getByPlaceholderText(/Ask Aria anything/);
-    fireEvent.change(textarea, { target: { value: 'Status?' } });
-    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await sendText('Status?');
 
-    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('Status?')).toBeTruthy();
-    const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
+    const call = mockStream.mock.calls[0];
+    expect(call[0]).toBe('conv-1');
+    expect(call[1]).toBe('Status?');
+    expect(call[2]).toEqual([
+      { role: 'user', content: 'Deploy the crew' },
+      { role: 'assistant', content: 'Crew deployed.' },
+    ]);
 
+    const callbacks = call[3] as StreamCallbacks;
     act(() => callbacks.onThinking?.('run-1'));
     await screen.findByRole('button', { name: /Stop the turn/i });
-
-    push({ runId: 'run-1', kind: 'ANSWER', partId: 'a1', content: 'Raft needs', seq: 1 });
-    expect(await screen.findByText('Raft needs')).toBeTruthy();
-
-    push({ runId: 'run-1', kind: 'ANSWER', partId: 'a1', content: 'Raft needs a majority.', seq: 2 });
-    expect(await screen.findByText('Raft needs a majority.')).toBeTruthy();
-    expect(screen.queryByText('Raft needs')).toBeNull();
 
     act(() => callbacks.onMessage?.('Raft needs a majority. The crew is healthy.'));
     act(() => callbacks.onDone?.({ runId: 'run-1', conversationId: 'conv-1', intent: 'status' }));
 
-    expect(await screen.findByText('Raft needs a majority. The crew is healthy.')).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: /Stop the turn/i })).toBeNull());
-    expect(mockProgress).toHaveBeenCalledWith('run-1', 0);
+    expect(await screen.findByRole('button', { name: /Send message/i })).toBeTruthy();
+    await waitFor(() => expect(mockProgress).toHaveBeenCalledWith('run-1', 0));
   });
 
   it('stops the turn through the server cancel path once the run id is known', async () => {
+    holdStream();
     renderPage();
-    await screen.findByText('Crew deployed.');
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
     const listCallsBeforeStop = mockList.mock.calls.length;
 
-    fireEvent.change(screen.getByPlaceholderText(/Ask Aria anything/), { target: { value: 'Long job' } });
-    fireEvent.click(screen.getByRole('button', { name: /Send message/i }));
-    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
-
+    await sendText('Long job');
     const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
     act(() => callbacks.onThinking?.('run-42'));
     fireEvent.click(await screen.findByRole('button', { name: /Stop the turn/i }));
 
-    expect(mockCancel).toHaveBeenCalledWith('run-42');
-    await waitFor(() => expect(screen.getByRole('button', { name: /Send message/i })).toBeTruthy());
+    await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('run-42'));
     // The stopped turn's conversation exists server-side, so the switcher must
     // refresh once the cancel settles instead of waiting for a page reload.
     await waitFor(() => expect(mockList.mock.calls.length).toBeGreaterThan(listCallsBeforeStop));
   });
 
+  it('keeps a failed server-side cancel visible in the state notice', async () => {
+    holdStream();
+    mockCancel.mockRejectedValueOnce(new Error('cancel refused'));
+    renderPage();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+
+    await sendText('Long job');
+    const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
+    act(() => callbacks.onThinking?.('run-7'));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop the turn/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('cancel refused');
+  });
+
   it('deletes a conversation only after confirmation and then starts a new chat', async () => {
     mockDelete.mockResolvedValue(undefined);
     renderPage();
-    await screen.findByText('Crew deployed.');
+    await screen.findByRole('button', { name: 'Deploy the crew' });
 
     fireEvent.click(screen.getByRole('button', { name: /Delete conversation Deploy the crew/i }));
     expect(await screen.findByRole('dialog')).toBeTruthy();
@@ -169,17 +204,9 @@ describe('MainChatPage', () => {
     mockTimeline.mockResolvedValue([
       { role: 'user', content: 'Check runs', timestamp: '2026-11-21T09:00:00Z', runId: 'run-9' },
     ]);
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/aria?conversationId=conv-2']}>
-          <MainChatPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    renderPage('/aria?conversationId=conv-2');
 
-    expect(await screen.findByText('Check runs', { selector: '.ai-msg-text' })).toBeTruthy();
-    expect(mockTimeline).toHaveBeenCalledWith('conv-2');
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-2'));
     expect(mockLatest).not.toHaveBeenCalled();
   });
 
@@ -194,11 +221,11 @@ describe('MainChatPage', () => {
         : [{ role: 'assistant', content: 'Crew deployed.', timestamp: '2026-11-20T10:00:00Z', runId: 'run-0' }]
     ));
     renderPage();
-    await screen.findByText('Crew deployed.');
+    await screen.findByRole('button', { name: 'Check runs' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Check runs' }));
 
-    expect(await screen.findByText('Check runs', { selector: '.ai-msg-text' })).toBeTruthy();
-    expect(mockTimeline).toHaveBeenCalledWith('conv-2');
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-2'));
+    expect(await screen.findByRole('button', { name: 'Check runs' })).toBeTruthy();
   });
 });

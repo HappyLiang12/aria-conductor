@@ -100,12 +100,14 @@ test.describe('Aria main chat', () => {
     await page.goto('/aria');
     await expect(page.locator('.mc-stack')).toContainText('Crew deployed.');
 
-    await page.fill('.mc-compose .ai-compose-input', 'Send me a status');
-    await page.click('.mc-compose .ai-action-btn');
+    // The thread owns the transcript markup, so composer interactions go
+    // through the roles/labels the page's composer exposes.
+    await page.getByRole('textbox').fill('Send me a status');
+    await page.getByRole('button', { name: 'Send message' }).click();
 
     await expect(page.locator('.mc-stack')).toContainText('Send me a status');
     await expect(page.locator('.mc-stack')).toContainText('All good. The crew is healthy.');
-    await expect(page.locator('.mc-compose .ai-action-btn')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible();
   });
 
   test('deletes a conversation and returns to an empty new chat', async ({ page }) => {

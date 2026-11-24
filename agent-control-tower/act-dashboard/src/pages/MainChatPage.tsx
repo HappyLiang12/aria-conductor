@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { streamMessage, type StreamError } from '../api/aria';
+import { useAui, useAuiState, type AssistantClient, type MessageState, type ThreadMessageLike } from '@assistant-ui/react';
+import { streamMessage } from '../api/aria';
 import {
   deleteConversation,
   getConversationTimeline,
@@ -13,23 +14,25 @@ import { cancelRun } from '../api/runs';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import SlashCommandMenu from '../components/SlashCommandMenu';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { StateNotice } from '../components/StateNotice';
 import { ConversationSidebar } from '../components/main-chat/ConversationSidebar';
-import { ProgressTimeline, StepsDisclosure } from '../components/main-chat/ProgressTimeline';
+import { ProgressTimeline } from '../components/main-chat/ProgressTimeline';
 import { useLiveProgress } from '../components/main-chat/useLiveProgress';
-import { renderMarkdown } from '../utils/markdown';
-import { formatTimestamp } from '../utils/formatTime';
+import { createAriaAdapter, type AriaAdapter } from '../chat/ariaAdapter';
+import { AriaRuntimeProvider } from '../chat/AriaRuntimeProvider';
+import { AriaThread } from '../chat/AriaThread';
 import '../styles/main-chat.css';
 
 const CLIENT_TIMEOUT_MS = 600_000; // Matches the backend SSE timeout (aria.sse.timeout.ms).
 
-interface ChatEntry {
-  id: string;
-  role: 'user' | 'assistant';
+interface ChatHistoryRow {
+  role: string;
   content: string;
-  timestamp: string;
-  runId?: string;
-  error?: boolean;
-  retryPrompt?: string;
+}
+
+interface Notice {
+  title: string;
+  message: string;
 }
 
 function entryId(): string {
@@ -38,25 +41,73 @@ function entryId(): string {
     : `entry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function errorCopy(error: StreamError): string {
-  if (typeof error === 'string') return error;
-  const run = error.runId ? ` (Run ${error.runId.slice(0, 8)})` : '';
-  if (error.turnFailed) {
-    return `This turn failed${run}: ${error.reason || error.message || 'the backend reported no reason'}`;
-  }
-  return error.message || 'The stream ended with an error.';
+/**
+ * The prior-turn context of one request. The runtime appends the operator's
+ * message before the adapter opens the stream and the turn travels as
+ * `message`, so the trailing user row is never part of `history`.
+ */
+function historyRows(messages: readonly MessageState[]): ChatHistoryRow[] {
+  const rows = messages.map((message) => ({
+    role: message.role,
+    content: message.content
+      .filter((part) => part.type === 'text')
+      .map((part) => (part.type === 'text' ? part.text : ''))
+      .join('\n'),
+  }));
+  const last = rows[rows.length - 1];
+  return last && last.role === 'user' ? rows.slice(0, -1) : rows;
 }
 
-function fromTimeline(timeline: TimelineEntry[]): ChatEntry[] {
-  return timeline.map((entry, index) => ({
+/**
+ * The persisted conversation as assistant-ui seed messages. A recorded error
+ * stays an errored message, so the thread renders it through its own error
+ * surface instead of pretending the turn succeeded.
+ */
+function toSeedMessages(entries: TimelineEntry[]): ThreadMessageLike[] {
+  return entries.map((entry, index) => ({
     id: `${entry.runId || 'timeline'}-${index}`,
     role: entry.role === 'user' ? 'user' : 'assistant',
     content: entry.content ?? '',
-    timestamp: entry.timestamp,
-    runId: entry.runId,
-    error: entry.error,
-    retryPrompt: entry.retryPrompt,
+    createdAt: new Date(entry.timestamp),
+    // assistant-ui only carries a status on the assistant side.
+    ...(entry.role === 'user'
+      ? {}
+      : {
+        status: entry.error
+          ? { type: 'incomplete', reason: 'error' } as const
+          : { type: 'complete', reason: 'stop' } as const,
+      }),
   }));
+}
+
+/**
+ * Bridges the runtime the provider owns to the page: the page's composer sends
+ * through `auiRef`, and the thread's run state / history flow back out. It has
+ * to live inside the provider, so it is rendered as a child, not a prop.
+ */
+function RuntimeBridge({ auiRef, onThread, onHistory }: {
+  auiRef: { current: AssistantClient | null };
+  onThread: (running: boolean, messageCount: number) => void;
+  onHistory: (rows: ChatHistoryRow[]) => void;
+}) {
+  const aui = useAui();
+  const running = useAuiState((state) => state.thread.isRunning);
+  const messages = useAuiState((state) => state.thread.messages);
+
+  useEffect(() => {
+    auiRef.current = aui;
+    return () => { auiRef.current = null; };
+  }, [aui, auiRef]);
+
+  useEffect(() => {
+    onThread(running, messages.length);
+  }, [messages.length, onThread, running]);
+
+  useEffect(() => {
+    onHistory(historyRows(messages));
+  }, [messages, onHistory]);
+
+  return null;
 }
 
 export default function MainChatPage() {
@@ -65,13 +116,21 @@ export default function MainChatPage() {
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [entries, setEntries] = useState<ChatEntry[]>([]);
+  // A new chat needs a conversation id before the adapter opens its request; the
+  // backend takes the id it is given, so this draft id becomes the real one.
+  const [draftId, setDraftId] = useState(entryId);
+  const [entries, setEntries] = useState<TimelineEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // Bumped whenever persisted history changes, so the provider remounts and the
+  // runtime re-seeds from it (initialMessages is a mount-time value).
+  const [historyEpoch, setHistoryEpoch] = useState(0);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [messageCount, setMessageCount] = useState(0);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [finalReceived, setFinalReceived] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => typeof window !== 'undefined' && window.innerWidth <= 900,
   );
@@ -79,17 +138,21 @@ export default function MainChatPage() {
 
   const { progress, replay } = useLiveProgress(activeRunId);
 
-  const abortRef = useRef<AbortController | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancelledRef = useRef(false);
+  const auiRef = useRef<AssistantClient | null>(null);
+  const adapterRef = useRef<AriaAdapter | null>(null);
+  const historyRef = useRef<ChatHistoryRow[]>([]);
+  const conversationIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const pendingSkillIdRef = useRef<string | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadTokenRef = useRef(0);
   const lastSearchRef = useRef<string | null>(null);
-  const stackRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const adoptRef = useRef<(id: string) => void>(() => {});
+  const wasRunningRef = useRef(false);
 
   const slash = useSlashCommands(true);
-  const pendingSkillId = slash.pendingSkill?.id;
+  const pendingSkillId = slash.pendingSkill?.id ?? null;
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -103,20 +166,39 @@ export default function MainChatPage() {
     }
   }, []);
 
+  /** Adopt the id the first turn was sent under, once, without reloading history. */
+  const adoptConversation = useCallback((id: string) => {
+    if (conversationIdRef.current) return;
+    conversationIdRef.current = id;
+    setConversationId(id);
+    lastSearchRef.current = new URLSearchParams({ conversationId: id }).toString();
+    setSearchParams({ conversationId: id }, { replace: true });
+  }, [setSearchParams]);
+
+  useEffect(() => {
+    adoptRef.current = adoptConversation;
+  }, [adoptConversation]);
+
   const openConversation = useCallback(async (id: string) => {
     const token = ++loadTokenRef.current;
+    conversationIdRef.current = id;
     setConversationId(id);
+    lastSearchRef.current = new URLSearchParams({ conversationId: id }).toString();
     setSearchParams({ conversationId: id }, { replace: true });
     setHistoryLoading(true);
     setHistoryError(null);
+    setNotice(null);
+    setEntries([]);
     try {
       const timeline = await getConversationTimeline(id);
       if (token !== loadTokenRef.current) return;
-      setEntries(fromTimeline(timeline));
+      setEntries(timeline);
+      setHistoryEpoch((value) => value + 1);
     } catch (err) {
       if (token !== loadTokenRef.current) return;
       setHistoryError(err instanceof Error ? err.message : String(err));
       setEntries([]);
+      setHistoryEpoch((value) => value + 1);
     } finally {
       if (token === loadTokenRef.current) setHistoryLoading(false);
     }
@@ -124,11 +206,21 @@ export default function MainChatPage() {
 
   const startNewChat = useCallback(() => {
     if (busy) return;
+    conversationIdRef.current = null;
+    activeRunIdRef.current = null;
     setConversationId(null);
+    setDraftId(entryId());
+    lastSearchRef.current = '';
     setSearchParams({}, { replace: true });
     setEntries([]);
+    setHistoryEpoch((value) => value + 1);
     setHistoryError(null);
+    setNotice(null);
     setInput('');
+    setActiveRunId(null);
+    setMessageCount(0);
+    setFinalReceived(false);
+    historyRef.current = [];
   }, [busy, setSearchParams]);
 
   useEffect(() => {
@@ -164,15 +256,9 @@ export default function MainChatPage() {
     if (current === lastSearchRef.current) return;
     lastSearchRef.current = current;
     const requested = searchParams.get('conversationId');
-    if (!requested || requested === conversationId || busy) return;
+    if (!requested || requested === conversationIdRef.current || busy) return;
     void openConversation(requested);
-  }, [busy, conversationId, openConversation, searchParams]);
-
-  useEffect(() => {
-    const stack = stackRef.current;
-    if (!stack) return;
-    stack.scrollTop = stack.scrollHeight;
-  }, [entries, progress, busy]);
+  }, [busy, openConversation, searchParams]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -182,137 +268,130 @@ export default function MainChatPage() {
   }, [input]);
 
   useEffect(() => () => {
-    abortRef.current?.abort();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
+
+  /**
+   * One turn's SSE request, wrapped so the page keeps what the adapter does not
+   * expose: the run id (server cancel + live progress) and the skill the
+   * operator chose from the slash menu.
+   */
+  const trackedStream = useCallback<typeof streamMessage>(
+    (targetId, text, history, callbacks, signal, options) => {
+      const skillId = options?.skillId ?? pendingSkillIdRef.current ?? undefined;
+      // Consumed by this turn only; a refused send must not leak the skill on.
+      pendingSkillIdRef.current = null;
+      return streamMessage(
+        targetId,
+        text,
+        history,
+        {
+          ...callbacks,
+          onThinking: (runId) => {
+            if (runId) {
+              activeRunIdRef.current = runId;
+              setActiveRunId(runId);
+            }
+            callbacks.onThinking?.(runId);
+          },
+          onMessage: (content) => {
+            setFinalReceived(true);
+            callbacks.onMessage?.(content);
+          },
+          onDone: (data) => {
+            if (data?.conversationId) adoptRef.current(data.conversationId);
+            callbacks.onDone?.(data);
+          },
+        },
+        signal,
+        { ...options, skillId },
+      );
+    },
+    [],
+  );
+
+  const adapterId = conversationId ?? draftId;
+  const adapter = useMemo(
+    () => createAriaAdapter({
+      conversationId: adapterId,
+      getHistory: () => historyRef.current,
+      stream: trackedStream,
+    }),
+    [adapterId, trackedStream],
+  );
+
+  useEffect(() => {
+    adapterRef.current = adapter;
+  }, [adapter]);
+
+  const handleHistory = useCallback((rows: ChatHistoryRow[]) => {
+    historyRef.current = rows;
+  }, []);
+
+  const handleThread = useCallback((running: boolean, count: number) => {
+    setBusy(running);
+    setMessageCount(count);
+    if (running) {
+      // Every message change re-reports the same run; the client timeout is one
+      // budget for the whole turn, not one per frame.
+      if (wasRunningRef.current) return;
+      wasRunningRef.current = true;
+      setFinalReceived(false);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      const turn = adapterRef.current;
+      timeoutRef.current = setTimeout(() => {
+        turn?.cancel();
+        setNotice({
+          title: 'No reply from Aria',
+          message: "No reply after 10 minutes. The run may still be alive in the background — check the Runs page.",
+        });
+      }, CLIENT_TIMEOUT_MS);
+      return;
+    }
+    wasRunningRef.current = false;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    const runId = activeRunIdRef.current;
+    activeRunIdRef.current = null;
+    setActiveRunId(null);
+    if (runId) void replay(runId);
+    void refreshConversations();
+  }, [refreshConversations, replay]);
 
   const send = useCallback((rawText: string, skillIdOverride?: string) => {
     const text = rawText.trim();
     if (!text || busy) return;
+    const composer = auiRef.current?.thread.composer();
+    if (!composer) return;
 
-    const skillId = skillIdOverride ?? pendingSkillId;
-    const history = entries
-      .filter((entry) => !entry.error)
-      .map((entry) => ({ role: entry.role, content: entry.content }));
-    const targetConversationId = conversationId || entryId();
-    if (!conversationId) {
-      setConversationId(targetConversationId);
-      setSearchParams({ conversationId: targetConversationId }, { replace: true });
-    }
+    pendingSkillIdRef.current = skillIdOverride ?? pendingSkillId;
+    composer.setText(text);
+    composer.send();
 
-    abortRef.current?.abort();
-    cancelledRef.current = false;
-    activeRunIdRef.current = null;
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setEntries((prev) => [
-      ...prev,
-      { id: entryId(), role: 'user', content: text, timestamp: new Date().toISOString() },
-    ]);
     setInput('');
-    setBusy(true);
-    setActiveRunId(null);
+    setNotice(null);
     setFinalReceived(false);
     slash.clearSkill();
-
-    void streamMessage(
-      targetConversationId,
-      text,
-      history,
-      {
-        onThinking: (runId) => {
-          if (!runId) return;
-          activeRunIdRef.current = runId;
-          setActiveRunId(runId);
-        },
-        onMessage: (content) => {
-          setFinalReceived(true);
-          const runId = activeRunIdRef.current ?? undefined;
-          setEntries((prev) => [
-            ...prev,
-            {
-              id: entryId(),
-              role: 'assistant',
-              content: content || 'No response received.',
-              timestamp: new Date().toISOString(),
-              runId,
-            },
-          ]);
-        },
-        onDone: (data) => {
-          if (timeoutRef.current) clearTimeout(timeoutRef.current);
-          if (data?.conversationId) {
-            setConversationId((prev) => prev || data.conversationId);
-          }
-          if (data?.runId) {
-            void replay(data.runId);
-          }
-          setBusy(false);
-          setActiveRunId(null);
-          void refreshConversations();
-        },
-        onError: (error) => {
-          if (cancelledRef.current) return;
-          if (timeoutRef.current) clearTimeout(timeoutRef.current);
-          setEntries((prev) => [
-            ...prev,
-            {
-              id: entryId(),
-              role: 'assistant',
-              content: errorCopy(error),
-              timestamp: new Date().toISOString(),
-              runId: typeof error === 'string' ? undefined : error.runId,
-              error: true,
-              retryPrompt: text,
-            },
-          ]);
-          setBusy(false);
-          setActiveRunId(null);
-        },
-      },
-      controller.signal,
-      { isCancelled: () => cancelledRef.current, skillId },
-    );
-
-    timeoutRef.current = setTimeout(() => {
-      controller.abort();
-      setBusy(false);
-      setActiveRunId(null);
-      setEntries((prev) => [
-        ...prev,
-        {
-          id: entryId(),
-          role: 'assistant',
-          content: 'No reply after 10 minutes. The run may still be alive in the background — check the Runs page.',
-          timestamp: new Date().toISOString(),
-          error: true,
-          retryPrompt: text,
-        },
-      ]);
-    }, CLIENT_TIMEOUT_MS);
-  }, [busy, conversationId, entries, pendingSkillId, refreshConversations, replay, setSearchParams, slash]);
+    if (!conversationIdRef.current) adoptRef.current(draftId);
+  }, [busy, draftId, pendingSkillId, slash]);
 
   const stop = useCallback(() => {
-    cancelledRef.current = true;
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    abortRef.current?.abort();
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    // The adapter owns the one SSE request this turn opened.
+    adapterRef.current?.cancel();
     const runId = activeRunIdRef.current;
-    setBusy(false);
-    setActiveRunId(null);
     if (runId) {
       void cancelRun(runId)
         .catch((err) => {
-          setEntries((prev) => [
-            ...prev,
-            {
-              id: entryId(),
-              role: 'assistant',
-              content: `The server-side cancel could not be confirmed: ${err instanceof Error ? err.message : String(err)}`,
-              timestamp: new Date().toISOString(),
-              error: true,
-            },
-          ]);
+          setNotice({
+            title: 'Stop not confirmed',
+            message: `The server-side cancel could not be confirmed: ${err instanceof Error ? err.message : String(err)}`,
+          });
         })
         .finally(() => {
           // The stopped turn already has a server-side conversation; refresh the
@@ -335,12 +414,12 @@ export default function MainChatPage() {
     if (!id) return;
     try {
       await deleteConversation(id);
-      if (id === conversationId) startNewChat();
+      if (id === conversationIdRef.current) startNewChat();
       await refreshConversations();
     } catch (err) {
       setListError(err instanceof Error ? err.message : String(err));
     }
-  }, [conversationId, pendingDelete, refreshConversations, startNewChat]);
+  }, [pendingDelete, refreshConversations, startNewChat]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (slash.open) {
@@ -364,10 +443,18 @@ export default function MainChatPage() {
     return active?.title ?? (conversationId ? 'Conversation' : 'New chat');
   }, [conversationId, conversations]);
 
+  const initialMessages = useMemo(() => toSeedMessages(entries), [entries]);
+  const threadKey = `${adapterId}#${historyEpoch}`;
+
   const isLive = Boolean(busy && activeRunId && progress && progress.runId === activeRunId);
   const liveItems = isLive
     ? progress!.items.filter((item) => !(finalReceived && item.kind === 'answer'))
     : [];
+  const indicator = isLive && liveItems.length > 0
+    ? <ProgressTimeline items={liveItems} />
+    : undefined;
+
+  const showEmpty = !historyLoading && entries.length === 0 && messageCount === 0;
 
   return (
     <div className={`mc-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
@@ -384,7 +471,10 @@ export default function MainChatPage() {
         />
       )}
 
-      <section className="mc-main" aria-label="Aria chat">
+      {/* pb-24 keeps the composer clear of the shell's floating Aria button
+          (56px + 24px gutter, fixed bottom-right), which otherwise covers the
+          send control on narrow viewports. */}
+      <section className="mc-main pb-24" aria-label="Aria chat">
         <header className="mc-header">
           <button
             type="button"
@@ -400,132 +490,91 @@ export default function MainChatPage() {
           </div>
         </header>
 
-        <div className="mc-stack" ref={stackRef} aria-live="polite" aria-relevant="additions">
+        <AriaRuntimeProvider
+          key={threadKey}
+          adapter={adapter}
+          initialMessages={initialMessages}
+        >
+          <RuntimeBridge auiRef={auiRef} onThread={handleThread} onHistory={handleHistory} />
+
           {historyError && <div className="mc-history-error" role="alert">{historyError}</div>}
+          {notice && <StateNotice kind="error" title={notice.title} message={notice.message} />}
+
           {historyLoading ? (
-            <div className="mc-sidebar-empty">Loading conversation…</div>
-          ) : entries.length === 0 && !busy ? (
-            <div className="mc-empty">
-              <div className="ai-empty-eyebrow">— operator copilot</div>
-              <div className="ai-empty-title">Ask Aria anything.</div>
-              <div className="ai-empty-sub">
-                I can brief you on agents, runs, approvals and the knowledge base — and I can act on what you ask.
+            <div className="mc-stack">
+              <div className="mc-sidebar-empty">Loading conversation…</div>
+            </div>
+          ) : showEmpty ? (
+            <div className="mc-stack">
+              <div className="mc-empty">
+                <div className="ai-empty-eyebrow">— operator copilot</div>
+                <div className="ai-empty-title">Ask Aria anything.</div>
+                <div className="ai-empty-sub">
+                  I can brief you on agents, runs, approvals and the knowledge base — and I can act on what you ask.
+                </div>
               </div>
             </div>
           ) : (
-            entries.map((entry) => (
-              <div key={entry.id} className={`ai-msg ai-msg-${entry.role}`}>
-                <div className="ai-msg-avatar" aria-hidden="true">
-                  {entry.role === 'user' ? 'You' : 'A'}
-                </div>
-                <div className="ai-msg-body">
-                  <div className={`ai-msg-bubble${entry.error ? ' ai-msg-bubble-error' : ''}`}>
-                    {entry.role === 'assistant' ? (
-                      <div
-                        className="ai-msg-md markdown-content"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }}
-                      />
-                    ) : (
-                      <div className="ai-msg-text">{entry.content}</div>
-                    )}
-                  </div>
-                  <div className="ai-msg-meta">
-                    {entry.role === 'user' ? 'You' : 'Aria'} · {formatTimestamp(entry.timestamp)}
-                    {entry.error && entry.retryPrompt && !busy && (
-                      <button
-                        type="button"
-                        className="ai-retry"
-                        onClick={() => send(entry.retryPrompt ?? '')}
-                      >
-                        Retry
-                      </button>
-                    )}
-                    {entry.role === 'assistant' && entry.runId && !entry.error && entry.runId !== activeRunId && (
-                      <StepsDisclosure
-                        runId={entry.runId}
-                        liveSteps={progress && progress.runId === entry.runId
-                          ? progress.items.filter((item) => item.kind === 'tool')
-                          : undefined}
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
+            <AriaThread indicator={indicator} />
           )}
 
-          {busy && (
-            <div className="ai-msg ai-msg-assistant">
-              <div className="ai-msg-avatar" aria-hidden="true">A</div>
-              <div className="ai-msg-body">
-                {isLive ? (
-                  <ProgressTimeline items={liveItems} />
-                ) : (
-                  <div className="ai-msg-bubble ai-msg-bubble-thinking">
-                    <div className="typing-indicator" aria-label="Aria is thinking">
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mc-compose-wrap">
-          <div className="ai-compose mc-compose">
-            {slash.open && (
-              <SlashCommandMenu
-                items={slash.items}
-                activeIndex={slash.activeIndex}
-                onHover={(index) => slash.move(index - slash.activeIndex)}
-                onSelect={(item) => { slash.choose(item); setInput(''); }}
+          <div className="mc-compose-wrap">
+            <div className="ai-compose mc-compose">
+              {slash.open && (
+                <SlashCommandMenu
+                  items={slash.items}
+                  activeIndex={slash.activeIndex}
+                  onHover={(index) => slash.move(index - slash.activeIndex)}
+                  onSelect={(item) => {
+                    slash.choose(item);
+                    pendingSkillIdRef.current = item.id;
+                    setInput('');
+                  }}
+                />
+              )}
+              {slash.pendingSkill && !slash.open && (
+                <div className="ai-skill-chip">
+                  <span>/{slash.pendingSkill.name}</span>
+                  <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
+                </div>
+              )}
+              <textarea
+                ref={textareaRef}
+                className="ai-compose-input"
+                value={input}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  slash.onInputChange(event.target.value, event.target.selectionStart ?? event.target.value.length);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask Aria anything…  (type / for skills)"
+                rows={2}
+                disabled={busy}
+                aria-controls={slash.open ? 'slash-command-listbox' : undefined}
               />
-            )}
-            {slash.pendingSkill && !slash.open && (
-              <div className="ai-skill-chip">
-                <span>/{slash.pendingSkill.name}</span>
-                <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
-              </div>
-            )}
-            <textarea
-              ref={textareaRef}
-              className="ai-compose-input"
-              value={input}
-              onChange={(event) => {
-                setInput(event.target.value);
-                slash.onInputChange(event.target.value, event.target.selectionStart ?? event.target.value.length);
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask Aria anything…  (type / for skills)"
-              rows={2}
-              disabled={busy}
-              aria-controls={slash.open ? 'slash-command-listbox' : undefined}
-            />
-            {busy ? (
-              <button type="button" className="ai-cancel-btn" onClick={stop} aria-label="Stop the turn">
-                <span aria-hidden="true">■</span>
-                <span>Stop</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ai-action-btn"
-                onClick={() => send(input)}
-                disabled={!input.trim()}
-                aria-label="Send message"
-              >
-                <span className="ai-action-glyph" aria-hidden="true">↗</span>
-                <span className="ai-action-label">Send</span>
-              </button>
-            )}
+              {busy ? (
+                <button type="button" className="ai-cancel-btn" onClick={stop} aria-label="Stop the turn">
+                  <span aria-hidden="true">■</span>
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ai-action-btn"
+                  onClick={() => send(input)}
+                  disabled={!input.trim()}
+                  aria-label="Send message"
+                >
+                  <span className="ai-action-glyph" aria-hidden="true">↗</span>
+                  <span className="ai-action-label">Send</span>
+                </button>
+              )}
+            </div>
+            <div className="ai-hint mc-hint">
+              Aria streams live · acts on the live system · review approvals before destructive moves.
+            </div>
           </div>
-          <div className="ai-hint mc-hint">
-            Aria streams live · acts on the live system · review approvals before destructive moves.
-          </div>
-        </div>
+        </AriaRuntimeProvider>
       </section>
 
       <ConfirmDialog

@@ -168,6 +168,9 @@ export function startSession(options: SessionOptions): LiveSession {
   let configured = false;
   let closing = false;
   let fataled = false;
+  /** Consecutive provider-initiated closes; a healthy gap starts the count over. */
+  let silentReopens = 0;
+  let lastSilentReopenAt = 0;
   let firstOpenedAt: number | null = null;
   let reopenTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingImage: string | null = null;
@@ -430,8 +433,8 @@ export function startSession(options: SessionOptions): LiveSession {
           settle('socket closed during the handshake');
           return;
         }
-        if (socket === ws && !closing) {
-          fail(1011);
+        if (socket === ws && !closing && !fataled) {
+          providerClosed();
         }
       });
     });
@@ -469,6 +472,29 @@ export function startSession(options: SessionOptions): LiveSession {
     const handleAgeSec = Math.max(0, Math.round((clock() - openedAt) / 1000));
     emitEvent(translator.resumedEvent(handleAgeSec));
     scheduleReopen();
+  };
+
+  /**
+   * The provider closed a configured session by itself (observed at ~300 s on the SG
+   * endpoint). The phone's socket never closed, so this is not its failure: rebuild the
+   * provider session in place, reseed, and keep the phone's live state untouched. A
+   * session that keeps dying right after it opens is a real failure: three consecutive
+   * quick reopens, then 1011; a failed handshake is 4012 (spec X9).
+   */
+  const providerClosed = () => {
+    const now = clock();
+    silentReopens = now - lastSilentReopenAt < 10_000 ? silentReopens + 1 : 1;
+    lastSilentReopenAt = now;
+    if (silentReopens > 3) {
+      fail(1011);
+      return;
+    }
+    configured = false;
+    resetProviderState();
+    const old = socket;
+    socket = null;
+    teardown(old);
+    void open().catch(() => fail(4012));
   };
 
   const startup = (async () => {

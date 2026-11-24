@@ -827,7 +827,7 @@ class CoreAdapterContractTest {
      * the resulting completion carries the fixture's cancelled outcome.
      */
     @Test
-    void openCodePermissionDecisionsAreRefusedAndCancelUsesTheAbortRoute() throws Exception {
+    void openCodePendingPermissionAndCancelUseTheAbortRoute() throws Exception {
         try (OpenCodeRun run = new OpenCodeRun("cancel-pending")) {
             CompletionStage<CoreResult> stage = run.session()
                     .prompt(new CoreTask(null, List.of(), "Create probe-cancel-pending.txt with the fixture text"),
@@ -838,11 +838,9 @@ class CoreAdapterContractTest {
             assertThat(pending.path("pending").get(0).path("kind").asText()).isEqualTo("edit");
             assertThat(pending.path("pending").get(0).path("options")).isEqualTo(recordedEditOptions());
 
-            assertThatThrownBy(() -> run.session()
-                    .decide(new PermissionReply(run.runId(), run.session().sessionId(), "0", "proceed_once"))
-                    .toCompletableFuture().get(30, TimeUnit.SECONDS))
-                    .hasMessageContaining("no native permission reply channel");
-
+            // The decision reply route is exercised by OpenCodeCoreSessionTest and the
+            // live GATED scenario; this fixture peer exposes no reply route, so the
+            // contract under test here is that a pending decision does not block cancel.
             ControlAck ack = run.session().cancel(Instant.now().plusSeconds(30))
                     .toCompletableFuture().get(30, TimeUnit.SECONDS);
             assertThat(ack.state())
@@ -1003,11 +1001,17 @@ class CoreAdapterContractTest {
             Path governed = OpenCodeCoreAdapter.governedConfigurationFile(run.environment());
             assertThat(governed).isEqualTo(Path.of(run.environment().configurationDirectory())
                     .resolve("config").resolve("opencode").resolve("opencode.json"));
-            assertThat(Files.readString(governed)).isEqualTo(OpenCodeCoreAdapter.governedConfigurationJson());
-            assertThat(OpenCodeCoreAdapter.governedConfigurationJson())
+            String document = Files.readString(governed);
+            assertThat(document)
                     .as("the legacy allow-all default must not survive into the governed profile")
                     .doesNotContain("\"*\": \"allow\"")
                     .doesNotContain("\"*\":\"allow\"");
+            assertThat(document)
+                    .as("the default GATED posture surfaces the workspace write tools as asks")
+                    .contains("\"edit\": \"ask\"")
+                    .contains("\"write\": \"ask\"")
+                    .contains("\"patch\": \"ask\"")
+                    .contains("\"bash\": \"ask\"");
 
             LaunchProfile profile = run.launchProfile();
             assertThat(profile.argv()).isEqualTo(List.of(

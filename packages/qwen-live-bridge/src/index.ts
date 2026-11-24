@@ -249,7 +249,7 @@ async function main(): Promise<void> {
         defer(() => session?.toolResult(line.id, line.ok, line.output));
         return;
       case 'tower':
-        defer(() => session?.tower(line.text));
+        defer(() => session?.tower(line.text, line.mode));
         return;
       case 'mic':
         micOff = line.on === false;

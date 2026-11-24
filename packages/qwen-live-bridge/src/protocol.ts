@@ -98,6 +98,8 @@ export interface ToolResultLine {
 /** A TOWER injection: the model is told the result and speaks it as its own turn. */
 export interface TowerLine {
   type: 'tower';
+  /** Phase 4: `idle` waits for the current answer to finish; absent or `interrupt` is now. */
+  mode?: 'idle' | 'interrupt';
   text: string;
 }
 

@@ -1536,6 +1536,47 @@ describe('session: tools and TOWER', () => {
     await session.close();
   });
 
+  it('holds an idle TOWER until the current response ends, then asks once', async () => {
+    const fake = await fakeQwen();
+    const { session } = await open(fake);
+    fake.send(0, { type: 'response.created', response: { id: 'resp_1' } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.tower('[tower] Analyst 已完成：done', 'idle');
+    await new Promise((resolve) => setImmediate(resolve));
+    const before = fake.connections[0]!.messages.map((message) => message.type);
+    expect(before).not.toContain('conversation.item.create');
+    expect(before).not.toContain('response.create');
+
+    fake.send(0, { type: 'response.done', response: { status: 'completed' } });
+    await waitUntil(
+      () => fake.connections[0]!.messages.some((message) => message.type === 'response.create'),
+      'the idle tower',
+    );
+    const messages = fake.connections[0]!.messages;
+    expect(messages.at(-2)?.type).toBe('conversation.item.create');
+    expect(messages.at(-1)?.type).toBe('response.create');
+    await session.close();
+  });
+
+  it('interrupts an active response for a failure TOWER', async () => {
+    const fake = await fakeQwen();
+    const { session } = await open(fake);
+    fake.send(0, { type: 'response.created', response: { id: 'resp_1' } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.tower('[tower] Analyst 失敗：timeout', 'interrupt');
+    await waitUntil(
+      () => fake.connections[0]!.messages.some((message) => message.type === 'response.create'),
+      'the interrupt tower',
+    );
+    const types = fake.connections[0]!.messages.map((message) => message.type);
+    expect(types).toContain('response.cancel');
+    expect(types.at(-2)).toBe('conversation.item.create');
+    expect(types.at(-1)).toBe('response.create');
+    await session.close();
+  });
+
   it('cancels the live response on a phone barge-in', async () => {
     const fake = await fakeQwen();
     const { session } = await open(fake);

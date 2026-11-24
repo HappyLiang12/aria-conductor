@@ -98,6 +98,15 @@ public class LiveFrames {
      * text; a caller with nothing to say gets the state itself rather than a blank row.
      */
     static Map<String, Object> runEvent(UUID runId, String state, String summary) {
+        return runEvent(runId, state, summary, null);
+    }
+
+    /**
+     * The dispatched child run's progress (Phase 4): the same frame plus
+     * {@code origin:"dispatch"}, so the phone keys its run chip without confusing it with
+     * the turn's own run. The turn's frames keep the three-field shape.
+     */
+    static Map<String, Object> runEvent(UUID runId, String state, String summary, String origin) {
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("type", TYPE_RUN_EVENT);
         event.put("v", VERSION);
@@ -106,6 +115,9 @@ public class LiveFrames {
         }
         event.put("state", state);
         event.put("summary", summary == null || summary.isBlank() ? state : summary);
+        if (origin != null) {
+            event.put("origin", origin);
+        }
         return event;
     }
 
@@ -158,9 +170,22 @@ public class LiveFrames {
 
     /** A TOWER injection: the bridge turns it into a model turn of its own. */
     static Map<String, Object> tower(String text) {
+        return tower(text, null);
+    }
+
+    /**
+     * A TOWER message with its delivery mode (Phase 4): {@code idle} waits for the answer
+     * already streaming to finish, {@code interrupt} cancels it first. Absent (today's
+     * denials) keeps the immediate behaviour an old bridge implements.
+     */
+    static Map<String, Object> tower(String text, String mode) {
         Map<String, Object> injection = new LinkedHashMap<>();
         injection.put("type", TYPE_TOWER);
+        injection.put("v", VERSION);
         injection.put("text", text);
+        if (mode != null) {
+            injection.put("mode", mode);
+        }
         return injection;
     }
 

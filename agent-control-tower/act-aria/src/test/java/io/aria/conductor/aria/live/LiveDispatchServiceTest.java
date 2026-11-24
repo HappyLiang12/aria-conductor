@@ -15,8 +15,8 @@ class LiveDispatchServiceTest {
     @Test
     void aRunBelongsToOneSocketAndIsRemovedOnce() {
         LiveDispatchService service = new LiveDispatchService();
-        LiveSession one = new LiveSession("s1", null, null);
-        LiveSession two = new LiveSession("s2", null, null);
+        LiveSession one = new LiveSession("s1", null, null, null);
+        LiveSession two = new LiveSession("s2", null, null, null);
         UUID run = UUID.randomUUID();
 
         service.register(run, one, "Analyst");
@@ -37,7 +37,7 @@ class LiveDispatchServiceTest {
     void aMissingAgentNameIsAnEmptyStringNeverNull() {
         LiveDispatchService service = new LiveDispatchService();
         UUID run = UUID.randomUUID();
-        service.register(run, new LiveSession("s1", null, null), null);
+        service.register(run, new LiveSession("s1", null, null, null), null);
         assertThat(service.find(run)).get()
                 .extracting(LiveDispatchService.Dispatch::agentName).isEqualTo("");
     }

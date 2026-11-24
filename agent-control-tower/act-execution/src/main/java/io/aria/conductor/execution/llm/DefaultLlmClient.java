@@ -110,15 +110,6 @@ public class DefaultLlmClient implements LlmClient {
         }
     }
 
-    @Override
-    public reactor.core.publisher.Flux<String> stream(LlmRequest request) {
-        // Streaming via Java HttpClient is not yet supported;
-        // return an error flux so callers know it's unavailable.
-        log.warn("LLM streaming is not supported with Java HttpClient backend");
-        return reactor.core.publisher.Flux.error(
-                new UnsupportedOperationException("Streaming is not supported with the current HTTP client"));
-    }
-
     private String buildRequestBody(LlmRequest request, String model, int maxTokens) {
         try {
             ObjectNode body = objectMapper.createObjectNode();

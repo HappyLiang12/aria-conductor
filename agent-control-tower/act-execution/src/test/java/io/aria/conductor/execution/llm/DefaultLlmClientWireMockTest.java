@@ -28,7 +28,7 @@ import static org.mockito.Mockito.when;
  * port (0 — never a fixed port). Covers request construction (Bearer vs Azure api-key auth,
  * model/max_tokens/messages body), response parsing (content, usage, tool calls), the
  * empty-choices sentinel, HTTP error → {@link LlmHttpException} mapping with status+body, the
- * active-provider precedence over YAML config, and the unsupported streaming path.
+ * active-provider precedence over YAML config.
  */
 @WireMockTest(httpPort = 0)
 @ExtendWith(MockitoExtension.class)
@@ -155,11 +155,4 @@ class DefaultLlmClientWireMockTest {
                 .withoutHeader("Authorization"));
     }
 
-    @Test
-    void stream_isUnsupported_andReturnsErrorFlux() {
-        DefaultLlmClient client = yamlClient();
-
-        assertThatThrownBy(() -> client.stream(request()).blockFirst())
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
 }

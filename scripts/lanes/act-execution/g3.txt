@@ -1,5 +1,5 @@
 # act-execution shard fragment 3 of 4 - a surefire includes file (one FQCN per line).
-# cost=15.12s  classes=31
+# cost=15.12s  classes=30
 # measured at 6370549 on Happy-Mac (MacBook Pro 14, Apple M5 Pro) (Apple M5 Pro 6P+12E (18 logical), 64GB unified)
 # by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
 
@@ -22,7 +22,6 @@ io.aria.conductor.execution.listener.ReportStepTreeGuardTest
 io.aria.conductor.execution.listener.RunExecutionListenerTest
 io.aria.conductor.execution.listener.WorkflowAutoCaptureListenerTest
 io.aria.conductor.execution.listener.WorkflowAutoChainerQaTreeGuardTest
-io.aria.conductor.execution.mcp.SandboxHostResolverTest
 io.aria.conductor.execution.pipeline.ToolRiskResolverTest
 io.aria.conductor.execution.runtime.AgentExecutionPolicyTest
 io.aria.conductor.execution.runtime.CoreRuntimeConfigurationTest

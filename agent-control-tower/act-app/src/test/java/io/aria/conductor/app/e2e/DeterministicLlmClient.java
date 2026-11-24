@@ -4,7 +4,6 @@ import io.aria.conductor.execution.llm.LlmClient;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmRequest;
 import io.aria.conductor.execution.llm.LlmResponse;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Objects;
@@ -110,14 +109,6 @@ public final class DeterministicLlmClient implements LlmClient {
                     + " reaches an external provider. Unmatched request: " + render(request));
         }
         return response;
-    }
-
-    @Override
-    public Flux<String> stream(LlmRequest request) {
-        // Eager: an unmatched stream fails at call time with the same exact
-        // diagnostic as complete(), never as an empty or partial stream.
-        LlmResponse response = complete(request);
-        return Flux.just(response.content());
     }
 
     /**

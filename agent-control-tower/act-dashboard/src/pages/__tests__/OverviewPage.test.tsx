@@ -4,9 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import OverviewPage from '../OverviewPage';
 import type { DrawerState } from '../../components/DrawerContext';
 import type { DecisionRow } from '../../hooks/useDecisionQueue';
+import type { DashboardSummary } from '../../types';
 import { useDecisionQueue } from '../../hooks/useDecisionQueue';
 import { useAttentionQueue } from '../../hooks/useAttentionQueue';
 import { approveApproval, rejectApproval } from '../../api/approvals';
+import { getSummary } from '../../api/dashboard';
 
 vi.mock('../../components/ExecutiveSummary', () => ({ default: () => <div data-testid="exec-summary" /> }));
 vi.mock('../../components/KanbanBoard', () => ({ default: () => <div data-testid="kanban-board" /> }));
@@ -25,6 +27,7 @@ vi.mock('../../api/approvals', () => ({
   rejectApproval: vi.fn(),
   answerAsk: vi.fn(),
 }));
+vi.mock('../../api/dashboard', () => ({ getSummary: vi.fn() }));
 
 let mockState: DrawerState = {
   taskDrawer: { open: false, itemId: null },
@@ -43,6 +46,20 @@ vi.mock('../../components/DrawerContext', async (importOriginal) => {
 
 const decisionMock = vi.mocked(useDecisionQueue);
 const attentionMock = vi.mocked(useAttentionQueue);
+const summaryMock = vi.mocked(getSummary);
+
+function summary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
+  return {
+    activeAgents: 3,
+    healthyAgents: 2,
+    degradedAgents: 1,
+    runningRuns: 2,
+    pendingApprovals: 1,
+    totalTokensBurned: 4200,
+    runsWithoutUsage: 0,
+    ...overrides,
+  };
+}
 
 function setQueues(
   decision: Partial<ReturnType<typeof useDecisionQueue>> = {},
@@ -73,6 +90,8 @@ beforeEach(() => {
   };
   openTaskDrawer.mockReset();
   openReviewMode.mockReset();
+  summaryMock.mockReset();
+  summaryMock.mockResolvedValue(summary());
   setQueues();
 });
 
@@ -87,6 +106,44 @@ describe('OverviewPage decision-first layout', () => {
     expect(screen.getByTestId('agent-team')).toBeInTheDocument();
     expect(screen.queryByTestId('review-queue')).not.toBeInTheDocument();
     expect(container.querySelector('.overview-grid')).not.toBeNull();
+  });
+
+  it('leads with the page heading and the KPI row above the decision queue', async () => {
+    ui();
+    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    const kpi = await screen.findByTestId('kpi-row');
+    const queue = screen.getByTestId('decision-queue');
+    expect(kpi.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders four KPI cards from the dashboard summary', async () => {
+    ui();
+    const kpi = await screen.findByTestId('kpi-row');
+    expect(within(kpi).getAllByTestId(/^kpi-card-/)).toHaveLength(4);
+    await waitFor(() =>
+      expect(within(kpi).getByTestId('kpi-card-recorded-tokens')).toHaveTextContent('4,200'),
+    );
+    expect(within(kpi).getByTestId('kpi-card-active-agents')).toHaveTextContent('3');
+    expect(within(kpi).getByTestId('kpi-card-active-agents')).toHaveTextContent('2 healthy · 1 degraded');
+    expect(within(kpi).getByTestId('kpi-card-running-runs')).toHaveTextContent('2');
+    expect(within(kpi).getByTestId('kpi-card-pending-approvals')).toHaveTextContent('1');
+  });
+
+  it('renders not reported for a zero token total beside silent runs', async () => {
+    summaryMock.mockResolvedValue(summary({ totalTokensBurned: 0, runsWithoutUsage: 3 }));
+    ui();
+    const card = await screen.findByTestId('kpi-card-recorded-tokens');
+    await waitFor(() => expect(card).toHaveTextContent('not reported'));
+    expect(card).toHaveTextContent('3 runs reported no usage');
+    expect(card).not.toHaveTextContent('0');
+  });
+
+  it('keeps a positive total but names the runs that reported no usage', async () => {
+    summaryMock.mockResolvedValue(summary({ totalTokensBurned: 1234, runsWithoutUsage: 1 }));
+    ui();
+    const card = await screen.findByTestId('kpi-card-recorded-tokens');
+    await waitFor(() => expect(card).toHaveTextContent('1,234'));
+    expect(card).toHaveTextContent('1 run reported no usage');
   });
 
   it('does not pin the page grid inline', () => {

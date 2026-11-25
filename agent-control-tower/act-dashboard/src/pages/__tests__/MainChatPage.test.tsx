@@ -270,6 +270,56 @@ describe('MainChatPage', () => {
     await screen.findByText('Ask Aria anything.');
   });
 
+  it('enables Send as soon as the composer has text and sends on click', async () => {
+    holdStream();
+    renderPage();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText(/Ask Aria anything/), {
+      target: { value: 'Write the release notes to RELEASE.md' },
+    });
+    expect(send).toBeEnabled();
+
+    fireEvent.click(send);
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('Write the release notes to RELEASE.md');
+  });
+
+  it('keeps the composer node and the typed text while the conversation opens and its history loads', async () => {
+    // The page seeds the runtime from persisted history, so it remounts the
+    // provider when that history arrives. The composer must not ride along: the
+    // operator can already be typing when the load lands, and a replaced
+    // textarea swallows the keystroke and leaves Send disabled with an empty box.
+    holdStream();
+    let releaseTimeline!: (entries: unknown[]) => void;
+    mockTimeline.mockReturnValue(new Promise((resolve) => { releaseTimeline = resolve; }));
+    renderPage();
+
+    // Settle the conversation id adoption first (that commit remounts the
+    // provider), so the typing below races only the history load.
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+    await act(async () => {});
+
+    const composer = screen.getByPlaceholderText(/Ask Aria anything/);
+    fireEvent.change(composer, { target: { value: 'Draft the release notes' } });
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+
+    await act(async () => {
+      releaseTimeline([
+        { role: 'user', content: 'Deploy the crew', timestamp: '2026-11-20T09:59:00Z', runId: 'run-0' },
+      ]);
+    });
+    await screen.findByText('thread');
+
+    const after = screen.getByPlaceholderText(/Ask Aria anything/);
+    expect(after).toBe(composer);
+    expect(after).toHaveValue('Draft the release notes');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+  });
+
   it('opens the conversation named by the route param instead of the latest one', async () => {
     mockList.mockResolvedValue([
       { conversationId: 'conv-1', title: 'Deploy the crew', lastMessageAt: '2026-11-20T10:00:00Z', runCount: 2 },

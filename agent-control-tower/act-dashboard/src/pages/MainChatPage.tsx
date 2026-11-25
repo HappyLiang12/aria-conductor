@@ -543,69 +543,74 @@ export default function MainChatPage() {
           ) : (
             <AriaThread indicator={indicator} />
           )}
-
-          <div className="mc-compose-wrap mx-auto w-full max-w-[860px]">
-            <div className="ai-compose mc-compose relative flex flex-col gap-2 rounded-t-xl border border-border bg-card p-3">
-              {slash.open && (
-                <SlashCommandMenu
-                  items={slash.items}
-                  activeIndex={slash.activeIndex}
-                  onHover={(index) => slash.move(index - slash.activeIndex)}
-                  onSelect={(item) => {
-                    slash.choose(item);
-                    pendingSkillIdRef.current = item.id;
-                    setInput('');
-                  }}
-                />
-              )}
-              {slash.pendingSkill && !slash.open && (
-                <div className="ai-skill-chip inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
-                  <span>/{slash.pendingSkill.name}</span>
-                  <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
-                </div>
-              )}
-              <textarea
-                ref={textareaRef}
-                className="ai-compose-input w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
-                value={input}
-                onChange={(event) => {
-                  setInput(event.target.value);
-                  slash.onInputChange(event.target.value, event.target.selectionStart ?? event.target.value.length);
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask Aria anything…  (type / for skills)"
-                rows={2}
-                disabled={busy}
-                aria-controls={slash.open ? 'slash-command-listbox' : undefined}
-              />
-              {busy ? (
-                <button
-                  type="button"
-                  className="ai-cancel-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/50 bg-destructive/10 px-3 text-xs font-semibold tracking-wide text-destructive uppercase transition-colors hover:bg-destructive/20"
-                  onClick={stop}
-                  aria-label="Stop the turn"
-                >
-                  <span aria-hidden="true">■</span>
-                  <span>Stop</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="ai-action-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
-                  onClick={() => send(input)}
-                  disabled={!input.trim()}
-                  aria-label="Send message"
-                >
-                  <span className="ai-action-glyph" aria-hidden="true">↗</span>
-                  <span className="ai-action-label">Send</span>
-                </button>
-              )}
-            </div>
-            <div className="ai-hint mc-hint py-1 text-center text-[11px] text-muted-foreground">
-              Aria streams live · acts on the live system · review approvals before destructive moves.
-            </div>
-          </div>
         </AriaRuntimeProvider>
+
+        {/* Outside the keyed provider on purpose: the provider remounts when the
+            latest conversation opens and again when its timeline lands, and a
+            textarea that remounts under the operator's first keystrokes drops
+            them, leaving Send disabled over an empty box. The page owns the
+            draft and sends through `auiRef`, so it needs no provider scope. */}
+        <div className="mc-compose-wrap mx-auto w-full max-w-[860px]">
+          <div className="ai-compose mc-compose relative flex flex-col gap-2 rounded-t-xl border border-border bg-card p-3">
+            {slash.open && (
+              <SlashCommandMenu
+                items={slash.items}
+                activeIndex={slash.activeIndex}
+                onHover={(index) => slash.move(index - slash.activeIndex)}
+                onSelect={(item) => {
+                  slash.choose(item);
+                  pendingSkillIdRef.current = item.id;
+                  setInput('');
+                }}
+              />
+            )}
+            {slash.pendingSkill && !slash.open && (
+              <div className="ai-skill-chip inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
+                <span>/{slash.pendingSkill.name}</span>
+                <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              className="ai-compose-input w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
+              value={input}
+              onChange={(event) => {
+                setInput(event.target.value);
+                slash.onInputChange(event.target.value, event.target.selectionStart ?? event.target.value.length);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask Aria anything…  (type / for skills)"
+              rows={2}
+              disabled={busy}
+              aria-controls={slash.open ? 'slash-command-listbox' : undefined}
+            />
+            {busy ? (
+              <button
+                type="button"
+                className="ai-cancel-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/50 bg-destructive/10 px-3 text-xs font-semibold tracking-wide text-destructive uppercase transition-colors hover:bg-destructive/20"
+                onClick={stop}
+                aria-label="Stop the turn"
+              >
+                <span aria-hidden="true">■</span>
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ai-action-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
+                onClick={() => send(input)}
+                disabled={!input.trim()}
+                aria-label="Send message"
+              >
+                <span className="ai-action-glyph" aria-hidden="true">↗</span>
+                <span className="ai-action-label">Send</span>
+              </button>
+            )}
+          </div>
+          <div className="ai-hint mc-hint py-1 text-center text-[11px] text-muted-foreground">
+            Aria streams live · acts on the live system · review approvals before destructive moves.
+          </div>
+        </div>
       </section>
 
       <ConfirmDialog

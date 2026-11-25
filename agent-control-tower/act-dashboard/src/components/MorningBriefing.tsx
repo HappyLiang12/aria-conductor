@@ -6,6 +6,7 @@ import { useWebSocketContext } from './Layout';
 import { formatTimestamp } from '../utils/formatTime';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 import { reviewNeedsHuman } from '../utils/reviewState';
+import { Card, CardContent } from './ui/card';
 
 function getTimeGreeting(): string {
   const hour = new Date().getHours();
@@ -63,41 +64,40 @@ export default function MorningBriefing() {
   const running = summary?.runningRuns ?? 0;
 
   return (
-    <section className="panel" id="panel-briefing">
-      <h2>
+    <section className="flex flex-col gap-2" id="panel-briefing">
+      <h2 className="flex items-baseline gap-2 text-sm font-semibold text-foreground">
         <span>{getTimeGreeting()}</span>
-        <span className="accent">· Auto-generated</span>
+        <span className="text-xs font-normal text-muted-foreground">· Auto-generated</span>
       </h2>
-      <div
-        className="body"
-        style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55 }}
-      >
-        <div style={{ color: 'var(--text)', fontWeight: 600, marginBottom: 6 }}>
-          Snapshot · {generatedAt}
-        </div>
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {/* The four counts come from two unrelated sources — kanban card columns
-              and run status — so each label names its own source; the wording must
-              not imply that "in progress" cards and "running" runs are one set. */}
-          <li>
-            <b style={{ color: '#6fe2b6' }}>{stats.done} cards done</b>
-          </li>
-          {/* Single HITL signal (D7): only the Review cards count; the
-              pendingApprovals item was removed to avoid a second signal. */}
-          <li>
-            <b style={{ color: '#ff97a3' }}>{stats.review} cards in review</b>
-          </li>
-          <li>
-            <b style={{ color: 'var(--brand-2)' }}>{running} runs running</b>
-          </li>
-          <li>
-            <b style={{ color: 'var(--text)' }}>{stats.inProgress} cards in progress</b>
-          </li>
-        </ul>
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-mute)' }}>
-          Generated at {generatedAt}
-        </div>
-      </div>
+      <Card>
+        <CardContent className="space-y-2 text-xs leading-relaxed text-muted-foreground">
+          <div className="text-sm font-semibold text-card-foreground">
+            Snapshot · {generatedAt}
+          </div>
+          <ul className="m-0 list-disc space-y-1 pl-5">
+            {/* The four counts come from two unrelated sources — kanban card columns
+                and run status — so each label names its own source; the wording must
+                not imply that "in progress" cards and "running" runs are one set. */}
+            <li>
+              <b className="text-emerald-700 dark:text-emerald-400">{stats.done} cards done</b>
+            </li>
+            {/* Single HITL signal (D7): only the Review cards count; the
+                pendingApprovals item was removed to avoid a second signal. */}
+            <li>
+              <b className="text-rose-700 dark:text-rose-400">{stats.review} cards in review</b>
+            </li>
+            <li>
+              <b className="text-primary">{running} runs running</b>
+            </li>
+            <li>
+              <b className="text-foreground">{stats.inProgress} cards in progress</b>
+            </li>
+          </ul>
+          <div className="text-[11px] text-muted-foreground">
+            Generated at {generatedAt}
+          </div>
+        </CardContent>
+      </Card>
     </section>
   );
 }

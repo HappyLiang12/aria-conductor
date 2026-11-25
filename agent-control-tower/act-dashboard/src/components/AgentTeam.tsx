@@ -2,12 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import type { Agent, AgentHealthStatus } from '../types';
 import { dispatchOpenAgentDrawer } from './DrawerContext';
-
-const AVATAR_VARIANTS = ['ba', 'sm', 'dev', 'qa', 'ver', 'night'] as const;
-
-function avatarClass(index: number): string {
-  return `avatar ${AVATAR_VARIANTS[index % AVATAR_VARIANTS.length]}`;
-}
+import { Badge } from './ui/badge';
+import { Card, CardContent } from './ui/card';
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -17,8 +13,7 @@ function initials(name: string): string {
 }
 
 interface StatusInfo {
-  rowClass: string;
-  pillClass: string;
+  variant: 'secondary' | 'destructive' | 'outline';
   label: string;
   filledBars: number;
   warnBars: number;
@@ -27,31 +22,31 @@ interface StatusInfo {
 function statusInfo(health: AgentHealthStatus): StatusInfo {
   switch (health) {
     case 'HEALTHY':
-      return { rowClass: 'agent running', pillClass: 'status', label: 'Online', filledBars: 4, warnBars: 0 };
+      return { variant: 'secondary', label: 'Online', filledBars: 4, warnBars: 0 };
     case 'DEGRADED':
-      return { rowClass: 'agent running', pillClass: 'status wait', label: 'Degraded', filledBars: 3, warnBars: 1 };
+      return { variant: 'secondary', label: 'Degraded', filledBars: 3, warnBars: 1 };
     case 'UNHEALTHY':
-      return { rowClass: 'agent blocked', pillClass: 'status blocked', label: 'Unhealthy', filledBars: 1, warnBars: 0 };
+      return { variant: 'destructive', label: 'Unhealthy', filledBars: 1, warnBars: 0 };
     case 'RETIRED':
-      return { rowClass: 'agent', pillClass: 'status done', label: 'Retired', filledBars: 0, warnBars: 0 };
+      return { variant: 'outline', label: 'Retired', filledBars: 0, warnBars: 0 };
     default:
-      return { rowClass: 'agent', pillClass: 'status', label: 'Unknown', filledBars: 0, warnBars: 0 };
+      return { variant: 'outline', label: 'Unknown', filledBars: 0, warnBars: 0 };
   }
 }
 
 function ActivityBars({ filled, warn }: { filled: number; warn: number }) {
-  const total = 5;
-  const cells = [];
-  for (let i = 0; i < total; i++) {
-    if (i < filled - warn) {
-      cells.push(<i key={i} className="on" />);
-    } else if (i < filled) {
-      cells.push(<i key={i} className="on warn" />);
-    } else {
-      cells.push(<i key={i} />);
-    }
-  }
-  return <div className="bars">{cells}</div>;
+  return (
+    <div className="flex gap-0.5" aria-hidden>
+      {Array.from({ length: 5 }, (_, i) => {
+        const tone = i < filled - warn
+          ? 'bg-emerald-500'
+          : i < filled
+            ? 'bg-amber-500'
+            : 'bg-muted-foreground/30';
+        return <span key={i} className={`h-1 w-1 rounded-full ${tone}`} />;
+      })}
+    </div>
+  );
 }
 
 export default function AgentTeam() {
@@ -65,60 +60,63 @@ export default function AgentTeam() {
   const activeCount = visibleAgents.filter((a) => a.healthStatus === 'HEALTHY').length;
 
   return (
-    <section className="panel" id="panel-agents">
-      <h2>
+    <section className="flex flex-col gap-2" id="panel-agents">
+      <h2 className="flex items-baseline gap-2 text-sm font-semibold text-foreground">
         <span>Agent Team</span>
-        <span className="accent">· {activeCount} active</span>
+        <span className="text-xs font-normal text-muted-foreground">· {activeCount} active</span>
       </h2>
-      <div className="agents">
-        {isLoading && (
-          <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
-            Loading agents…
-          </div>
-        )}
-        {error && (
-          <div style={{ padding: '8px 4px', color: 'var(--red)', fontSize: 12 }}>
-            Failed to load agents.
-          </div>
-        )}
-        {!isLoading && visibleAgents.length === 0 && (
-          <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
-            No agents registered yet.
-          </div>
-        )}
-        {visibleAgents.map((agent, idx) => {
-          const info = statusInfo(agent.healthStatus);
-          const taskLine = `${agent.role || agent.agentType} · ${agent.model || 'default'}`;
-          return (
-            <div
-              key={agent.id}
-              className={info.rowClass}
-              data-agent={agent.id}
-              onClick={() => dispatchOpenAgentDrawer(agent.id)}
-            >
-              <div className={avatarClass(idx)}>{initials(agent.name)}</div>
-              <div>
-                <div className="name">{agent.name}</div>
-                <div className="task" title={taskLine}>{taskLine}</div>
+      <Card>
+        <CardContent className="space-y-1">
+          {isLoading && (
+            <div className="px-1 py-2 text-xs text-muted-foreground">Loading agents…</div>
+          )}
+          {error && (
+            <div className="px-1 py-2 text-xs text-destructive">Failed to load agents.</div>
+          )}
+          {!isLoading && visibleAgents.length === 0 && (
+            <div className="px-1 py-2 text-xs text-muted-foreground">No agents registered yet.</div>
+          )}
+          {visibleAgents.map((agent) => {
+            const info = statusInfo(agent.healthStatus);
+            const taskLine = `${agent.role || agent.agentType} · ${agent.model || 'default'}`;
+            return (
+              <div
+                key={agent.id}
+                className="agent flex cursor-pointer items-center gap-2 rounded-lg border border-transparent p-2 hover:border-border hover:bg-muted/40"
+                data-agent={agent.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => dispatchOpenAgentDrawer(agent.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') dispatchOpenAgentDrawer(agent.id);
+                }}
+              >
+                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-muted-foreground">
+                  {initials(agent.name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-semibold text-card-foreground">{agent.name}</div>
+                  <div className="truncate text-[11px] text-muted-foreground" title={taskLine}>{taskLine}</div>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <Badge variant={info.variant}>{info.label}</Badge>
+                  {agent.pickupEligible === false && (
+                    <Badge
+                      variant="outline"
+                      title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
+                        agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
+                      }`}
+                    >
+                      No pickup
+                    </Badge>
+                  )}
+                  <ActivityBars filled={info.filledBars} warn={info.warnBars} />
+                </div>
               </div>
-              <div className="right">
-                <div className={info.pillClass}>{info.label}</div>
-                {agent.pickupEligible === false && (
-                  <span
-                    className="status wait"
-                    title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
-                      agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
-                    }`}
-                  >
-                    No pickup
-                  </span>
-                )}
-                <ActivityBars filled={info.filledBars} warn={info.warnBars} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </CardContent>
+      </Card>
     </section>
   );
 }

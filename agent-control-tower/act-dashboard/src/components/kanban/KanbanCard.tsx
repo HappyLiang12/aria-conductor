@@ -94,7 +94,7 @@ export function KanbanCard({
     >
       <button
         type="button"
-        className="card-open p-3"
+        className="card-open p-3!"
         draggable
         aria-label={`Open task ${item.title}`}
         onClick={(event) => {

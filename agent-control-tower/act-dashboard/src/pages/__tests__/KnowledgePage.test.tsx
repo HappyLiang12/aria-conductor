@@ -59,6 +59,18 @@ beforeEach(() => {
   );
 });
 
+describe('KnowledgePage token surfaces (Wave 2 C1)', () => {
+  it('renders the page header and governance sections on token surfaces', async () => {
+    ui();
+    await screen.findByTitle('Approve');
+
+    expect(document.querySelector('[data-slot="page-header"]')).not.toBeNull();
+    // Promotion path, per-agent spaces, review queue and library.
+    expect(document.querySelectorAll('[data-slot="card"]').length).toBeGreaterThanOrEqual(4);
+    expect(document.querySelector('[data-slot="badge"]')).not.toBeNull();
+  });
+});
+
 describe('KnowledgePage review confirmation (#UI audit)', () => {
   it('review_requiresConfirmation: clicking ✓ opens a dialog and the mutation fires only on confirm', async () => {
     ui();

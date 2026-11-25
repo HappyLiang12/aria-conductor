@@ -85,6 +85,21 @@ describe('ChatPage run conversations (Task 9)', () => {
     expect(screen.queryByText(/Agent ↔ Agent/)).not.toBeInTheDocument();
   });
 
+  // Wave 2 D2: the conversation shell is built from token surfaces (Card for
+  // the panes, Input/Textarea for the fields) while keeping its hooks.
+  it('renders the conversation shell on token surfaces', async () => {
+    renderChat();
+
+    const shell = screen.getByTestId('chat-shell');
+    expect(shell.querySelector('[data-slot="card"]')).not.toBeNull();
+    expect(shell.querySelector('.chat-list-panel[data-slot="card"]')).not.toBeNull();
+    expect(shell.querySelector('.chat-thread-panel[data-slot="card"]')).not.toBeNull();
+    expect(screen.getByRole('textbox', { name: /search threads/i }))
+      .toHaveAttribute('data-slot', 'input');
+    expect(screen.getByRole('textbox', { name: /inject message/i }))
+      .toHaveAttribute('data-slot', 'textarea');
+  });
+
   it('opens thread mode and keeps the draft when going Back', async () => {
     const user = userEvent.setup();
     renderChat();

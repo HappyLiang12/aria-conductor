@@ -6,11 +6,16 @@ import WorkflowStepper from '../components/WorkflowStepper';
 import DelegationTree from '../components/DelegationTree';
 import ReviewQueue from '../components/ReviewQueue';
 import { useWebSocketContext } from '../components/Layout';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardHeader } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { apiErrorMessage } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Run, Agent, SessionTrajectory } from '../types';
-import '../styles/chat-flow.css';
 
 // ---------- Types ----------
 interface ChatThread {
@@ -328,42 +333,49 @@ export default function ChatPage() {
 
   return (
     <div className="view-zone" data-view="chat">
-      <div className="chat-page">
-        <div className="view-header">
-          <div>
-            <h1>Run conversations</h1>
-            <div className="sub">Operator and agent transcript for each run</div>
-          </div>
-        </div>
+      <div className="chat-page p-4 max-[900px]:p-0">
+        <PageHeader
+          title="Run conversations"
+          description="Operator and agent transcript for each run"
+        />
 
+        {/* Wave 2 D2: the pane switch is driven by token breakpoint utilities
+            instead of chat-flow.css. `group-data-[mobile-pane=…]` mirrors the
+            data attribute the mobile E2E asserts, and the important marker is
+            needed until E1 removes the legacy `.chat-shell` block from
+            index.css (unlayered CSS outranks layered utilities). */}
         <div
-          className="chat-shell"
+          className="chat-shell group/chat grid gap-3.5 max-[900px]:h-auto! max-[900px]:min-h-0! max-[900px]:grid-cols-1! max-[900px]:gap-0!"
           data-testid="chat-shell"
           data-mobile-pane={mobilePane}
         >
           {/* ---------- Thread list ---------- */}
-          <div className="chat-list-panel">
-            <header>Threads</header>
-            <input
-              className="ch-search"
-              placeholder="Search threads…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              aria-label="Search threads"
-            />
-            <div className="chat-list-scroll">
+          <Card className="chat-list-panel min-h-0 min-w-0 gap-0 max-[900px]:h-[calc(100dvh-190px)]! max-[900px]:group-data-[mobile-pane=thread]/chat:hidden!">
+            <CardHeader className="flex-row items-center justify-between gap-2 border-b border-border">
+              <h2 className="text-sm font-semibold text-card-foreground">Threads</h2>
+            </CardHeader>
+            <div className="px-3 py-2">
+              <Input
+                className="ch-search"
+                placeholder="Search threads…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search threads"
+              />
+            </div>
+            <div className="chat-list-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
               {runsLoading && (
-                <div style={{ padding: 14, color: 'var(--text-dim)', fontSize: 12 }}>
+                <div className="px-3 py-3 text-xs text-muted-foreground">
                   Loading conversations…
                 </div>
               )}
               {runsError && (
-                <div style={{ padding: 14, color: 'var(--red, #ff97a3)', fontSize: 12 }}>
+                <div className="px-3 py-3 text-xs text-destructive">
                   Failed to load threads.
                 </div>
               )}
               {!runsLoading && !runsError && filteredThreads.length === 0 && (
-                <div style={{ padding: 14, color: 'var(--text-mute)', fontSize: 12 }}>
+                <div className="px-3 py-3 text-xs text-muted-foreground">
                   {threads.length === 0
                     ? 'No conversations yet. Start a run to begin a thread.'
                     : 'No threads match your search.'}
@@ -378,75 +390,75 @@ export default function ChatPage() {
                 />
               ))}
             </div>
-          </div>
+          </Card>
 
-          {/* ---------- Message panel ---------- */}
-          <div className="chat-thread-panel">
-            <header>
-              <button
+          {/* ---------- Transcript ---------- */}
+          <Card className="chat-thread-panel min-h-0 min-w-0 gap-0 max-[900px]:h-[calc(100dvh-170px)]! max-[900px]:group-data-[mobile-pane=list]/chat:hidden!">
+            <header className="flex flex-wrap items-center gap-2.5 border-b border-border px-3 py-2 max-[900px]:row-gap-1.5">
+              <Button
                 type="button"
-                className="chat-back"
+                variant="ghost"
+                size="sm"
+                className="chat-back hidden max-[900px]:inline-flex"
                 onClick={() => setMobilePane('list')}
               >
                 ← Back to conversations
-              </button>
-              <div>
-                <div className="h-ttl">
+              </Button>
+              <div className="min-w-0">
+                <div className="h-ttl truncate text-sm font-semibold text-foreground">
                   {activeThread ? activeThread.title : 'Select a thread'}
                 </div>
-                <div className="h-parts">
+                <div className="h-parts mt-0.5 text-[11px] text-muted-foreground">
                   {activeThread ? activeThread.participants.join(' · ') : '—'}
                 </div>
               </div>
-              <span className="badge governed" style={{ marginLeft: 'auto' }}>
+              <Badge variant="outline" className="badge governed ml-auto">
                 <span className="dot" /> audited
-              </span>
+              </Badge>
             </header>
 
             {activeRun && (
-              <div
-                className="chat-run-context"
-                style={{ padding: '8px 12px', borderBottom: '1px solid var(--line-2, #26304d)' }}
-              >
+              <div className="chat-run-context min-w-0 border-b border-border px-3 py-2">
                 <WorkflowStepper runId={activeRun.id} />
                 <DelegationTree runId={activeRun.id} agentName={activeAgent?.name} />
-                <div className="chat-inline-approvals" style={{ marginTop: 6 }}>
+                <div className="chat-inline-approvals mt-1.5">
                   <ReviewQueue runId={activeRun.id} />
                 </div>
               </div>
             )}
 
-            <div className="chat-stack" ref={stackRef}>
+            <div className="chat-stack min-w-0 flex-1 overflow-y-auto px-4 py-3.5" ref={stackRef}>
               {!activeThread && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: 8 }}>
+                <div className="p-2 text-xs text-muted-foreground">
                   Pick a thread on the left to read the audited transcript.
                 </div>
               )}
               {activeThread && trajLoading && messages.length === 0 && (
-                <div style={{ color: 'var(--text-dim)', fontSize: 12, padding: 8 }}>
+                <div className="p-2 text-xs text-muted-foreground">
                   Loading transcript…
                 </div>
               )}
               {activeThread && trajError && (
                 <div
                   role="alert"
-                  className="error-state"
-                  style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}
+                  className="error-state mb-2 flex items-center gap-2"
                 >
                   Failed to load this transcript.
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     className="btn"
                     onClick={() => {
                       void refetchTrajectory();
                     }}
                   >
                     Retry
-                  </button>
+                  </Button>
                 </div>
               )}
               {activeThread && !trajLoading && !trajError && messages.length === 0 && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: 8 }}>
+                <div className="p-2 text-xs text-muted-foreground">
                   No messages recorded yet. Inject a message below to bootstrap the thread.
                 </div>
               )}
@@ -466,24 +478,16 @@ export default function ChatPage() {
             </div>
 
             {injectError && (
-              <div role="alert" className="error-state" style={{ marginBottom: 8 }}>
+              <div role="alert" className="error-state mx-3 mb-2">
                 {injectError}
               </div>
             )}
-            <div className="chat-compose">
-              <div
-                style={{
-                  fontSize: 10.5,
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  color: 'var(--text-mute)',
-                  marginBottom: 6,
-                }}
-              >
+            <div className="chat-compose min-w-0">
+              <div className="mb-1.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
                 Inject message as Human Operator
               </div>
               <div className="row">
-                <textarea
+                <Textarea
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onComposeKey}
@@ -495,17 +499,17 @@ export default function ChatPage() {
                   aria-label="Inject message"
                   disabled={!activeThread}
                 />
-                <button
+                <Button
                   className="send"
                   onClick={handleSend}
                   disabled={!activeThread || !draft.trim()}
                   type="button"
                 >
                   Send ▶
-                </button>
+                </Button>
               </div>
             </div>
-          </div>
+          </Card>
         </div>
       </div>
     </div>
@@ -524,7 +528,7 @@ function ThreadRow({
 }) {
   return (
     <div
-      className={`chat-ch${active ? ' active' : ''}`}
+      className={`chat-ch cursor-pointer rounded-lg border border-transparent px-2.5 py-2 transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none${active ? ' active border-border bg-muted/60' : ''}`}
       onClick={onClick}
       role="button"
       tabIndex={0}
@@ -535,38 +539,32 @@ function ThreadRow({
         }
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <div className="mb-1 flex items-center gap-1.5">
         {thread.participantRoles.slice(0, 3).map((r, i) => (
           <span
             key={i}
-            className={`av ${r}`}
-            style={{
-              width: 18,
-              height: 18,
-              borderRadius: '50%',
-              background:
-                r === 'human'
-                  ? 'linear-gradient(135deg, #ffffff, #c0caf0)'
-                  : 'linear-gradient(135deg, var(--brand), var(--accent))',
-              display: 'inline-block',
-              border: '1px solid var(--line-2)',
-              marginLeft: i === 0 ? 0 : -6,
-            }}
+            className={`av ${r} inline-block size-[18px] rounded-full border border-border ${r === 'human' ? 'bg-foreground/90' : 'bg-primary'} ${i === 0 ? '' : '-ml-1.5'}`}
             aria-hidden
           />
         ))}
-        <div className="ttl" style={{ marginLeft: 4 }}>
+        <div className="ttl ml-1 truncate text-xs font-semibold text-foreground">
           {thread.title}
         </div>
       </div>
-      <div className="preview">{thread.lastMessage}</div>
-      <div className="meta">
+      <div className="preview line-clamp-2 text-[11px] text-muted-foreground">
+        {thread.lastMessage}
+      </div>
+      <div className="meta mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <span>{thread.participants.length} participants</span>
         <span>·</span>
         <span>{formatTime(thread.lastTimestamp)}</span>
         <span>·</span>
-        <span style={{ textTransform: 'lowercase' }}>{thread.status.toLowerCase()}</span>
-        {thread.unreadCount > 0 && <span className="un">{thread.unreadCount}</span>}
+        <span className="lowercase">{thread.status.toLowerCase()}</span>
+        {thread.unreadCount > 0 && (
+          <Badge variant="default" className="un ml-auto tabular-nums">
+            {thread.unreadCount}
+          </Badge>
+        )}
       </div>
     </div>
   );
@@ -574,23 +572,29 @@ function ThreadRow({
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const cls = [
-    'msg',
+    'msg flex gap-2.5 rounded-lg border border-border bg-muted/20 px-3 py-2',
     msg.isHandoff ? 'handoff' : '',
     msg.isSystem ? 'system' : '',
-    msg.isHuman ? 'human' : '',
+    msg.isHuman ? 'human bg-primary/10' : '',
     msg.isFresh ? 'new' : '',
   ]
     .filter(Boolean)
     .join(' ');
   return (
     <div className={cls}>
-      <div className={`av ${msg.senderRole || 'dev'}`}>{avatarInitials(msg.sender)}</div>
-      <div>
-        <div className="head">
-          <span className="who">{msg.sender}</span>
-          <span className="when">{formatTime(msg.timestamp)}</span>
+      <div className={`av ${msg.senderRole || 'dev'} flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground`}>
+        {avatarInitials(msg.sender)}
+      </div>
+      <div className="min-w-0">
+        <div className="head mb-1 flex items-baseline gap-2">
+          <span className="who text-xs font-semibold text-foreground">{msg.sender}</span>
+          <span className="when text-[10.5px] text-muted-foreground">
+            {formatTime(msg.timestamp)}
+          </span>
         </div>
-        <div className="text">{msg.content || <em>(empty)</em>}</div>
+        <div className="text break-words whitespace-pre-wrap text-foreground">
+          {msg.content || <em>(empty)</em>}
+        </div>
       </div>
     </div>
   );
@@ -599,35 +603,12 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 function HandoffMarker({ from, to }: { from: string; to: string }) {
   return (
     <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        margin: '10px 0 8px',
-        fontSize: 10,
-        textTransform: 'uppercase',
-        letterSpacing: 1.2,
-        color: 'var(--text-mute)',
-      }}
+      className="my-2.5 flex items-center gap-2 text-[10px] tracking-wider text-muted-foreground uppercase"
       aria-label={`Handoff from ${from} to ${to}`}
     >
-      <span
-        style={{
-          flex: 1,
-          height: 1,
-          background:
-            'linear-gradient(90deg, transparent, var(--line-2), transparent)',
-        }}
-      />
-      <span style={{ color: '#ffd884' }}>↪ handoff · {from} → {to}</span>
-      <span
-        style={{
-          flex: 1,
-          height: 1,
-          background:
-            'linear-gradient(90deg, transparent, var(--line-2), transparent)',
-        }}
-      />
+      <span className="h-px flex-1 bg-border" />
+      <span className="text-warning">↪ handoff · {from} → {to}</span>
+      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }

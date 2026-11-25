@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRunToolCalls } from '../api/runs';
+import { Badge } from './ui/badge';
 
 const STEPS: { key: string; label: string; tools: string[] }[] = [
   { key: 'discover', label: 'Discover', tools: ['web_fetch', 'http_request', 'query_knowledge', 'search_knowledge'] },
@@ -15,6 +16,9 @@ const STEPS: { key: string; label: string; tools: string[] }[] = [
  * Derives a governed dev-workflow progress bar (discover → delegate → clone → edit → commit →
  * push → PR) from a run's tool-call trajectory, giving operators an at-a-glance sense of where the
  * agent is in the flow.
+ *
+ * Wave 2 D2: each step is a `Badge` token surface; the `.step-chip`/`.done` hooks, the
+ * `role="list"` contract, the numbering and the done marker are unchanged.
  */
 export default function WorkflowStepper({ runId }: { runId: string }) {
   const { data: toolCalls } = useQuery({
@@ -26,32 +30,22 @@ export default function WorkflowStepper({ runId }: { runId: string }) {
   const used = new Set((toolCalls ?? []).map((t) => t.toolName));
   return (
     <div
-      className="workflow-stepper"
+      className="workflow-stepper my-1.5 flex flex-wrap items-center gap-1.5"
       role="list"
       aria-label="Development workflow progress"
-      style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', margin: '6px 0' }}
     >
       {STEPS.map((s, i) => {
         const done = s.tools.some((t) => used.has(t));
         return (
-          <span
+          <Badge
             key={s.key}
             role="listitem"
+            variant={done ? 'default' : 'outline'}
             className={`step-chip${done ? ' done' : ''}`}
-            style={{
-              fontSize: 10.5,
-              padding: '2px 8px',
-              borderRadius: 999,
-              border: '1px solid var(--line-2, #26304d)',
-              background: done
-                ? 'linear-gradient(135deg, var(--brand,#5b8cff), var(--accent,#8b5bff))'
-                : 'transparent',
-              color: done ? '#fff' : 'var(--text-mute, #8b95b5)',
-            }}
           >
             {done ? '✓ ' : `${i + 1}. `}
             {s.label}
-          </span>
+          </Badge>
         );
       })}
     </div>

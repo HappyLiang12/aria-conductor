@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRunToolCalls } from '../api/runs';
+import { Card } from './ui/card';
 
 function parseArg(args: string, key: string): string | null {
   try {
@@ -15,6 +16,8 @@ function parseArg(args: string, key: string): string | null {
  * Parent → worker delegation view derived from the orchestrator run's tool calls (create_agent /
  * run_agent). Makes it visible which workers Aria spun up and delegated to, without needing a
  * dedicated parentRunId schema column.
+ *
+ * Wave 2 D2: the panel is a token `Card`; the `.delegation-tree` hook and the worker copy stay.
  */
 export default function DelegationTree({ runId, agentName }: { runId: string; agentName?: string }) {
   const { data: toolCalls } = useQuery({
@@ -28,33 +31,25 @@ export default function DelegationTree({ runId, agentName }: { runId: string; ag
   );
   if (delegations.length === 0) return null;
   return (
-    <div className="delegation-tree" style={{ margin: '6px 0', fontSize: 11 }}>
-      <div
-        style={{
-          color: 'var(--text-mute)',
-          textTransform: 'uppercase',
-          letterSpacing: 1,
-          fontSize: 10,
-          marginBottom: 4,
-        }}
-      >
+    <Card size="sm" className="delegation-tree my-1.5 text-[11px]">
+      <div className="mb-1 px-(--card-spacing) text-[10px] tracking-wider text-muted-foreground uppercase">
         Delegation
       </div>
-      <div style={{ paddingLeft: 8, borderLeft: '2px solid var(--line-2, #26304d)' }}>
-        <div style={{ fontWeight: 600 }}>{agentName || 'Orchestrator'}</div>
+      <div className="mx-(--card-spacing) border-l-2 border-border pl-2">
+        <div className="font-semibold text-foreground">{agentName || 'Orchestrator'}</div>
         {delegations.map((d) => {
           const label =
             d.toolName === 'create_agent'
               ? `created worker · ${parseArg(d.arguments, 'role') || parseArg(d.arguments, 'name') || 'agent'}`
               : `ran agent · ${parseArg(d.arguments, 'agentId')?.slice(0, 8) || 'worker'}`;
           return (
-            <div key={d.id} style={{ paddingLeft: 12, color: 'var(--text-dim)' }}>
+            <div key={d.id} className="pl-3 text-muted-foreground">
               ↳ {label}{' '}
-              <span style={{ color: 'var(--text-mute)' }}>({d.status.toLowerCase()})</span>
+              <span className="text-muted-foreground">({d.status.toLowerCase()})</span>
             </div>
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

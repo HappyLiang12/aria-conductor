@@ -432,6 +432,31 @@ describe('ReviewQueue sparse approval payloads (T51)', () => {
   });
 });
 
+// Wave 2 D2: the queue is a token Card surface; the `.panel`/`.qitem` hooks
+// and the heading copy stay for the E2E specs and the operator.
+describe('ReviewQueue token surface (Wave 2 D2)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+  });
+
+  it('renders the queue on a token card surface with its hooks intact', async () => {
+    serve([gateAsk()]);
+    ui();
+
+    await screen.findByText('Review');
+    const surface = document.querySelector('#panel-queue') as HTMLElement;
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveClass('panel');
+    expect(surface).toHaveAttribute('data-slot', 'card');
+    expect(surface.querySelectorAll('.qitem')).toHaveLength(1);
+    expect(screen.getByText('Review Queue')).toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Task 37 / Item 6 (T35 audit row 13): approve and deny are operator-only, and a
 // refusal used to render the api error message — the server's own text, or the

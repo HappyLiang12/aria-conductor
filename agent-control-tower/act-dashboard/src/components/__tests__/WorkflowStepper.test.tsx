@@ -69,6 +69,18 @@ describe('WorkflowStepper', () => {
     expect(screen.getByText('3. Clone')).toBeInTheDocument();
   });
 
+  // Wave 2 D2: each step chip is a shadcn Badge token surface; the hook
+  // classes, the numbering and the done marker stay.
+  it('renders each step on the token badge surface', async () => {
+    getToolCalls.mockResolvedValue([{ toolName: 'git_clone' }]);
+    renderStepper('run-4');
+
+    const done = await screen.findByText('✓ Clone');
+    expect(done).toHaveAttribute('data-slot', 'badge');
+    expect(screen.getByText('1. Discover')).toHaveAttribute('data-slot', 'badge');
+    expect(done).toHaveClass('step-chip', 'done');
+  });
+
   it('does not fetch tool calls when runId is empty', () => {
     renderStepper('');
     expect(getToolCalls).not.toHaveBeenCalled();

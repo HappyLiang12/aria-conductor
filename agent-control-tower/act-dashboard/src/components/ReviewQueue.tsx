@@ -7,6 +7,8 @@ import { shortRunId } from '../utils/shortRunId';
 import { ErrorNotice } from './ErrorNotice';
 import DiffPreview from './DiffPreview';
 import { ApprovalToolDetails } from './ApprovalToolDetails';
+import { Button } from './ui/button';
+import { Card, CardContent, CardHeader } from './ui/card';
 import {
   NativePermissionFacts,
   NativePermissionKindPill,
@@ -79,21 +81,27 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   const items = (approvals ?? []).filter((a) => !runId || a.runId === runId);
 
   return (
-    <section className="panel" id="panel-queue">
-      <h2>
-        <span>Review Queue</span>
-        <span className="accent">· {items.length} pending</span>
-      </h2>
+    <Card id="panel-queue" className="panel gap-0">
+      <CardHeader className="flex-row items-center justify-between gap-2 border-b border-border">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-card-foreground">
+          <span>Review Queue</span>
+          <span className="accent text-xs font-normal text-muted-foreground">
+            · {items.length} pending
+          </span>
+        </h2>
+      </CardHeader>
       {actionError && (
-        <ErrorNotice
-          presented={presentError(actionError.error, actionError.fallback)}
-          operatorSession
-          actionLabel={actionError.action}
-        />
+        <div className="px-3 pt-2">
+          <ErrorNotice
+            presented={presentError(actionError.error, actionError.fallback)}
+            operatorSession
+            actionLabel={actionError.action}
+          />
+        </div>
       )}
-      <div className="queue">
+      <CardContent className="queue">
         {isLoading && (
-          <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
+          <div className="px-1 py-2 text-xs text-muted-foreground">
             Loading approvals…
           </div>
         )}
@@ -101,7 +109,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
           <ErrorNotice presented={presentError(error, 'Failed to load approvals.')} />
         )}
         {!isLoading && !error && items.length === 0 && (
-          <div style={{ padding: '12px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
+          <div className="px-1 py-3 text-xs text-muted-foreground">
             No pending approvals — queue is clear.
           </div>
         )}
@@ -110,21 +118,21 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
           const pending = approveMutation.isPending || rejectMutation.isPending;
           const permission = nativePermissionOf(approval);
           return (
-            <div key={approval.id ?? `row-${idx}`} className={`qitem${isFirst ? ' highlight' : ''}`}>
+            <div
+              key={approval.id ?? `row-${idx}`}
+              className={`qitem rounded-lg border border-border bg-muted/20 p-3${isFirst ? ' highlight' : ''}`}
+            >
               <div className="h">
                 {permission ? (
                   <NativePermissionKindPill permission={permission} />
                 ) : (
                   <span className="pill warn">Review</span>
                 )}
-                <span
-                  className="owner"
-                  style={{ marginLeft: 'auto', color: 'var(--text-mute)', fontSize: 11 }}
-                >
+                <span className="owner ml-auto text-[11px] text-muted-foreground">
                   {timeAgo(approval.requestedAt)}
                 </span>
               </div>
-              <div className="ttl">
+              <div className="ttl text-xs font-semibold text-foreground">
                 {approval.toolName ? (
                   <>
                     <span className="cell-mono">{approval.toolName}</span>
@@ -137,7 +145,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                   </>
                 )}
               </div>
-              <div className="desc">
+              <div className="desc mb-2 text-[11px] text-muted-foreground">
                 {permission
                   ? approval.reason || 'Awaiting human verification before tool execution proceeds.'
                   : approval.content ?? approval.reason ?? 'Review requested — open the run for context.'}
@@ -159,38 +167,40 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 // continue) or the run is finalized from the kanban card's
                 // decision panel, never approved/denied here. Point at that
                 // instead of offering buttons that can only fail.
-                <div className="ask-ctx">
+                <div className="ask-ctx rounded-md border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
                   This ask is waiting on the run — answer it on the kanban card
                   (Answer &amp; continue) or finalize the run from there.
                 </div>
               ) : (
-                <div className="row">
-                  <button
-                    className="btn primary"
-                    style={{ flex: 1 }}
+                <div className="row flex gap-1.5">
+                  <Button
+                    className="btn primary flex-1"
+                    variant="default"
+                    size="sm"
                     disabled={pending}
                     onClick={() => approveMutation.mutate(approval.id)}
                   >
                     {approveMutation.isPending && approveMutation.variables === approval.id
                       ? 'Approving…'
                       : 'Approve'}
-                  </button>
-                  <button
-                    className="btn danger"
-                    style={{ flex: 1 }}
+                  </Button>
+                  <Button
+                    className="btn danger flex-1"
+                    variant="destructive"
+                    size="sm"
                     disabled={pending}
                     onClick={() => rejectMutation.mutate(approval.id)}
                   >
                     {rejectMutation.isPending && rejectMutation.variables === approval.id
                       ? 'Denying…'
                       : 'Deny'}
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
           );
         })}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }

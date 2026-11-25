@@ -497,3 +497,28 @@ describe('ConfigureModal fleet re-read truthfulness (T56 F1)', () => {
     expect(confirmation.textContent).toMatch(/Current composition: opencode\/SANDBOX x2/);
   });
 });
+
+// Wave 2 D5: the modal chrome is a token dialog surface while the `.modal` /
+// `.tabs` hooks, the tab roles and the reference note stay.
+describe('ConfigureModal token shell (Wave 2 D5)', () => {
+  beforeEach(() => {
+    mockedAgents.mockResolvedValue([]);
+    mockedSkills.mockResolvedValue([
+      { id: 's-1', name: 'browser-use', category: 'Web', description: 'Drive a browser' },
+    ] as never);
+  });
+
+  it('renders the modal on token dialog surfaces with its hooks intact', async () => {
+    await renderTab('skills');
+
+    const dialog = screen.getByRole('dialog', { name: /configure/i });
+    expect(dialog).toHaveAttribute('data-slot', 'dialog-content');
+    expect(dialog.querySelector('[data-slot="dialog-header"]')).not.toBeNull();
+    expect(dialog.querySelector('[data-slot="dialog-footer"]')).not.toBeNull();
+    expect(dialog.querySelector('.tabs[role="tablist"]')).not.toBeNull();
+    expect(
+      await screen.findByText('Read-only catalog. No skill permission is editable or enforced in this build.'),
+    ).toHaveClass('configure-reference-note');
+    expect(dialog.querySelector('[data-slot="badge"]')).not.toBeNull();
+  });
+});

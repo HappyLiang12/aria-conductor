@@ -11,8 +11,9 @@ import { listAdkProviders } from '../api/adk';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 import { composeRuntimes } from '../utils/runtimeComposition';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
 import type { ExecutionMode } from '../types';
-import '../styles/configure-flow.css';
 
 interface SkillRow {
   name: string;
@@ -70,24 +71,31 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
   return (
     <>
       <div
-        className={`modal-scrim${open ? ' open' : ''}`}
+        className={`modal-scrim${open ? ' open' : ''} fixed inset-0 z-[150] bg-black/50 backdrop-blur-sm transition-opacity`}
         onClick={close}
         aria-hidden={!open}
       />
       <div
-        className={`modal${open ? ' open' : ''}`}
+        className={`modal${open ? ' open' : ''} z-[160] flex flex-col overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl`}
+        data-slot="dialog-content"
         role="dialog"
         aria-modal="true"
         aria-labelledby="configure-title"
         aria-hidden={!open}
         style={{ width: 'min(720px, 94vw)' }}
       >
-        <header>
-          <h2 id="configure-title">
-            <b>Configure</b> Governance &amp; Capabilities
+        <header
+          className="flex items-center gap-3 border-b border-border bg-muted/20 px-4.5 py-3.5"
+          data-slot="dialog-header"
+        >
+          <h2 id="configure-title" className="text-sm tracking-wide text-muted-foreground uppercase">
+            <b className="mr-2 text-base font-bold tracking-normal text-foreground normal-case">
+              Configure
+            </b>{' '}
+            Governance &amp; Capabilities
           </h2>
           <span
-            className="x"
+            className="x ml-auto cursor-pointer rounded-lg px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
             role="button"
             tabIndex={0}
             aria-label="Close configuration"
@@ -100,9 +108,9 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
           </span>
         </header>
 
-        <div className="tabs" role="tablist">
+        <div className="tabs flex gap-1 border-b border-border px-3.5 pt-2.5" role="tablist">
           <div
-            className={`tab${activeTab === 'skills' ? ' active' : ''}`}
+            className={`tab inline-flex cursor-pointer items-center gap-1.5 rounded-t-lg border border-transparent px-3.5 py-2 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground${activeTab === 'skills' ? ' active border-border bg-card text-foreground' : ''}`}
             role="tab"
             aria-selected={activeTab === 'skills'}
             onClick={() => setActiveTab('skills')}
@@ -110,7 +118,7 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
             🧰 Skills
           </div>
           <div
-            className={`tab${activeTab === 'llm' ? ' active' : ''}`}
+            className={`tab inline-flex cursor-pointer items-center gap-1.5 rounded-t-lg border border-transparent px-3.5 py-2 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground${activeTab === 'llm' ? ' active border-border bg-card text-foreground' : ''}`}
             role="tab"
             aria-selected={activeTab === 'llm'}
             onClick={() => setActiveTab('llm')}
@@ -118,7 +126,7 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
             🤖 LLM Providers
           </div>
           <div
-            className={`tab${activeTab === 'config' ? ' active' : ''}`}
+            className={`tab inline-flex cursor-pointer items-center gap-1.5 rounded-t-lg border border-transparent px-3.5 py-2 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground${activeTab === 'config' ? ' active border-border bg-card text-foreground' : ''}`}
             role="tab"
             aria-selected={activeTab === 'config'}
             onClick={() => setActiveTab('config')}
@@ -126,7 +134,7 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
             ⚙️ System Config
           </div>
           <div
-            className={`tab${activeTab === 'runtime' ? ' active' : ''}`}
+            className={`tab inline-flex cursor-pointer items-center gap-1.5 rounded-t-lg border border-transparent px-3.5 py-2 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground${activeTab === 'runtime' ? ' active border-border bg-card text-foreground' : ''}`}
             role="tab"
             aria-selected={activeTab === 'runtime'}
             onClick={() => setActiveTab('runtime')}
@@ -135,12 +143,12 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
           </div>
         </div>
 
-        <div className="tab-body">
+        <div className="tab-body min-h-0 flex-1 overflow-y-auto px-5 py-4.5">
           {activeTab === 'skills' && (
             <SkillsPane skills={skills} />
           )}
           {activeTab === 'llm' && (
-            <div style={{ padding: '0', margin: '0' }}>
+            <div className="m-0 p-0">
               <SettingsPage />
               {/* One-time Qoder runtime credential setup lives next to the LLM
                   provider config; the card carries its own top-margin
@@ -152,7 +160,7 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
             <SystemConfigPanel />
           )}
           {activeTab === 'runtime' && (
-            <div style={{ padding: '0', margin: '0' }}>
+            <div className="m-0 p-0">
               <RuntimePane open={open} />
               {/* F8: the workflow git handoff credential (pack-git-0001) had no
                   editor; it lives with the other runtime credentials. */}
@@ -161,8 +169,11 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
           )}
         </div>
 
-        <footer>
-          <div className="info">
+        <footer
+          className="flex items-center justify-between border-t border-border bg-muted/20 px-4.5 py-3"
+          data-slot="dialog-footer"
+        >
+          <div className="info text-[11.5px] text-muted-foreground">
             {activeTab === 'skills'
               ? `${skills.length} skills in the read-only catalog`
               : activeTab === 'llm'
@@ -171,10 +182,10 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
               ? 'One runtime for the whole fleet - applying updates every agent'
               : 'Runtime settings stored in the database — changes take effect immediately'}
           </div>
-          <div className="actions">
-            <button type="button" className="btn primary" onClick={close}>
+          <div className="actions flex gap-2">
+            <Button type="button" className="btn primary" onClick={close}>
               Done
-            </button>
+            </Button>
           </div>
         </footer>
       </div>
@@ -189,36 +200,38 @@ interface SkillsPaneProps {
 function SkillsPane({ skills }: SkillsPaneProps) {
   return (
     <>
-      <div className="configure-reference-note">
+      <div className="configure-reference-note mb-3 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-xs text-warning">
         Read-only catalog. No skill permission is editable or enforced in this build.
       </div>
 
-      <div className="skill-table" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+      <div
+        className="skill-table grid text-xs"
+        style={{ gridTemplateColumns: '1.4fr 1fr' }}
+      >
         <div className="row" style={{ display: 'contents' }}>
-          <div className="th first">Skill</div>
-          <div className="th">Category</div>
+          <div className="th first text-[10.5px] tracking-wider text-muted-foreground uppercase">
+            Skill
+          </div>
+          <div className="th text-[10.5px] tracking-wider text-muted-foreground uppercase">
+            Category
+          </div>
         </div>
         {skills.map((sk) => (
           <div key={sk.name} className="row" style={{ display: 'contents' }}>
             <div className="cell skill-name" style={{ justifyContent: 'flex-start' }}>
               <div>
-                <div>
+                <div className="font-semibold text-foreground">
                   <code style={{ fontFamily: 'inherit' }}>{sk.name}</code>
                 </div>
-                <div
-                  style={{
-                    color: 'var(--text-dim)',
-                    fontSize: 10.5,
-                    fontWeight: 400,
-                    marginTop: 1,
-                  }}
-                >
+                <div className="mt-px text-[10.5px] font-normal text-muted-foreground">
                   {sk.description}
                 </div>
               </div>
             </div>
             <div className="cell" style={{ justifyContent: 'flex-start' }}>
-              <span className="skill-tag">{sk.category}</span>
+              <Badge variant="outline" className="skill-tag">
+                {sk.category}
+              </Badge>
             </div>
           </div>
         ))}
@@ -350,24 +363,24 @@ function RuntimePane({ open }: { open: boolean }) {
   const bannerOk = fleetSettled && composition.length <= 1;
 
   return (
-    <div style={{ padding: '0', margin: '0' }}>
+    <div className="m-0 p-0">
       <div
-        style={{
-          background: bannerOk ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
-          border: `1px solid ${bannerOk ? '#22c55e' : 'var(--amber, #f59e0b)'}`,
-          borderRadius: 6,
-          padding: '8px 10px',
-          fontSize: 12,
-          marginBottom: 12,
-        }}
+        className={`mb-3 rounded-md border px-2.5 py-2 text-xs ${
+          bannerOk
+            ? 'border-success/50 bg-success/10 text-foreground'
+            : 'border-warning/50 bg-warning/10 text-foreground'
+        }`}
       >
         {compositionText}
       </div>
-      <div className="form-grid">
-        <div className="form-field">
-          <label htmlFor="runtime-core">Core</label>
+      <div className="form-grid grid grid-cols-2 gap-3.5">
+        <div className="form-field flex flex-col gap-1.5">
+          <label htmlFor="runtime-core" className="text-xs text-muted-foreground">
+            Core
+          </label>
           <select
             id="runtime-core"
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground"
             value={coreId}
             onChange={(e) => {
               setCoreId(e.target.value);
@@ -382,10 +395,13 @@ function RuntimePane({ open }: { open: boolean }) {
             ))}
           </select>
         </div>
-        <div className="form-field">
-          <label htmlFor="runtime-mode">Execution mode</label>
+        <div className="form-field flex flex-col gap-1.5">
+          <label htmlFor="runtime-mode" className="text-xs text-muted-foreground">
+            Execution mode
+          </label>
           <select
             id="runtime-mode"
+            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground"
             value={mode}
             disabled={coreId === ''}
             onChange={(e) => setMode(e.target.value as ExecutionMode)}
@@ -399,13 +415,13 @@ function RuntimePane({ open }: { open: boolean }) {
           </select>
         </div>
       </div>
-      <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+      <p className="text-xs text-muted-foreground">
         Changes apply to every agent and take effect on new runs. A running or waiting run
         keeps the runtime it was frozen with; answering a waiting run continues it on the
         agent&apos;s current core.
       </p>
       {applyError != null && (
-        <div style={{ marginBottom: 8 }}>
+        <div className="mb-2">
           <ErrorNotice
             presented={presentError(applyError, 'The fleet runtime was not applied.')}
             operatorSession
@@ -413,14 +429,14 @@ function RuntimePane({ open }: { open: boolean }) {
           />
         </div>
       )}
-      <button
+      <Button
         type="button"
         className="btn primary"
         disabled={!canApply || apply.isPending || agentsQuery.isFetching}
         onClick={() => setConfirmOpen(true)}
       >
         Apply to all agents
-      </button>
+      </Button>
 
       <ConfirmDialog
         open={confirmOpen}

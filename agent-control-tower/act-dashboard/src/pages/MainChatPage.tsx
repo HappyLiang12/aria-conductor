@@ -21,7 +21,6 @@ import { useLiveProgress } from '../components/main-chat/useLiveProgress';
 import { createAriaAdapter, type AriaAdapter } from '../chat/ariaAdapter';
 import { AriaRuntimeProvider } from '../chat/AriaRuntimeProvider';
 import { AriaThread } from '../chat/AriaThread';
-import '../styles/main-chat.css';
 
 const CLIENT_TIMEOUT_MS = 600_000; // Matches the backend SSE timeout (aria.sse.timeout.ms).
 
@@ -475,7 +474,9 @@ export default function MainChatPage() {
   const showEmpty = !historyLoading && entries.length === 0 && messageCount === 0;
 
   return (
-    <div className={`mc-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+    <div
+      className={`mc-shell grid h-[calc(100vh-var(--top-stack-h,67px))] min-h-0 max-[900px]:grid-cols-1 ${sidebarCollapsed ? 'sidebar-collapsed grid-cols-1' : 'grid-cols-1 min-[901px]:grid-cols-[260px_minmax(0,1fr)]'}`}
+    >
       {!sidebarCollapsed && (
         <ConversationSidebar
           items={conversations}
@@ -492,19 +493,26 @@ export default function MainChatPage() {
       {/* pb-24 keeps the composer clear of the shell's floating Aria button
           (56px + 24px gutter, fixed bottom-right), which otherwise covers the
           send control on narrow viewports. */}
-      <section className="mc-main pb-24" aria-label="Aria chat">
-        <header className="mc-header">
+      <section
+        className="mc-main flex min-h-0 min-w-0 flex-col pb-24 [&_.mc-stack]:flex [&_.mc-stack]:min-h-0 [&_.mc-stack]:flex-1 [&_.mc-stack]:flex-col [&_.mc-stack]:gap-3.5 [&_.mc-stack]:overflow-y-auto [&_.mc-stack]:px-4 [&_.mc-stack]:pt-4 [&_.mc-stack]:pb-2 [&_.mc-stack_.ai-msg]:mx-auto [&_.mc-stack_.ai-msg]:w-full [&_.mc-stack_.ai-msg]:max-w-[860px]"
+        aria-label="Aria chat"
+      >
+        <header className="mc-header flex items-center gap-2.5 border-b border-border px-4 py-2.5">
           <button
             type="button"
-            className="mc-sidebar-toggle"
+            className="mc-sidebar-toggle flex size-7 items-center justify-center rounded-lg border border-border bg-transparent text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setSidebarCollapsed((value) => !value)}
             aria-label={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
           >
             ☰
           </button>
-          <div className="mc-header-text">
-            <div className="mc-header-title">{activeTitle}</div>
-            {busy && <div className="mc-header-sub"><span className="ai-pulse-dot" aria-hidden="true" /> working</div>}
+          <div className="mc-header-text min-w-0">
+            <div className="mc-header-title truncate text-sm font-semibold text-foreground">{activeTitle}</div>
+            {busy && (
+              <div className="mc-header-sub mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="ai-pulse-dot inline-block size-1.5 rounded-full bg-primary" aria-hidden="true" /> working
+              </div>
+            )}
           </div>
         </header>
 
@@ -515,19 +523,19 @@ export default function MainChatPage() {
         >
           <RuntimeBridge auiRef={auiRef} onThread={handleThread} onHistory={handleHistory} />
 
-          {historyError && <div className="mc-history-error" role="alert">{historyError}</div>}
+          {historyError && <div className="mc-history-error px-4 py-2 text-xs text-destructive" role="alert">{historyError}</div>}
           {notice && <StateNotice kind="error" title={notice.title} message={notice.message} />}
 
           {historyLoading ? (
             <div className="mc-stack" aria-live="polite" aria-relevant="additions">
-              <div className="mc-sidebar-empty">Loading conversation…</div>
+              <div className="mc-sidebar-empty px-1 py-1.5 text-xs text-muted-foreground">Loading conversation…</div>
             </div>
           ) : showEmpty ? (
             <div className="mc-stack" aria-live="polite" aria-relevant="additions">
-              <div className="mc-empty">
-                <div className="ai-empty-eyebrow">— operator copilot</div>
-                <div className="ai-empty-title">Ask Aria anything.</div>
-                <div className="ai-empty-sub">
+              <div className="mc-empty mx-auto max-w-[520px] p-6">
+                <div className="ai-empty-eyebrow font-mono text-[10px] tracking-[0.28em] text-primary uppercase">— operator copilot</div>
+                <div className="ai-empty-title text-lg leading-tight font-medium text-foreground">Ask Aria anything.</div>
+                <div className="ai-empty-sub text-sm leading-relaxed text-muted-foreground">
                   I can brief you on agents, runs, approvals and the knowledge base — and I can act on what you ask.
                 </div>
               </div>
@@ -536,8 +544,8 @@ export default function MainChatPage() {
             <AriaThread indicator={indicator} />
           )}
 
-          <div className="mc-compose-wrap">
-            <div className="ai-compose mc-compose">
+          <div className="mc-compose-wrap mx-auto w-full max-w-[860px]">
+            <div className="ai-compose mc-compose relative flex flex-col gap-2 rounded-t-xl border border-border bg-card p-3">
               {slash.open && (
                 <SlashCommandMenu
                   items={slash.items}
@@ -551,14 +559,14 @@ export default function MainChatPage() {
                 />
               )}
               {slash.pendingSkill && !slash.open && (
-                <div className="ai-skill-chip">
+                <div className="ai-skill-chip inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
                   <span>/{slash.pendingSkill.name}</span>
                   <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
                 </div>
               )}
               <textarea
                 ref={textareaRef}
-                className="ai-compose-input"
+                className="ai-compose-input w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
                 value={input}
                 onChange={(event) => {
                   setInput(event.target.value);
@@ -571,14 +579,19 @@ export default function MainChatPage() {
                 aria-controls={slash.open ? 'slash-command-listbox' : undefined}
               />
               {busy ? (
-                <button type="button" className="ai-cancel-btn" onClick={stop} aria-label="Stop the turn">
+                <button
+                  type="button"
+                  className="ai-cancel-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/50 bg-destructive/10 px-3 text-xs font-semibold tracking-wide text-destructive uppercase transition-colors hover:bg-destructive/20"
+                  onClick={stop}
+                  aria-label="Stop the turn"
+                >
                   <span aria-hidden="true">■</span>
                   <span>Stop</span>
                 </button>
               ) : (
                 <button
                   type="button"
-                  className="ai-action-btn"
+                  className="ai-action-btn ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
                   onClick={() => send(input)}
                   disabled={!input.trim()}
                   aria-label="Send message"
@@ -588,7 +601,7 @@ export default function MainChatPage() {
                 </button>
               )}
             </div>
-            <div className="ai-hint mc-hint">
+            <div className="ai-hint mc-hint py-1 text-center text-[11px] text-muted-foreground">
               Aria streams live · acts on the live system · review approvals before destructive moves.
             </div>
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getRunToolCalls } from '../../api/runs';
 import type { ToolCall } from '../../types';
+import { Card } from '../ui/card';
 import type { ProgressItem } from './progress';
 import { renderMarkdown } from '../../utils/markdown';
 
@@ -9,27 +10,46 @@ function clip(text: string, max = 140): string {
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
 }
 
+/** The dot colour of a step's state, kept beside the `.mc-step` hook. */
+function stepDotClass(state: 'running' | 'done' | 'failed'): string {
+  if (state === 'running') return 'mc-step-dot size-1.5 shrink-0 rounded-full bg-primary';
+  if (state === 'failed') return 'mc-step-dot size-1.5 shrink-0 rounded-full bg-destructive';
+  return 'mc-step-dot size-1.5 shrink-0 rounded-full bg-muted-foreground';
+}
+
 function StepRow({ name, state, detail }: { name: string; state: 'running' | 'done' | 'failed'; detail: string }) {
   return (
-    <div className="mc-step" data-state={state}>
-      <span className="mc-step-dot" aria-hidden="true" />
-      <code className="mc-step-name">{name}</code>
-      {detail && <span className="mc-step-detail">{clip(detail)}</span>}
+    <div className="mc-step flex items-baseline gap-2 text-xs text-muted-foreground" data-state={state}>
+      <span className={stepDotClass(state)} aria-hidden="true" />
+      <code className="mc-step-name font-mono text-[11.5px] text-foreground">{name}</code>
+      {detail && (
+        <span className="mc-step-detail overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground">
+          {clip(detail)}
+        </span>
+      )}
     </div>
   );
 }
 
-/** The live turn's activity and answer parts, in the order the core reported them. */
+/**
+ * The live turn's activity and answer parts, in the order the core reported them.
+ *
+ * Wave 2 D6: the timeline is a token Card; `.mc-progress`, its `mc-progress` test
+ * id and the `.mc-step*` hooks stay because the page/E2E suite drives them.
+ */
 export function ProgressTimeline({ items }: { items: ProgressItem[] }) {
   if (items.length === 0) return null;
   return (
-    <div className="mc-progress" data-testid="mc-progress">
+    <Card
+      className="mc-progress flex w-full max-w-[88%] flex-col gap-1.5 rounded-2xl border border-dashed border-border bg-card p-2.5 [--card-spacing:0px]"
+      data-testid="mc-progress"
+    >
       {items.map((item) => {
         if (item.kind === 'answer') {
           return (
             <div
               key={item.key}
-              className="ai-msg-md markdown-content mc-live-answer"
+              className="ai-msg-md markdown-content mc-live-answer max-w-full text-sm text-card-foreground"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(item.text) }}
             />
           );
@@ -46,19 +66,22 @@ export function ProgressTimeline({ items }: { items: ProgressItem[] }) {
         }
         if (item.kind === 'thinking') {
           return (
-            <details key={item.key} className="mc-thinking">
-              <summary>Thinking</summary>
-              <div>{item.text}</div>
+            <details key={item.key} className="mc-thinking text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Thinking</summary>
+              <div className="mt-1 whitespace-pre-wrap">{item.text}</div>
             </details>
           );
         }
         return (
-          <div key={item.key} className={`mc-status${item.kind === 'error' ? ' mc-status-error' : ''}`}>
+          <div
+            key={item.key}
+            className={`mc-status text-xs text-muted-foreground${item.kind === 'error' ? ' mc-status-error text-destructive' : ''}`}
+          >
             {clip(item.text, 240)}
           </div>
         );
       })}
-    </div>
+    </Card>
   );
 }
 
@@ -85,10 +108,10 @@ export function StepsDisclosure({ runId, liveSteps }: { runId: string; liveSteps
 
   return (
     <details
-      className="mc-steps"
+      className="mc-steps text-[11px] text-muted-foreground"
       onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
     >
-      <summary>{stepCount != null && stepCount > 0 ? `Worked · ${stepCount} step${stepCount === 1 ? '' : 's'}` : 'Steps'}</summary>
+      <summary className="cursor-pointer">{stepCount != null && stepCount > 0 ? `Worked · ${stepCount} step${stepCount === 1 ? '' : 's'}` : 'Steps'}</summary>
       {liveSteps ? (
         liveSteps.map((item) => (
           <StepRow
@@ -99,11 +122,11 @@ export function StepsDisclosure({ runId, liveSteps }: { runId: string; liveSteps
           />
         ))
       ) : error ? (
-        <div className="mc-status mc-status-error">{error}</div>
+        <div className="mc-status mc-status-error text-xs text-destructive">{error}</div>
       ) : calls === null ? (
-        <div className="mc-status">Loading steps…</div>
+        <div className="mc-status text-xs text-muted-foreground">Loading steps…</div>
       ) : calls.length === 0 ? (
-        <div className="mc-status">No tool calls were recorded for this turn.</div>
+        <div className="mc-status text-xs text-muted-foreground">No tool calls were recorded for this turn.</div>
       ) : (
         calls.map((call) => (
           <StepRow

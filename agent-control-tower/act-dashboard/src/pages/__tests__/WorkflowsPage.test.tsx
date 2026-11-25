@@ -19,16 +19,25 @@ vi.mock('../../api/agents', () => ({ listAgents: vi.fn() }));
 vi.mock('../../components/Layout', () => ({
   useWebSocketContext: () => ({ lastMessage: null, isConnected: true }),
 }));
+// The Templates tab mounts TemplatesPanel, which reads workflow templates from
+// the knowledge API. Only the list call is exercised here; the rest keep their
+// real implementations so the module graph resolves unchanged.
+vi.mock('../../api/knowledge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/knowledge')>();
+  return { ...actual, listKnowledge: vi.fn() };
+});
 
 import { listWorkflows, deleteWorkflow, retryWorkflow } from '../../api/workflows';
 import { listRuns } from '../../api/runs';
 import { listAgents } from '../../api/agents';
+import { listKnowledge } from '../../api/knowledge';
 
 const mockListWorkflows = listWorkflows as Mock;
 const mockDeleteWorkflow = deleteWorkflow as Mock;
 const mockRetryWorkflow = retryWorkflow as Mock;
 const mockListRuns = listRuns as Mock;
 const mockListAgents = listAgents as Mock;
+const mockListKnowledge = listKnowledge as Mock;
 
 function chain() {
   return {
@@ -143,5 +152,47 @@ describe('WorkflowsPage delete confirmation (Task 10)', () => {
     await userEvent.click(screen.getByRole('button', { name: /Retry Step/ }));
 
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 2 C4: the Workflows page and its Templates panel render on the shadcn
+// token surfaces. The hooks the operator/E2E contracts depend on stay put.
+// ---------------------------------------------------------------------------
+describe('WorkflowsPage token surfaces (Wave 2 C4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListWorkflows.mockResolvedValue([chain()]);
+    mockListRuns.mockResolvedValue([]);
+    mockListAgents.mockResolvedValue([]);
+    mockListKnowledge.mockResolvedValue([
+      {
+        id: 't1', name: 'development-workflow', type: 'WORKFLOW', status: 'APPROVED',
+        description: 'SDD loop', currentVersion: 'v1.0.0', createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+  });
+
+  it('renders each workflow chain on a token card surface', async () => {
+    renderPage(<WorkflowsPage />);
+
+    const name = await screen.findByText('Demo chain');
+    const card = name.closest('[data-slot="card"]');
+    expect(card).not.toBeNull();
+    // Compatibility shims: select-for-merge, step copy, created stamp.
+    expect(card!.querySelector('input[type="checkbox"]')).not.toBeNull();
+    expect(card).toHaveTextContent('1/1 steps');
+    expect(card).toHaveTextContent('Created:');
+    expect(card).toHaveTextContent('Step 1:');
+  });
+
+  it('renders the Templates panel on token card surfaces', async () => {
+    renderPage(<WorkflowsPage />);
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Templates' }));
+
+    const name = await screen.findByText('development-workflow');
+    expect(name.closest('[data-slot="card"]')).not.toBeNull();
+    expect(screen.getByText('1 template')).toBeInTheDocument();
   });
 });

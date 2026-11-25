@@ -14,6 +14,13 @@ import ErrorNotice from '../components/ErrorNotice';
 import { StateNotice } from '../components/StateNotice';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { PageHeader } from '../components/layout/PageHeader';
+import { SectionCard } from '../components/layout/SectionCard';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { formatTimestamp } from '../utils/formatTime';
 import type {
   Agent,
@@ -51,29 +58,6 @@ function stageClass(item: KnowledgeItem): string {
 function avatarChar(name?: string): string {
   if (!name) return '·';
   return name.trim().charAt(0).toUpperCase();
-}
-
-function avatarStyle(seed: string): React.CSSProperties {
-  // deterministic gradient from string hash
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  const a = h % 360;
-  const b = (a + 48) % 360;
-  return {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    flex: '0 0 auto',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: '#0c1228',
-    fontWeight: 800,
-    fontSize: 13,
-    letterSpacing: '.5px',
-    background: `linear-gradient(135deg, hsl(${a} 70% 68%), hsl(${b} 70% 56%))`,
-    boxShadow: '0 0 0 1px rgba(255,255,255,.08), inset 0 0 8px rgba(255,255,255,.18)',
-  };
 }
 
 function formatDate(iso: string): string {
@@ -322,478 +306,475 @@ export function KnowledgePage() {
       .finally(() => setConfirmingPromote(false));
   };
 
+  const spacesCount = ownershipKnown
+    ? `${agents.length} agents${unattributedItems.length > 0 ? ` · ${unattributedItems.length} unattributed` : ''}`
+    : 'ownership unavailable';
+  const reviewCount = `/ ${visiblePending.length} pending${
+    activeAgentId
+      ? ` · ${activeAgentId === UNATTRIBUTED ? 'Unattributed' : agents.find((a) => a.id === activeAgentId)?.name}`
+      : ''
+  }`;
+
   return (
-    <div className="view-zone" data-view="knowledge" style={{ display: 'block', padding: 16 }}>
-      {/* ---------- Header ---------- */}
-      <div className="view-header">
-        <div>
-          <h1>Knowledge Governance</h1>
-          <div className="sub">
-            Status lifecycle for every skill, prompt, script and template — draft to retirement.
-          </div>
-        </div>
-        <div className="actions">
-          <button className="btn" onClick={() => queryClient.invalidateQueries({ queryKey: ['knowledge'] })}>
-            ↻ Refresh
-          </button>
-          <button className="btn primary" onClick={() => setShowSubmit(true)}>
-            + Submit New
-          </button>
-        </div>
-      </div>
+    <div className="view-zone space-y-4 p-4" data-view="knowledge">
+      <PageHeader
+        title="Knowledge Governance"
+        description="Status lifecycle for every skill, prompt, script and template — draft to retirement."
+        actions={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['knowledge'] })}
+            >
+              ↻ Refresh
+            </Button>
+            <Button onClick={() => setShowSubmit(true)}>+ Submit New</Button>
+          </>
+        }
+      />
 
       {itemsError && (
-        <div style={{ marginBottom: 16 }}>
-          <ErrorNotice presented={presentError(itemsError, 'Failed to load the knowledge library.')} />
-        </div>
+        <ErrorNotice presented={presentError(itemsError, 'Failed to load the knowledge library.')} />
       )}
 
       {/* ---------- 1. Promotion Path ---------- */}
-      <section className="panel" style={{ marginBottom: 16 }}>
-        <h2>
-          Promotion Path <span className="accent">/ governance flow</span>
-        </h2>
-        <div className="knowledge-flow">
-          {FLOW_STEPS.map((s) => (
-            <div key={s.num} className="kstep">
-              <div className="num">Stage {s.num}</div>
-              <div className="ttl">{s.ttl}</div>
-              <div className="desc">{s.desc}</div>
-            </div>
-          ))}
-        </div>
+      <section className="panel">
+        <SectionCard title="Promotion Path / governance flow">
+          <div className="knowledge-flow grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {FLOW_STEPS.map((s) => (
+              <Card key={s.num} size="sm" className="kstep p-3">
+                <div className="num text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                  Stage {s.num}
+                </div>
+                <div className="ttl mt-1 text-sm font-semibold text-foreground">{s.ttl}</div>
+                <div className="desc mt-1 text-xs leading-relaxed text-muted-foreground">{s.desc}</div>
+              </Card>
+            ))}
+          </div>
+        </SectionCard>
       </section>
 
       {/* ---------- 2. Per-Agent Knowledge Spaces ---------- */}
-      <section className="panel" style={{ marginBottom: 16 }}>
-        <h2>
-          Per-Agent Spaces{' '}
-          <span className="accent">
-            / {ownershipKnown ? `${agents.length} agents` : 'ownership unavailable'}
-          </span>
-          {ownershipKnown && unattributedItems.length > 0 && (
-            <span className="accent"> · {unattributedItems.length} unattributed</span>
-          )}
-        </h2>
-        <div className="knowledge-spaces">
-          {!ownershipKnown && (
-            <div style={{ gridColumn: '1 / -1' }} data-testid="ownership-unavailable">
-              {agentsLoading ? (
-                <StateNotice kind="loading" title="Loading agent spaces…" />
-              ) : (
-                <StateNotice
-                  kind="error"
-                  title="Agent ownership unavailable"
-                  message={apiErrorMessage(agentsError, 'Items are listed without ownership labels.')}
-                  actionLabel="Retry"
-                  onAction={() => {
-                    void refetchAgents();
-                  }}
-                />
-              )}
-            </div>
-          )}
-          {ownershipKnown && agents.length === 0 && (
-            <div style={{ gridColumn: '1 / -1', padding: 24, color: 'var(--text-mute)', fontSize: 12, textAlign: 'center' }}>
-              No agents registered yet. Create an agent to allocate a knowledge space.
-            </div>
-          )}
-          {ownershipKnown && agents.map((a) => {
-            const owned = itemsByAgent.get(a.id) ?? [];
-            const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
-            const live = owned.filter((i) => i.status === 'APPROVED').length;
-            const isActive = activeAgentId === a.id;
-            return (
-              <button
-                type="button"
-                key={a.id}
-                className={`kspace ${isActive ? 'active' : ''}`}
-                onClick={() => setActiveAgentId(isActive ? null : a.id)}
-                style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }}
-              >
-                <div className="top">
-                  <div style={avatarStyle(a.id)}>{avatarChar(a.name)}</div>
-                  <div>
-                    <div className="name">{a.name}</div>
-                    <div className="sub">{a.role || a.agentType}</div>
-                  </div>
-                </div>
-                <div className="metrics">
-                  <div>
-                    <b>{owned.length}</b>
-                    <span>Total</span>
-                  </div>
-                  <div>
-                    <b>{draft}</b>
-                    <span>In Review</span>
-                  </div>
-                  <div>
-                    <b>{live}</b>
-                    <span>Live</span>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-          {ownershipKnown && unattributedItems.length > 0 && (() => {
-            const owned = unattributedItems;
-            const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
-            const live = owned.filter((i) => i.status === 'APPROVED').length;
-            const isActive = activeAgentId === UNATTRIBUTED;
-            return (
-              <button
-                type="button"
-                className={`kspace ${isActive ? 'active' : ''}`}
-                onClick={() => setActiveAgentId(isActive ? null : UNATTRIBUTED)}
-                style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }}
-              >
-                <div className="top">
-                  {/* Never a real agent's avatar or name: this bucket means
-                      "no owner recorded", not shared authority. */}
-                  <div style={avatarStyle(UNATTRIBUTED)}>{avatarChar('Unattributed')}</div>
-                  <div>
-                    <div className="name">
-                      <span className="pill dim">Unattributed</span>
+      <section className="panel">
+        <SectionCard title="Per-Agent Spaces" count={`/ ${spacesCount}`}>
+          <div className="knowledge-spaces grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {!ownershipKnown && (
+              <div className="sm:col-span-2 xl:col-span-3" data-testid="ownership-unavailable">
+                {agentsLoading ? (
+                  <StateNotice kind="loading" title="Loading agent spaces…" />
+                ) : (
+                  <StateNotice
+                    kind="error"
+                    title="Agent ownership unavailable"
+                    message={apiErrorMessage(agentsError, 'Items are listed without ownership labels.')}
+                    actionLabel="Retry"
+                    onAction={() => {
+                      void refetchAgents();
+                    }}
+                  />
+                )}
+              </div>
+            )}
+            {ownershipKnown && agents.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground sm:col-span-2 xl:col-span-3">
+                No agents registered yet. Create an agent to allocate a knowledge space.
+              </div>
+            )}
+            {ownershipKnown && agents.map((a) => {
+              const owned = itemsByAgent.get(a.id) ?? [];
+              const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
+              const live = owned.filter((i) => i.status === 'APPROVED').length;
+              const isActive = activeAgentId === a.id;
+              return (
+                <button
+                  type="button"
+                  key={a.id}
+                  className={`kspace flex flex-col gap-3 rounded-xl bg-card p-4 text-left text-card-foreground ring-1 ring-foreground/10 transition-colors hover:ring-ring ${
+                    isActive ? 'active ring-2 ring-primary' : ''
+                  }`}
+                  aria-pressed={isActive}
+                  onClick={() => setActiveAgentId(isActive ? null : a.id)}
+                >
+                  <div className="top flex items-center gap-3">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-extrabold tracking-wide text-secondary-foreground">
+                      {avatarChar(a.name)}
                     </div>
-                    <div className="sub">No owner recorded</div>
+                    <div className="min-w-0">
+                      <div className="name truncate text-sm font-semibold text-foreground">{a.name}</div>
+                      <div className="sub truncate text-xs text-muted-foreground">{a.role || a.agentType}</div>
+                    </div>
                   </div>
-                </div>
-                <div className="metrics">
-                  <div>
-                    <b>{owned.length}</b>
-                    <span>Total</span>
+                  <div className="metrics grid grid-cols-3 gap-2">
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{owned.length}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">Total</span>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{draft}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">In Review</span>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{live}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">Live</span>
+                    </div>
                   </div>
-                  <div>
-                    <b>{draft}</b>
-                    <span>In Review</span>
+                </button>
+              );
+            })}
+            {ownershipKnown && unattributedItems.length > 0 && (() => {
+              const owned = unattributedItems;
+              const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
+              const live = owned.filter((i) => i.status === 'APPROVED').length;
+              const isActive = activeAgentId === UNATTRIBUTED;
+              return (
+                <button
+                  type="button"
+                  className={`kspace flex flex-col gap-3 rounded-xl bg-card p-4 text-left text-card-foreground ring-1 ring-foreground/10 transition-colors hover:ring-ring ${
+                    isActive ? 'active ring-2 ring-primary' : ''
+                  }`}
+                  aria-pressed={isActive}
+                  onClick={() => setActiveAgentId(isActive ? null : UNATTRIBUTED)}
+                >
+                  <div className="top flex items-center gap-3">
+                    {/* Never a real agent's avatar or name: this bucket means
+                        "no owner recorded", not shared authority. */}
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-extrabold tracking-wide text-muted-foreground">
+                      {avatarChar('Unattributed')}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="name">
+                        <Badge variant="outline" className="pill dim">Unattributed</Badge>
+                      </div>
+                      <div className="sub text-xs text-muted-foreground">No owner recorded</div>
+                    </div>
                   </div>
-                  <div>
-                    <b>{live}</b>
-                    <span>Live</span>
+                  <div className="metrics grid grid-cols-3 gap-2">
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{owned.length}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">Total</span>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{draft}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">In Review</span>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-2">
+                      <b className="block text-sm text-foreground">{live}</b>
+                      <span className="text-[10px] tracking-wide text-muted-foreground uppercase">Live</span>
+                    </div>
                   </div>
-                </div>
-              </button>
-            );
-          })()}
-        </div>
+                </button>
+              );
+            })()}
+          </div>
+        </SectionCard>
       </section>
 
       {/* ---------- 3 + 4. Review queue + Unified library ---------- */}
-      <div className="knowledge-grid">
+      <div className="knowledge-grid grid gap-4 xl:grid-cols-2">
         {/* Review queue */}
         <section className="panel">
-          <h2>
-            Submitted For Review{' '}
-            <span className="accent">
-              / {visiblePending.length} pending
-              {activeAgentId
-                ? ` · ${activeAgentId === UNATTRIBUTED ? 'Unattributed' : agents.find((a) => a.id === activeAgentId)?.name}`
-                : ''}
-            </span>
-            {activeAgentId && (
-              <button
-                className="btn"
-                style={{ marginLeft: 'auto', padding: '4px 8px', fontSize: 11 }}
-                onClick={() => setActiveAgentId(null)}
-              >
-                Clear filter
-              </button>
-            )}
-          </h2>
-
-          <div className="knowledge-review">
-            {/* Batch toolbar */}
-            <div
-              style={{
-                display: 'flex',
-                gap: 8,
-                alignItems: 'center',
-                paddingBottom: 10,
-                borderBottom: '1px dashed var(--line)',
-                marginBottom: 10,
-              }}
-            >
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-dim)' }}>
-                <input
-                  type="checkbox"
-                  checked={visiblePending.length > 0 && visiblePending.every((p) => checkedIds.has(p.id))}
-                  onChange={toggleAllVisible}
-                  style={{ accentColor: 'var(--brand)' }}
-                />
-                Select all visible
-              </label>
-              <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>
-                {checkedIds.size} selected
-              </span>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                <button
-                  className="btn"
-                  disabled={checkedIds.size === 0 || batchMut.isPending}
-                  onClick={() =>
-                    setConfirmReview({
-                      ids: Array.from(checkedIds),
-                      approved: true,
-                      batch: true,
-                    })
-                  }
-                  style={{ color: '#6fe2b6', borderColor: 'rgba(54,211,153,.4)' }}
-                >
-                  ✓ Batch Approve
-                </button>
-                <button
-                  className="btn"
-                  disabled={checkedIds.size === 0 || batchMut.isPending}
-                  onClick={() =>
-                    setConfirmReview({
-                      ids: Array.from(checkedIds),
-                      approved: false,
-                      batch: true,
-                    })
-                  }
-                  style={{ color: '#ff8d99', borderColor: 'rgba(255,107,122,.4)' }}
-                >
-                  ✗ Batch Reject
-                </button>
+          <SectionCard
+            title="Submitted For Review"
+            count={reviewCount}
+            actions={
+              activeAgentId ? (
+                <Button size="xs" variant="ghost" onClick={() => setActiveAgentId(null)}>
+                  Clear filter
+                </Button>
+              ) : undefined
+            }
+          >
+            <div className="knowledge-review space-y-3">
+              {/* Batch toolbar */}
+              <div className="flex flex-wrap items-center gap-3 border-b border-dashed border-border pb-3">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="accent-primary"
+                    checked={visiblePending.length > 0 && visiblePending.every((p) => checkedIds.has(p.id))}
+                    onChange={toggleAllVisible}
+                  />
+                  Select all visible
+                </label>
+                <span className="text-xs text-muted-foreground">{checkedIds.size} selected</span>
+                <div className="ml-auto flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-emerald-700 dark:text-emerald-400"
+                    disabled={checkedIds.size === 0 || batchMut.isPending}
+                    onClick={() =>
+                      setConfirmReview({
+                        ids: Array.from(checkedIds),
+                        approved: true,
+                        batch: true,
+                      })
+                    }
+                  >
+                    ✓ Batch Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive"
+                    disabled={checkedIds.size === 0 || batchMut.isPending}
+                    onClick={() =>
+                      setConfirmReview({
+                        ids: Array.from(checkedIds),
+                        approved: false,
+                        batch: true,
+                      })
+                    }
+                  >
+                    ✗ Batch Reject
+                  </Button>
+                </div>
               </div>
-            </div>
 
-            {/* Items */}
-            <div style={{ display: 'grid', gap: 8 }}>
-              {loadingItems && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: '12px 0' }}>Loading…</div>
-              )}
-              {!loadingItems && !itemsError && visiblePending.length === 0 && (
-                <div
-                  style={{
-                    color: 'var(--text-mute)',
-                    fontSize: 12,
-                    padding: '24px 0',
-                    textAlign: 'center',
-                    border: '1px dashed var(--line)',
-                    borderRadius: 10,
-                  }}
-                >
-                  Inbox zero. No items waiting for review.
+              {/* Items */}
+              <div className="grid gap-2">
+                {loadingItems && (
+                  <div className="py-3 text-xs text-muted-foreground">Loading…</div>
+                )}
+                {!loadingItems && !itemsError && visiblePending.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-border py-6 text-center text-xs text-muted-foreground">
+                    Inbox zero. No items waiting for review.
+                  </div>
+                )}
+                {visiblePending.map((it) => {
+                  const checked = checkedIds.has(it.id);
+                  return (
+                    <Card
+                      key={it.id}
+                      size="sm"
+                      className="kitem grid grid-cols-[auto_auto_1fr_auto] items-center gap-3 p-3"
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-primary"
+                        checked={checked}
+                        onChange={() => toggleChecked(it.id)}
+                      />
+                      <Badge variant="secondary" className={`stage ${stageClass(it)}`}>
+                        {it.type}
+                      </Badge>
+                      <div className="min-w-0">
+                        <div className="ttl truncate text-sm font-medium text-foreground">{it.name}</div>
+                        <div className="desc truncate text-xs text-muted-foreground">
+                          {ownerLabelOf(it)} · submitted {formatDate(it.createdAt)}
+                          {it.description ? ` · ${it.description.slice(0, 60)}${it.description.length > 60 ? '…' : ''}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          className="text-emerald-700 dark:text-emerald-400"
+                          onClick={() => setConfirmReview({ ids: [it.id], approved: true, batch: false })}
+                          disabled={reviewMut.isPending}
+                          title="Approve"
+                        >
+                          ✓
+                        </Button>
+                        <Button
+                          size="icon-sm"
+                          variant="outline"
+                          className="text-destructive"
+                          onClick={() => setConfirmReview({ ids: [it.id], approved: false, batch: false })}
+                          disabled={reviewMut.isPending}
+                          title="Reject"
+                        >
+                          ✗
+                        </Button>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={() => setSelectedItemId(it.id)}
+                          title="View"
+                        >
+                          ↗
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              {/* Reason */}
+              {(visiblePending.length > 0 || checkedIds.size > 0) && (
+                <div className="space-y-1">
+                  <label
+                    htmlFor="knowledge-review-reason"
+                    className="block text-[10px] font-medium tracking-wider text-muted-foreground uppercase"
+                  >
+                    Review note (optional)
+                  </label>
+                  <Input
+                    id="knowledge-review-reason"
+                    value={reviewReason}
+                    onChange={(e) => setReviewReason(e.target.value)}
+                    placeholder="e.g. Approved per security review SR-2031"
+                  />
                 </div>
               )}
-              {visiblePending.map((it) => {
-                const checked = checkedIds.has(it.id);
-                return (
-                  <div key={it.id} className="kitem" style={{ gridTemplateColumns: 'auto auto 1fr auto' }}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleChecked(it.id)}
-                      style={{ accentColor: 'var(--brand)' }}
-                    />
-                    <span className={`stage ${stageClass(it)}`}>{it.type}</span>
-                    <div>
-                      <div className="ttl">{it.name}</div>
-                      <div className="desc">
-                        {ownerLabelOf(it)} · submitted {formatDate(it.createdAt)}
-                        {it.description ? ` · ${it.description.slice(0, 60)}${it.description.length > 60 ? '…' : ''}` : ''}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        className="btn"
-                        onClick={() => setConfirmReview({ ids: [it.id], approved: true, batch: false })}
-                        disabled={reviewMut.isPending}
-                        style={{ color: '#6fe2b6', borderColor: 'rgba(54,211,153,.4)' }}
-                        title="Approve"
-                      >
-                        ✓
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => setConfirmReview({ ids: [it.id], approved: false, batch: false })}
-                        disabled={reviewMut.isPending}
-                        style={{ color: '#ff8d99', borderColor: 'rgba(255,107,122,.4)' }}
-                        title="Reject"
-                      >
-                        ✗
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => setSelectedItemId(it.id)}
-                        title="View"
-                      >
-                        ↗
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
-
-            {/* Reason */}
-            {(visiblePending.length > 0 || checkedIds.size > 0) && (
-              <div style={{ marginTop: 12 }}>
-                <label
-                  style={{
-                    display: 'block',
-                    color: 'var(--text-mute)',
-                    fontSize: 9.5,
-                    letterSpacing: '.7px',
-                    textTransform: 'uppercase',
-                    marginBottom: 4,
-                  }}
-                >
-                  Review note (optional)
-                </label>
-                <input
-                  value={reviewReason}
-                  onChange={(e) => setReviewReason(e.target.value)}
-                  placeholder="e.g. Approved per security review SR-2031"
-                  style={{
-                    width: '100%',
-                    border: '1px solid var(--line-2)',
-                    borderRadius: 9,
-                    background: 'rgba(0,0,0,.22)',
-                    color: 'var(--text)',
-                    padding: '8px 10px',
-                    font: 'inherit',
-                    fontSize: 12,
-                    outline: 'none',
-                  }}
-                />
-              </div>
-            )}
-          </div>
+          </SectionCard>
         </section>
 
         {/* Unified knowledge space */}
         <section className="panel">
-          <h2>
-            Unified Knowledge Space <span className="accent">/ {filteredApproved.length} approved</span>
-          </h2>
-
-          <div className="kb-toolbar">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search title, description, type…"
-            />
-            <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>
-              {approved.length} total
-            </span>
-          </div>
-
-          <div className="kb-layout">
-            <div className="unified-list">
-              {!itemsError && filteredApproved.length === 0 && (
-                <div
-                  style={{
-                    color: 'var(--text-mute)',
-                    fontSize: 12,
-                    padding: 16,
-                    textAlign: 'center',
-                    border: '1px dashed var(--line)',
-                    borderRadius: 10,
-                  }}
-                >
-                  {approved.length === 0 ? 'No approved knowledge yet.' : 'No items match your search.'}
-                </div>
-              )}
-              {filteredApproved.map((it) => {
-                const isActive = selectedItemId === it.id;
-                return (
-                  <div
-                    key={it.id}
-                    className={`kitem selectable ${isActive ? 'active' : ''}`}
-                    onClick={() => setSelectedItemId(it.id)}
-                  >
-                    <span className={`stage ${stageClass(it)}`}>{it.type}</span>
-                    <div>
-                      <div className="ttl">{it.name}</div>
-                      <div className="desc">
-                        {formatVersion(it.currentVersion)} · {ownerLabelOf(it)} · {formatDate(it.createdAt)}
-                      </div>
-                    </div>
-                    <span style={{ fontSize: 10, color: 'var(--text-mute)', letterSpacing: '.5px' }}>
-                      {it.sensitivity}
-                    </span>
-                  </div>
-                );
-              })}
+          <SectionCard title="Unified Knowledge Space" count={`/ ${filteredApproved.length} approved`}>
+            <div className="kb-toolbar mb-3 flex flex-wrap items-center gap-3">
+              <Input
+                className="max-w-xs"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search title, description, type…"
+              />
+              <span className="text-xs text-muted-foreground">{approved.length} total</span>
             </div>
 
-            <div className="kb-detail">
-              {!selected && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12, lineHeight: 1.6 }}>
-                  <div className="ttl" style={{ color: 'var(--text)', marginBottom: 6 }}>
-                    Select a knowledge item
+            <div className="kb-layout grid gap-3 lg:grid-cols-2">
+              <div className="unified-list grid content-start gap-2">
+                {!itemsError && filteredApproved.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+                    {approved.length === 0 ? 'No approved knowledge yet.' : 'No items match your search.'}
                   </div>
-                  Pick any approved entry on the left to inspect its content, lineage and access scope. Items in the unified
-                  library are versioned, signed and indexed across the entire fleet.
-                </div>
-              )}
-              {selected && (
-                <>
-                  <div className="ttl">{selected.name}</div>
-                  <div className="meta">
-                    <span className={`stage ${stageClass(selected)}`} style={{ marginRight: 6 }}>
-                      {selected.type}
-                    </span>
-                    {formatVersion(selected.currentVersion)} · {ownerLabelOf(selected)} · approved{' '}
-                    {formatDate(selected.createdAt)} · {selected.sensitivity}
-                  </div>
-                  {selected.type === 'WORKFLOW' && (
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                      <button className={`btn ${viewMode === 'md' ? 'primary' : ''}`} onClick={() => setViewMode('md')}>Markdown</button>
-                      <button className={`btn ${viewMode === 'yaml' ? 'primary' : ''}`} onClick={() => setViewMode('yaml')}>YAML</button>
-                    </div>
-                  )}
-                  <div className="content">
-                    {selected.type === 'WORKFLOW' && viewMode === 'yaml' ? (
-                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>
-                        {yamlQuery.isLoading ? 'Loading YAML…' : yamlQuery.data || '(no YAML available)'}
-                      </pre>
-                    ) : (
-                      selected.description || '(no description)'
-                    )}
-                  </div>
-                  <div className="actions">
-                    <button className="btn" onClick={() => setConfirmingPromote(true)}>
-                      ⤴ Promote
-                    </button>
-                    <button
-                      className="btn"
-                      onClick={() => navigator.clipboard?.writeText(selected.id)}
+                )}
+                {filteredApproved.map((it) => {
+                  const isActive = selectedItemId === it.id;
+                  return (
+                    <Card
+                      key={it.id}
+                      size="sm"
+                      className={`kitem selectable cursor-pointer p-3 ${
+                        isActive ? 'active ring-2 ring-primary' : ''
+                      }`}
+                      onClick={() => setSelectedItemId(it.id)}
                     >
-                      ⧉ Copy ID
-                    </button>
-                    <button className="btn" onClick={() => setSelectedItemId(null)}>
-                      Close
-                    </button>
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary" className={`stage ${stageClass(it)}`}>
+                          {it.type}
+                        </Badge>
+                        <div className="min-w-0 flex-1">
+                          <div className="ttl truncate text-sm font-medium text-foreground">{it.name}</div>
+                          <div className="desc text-xs text-muted-foreground">
+                            {formatVersion(it.currentVersion)} · {ownerLabelOf(it)} · {formatDate(it.createdAt)}
+                          </div>
+                        </div>
+                        <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
+                          {it.sensitivity}
+                        </span>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              <div className="kb-detail rounded-lg bg-muted/30 p-3 ring-1 ring-foreground/5">
+                {!selected && (
+                  <div className="text-xs leading-relaxed text-muted-foreground">
+                    <div className="ttl mb-1.5 text-sm font-semibold text-foreground">
+                      Select a knowledge item
+                    </div>
+                    Pick any approved entry on the left to inspect its content, lineage and access scope. Items in the unified
+                    library are versioned, signed and indexed across the entire fleet.
                   </div>
-                </>
-              )}
+                )}
+                {selected && (
+                  <>
+                    <div className="ttl text-sm font-semibold text-foreground">{selected.name}</div>
+                    <div className="meta mt-2 mb-2 flex flex-wrap items-center gap-2 text-xs leading-relaxed text-muted-foreground">
+                      <Badge variant="secondary" className={`stage ${stageClass(selected)}`}>
+                        {selected.type}
+                      </Badge>
+                      <span>
+                        {formatVersion(selected.currentVersion)} · {ownerLabelOf(selected)} · approved{' '}
+                        {formatDate(selected.createdAt)} · {selected.sensitivity}
+                      </span>
+                    </div>
+                    {selected.type === 'WORKFLOW' && (
+                      <div className="mb-2 flex gap-2">
+                        <Button
+                          size="xs"
+                          variant={viewMode === 'md' ? 'default' : 'outline'}
+                          onClick={() => setViewMode('md')}
+                        >
+                          Markdown
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={viewMode === 'yaml' ? 'default' : 'outline'}
+                          onClick={() => setViewMode('yaml')}
+                        >
+                          YAML
+                        </Button>
+                      </div>
+                    )}
+                    <div className="content max-h-40 overflow-auto rounded-lg border border-border bg-background/60 p-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+                      {selected.type === 'WORKFLOW' && viewMode === 'yaml' ? (
+                        <pre className="m-0 text-xs whitespace-pre-wrap">
+                          {yamlQuery.isLoading ? 'Loading YAML…' : yamlQuery.data || '(no YAML available)'}
+                        </pre>
+                      ) : (
+                        selected.description || '(no description)'
+                      )}
+                    </div>
+                    <div className="actions mt-3 flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={() => setConfirmingPromote(true)}>
+                        ⤴ Promote
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => navigator.clipboard?.writeText(selected.id)}
+                      >
+                        ⧉ Copy ID
+                      </Button>
+                      <Button variant="ghost" onClick={() => setSelectedItemId(null)}>
+                        Close
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          </SectionCard>
         </section>
       </div>
 
       {/* ---------- Review confirm dialog ---------- */}
       {confirmReview && (
-        <div className="modal-overlay" onClick={() => setConfirmReview(null)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Confirm Review</h3>
+        <div
+          className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          onClick={() => setConfirmReview(null)}
+        >
+          <div
+            className="modal-dialog w-full max-w-md rounded-xl bg-card p-5 text-card-foreground ring-1 ring-foreground/10"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm Review"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-foreground">Confirm Review</h3>
             {confirmReview.approved ? (
-              <p>
-                You are about to <strong>approve</strong> {confirmReview.ids.length} item(s).
+              <p className="mt-2 text-sm text-muted-foreground">
+                You are about to <strong className="text-foreground">approve</strong> {confirmReview.ids.length} item(s).
                 They will be published to the unified knowledge library.
               </p>
             ) : (
-              <p>
-                You are about to <strong>reject</strong> {confirmReview.ids.length} item(s).
+              <p className="mt-2 text-sm text-muted-foreground">
+                You are about to <strong className="text-foreground">reject</strong> {confirmReview.ids.length} item(s).
                 They will be returned to the submitting agent.
               </p>
             )}
-            {reviewReason && <div className="approval-reason-preview">Reason: {reviewReason}</div>}
-            <div className="modal-actions">
-              <button
-                className={`btn ${confirmReview.approved ? 'btn-success' : 'btn-danger'}`}
+            {reviewReason && (
+              <div className="approval-reason-preview mt-2 rounded-lg bg-muted p-2 text-xs text-muted-foreground">
+                Reason: {reviewReason}
+              </div>
+            )}
+            <div className="modal-actions mt-4 flex justify-end gap-2">
+              <Button
+                variant={confirmReview.approved ? 'default' : 'destructive'}
                 onClick={handleConfirmReview}
                 disabled={reviewMut.isPending || batchMut.isPending}
               >
@@ -802,8 +783,8 @@ export function KnowledgePage() {
                   : confirmReview.approved
                     ? 'Confirm Approve'
                     : 'Confirm Reject'}
-              </button>
-              <button className="btn" onClick={() => setConfirmReview(null)}>Cancel</button>
+              </Button>
+              <Button variant="outline" onClick={() => setConfirmReview(null)}>Cancel</Button>
             </div>
           </div>
         </div>
@@ -826,40 +807,41 @@ export function KnowledgePage() {
       {/* ---------- Submit modal ---------- */}
       {showSubmit && (
         <>
-          <div className="knowledge-pop-scrim open" onClick={() => setShowSubmit(false)} />
-          <div className="knowledge-pop" style={{ transform: 'translate(-50%, -50%) scale(1)', opacity: 1, pointerEvents: 'auto', display: 'flex', flexDirection: 'column' }}>
-            <div
-              style={{
-                padding: '14px 16px',
-                borderBottom: '1px solid var(--line)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <strong style={{ fontSize: 13, letterSpacing: '.6px' }}>Submit New Knowledge</strong>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)' }}>
+          <div
+            className="knowledge-pop-scrim open fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            onClick={() => setShowSubmit(false)}
+          />
+          <div
+            className="knowledge-pop fixed top-1/2 left-1/2 z-50 flex max-h-[85vh] w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-card text-card-foreground ring-1 ring-foreground/10"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Submit New Knowledge"
+          >
+            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+              <strong className="text-sm font-semibold tracking-wide text-foreground">Submit New Knowledge</strong>
+              <span className="ml-auto text-xs text-muted-foreground">
                 Stored as <em>Pending</em> — a human must approve it before agents can use it.
               </span>
-              <button className="btn" onClick={() => setShowSubmit(false)} style={{ marginLeft: 6 }}>
+              <Button variant="ghost" size="icon-sm" onClick={() => setShowSubmit(false)} className="ml-1.5">
                 ✕
-              </button>
+              </Button>
             </div>
-            <form onSubmit={submitNew} style={{ padding: 16, display: 'grid', gap: 12, overflow: 'auto' }}>
-              <FormRow label="Title">
-                <input
+            <form onSubmit={submitNew} className="grid gap-3 overflow-auto p-4">
+              <FormRow label="Title" htmlFor="knowledge-title">
+                <Input
+                  id="knowledge-title"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="e.g. PR Review Checklist v2"
-                  style={inputStyle}
                 />
               </FormRow>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <FormRow label="Type">
+              <div className="grid grid-cols-2 gap-3">
+                <FormRow label="Type" htmlFor="knowledge-type">
                   <select
+                    id="knowledge-type"
+                    className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
                     value={form.type}
                     onChange={(e) => setForm({ ...form, type: e.target.value as KnowledgeType })}
-                    style={inputStyle}
                   >
                     <option value="SKILL">Skill</option>
                     <option value="SCRIPT">Script</option>
@@ -871,11 +853,12 @@ export function KnowledgePage() {
                     <option value="SPEC">Spec</option>
                   </select>
                 </FormRow>
-                <FormRow label="Sensitivity">
+                <FormRow label="Sensitivity" htmlFor="knowledge-sensitivity">
                   <select
+                    id="knowledge-sensitivity"
+                    className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
                     value={form.sensitivity}
-                    onChange={(e) => setForm({ ...form, sensitivity: e.target.value })}
-                    style={inputStyle}
+                    onChange={(e) => setForm({ ...form, sensitivity: e.target.value as CreateKnowledgeRequest['sensitivity'] })}
                   >
                     <option value="PUBLIC">Public</option>
                     <option value="INTERNAL">Internal</option>
@@ -884,34 +867,36 @@ export function KnowledgePage() {
                   </select>
                 </FormRow>
               </div>
-              <FormRow label="Description">
-                <textarea
+              <FormRow label="Description" htmlFor="knowledge-description">
+                <Textarea
+                  id="knowledge-description"
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}
                   placeholder="Plain-language summary"
-                  style={{ ...inputStyle, resize: 'vertical' }}
+                  className="resize-y"
                 />
               </FormRow>
-              <FormRow label="Content">
-                <textarea
+              <FormRow label="Content" htmlFor="knowledge-content">
+                <Textarea
+                  id="knowledge-content"
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
                   rows={6}
                   placeholder="Body, code, instructions…"
-                  style={{ ...inputStyle, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', resize: 'vertical' }}
+                  className="resize-y font-mono"
                 />
               </FormRow>
               {formError && (
-                <div style={{ color: '#ff8d99', fontSize: 12 }}>{formError}</div>
+                <div className="text-xs text-destructive" role="alert">{formError}</div>
               )}
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button type="button" className="btn" onClick={() => setShowSubmit(false)}>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setShowSubmit(false)}>
                   Cancel
-                </button>
-                <button type="submit" className="btn primary" disabled={createMut.isPending}>
+                </Button>
+                <Button type="submit" disabled={createMut.isPending}>
                   {createMut.isPending ? 'Submitting…' : 'Submit for Review'}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -921,20 +906,8 @@ export function KnowledgePage() {
       {/* ---------- Toast ---------- */}
       {toast && (
         <div
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            right: 24,
-            zIndex: 200,
-            padding: '10px 14px',
-            border: '1px solid rgba(91,140,255,.4)',
-            background: 'rgba(91,140,255,.14)',
-            color: 'var(--text)',
-            borderRadius: 10,
-            fontSize: 12,
-            backdropFilter: 'blur(8px)',
-            boxShadow: '0 12px 32px rgba(0,0,0,.45)',
-          }}
+          role="status"
+          className="fixed right-6 bottom-6 z-[200] rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2.5 text-xs text-foreground shadow-lg backdrop-blur-md"
         >
           {toast}
         </div>
@@ -945,34 +918,24 @@ export function KnowledgePage() {
 
 // ---------- Tiny presentational helpers ---------- //
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  border: '1px solid var(--line-2)',
-  borderRadius: 9,
-  background: 'rgba(0,0,0,.22)',
-  color: 'var(--text)',
-  padding: '8px 10px',
-  font: 'inherit',
-  fontSize: 12.5,
-  outline: 'none',
-};
-
-function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+function FormRow({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <label style={{ display: 'block' }}>
-      <span
-        style={{
-          display: 'block',
-          color: 'var(--text-mute)',
-          fontSize: 9.5,
-          letterSpacing: '.7px',
-          textTransform: 'uppercase',
-          marginBottom: 4,
-        }}
+    <div className="block">
+      <label
+        htmlFor={htmlFor}
+        className="mb-1 block text-[10px] font-medium tracking-wider text-muted-foreground uppercase"
       >
         {label}
-      </span>
+      </label>
       {children}
-    </label>
+    </div>
   );
 }

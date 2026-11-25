@@ -10,16 +10,24 @@ import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import TemplatesPanel from '../components/TemplatesPanel';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import PageHeader from '../components/layout/PageHeader';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
 
-const statusColor = (s: WorkflowStatus): string => {
+// Tone classes rather than fixed colours: the status chip and the completed-step
+// bar read the same tokens in both themes. The chip renders the tone as a dot so
+// the token colour never competes with the Badge variant's own text/border.
+const statusDot = (s: WorkflowStatus): string => {
   switch (s) {
-    case 'COMPLETED': return 'var(--ok, #22c55e)';
-    case 'RUNNING': return 'var(--warn, #f59e0b)';
-    case 'WAITING_APPROVAL': return 'var(--warn, #f59e0b)';
-    case 'FAILED': return 'var(--err, #ef4444)';
-    case 'CANCELLED': return 'var(--muted, #94a3b8)';
-    default: return 'var(--muted, #94a3b8)';
+    case 'COMPLETED': return 'bg-success';
+    case 'RUNNING': return 'bg-warning';
+    case 'WAITING_APPROVAL': return 'bg-warning';
+    case 'FAILED': return 'bg-destructive';
+    default: return 'bg-muted-foreground';
   }
 };
 
@@ -50,35 +58,23 @@ function StepCard({ step, agentName }: { step: WorkflowStepInfo; agentName: stri
   const [expanded, setExpanded] = useState(false);
   return (
     <div
-      style={{
-        border: `1px solid ${step.status === 'RUNNING' ? 'var(--warn, #f59e0b)' : 'var(--border, #334155)'}`,
-        borderRadius: 8,
-        padding: '10px 14px',
-        background: step.status === 'RUNNING' ? 'rgba(245,158,11,0.06)' : 'var(--surface2, #1e293b)',
-        cursor: step.outputPreview ? 'pointer' : 'default',
-      }}
+      className={`rounded-lg border px-3.5 py-2.5 ${
+        step.status === 'RUNNING'
+          ? 'border-warning/50 bg-warning/5'
+          : 'border-border bg-muted/30'
+      } ${step.outputPreview ? 'cursor-pointer' : 'cursor-default'}`}
       onClick={() => step.outputPreview && setExpanded(!expanded)}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 16 }}>{stepStatusIcon(step.status)}</span>
-        <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>Step {step.index + 1}: {agentName}</span>
-        <span style={{ fontSize: 11, color: 'var(--muted, #94a3b8)' }}>{step.status}</span>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="text-base leading-none">{stepStatusIcon(step.status)}</span>
+        <span className="flex-1 text-sm font-semibold text-foreground">Step {step.index + 1}: {agentName}</span>
+        <span className="text-[11px] text-muted-foreground">{step.status}</span>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--muted, #94a3b8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <div className="truncate text-xs text-muted-foreground">
         {step.promptTemplate}
       </div>
       {expanded && step.outputPreview && (
-        <div style={{
-          marginTop: 8,
-          padding: '8px 10px',
-          background: 'var(--surface, #0f172a)',
-          borderRadius: 6,
-          fontSize: 12,
-          whiteSpace: 'pre-wrap',
-          maxHeight: 300,
-          overflow: 'auto',
-          lineHeight: 1.5,
-        }}>
+        <div className="mt-2 max-h-[300px] overflow-auto rounded-md bg-background p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground">
           {step.outputPreview}
         </div>
       )}
@@ -101,59 +97,45 @@ function WorkflowCard({ wf, agentMap, runStatusById, isSelected, onToggleSelect,
   const progress = wf.totalSteps > 0 ? (completedSteps / wf.totalSteps) * 100 : 0;
 
   return (
-    <div style={{
-      border: isSelected ? '2px solid var(--brand, #5b8cff)' : '1px solid var(--border, #334155)',
-      borderRadius: 12,
-      padding: '16px 20px',
-      background: 'var(--surface, #0f172a)',
-      marginBottom: 16,
-    }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+    <Card
+      className={`mb-4 gap-3 ${
+        isSelected ? 'ring-2 ring-primary' : ''
+      }`}
+    >
+      {/* Header: the name stays a bare <span> (E2E selects the card by its exact text). */}
+      <div className="flex flex-wrap items-center gap-2.5 px-(--card-spacing)">
         <input
           type="checkbox"
           checked={isSelected}
           onChange={() => onToggleSelect(wf.id)}
-          style={{ accentColor: 'var(--brand, #5b8cff)' }}
+          className="size-4 accent-primary"
           title="Select for merge"
         />
-        <span style={{
-          fontSize: 11,
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-          padding: '3px 8px',
-          borderRadius: 4,
-          color: '#fff',
-          background: statusColor(wf.status),
-        }}>
+        <Badge
+          variant="outline"
+          className="gap-1.5 px-2 py-0.5 text-[11px] font-bold tracking-wide uppercase"
+        >
+          <span className={`size-1.5 rounded-full ${statusDot(wf.status)}`} aria-hidden="true" />
           {wf.status}
-        </span>
-        <span style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>{wf.name}</span>
-        <span style={{ fontSize: 12, color: 'var(--muted, #94a3b8)' }}>
+        </Badge>
+        <span className="min-w-0 flex-1 truncate text-base font-bold text-card-foreground">{wf.name}</span>
+        <span className="text-xs text-muted-foreground">
           {completedSteps}/{wf.totalSteps} steps
         </span>
       </div>
 
       {/* Progress bar */}
-      <div style={{
-        height: 4,
-        background: 'var(--surface2, #1e293b)',
-        borderRadius: 2,
-        marginBottom: 14,
-        overflow: 'hidden',
-      }}>
-        <div style={{
-          height: '100%',
-          width: `${progress}%`,
-          background: wf.status === 'FAILED' ? 'var(--err, #ef4444)' : 'var(--ok, #22c55e)',
-          borderRadius: 2,
-          transition: 'width 0.5s ease',
-        }} />
+      <div className="h-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 ${
+            wf.status === 'FAILED' ? 'bg-destructive' : 'bg-success'
+          }`}
+          style={{ width: `${progress}%` }}
+        />
       </div>
 
       {/* Steps */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="flex flex-col gap-2">
         {wf.steps.map(step => (
           <StepCard
             key={step.index}
@@ -164,7 +146,7 @@ function WorkflowCard({ wf, agentMap, runStatusById, isSelected, onToggleSelect,
       </div>
 
       {/* Footer */}
-      <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted, #94a3b8)', display: 'flex', gap: 16 }}>
+      <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
         <span>Created: {formatTimestamp(wf.createdAt)}</span>
         {wf.completedAt && <span>Completed: {formatTimestamp(wf.completedAt)}</span>}
         {wf.completedAt && (
@@ -175,29 +157,29 @@ function WorkflowCard({ wf, agentMap, runStatusById, isSelected, onToggleSelect,
       </div>
 
       {/* Action buttons */}
-      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div className="flex flex-wrap gap-2">
         {['RUNNING', 'PENDING', 'WAITING_APPROVAL'].includes(wf.status) && (
-          <button className="btn danger" onClick={() => onCancel(wf.id)}>
+          <Button variant="destructive" size="sm" onClick={() => onCancel(wf.id)}>
             Cancel
-          </button>
+          </Button>
         )}
         {wf.status === 'WAITING_APPROVAL' && (
-          <button className="btn btn-warning" onClick={() => onResubmit(wf.id)}>
+          <Button variant="outline" size="sm" className="text-warning" onClick={() => onResubmit(wf.id)}>
             Resubmit approval
-          </button>
+          </Button>
         )}
         {wf.status === 'FAILED' && (
-          <button className="btn primary" onClick={() => onRetry(wf.id, wf.currentStepIndex)}>
+          <Button size="sm" onClick={() => onRetry(wf.id, wf.currentStepIndex)}>
             Retry Step {wf.currentStepIndex}
-          </button>
+          </Button>
         )}
         {wf.status !== 'RUNNING' && (
-          <button className="btn" onClick={() => onDelete(wf.id)}>
+          <Button variant="outline" size="sm" onClick={() => onDelete(wf.id)}>
             Delete
-          </button>
+          </Button>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -347,53 +329,51 @@ export function WorkflowsPage() {
   }, []);
 
   return (
-    <div style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Workflows</h1>
-        {activeTab === 'chains' && runningCount > 0 && (
-          <span style={{
-            fontSize: 11,
-            fontWeight: 600,
-            padding: '2px 8px',
-            borderRadius: 10,
-            background: 'var(--warn, #f59e0b)',
-            color: '#000',
-          }}>
-            {runningCount} running
-          </span>
-        )}
-        {activeTab === 'chains' && (
-          <span style={{
-            fontSize: 11,
-            fontWeight: 600,
-            padding: '2px 8px',
-            borderRadius: 10,
-            background: 'var(--ok, #22c55e)',
-            color: '#000',
-          }}>
-            {completedCount} completed
-          </span>
-        )}
-        {activeTab === 'chains' && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            {selectedIds.length >= 2 && (
-              <button className="btn primary" onClick={() => { setMergeName(''); setMergeModalOpen(true); }}>
-                Merge {selectedIds.length} Workflows
-              </button>
+    <div className="mx-auto w-full max-w-5xl space-y-3 p-6">
+      <PageHeader
+        title="Workflows"
+        actions={activeTab === 'chains' ? (
+          <>
+            {runningCount > 0 && (
+              <Badge variant="outline" className="gap-1.5 tabular-nums">
+                <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
+                {runningCount} running
+              </Badge>
             )}
-            <button className="btn" onClick={() => { setYamlContent(''); setYamlModalOpen(true); }}>
+            <Badge variant="outline" className="gap-1.5 tabular-nums">
+              <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
+              {completedCount} completed
+            </Badge>
+            {selectedIds.length >= 2 && (
+              <Button size="sm" onClick={() => { setMergeName(''); setMergeModalOpen(true); }}>
+                Merge {selectedIds.length} Workflows
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => { setYamlContent(''); setYamlModalOpen(true); }}>
               Execute YAML
-            </button>
-          </div>
-        )}
-      </div>
+            </Button>
+          </>
+        ) : undefined}
+      />
 
       {/* Tab bar */}
-      <div className="tab-bar" role="tablist" style={{ marginBottom: 16 }}>
-        <button className={`tab-btn ${activeTab === 'chains' ? 'active' : ''}`} role="tab" aria-selected={activeTab === 'chains'} onClick={() => setActiveTab('chains')}>
+      <div className="inline-flex items-center gap-1 rounded-lg bg-muted p-1" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'chains'}
+          onClick={() => setActiveTab('chains')}
+          className="rounded-md px-3 py-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm"
+        >
           Chains
         </button>
-        <button className={`tab-btn ${activeTab === 'templates' ? 'active' : ''}`} role="tab" aria-selected={activeTab === 'templates'} onClick={() => setActiveTab('templates')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'templates'}
+          onClick={() => setActiveTab('templates')}
+          className="rounded-md px-3 py-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm"
+        >
           Templates
         </button>
       </div>
@@ -401,46 +381,42 @@ export function WorkflowsPage() {
       {activeTab === 'templates' && <TemplatesPanel onInstantiate={() => setActiveTab('chains')} />}
 
       {activeTab === 'chains' && (<>
-      {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading workflows...</div>}
+      {isLoading && <p className="text-sm text-muted-foreground">Loading workflows...</p>}
       {error && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="mb-3">
           <ErrorNotice presented={presentError(error, 'Failed to load workflows.')} />
         </div>
       )}
       {deleteError && (
-        <div role="alert" style={{ color: 'var(--err, #ef4444)' }}>{deleteError}</div>
+        <div role="alert" className="text-sm text-destructive">{deleteError}</div>
       )}
 
       {!error && sorted.length === 0 && !isLoading && (
-        <div style={{
-          textAlign: 'center',
-          padding: 40,
-          color: 'var(--muted, #94a3b8)',
-          border: '1px dashed var(--border, #334155)',
-          borderRadius: 12,
-        }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🔗</div>
-          <div>No workflow chains yet.</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>
-            Create one via Aria: <code>start_workflow</code> or the REST API.
+        <div className="rounded-xl border border-dashed border-border px-8 py-10 text-center">
+          <div className="mb-2 text-3xl">🔗</div>
+          <div className="text-sm text-foreground">No workflow chains yet.</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Create one via Aria: <code className="rounded bg-muted px-1 py-0.5 font-mono">start_workflow</code> or the REST API.
           </div>
         </div>
       )}
 
-      {sorted.map(wf => (
-        <WorkflowCard
-          key={wf.id}
-          wf={wf}
-          agentMap={agentMap}
-          runStatusById={runStatusById}
-          isSelected={selectedIds.includes(wf.id)}
-          onToggleSelect={toggleSelect}
-          onCancel={(id) => cancelMutation.mutate(id)}
-          onRetry={(id, stepIndex) => retryMutation.mutate({ id, stepIndex })}
-          onResubmit={(id) => resubmitMutation.mutate(id)}
-          onDelete={(id) => setDeletingId(id)}
-        />
-      ))}
+      <div>
+        {sorted.map(wf => (
+          <WorkflowCard
+            key={wf.id}
+            wf={wf}
+            agentMap={agentMap}
+            runStatusById={runStatusById}
+            isSelected={selectedIds.includes(wf.id)}
+            onToggleSelect={toggleSelect}
+            onCancel={(id) => cancelMutation.mutate(id)}
+            onRetry={(id, stepIndex) => retryMutation.mutate({ id, stepIndex })}
+            onResubmit={(id) => resubmitMutation.mutate(id)}
+            onDelete={(id) => setDeletingId(id)}
+          />
+        ))}
+      </div>
 
       {/* M2: Merge workflow modal (replaces window.prompt). Conditionally rendered so a closed
           modal is unmounted — no autoFocus steal, no Tab into hidden controls — and uses
@@ -455,31 +431,30 @@ export function WorkflowsPage() {
             aria-labelledby="merge-modal-title"
             style={{ width: 'min(480px, 94vw)', height: 'auto' }}
           >
-            <header>
-              <h2 id="merge-modal-title"><b>Merge</b> {selectedIds.length} Workflows</h2>
-              <span className="x" role="button" tabIndex={0} aria-label="Close merge dialog" onClick={() => setMergeModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMergeModalOpen(false); }}>✕</span>
+            <header className="mb-3 flex items-center justify-between gap-2">
+              <h2 id="merge-modal-title" className="text-base font-semibold"><b>Merge</b> {selectedIds.length} Workflows</h2>
+              <span className="x cursor-pointer text-muted-foreground hover:text-foreground" role="button" tabIndex={0} aria-label="Close merge dialog" onClick={() => setMergeModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMergeModalOpen(false); }}>✕</span>
             </header>
-            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="flex flex-col gap-3">
+              <label className="flex flex-col gap-1.5 text-sm text-muted-foreground">
                 Name for merged workflow
-                <input
+                <Input
                   className="gate-row-input"
                   value={mergeName}
                   onChange={(e) => setMergeName(e.target.value)}
                   placeholder="e.g. Combined onboarding flow"
                   autoFocus
-                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--line, #334155)', background: 'var(--surface, #0f172a)', color: 'var(--text, #e2e8f0)' }}
                 />
               </label>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <button className="btn" onClick={() => setMergeModalOpen(false)}>Cancel</button>
-                <button
-                  className="btn primary"
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setMergeModalOpen(false)}>Cancel</Button>
+                <Button
+                  size="sm"
                   disabled={!mergeName.trim()}
                   onClick={() => { mergeMutation.mutate({ sourceIds: selectedIds, name: mergeName.trim() }); setMergeModalOpen(false); }}
                 >
                   Confirm
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -497,31 +472,31 @@ export function WorkflowsPage() {
             aria-labelledby="yaml-modal-title"
             style={{ width: 'min(560px, 94vw)', height: 'auto' }}
           >
-            <header>
-              <h2 id="yaml-modal-title"><b>Execute</b> YAML Workflow</h2>
-              <span className="x" role="button" tabIndex={0} aria-label="Close YAML dialog" onClick={() => setYamlModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setYamlModalOpen(false); }}>✕</span>
+            <header className="mb-3 flex items-center justify-between gap-2">
+              <h2 id="yaml-modal-title" className="text-base font-semibold"><b>Execute</b> YAML Workflow</h2>
+              <span className="x cursor-pointer text-muted-foreground hover:text-foreground" role="button" tabIndex={0} aria-label="Close YAML dialog" onClick={() => setYamlModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setYamlModalOpen(false); }}>✕</span>
             </header>
-            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="flex flex-col gap-3">
+              <label className="flex flex-col gap-1.5 text-sm text-muted-foreground">
                 YAML workflow template
-                <textarea
+                <Textarea
                   value={yamlContent}
                   onChange={(e) => setYamlContent(e.target.value)}
                   placeholder={'name: my-workflow\nsteps:\n  - agent: dev\n    promptTemplate: implement the feature'}
                   rows={10}
                   autoFocus
-                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--line, #334155)', background: 'var(--surface, #0f172a)', color: 'var(--text, #e2e8f0)', fontFamily: 'monospace', resize: 'vertical' }}
+                  className="font-mono text-xs"
                 />
               </label>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <button className="btn" onClick={() => setYamlModalOpen(false)}>Cancel</button>
-                <button
-                  className="btn primary"
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setYamlModalOpen(false)}>Cancel</Button>
+                <Button
+                  size="sm"
                   disabled={!yamlContent.trim()}
                   onClick={() => { executeYamlMutation.mutate(yamlContent); setYamlModalOpen(false); }}
                 >
                   Execute
-                </button>
+                </Button>
               </div>
             </div>
           </div>

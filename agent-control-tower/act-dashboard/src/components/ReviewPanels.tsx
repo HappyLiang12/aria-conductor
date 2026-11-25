@@ -17,6 +17,10 @@ import {
   NativePermissionKindPill,
   nativePermissionOf,
 } from './NativePermissionAsk';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Textarea } from './ui/textarea';
 import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus, RunStatus } from '../types';
 
 interface PanelProps {
@@ -27,17 +31,17 @@ interface PanelProps {
 function AskMeta({ ask, permission }: { ask: Approval; permission: ReturnType<typeof nativePermissionOf> }) {
   if (permission) {
     return (
-      <div className="ask-meta">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <NativePermissionKindPill permission={permission} />
         <NativePermissionFacts ask={ask} permission={permission} />
       </div>
     );
   }
   return (
-    <div className="ask-meta">
-      <span className="pill">{ask.approvalType ?? 'TOOL_CALL'}</span>
-      {ask.riskTier && <span className="pill warn">risk {ask.riskTier}</span>}
-      {ask.expiresAt && <span className="owner">expires {formatTimestamp(ask.expiresAt)}</span>}
+    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <Badge variant="outline">{ask.approvalType ?? 'TOOL_CALL'}</Badge>
+      {ask.riskTier && <Badge variant="secondary">risk {ask.riskTier}</Badge>}
+      {ask.expiresAt && <span>expires {formatTimestamp(ask.expiresAt)}</span>}
     </div>
   );
 }
@@ -141,117 +145,128 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   };
 
   return (
-    <div className="decision-zone" role="region" aria-label="Decision panel">
-      <div className="dz-title">⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks</div>
-      {pendingAsks.map((ask) => (
-        <div key={ask.id} className="ask-card">
-          <div className="ask-q">
-            {ask.askType === 'QUESTION' ? 'Question' : ask.askType === 'REVIEW_REQUEST' ? 'Review' : 'Approval'}
-            : {ask.content?.slice(0, 160)}
-          </div>
-          <AskMeta ask={ask} permission={nativePermissionOf(ask)} />
-          {/* F7: toolName + redacted arguments when the api/bridge payload
-              carries them; a native ask already names its tool in the facts
-              row above, so only the arguments are added for it. */}
-          <ApprovalToolDetails ask={ask} includeToolName={nativePermissionOf(ask) === null} />
-          {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
-          <textarea
-            className="dod-textarea"
-            rows={2}
-            aria-label={`Answer for ask ${ask.id}`}
-            placeholder="Answer / feedback (optional)"
-            value={answers[ask.id] ?? ''}
-            onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
-          />
-          <div className="ask-actions">
-            {ask.source === 'CLARIFICATION' ? (
-              <>
-                {/* Waiting-input (2026-10-05): the ask genuinely needs the operator.
-                    Answer & continue routes through /answer (approved=true + the
-                    answer) and wakes the parked run; Finalize ends the run with
-                    the question preserved and never requires an answer. */}
-                <button
-                  className="btn primary"
-                  disabled={resolveAsk.isPending || !(answers[ask.id] ?? '').trim()}
-                  onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] })}
-                >
-                  ▶ Answer &amp; continue
-                </button>
-                <button
-                  className="btn"
-                  disabled={finalize.isPending}
-                  onClick={() => finalize.mutate(ask.runId)}
-                >
-                  ■ Finalize
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="btn primary" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] || undefined })}>Approve</button>
-                <button className="btn" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: false, answer: answers[ask.id] || undefined })}>Deny</button>
-              </>
-            )}
-          </div>
-        </div>
-      ))}
-      <button
-        className="btn primary"
-        disabled={resolveAsk.isPending || batchApprovable.length === 0}
-        title={`Approve ${batchApprovable.length} eligible ask${batchApprovable.length === 1 ? '' : 's'} at once`}
-        onClick={() => {
-          setError(null);
-          batchApprovable.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
-        }}
-      >
-        ✓ Approve all ({batchApprovable.length})
-      </button>
-      {nativeAsks.length > 0 && (
-        <div className="ask-ctx">
-          {nativeAsks.length} native permission ask{nativeAsks.length === 1 ? '' : 's'} not included in
-          Approve all: each is an allow-once decision and must be resolved individually.
-        </div>
-      )}
-      <textarea
-        className="dod-textarea"
-        rows={2}
-        aria-label="Request-changes feedback"
-        placeholder="What should change? (sent back to the agent)"
-        value={requestFeedback}
-        onChange={(e) => setRequestFeedback(e.target.value)}
-      />
-      <button
-        className="btn"
-        disabled={requestChanges.isPending}
-        onClick={() => {
-          setError(null);
-          requestChanges.mutate(requestFeedback);
-          setRequestFeedback('');
-        }}
-      >
-        ✎ Request changes (starts 1 fresh run)
-      </button>
-      {/* A refusal is answered by the remedy below, not by the server's wording
-          (on a refusal that wording points at no fix — Task 41 m4: Finalize's
-          bare marker was the only thing shown). A fault keeps its text. */}
-      {error && !operatorRejected && <ErrorNotice className="kanban-form-error" presented={error} />}
-      {/* Task 35: the remedy clause is the shared `OPERATOR_REMEDY_COPY`; the
-          panel keeps its own frame (what was refused, and that it decided
-          nothing) because a refusal here may also carry the server's wording. */}
-      {operatorRejected && (
-        <div className="ask-ctx">
-          {crossOriginRejected ? (
-            <>
-              {crossSiteSessionMessage(refusedAction)} Nothing was decided by the refused
-              call.
-            </>
-          ) : (
-            <>
-              Approvals are operator-only. {OPERATOR_REMEDY_COPY} Nothing was decided by the
-              refused call.
-            </>
+    <div
+      className="decision-zone flex flex-col border-0! bg-transparent! p-0!"
+      role="region"
+      aria-label="Decision panel"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold">
+            ⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {pendingAsks.map((ask) => (
+            <div key={ask.id} className="ask-card flex flex-col gap-2 rounded-lg border! border-solid! border-border! p-3!">
+              <div className="ask-q text-sm font-semibold break-words text-card-foreground">
+                {ask.askType === 'QUESTION' ? 'Question' : ask.askType === 'REVIEW_REQUEST' ? 'Review' : 'Approval'}
+                : {ask.content?.slice(0, 160)}
+              </div>
+              <AskMeta ask={ask} permission={nativePermissionOf(ask)} />
+              {/* F7: toolName + redacted arguments when the api/bridge payload
+                  carries them; a native ask already names its tool in the facts
+                  row above, so only the arguments are added for it. */}
+              <ApprovalToolDetails ask={ask} includeToolName={nativePermissionOf(ask) === null} />
+              {ask.contextMd && <div className="text-xs text-muted-foreground">{ask.contextMd}</div>}
+              <Textarea
+                className="min-h-0"
+                rows={2}
+                aria-label={`Answer for ask ${ask.id}`}
+                placeholder="Answer / feedback (optional)"
+                value={answers[ask.id] ?? ''}
+                onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                {ask.source === 'CLARIFICATION' ? (
+                  <>
+                    {/* Waiting-input (2026-10-05): the ask genuinely needs the operator.
+                        Answer & continue routes through /answer (approved=true + the
+                        answer) and wakes the parked run; Finalize ends the run with
+                        the question preserved and never requires an answer. */}
+                    <Button
+                      disabled={resolveAsk.isPending || !(answers[ask.id] ?? '').trim()}
+                      onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] })}
+                    >
+                      ▶ Answer &amp; continue
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={finalize.isPending}
+                      onClick={() => finalize.mutate(ask.runId)}
+                    >
+                      ■ Finalize
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] || undefined })}>Approve</Button>
+                    <Button variant="outline" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: false, answer: answers[ask.id] || undefined })}>Deny</Button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+          <Button
+            disabled={resolveAsk.isPending || batchApprovable.length === 0}
+            title={`Approve ${batchApprovable.length} eligible ask${batchApprovable.length === 1 ? '' : 's'} at once`}
+            onClick={() => {
+              setError(null);
+              batchApprovable.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
+            }}
+          >
+            ✓ Approve all ({batchApprovable.length})
+          </Button>
+          {nativeAsks.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              {nativeAsks.length} native permission ask{nativeAsks.length === 1 ? '' : 's'} not included in
+              Approve all: each is an allow-once decision and must be resolved individually.
+            </div>
           )}
-        </div>
-      )}
+          <Textarea
+            className="min-h-0"
+            rows={2}
+            aria-label="Request-changes feedback"
+            placeholder="What should change? (sent back to the agent)"
+            value={requestFeedback}
+            onChange={(e) => setRequestFeedback(e.target.value)}
+          />
+          <Button
+            variant="outline"
+            className="self-start"
+            disabled={requestChanges.isPending}
+            onClick={() => {
+              setError(null);
+              requestChanges.mutate(requestFeedback);
+              setRequestFeedback('');
+            }}
+          >
+            ✎ Request changes (starts 1 fresh run)
+          </Button>
+          {/* A refusal is answered by the remedy below, not by the server's wording
+              (on a refusal that wording points at no fix — Task 41 m4: Finalize's
+              bare marker was the only thing shown). A fault keeps its text. */}
+          {error && !operatorRejected && <ErrorNotice className="kanban-form-error" presented={error} />}
+          {/* Task 35: the remedy clause is the shared `OPERATOR_REMEDY_COPY`; the
+              panel keeps its own frame (what was refused, and that it decided
+              nothing) because a refusal here may also carry the server's wording. */}
+          {operatorRejected && (
+            <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+              {crossOriginRejected ? (
+                <>
+                  {crossSiteSessionMessage(refusedAction)} Nothing was decided by the refused
+                  call.
+                </>
+              ) : (
+                <>
+                  Approvals are operator-only. {OPERATOR_REMEDY_COPY} Nothing was decided by the
+                  refused call.
+                </>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -268,6 +283,13 @@ const RUN_OUTCOME_PILL: Record<KnownRunOutcome, string> = {
   FAILED: 'pill risk',
   ACTIVE: 'pill',
   CANCELLED: 'pill dim',
+};
+
+const RUN_OUTCOME_BADGE: Record<KnownRunOutcome, 'secondary' | 'destructive' | 'outline'> = {
+  COMPLETED: 'secondary',
+  FAILED: 'destructive',
+  ACTIVE: 'outline',
+  CANCELLED: 'outline',
 };
 
 /** Decision copy per outcome; only COMPLETED keeps the original sign-off text. */
@@ -289,7 +311,11 @@ function knownRunOutcome(outcome: KanbanItem['runOutcome']): KnownRunOutcome | n
 export function RunOutcomeChip({ outcome }: { outcome: KanbanItem['runOutcome'] }) {
   const known = knownRunOutcome(outcome);
   if (!known) return null;
-  return <span className={RUN_OUTCOME_PILL[known]}>{known}</span>;
+  return (
+    <Badge variant={RUN_OUTCOME_BADGE[known]} className={RUN_OUTCOME_PILL[known]}>
+      {known}
+    </Badge>
+  );
 }
 
 /**
@@ -350,28 +376,38 @@ export function ShortApprovalView({
   const outcome = knownRunOutcome(effectiveOutcome);
 
   return (
-    <div className="decision-zone short-view" role="region" aria-label="Decision panel">
-      <div className="dz-title">
-        <RunOutcomeChip outcome={effectiveOutcome} />{' '}
-        {outcome ? RUN_OUTCOME_TITLE[outcome] : 'Quick decision'}
-      </div>
-      <div className="ask-ctx">
-        agent {item.assignee ?? 'n/a'} · run {item.linkedRunId ? item.linkedRunId.slice(0, 8) : '—'}
-      </div>
-      <textarea
-        className="dod-textarea"
-        rows={2}
-        aria-label="Request-changes feedback"
-        placeholder="What should change? (sent back to the agent)"
-        value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
-      />
-      {error && <ErrorNotice className="kanban-form-error" presented={error} />}
-      <div className="ask-actions">
-        <button className="btn primary" onClick={() => move.mutate({ status: 'DONE' })}>Approve</button>
-        <button className="btn" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes (starts 1 fresh run)</button>
-        <button className="btn danger" onClick={() => move.mutate({ status: 'CANCELLED' })}>Deny</button>
-      </div>
+    <div
+      className="decision-zone short-view flex flex-col border-0! bg-transparent! p-0!"
+      role="region"
+      aria-label="Decision panel"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+            <RunOutcomeChip outcome={effectiveOutcome} />{' '}
+            {outcome ? RUN_OUTCOME_TITLE[outcome] : 'Quick decision'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="text-xs text-muted-foreground">
+            agent {item.assignee ?? 'n/a'} · run {item.linkedRunId ? item.linkedRunId.slice(0, 8) : '—'}
+          </div>
+          <Textarea
+            className="min-h-0"
+            rows={2}
+            aria-label="Request-changes feedback"
+            placeholder="What should change? (sent back to the agent)"
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+          />
+          {error && <ErrorNotice className="kanban-form-error" presented={error} />}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => move.mutate({ status: 'DONE' })}>Approve</Button>
+            <Button variant="outline" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes (starts 1 fresh run)</Button>
+            <Button variant="destructive" onClick={() => move.mutate({ status: 'CANCELLED' })}>Deny</Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -295,7 +295,7 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
               </div>
             )}
           </div>
-          <div className="rf-decisions max-h-[56vh] min-w-0 overflow-y-auto">
+          <div className="rf-decisions max-h-[56vh] min-w-0! overflow-y-auto">
             {pendingAsks.length > 0 ? (
               <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
             ) : asksQuery.isSuccess ? (

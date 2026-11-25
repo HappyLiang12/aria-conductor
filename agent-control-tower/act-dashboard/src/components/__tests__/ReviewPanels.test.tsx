@@ -43,6 +43,13 @@ function renderPanel(ui: ReactElement, qc: QueryClient = makeClient()) {
 }
 
 describe('DecisionPanel', () => {
+  it('renders the decision zone on a token surface while keeping the region name', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk()]} />);
+    const zone = screen.getByRole('region', { name: 'Decision panel' });
+    expect(zone).toHaveClass('decision-zone');
+    expect(zone.querySelector('[data-slot="card"]')).not.toBeNull();
+  });
+
   it('renders each pending ask and routes gate asks to /decide endpoints', async () => {
     mockedApprove.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
     renderPanel(<DecisionPanel item={item} pendingAsks={[

@@ -10,6 +10,9 @@ import { RunErrorNotice } from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import { tokenUsageText } from '../utils/tokenUsage';
 import { reviewNeedsHuman } from '../utils/reviewState';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
 import type { KanbanItem } from '../types';
 
 /**
@@ -131,183 +134,179 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
   if (itemQuery.isError) {
     return (
       <section
-        className="panel review-workspace"
+        className="review-workspace flex flex-col"
         data-testid="review-workspace"
         aria-label="Review workspace"
       >
-        <div className="rw-head">
-          <div style={{ minWidth: 0 }} />
-          <div className="rw-nav">
-            <button
-              className="btn"
+        <Card>
+          <div className="flex justify-end p-3">
+            <Button
+              variant="outline"
+              size="sm"
               onClick={closeReviewMode}
               aria-label="Collapse review"
               autoFocus
             >
               ⤡ Collapse
-            </button>
+            </Button>
           </div>
-        </div>
-        <div className="rw-body">
-          <div className="evidence-error">Failed to load task. It may have been deleted.</div>
-        </div>
+          <CardContent className="text-sm text-destructive">
+            Failed to load task. It may have been deleted.
+          </CardContent>
+        </Card>
       </section>
     );
   }
 
   if (!item) {
     return (
-      <section className="panel review-workspace" data-testid="review-workspace">
-        <div className="loading-spinner" style={{ padding: 20 }}>
-          <div className="spinner" />
-        </div>
+      <section className="review-workspace flex flex-col" data-testid="review-workspace">
+        <Card>
+          <div className="p-5">
+            <div className="spinner" />
+          </div>
+        </Card>
       </section>
     );
   }
 
   return (
     <section
-      className="panel review-workspace"
+      className="review-workspace flex flex-col"
       data-testid="review-workspace"
       aria-label="Review workspace"
     >
-      <div className="rw-head">
-        <div style={{ minWidth: 0 }}>
-          <div className="id">TASK · {item.id.slice(0, 8).toUpperCase()}</div>
-          <h3
-            ref={headingRef}
-            tabIndex={-1}
-            style={{
-              margin: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {item.title}
-          </h3>
-        </div>
-        <div className="rw-nav">
-          {/* Defect D7: entry point into the linked agent's live stream. */}
-          {item.linkedAgentId && (
-            <button
-              className="btn"
-              aria-label="Open live activity"
-              onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
-            >
-              ▶ Live activity
-            </button>
-          )}
-          <button
-            className="btn"
-            disabled={!prevSibling}
-            aria-label="Previous review card"
-            onClick={() => prevSibling && openReviewMode(prevSibling.id)}
-          >
-            ← prev
-          </button>
-          <button
-            className="btn"
-            disabled={!nextSibling}
-            aria-label="Next review card"
-            onClick={() => nextSibling && openReviewMode(nextSibling.id)}
-          >
-            next →
-          </button>
-          <button
-            className="btn"
-            onClick={closeReviewMode}
-            aria-label="Collapse review"
-          >
-            ⤡ Collapse
-          </button>
-        </div>
-      </div>
-      <div className="rw-body">
-        <div className="rf-spec">
-          <div className="rf-meta">
-            {/* F24: REVIEW badges an open ask only; a finished card parked here
-                is awaiting sign-off (the run outcome chip carries the result). */}
-            <span className={reviewNeedsHuman(item) ? 'pill warn' : 'pill'}>
-              {item.status === 'REVIEW' && !reviewNeedsHuman(item)
-                ? 'Awaiting sign-off'
-                : item.status}
-            </span>
-            <span className={item.priority === 'CRITICAL' || item.priority === 'HIGH' ? 'pill warn' : 'pill'}>
-              {item.priority}
-            </span>
-            <span className="owner">{item.assignee ? `@${item.assignee}` : 'unassigned'}</span>
-            {item.linkedRunId && (
-              <span className="owner cell-mono">run {item.linkedRunId.slice(0, 8)}</span>
-            )}
-            <span className="owner">updated {formatTimestamp(item.updatedAt)}</span>
-          </div>
-          <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
-
-          {/* Linked run result (D4): reviewers need the run's actual output to
-              judge the card, not just the truncated run id in the meta row. */}
-          {item.linkedRunId && (
-            <div className="run-result">
-              <div className="section-h">Run Result</div>
-              {runQuery.isLoading && (
-                <div style={{ fontSize: 11.5, color: 'var(--text-mute)' }}>Loading run…</div>
-              )}
-              {runQuery.isError && !runQuery.isLoading && (
-                <div className="evidence-error">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
-              )}
-              {linkedRun && (
-                <>
-                  <div className="rf-meta">
-                    <span className="pill">{linkedRun.status}</span>
-                    <span className="owner cell-mono">Iter {linkedRun.iterationCount}</span>
-                    <span className="owner cell-mono">
-                      {tokenUsageText(linkedRun.totalTokensUsed)}
-                    </span>
-                    <span className="owner cell-mono">
-                      {linkedRun.completedAt
-                        ? formatTimestamp(linkedRun.completedAt)
-                        : 'not finished'}
-                    </span>
-                  </div>
-                  {linkedRun.errorMessage && (
-                    <div
-                      className="evidence-error"
-                      style={{
-                        background: 'rgba(255,107,122,.06)',
-                        border: '1px solid rgba(255,107,122,.2)',
-                        borderRadius: 8,
-                        padding: '10px 12px',
-                        marginTop: 8,
-                      }}
-                    >
-                      <RunErrorNotice
-                        message={linkedRun.errorMessage}
-                        surface={linkedRun.errorSurface}
-                        code={linkedRun.errorCode}
-                      />
-                    </div>
-                  )}
-                  {linkedRun.finalOutput && (
-                    <div className="artifact-result">
-                      <MarkdownViewer content={linkedRun.finalOutput} />
-                    </div>
-                  )}
-                </>
-              )}
+      <Card className="gap-0 p-0!">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b p-3">
+          <div className="min-w-0">
+            <div className="font-mono text-[10.5px] tracking-wide text-muted-foreground">
+              TASK · {item.id.slice(0, 8).toUpperCase()}
             </div>
-          )}
+            <h3
+              ref={headingRef}
+              tabIndex={-1}
+              className="mt-0.5 truncate text-base font-semibold text-card-foreground outline-none"
+            >
+              {item.title}
+            </h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {/* Defect D7: entry point into the linked agent's live stream. */}
+            {item.linkedAgentId && (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Open live activity"
+                onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
+              >
+                ▶ Live activity
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!prevSibling}
+              aria-label="Previous review card"
+              onClick={() => prevSibling && openReviewMode(prevSibling.id)}
+            >
+              ← prev
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!nextSibling}
+              aria-label="Next review card"
+              onClick={() => nextSibling && openReviewMode(nextSibling.id)}
+            >
+              next →
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={closeReviewMode}
+              aria-label="Collapse review"
+            >
+              ⤡ Collapse
+            </Button>
+          </div>
         </div>
-        <div className="rf-decisions">
-          {pendingAsks.length > 0 ? (
-            <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
-          ) : asksQuery.isSuccess ? (
-            // Mirrors the drawer's guard: while the asks query is in flight an
-            // empty pendingAsks array is NOT evidence that the card has no
-            // asks — the rail stays empty instead of flashing the short view.
-            <ShortApprovalView item={item} runOutcome={runOutcome} />
-          ) : null}
+        <div className="grid gap-3 p-3 lg:grid-cols-[1.4fr_1fr]">
+          <div className="rf-spec max-h-[56vh] min-w-0 space-y-2 overflow-y-auto rounded-lg border! border-border! bg-muted/20! p-3!">
+            <div className="rf-meta flex flex-wrap items-center gap-2">
+              {/* F24: REVIEW badges an open ask only; a finished card parked here
+                  is awaiting sign-off (the run outcome chip carries the result). */}
+              <Badge variant={reviewNeedsHuman(item) ? 'secondary' : 'outline'}>
+                {item.status === 'REVIEW' && !reviewNeedsHuman(item)
+                  ? 'Awaiting sign-off'
+                  : item.status}
+              </Badge>
+              <Badge variant={item.priority === 'CRITICAL' || item.priority === 'HIGH' ? 'secondary' : 'outline'}>
+                {item.priority}
+              </Badge>
+              <span className="text-xs text-muted-foreground">{item.assignee ? `@${item.assignee}` : 'unassigned'}</span>
+              {item.linkedRunId && (
+                <span className="font-mono text-xs text-muted-foreground">run {item.linkedRunId.slice(0, 8)}</span>
+              )}
+              <span className="text-xs text-muted-foreground">updated {formatTimestamp(item.updatedAt)}</span>
+            </div>
+            <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
+
+            {/* Linked run result (D4): reviewers need the run's actual output to
+                judge the card, not just the truncated run id in the meta row. */}
+            {item.linkedRunId && (
+              <div className="run-result mt-3 grid gap-1.5">
+                <div className="text-[11px] tracking-wide text-muted-foreground uppercase">Run Result</div>
+                {runQuery.isLoading && (
+                  <div className="text-xs text-muted-foreground">Loading run…</div>
+                )}
+                {runQuery.isError && !runQuery.isLoading && (
+                  <div className="text-xs text-destructive">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
+                )}
+                {linkedRun && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{linkedRun.status}</Badge>
+                      <span className="font-mono text-xs text-muted-foreground">Iter {linkedRun.iterationCount}</span>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {tokenUsageText(linkedRun.totalTokensUsed)}
+                      </span>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {linkedRun.completedAt
+                          ? formatTimestamp(linkedRun.completedAt)
+                          : 'not finished'}
+                      </span>
+                    </div>
+                    {linkedRun.errorMessage && (
+                      <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                        <RunErrorNotice
+                          message={linkedRun.errorMessage}
+                          surface={linkedRun.errorSurface}
+                          code={linkedRun.errorCode}
+                        />
+                      </div>
+                    )}
+                    {linkedRun.finalOutput && (
+                      <div className="artifact-result rounded-lg border bg-background/40 p-3">
+                        <MarkdownViewer content={linkedRun.finalOutput} />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="rf-decisions max-h-[56vh] min-w-0 overflow-y-auto">
+            {pendingAsks.length > 0 ? (
+              <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
+            ) : asksQuery.isSuccess ? (
+              // Mirrors the drawer's guard: while the asks query is in flight an
+              // empty pendingAsks array is NOT evidence that the card has no
+              // asks — the rail stays empty instead of flashing the short view.
+              <ShortApprovalView item={item} runOutcome={runOutcome} />
+            ) : null}
+          </div>
         </div>
-      </div>
+      </Card>
     </section>
   );
 }

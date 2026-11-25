@@ -218,6 +218,19 @@ describe('MemoryPage — entity list', () => {
     expect(dialog.querySelectorAll('[style]')).toHaveLength(0);
   });
 
+  it('renders the entities and proposal inbox on token card surfaces', async () => {
+    routeGets({
+      entities: () => [entity()],
+      proposals: (status) => (status === 'PENDING' ? [proposal()] : []),
+    });
+    const { container } = ui();
+    await screen.findByText('Happy');
+
+    expect(container.querySelector('[data-slot="page-header"]')).not.toBeNull();
+    // Entities and the proposal inbox are both token Card surfaces.
+    expect(container.querySelectorAll('[data-slot="card"]').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('renders a non-authority failure as the backend message', async () => {
     get.mockImplementation((url: string) =>
       url === '/api/v1/memory/proposals'

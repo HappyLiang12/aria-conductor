@@ -23,6 +23,12 @@ import ErrorNotice from '../components/ErrorNotice';
 import { StateNotice } from '../components/StateNotice';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { OperatorSessionNotice } from '../components/AriaProposalCard';
+import { PageHeader } from '../components/layout/PageHeader';
+import { SectionCard } from '../components/layout/SectionCard';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
 
 /**
  * The memory operator page (spec C1/C2, F11).
@@ -36,8 +42,9 @@ import { OperatorSessionNotice } from '../components/AriaProposalCard';
  * operator-session notice — never an empty list, which would claim there is
  * nothing to decide.
  *
- * Layout uses only classes that already exist in `src/styles/index.css`; this
- * lane does not own that file.
+ * Wave 2 C2: the page composes the shared PageHeader/SectionCard token
+ * surfaces. The legacy `memory-page`/`.panel`/`.data-table` hooks stay for the
+ * E2E specs until the cleanup owner removes their CSS.
  */
 
 const ENTITY_PAGES: Array<{ status: MemoryEntityStatus; label: string }> = [
@@ -86,11 +93,32 @@ function proposalTitle(proposal: MemoryProposalView): string {
   }
 }
 
+const PILL_BASE =
+  'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide ring-1';
+
 function statusPill(status: string | null): string {
-  if (status === 'ACTIVE') return 'pill ok';
-  if (status === 'PENDING') return 'pill warn';
-  return 'pill dim';
+  if (status === 'ACTIVE') {
+    return `${PILL_BASE} pill ok bg-emerald-500/10 text-emerald-700 ring-emerald-500/30 dark:text-emerald-400`;
+  }
+  if (status === 'PENDING') {
+    return `${PILL_BASE} pill warn bg-amber-500/10 text-amber-700 ring-amber-500/30 dark:text-amber-400`;
+  }
+  return `${PILL_BASE} pill dim bg-muted text-muted-foreground ring-border`;
 }
+
+const FILTER_TAB_BASE =
+  'filter-tab inline-flex h-7 items-center rounded-lg px-2.5 text-xs font-medium transition-colors';
+
+function filterTabClass(active: boolean): string {
+  return `${FILTER_TAB_BASE} ${
+    active
+      ? 'active bg-primary text-primary-foreground'
+      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+  }`;
+}
+
+const TABLE_HEAD = 'px-3 py-2 text-left text-xs font-medium text-muted-foreground';
+const TABLE_CELL = 'border-t border-border/60 px-3 py-2 text-sm text-foreground';
 
 const EMPTY_FORM: CreateMemoryEntityRequest = {
   kind: 'PERSON',
@@ -280,35 +308,32 @@ export function MemoryPage() {
   const decideFailure = decideMut.error;
 
   return (
-    <div className="view-zone memory-page" data-view="memory">
-      <div className="view-header">
-        <div>
-          <h1>Memory</h1>
-          <div className="sub">
-            Governed long-term memory — entities, facts and the proposals awaiting your decision.
-          </div>
-        </div>
-        <div className="actions">
-          <button
-            className="btn"
-            onClick={() => {
-              invalidateEntities();
-              invalidateProposals();
-            }}
-          >
-            ↻ Refresh
-          </button>
-          <button
-            className="btn primary"
-            onClick={() => {
-              setCreateRefusal(null);
-              setShowCreate(true);
-            }}
-          >
-            + New Entity
-          </button>
-        </div>
-      </div>
+    <div className="view-zone memory-page space-y-4 p-4" data-view="memory">
+      <PageHeader
+        title="Memory"
+        description="Governed long-term memory — entities, facts and the proposals awaiting your decision."
+        actions={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                invalidateEntities();
+                invalidateProposals();
+              }}
+            >
+              ↻ Refresh
+            </Button>
+            <Button
+              onClick={() => {
+                setCreateRefusal(null);
+                setShowCreate(true);
+              }}
+            >
+              + New Entity
+            </Button>
+          </>
+        }
+      />
 
       {refused && (
         <OperatorSessionNotice
@@ -342,18 +367,15 @@ export function MemoryPage() {
       )}
 
       {/* ---------- Entities ---------- */}
-      <section className="panel">
-        <h2>
-          Entities{' '}
-          <span className="accent">
-            {entitiesRefused ? '/ unavailable' : `/ ${countLabel(entities.length, entityStatus.toLowerCase())}`}
-          </span>
-        </h2>
-        <div className="filter-tabs">
+      <SectionCard
+        title="Entities"
+        count={entitiesRefused ? '/ unavailable' : `/ ${countLabel(entities.length, entityStatus.toLowerCase())}`}
+      >
+        <div className="filter-tabs mb-3 flex flex-wrap gap-1.5">
           {ENTITY_PAGES.map((page) => (
             <button
               key={page.status}
-              className={`filter-tab${entityStatus === page.status ? ' active' : ''}`}
+              className={filterTabClass(entityStatus === page.status)}
               aria-label={`${page.label} entities`}
               aria-pressed={entityStatus === page.status}
               onClick={() => {
@@ -386,56 +408,60 @@ export function MemoryPage() {
           />
         )}
         {entities.length > 0 && (
-          <div className="table-wrapper">
-            <table className="data-table">
+          <div className="table-wrapper overflow-x-auto">
+            <table className="data-table w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Canonical key</th>
-                  <th>Kind</th>
-                  <th>Status</th>
-                  <th>Sensitivity</th>
-                  <th>Actions</th>
+                  <th className={TABLE_HEAD}>Name</th>
+                  <th className={TABLE_HEAD}>Canonical key</th>
+                  <th className={TABLE_HEAD}>Kind</th>
+                  <th className={TABLE_HEAD}>Status</th>
+                  <th className={TABLE_HEAD}>Sensitivity</th>
+                  <th className={TABLE_HEAD}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {entities.map((row) => (
                   <tr key={row.id}>
-                    <td className="cell-primary">{row.displayName}</td>
-                    <td className="cell-mono">{row.canonicalKey}</td>
-                    <td>{row.kind}</td>
-                    <td>
+                    <td className={`cell-primary ${TABLE_CELL} font-medium`}>{row.displayName}</td>
+                    <td className={`cell-mono ${TABLE_CELL} font-mono text-xs text-muted-foreground`}>{row.canonicalKey}</td>
+                    <td className={TABLE_CELL}>{row.kind}</td>
+                    <td className={TABLE_CELL}>
                       <span className={statusPill(row.status)}>{row.status}</span>
                     </td>
-                    <td>{row.sensitivity ?? '—'}</td>
-                    <td className="action-cell">
-                      {/* A PENDING row opens through the operator review read
-                          (`status=PENDING`, spec :309-313, review finding M2):
-                          the operator cannot approve what they cannot see. Retire
-                          stays ACTIVE-only — approving is the only way out of
-                          PENDING. */}
-                      {(row.status === 'ACTIVE' || row.status === 'PENDING') && (
-                        <button
-                          className="btn btn-sm"
-                          onClick={() =>
-                            setSelection({
-                              id: row.id,
-                              reviewStatus: row.status === 'PENDING' ? 'PENDING' : undefined,
-                            })
-                          }
-                        >
-                          Open
-                        </button>
-                      )}
-                      {row.status === 'ACTIVE' && (
-                        <button
-                          className="btn btn-sm"
-                          aria-label={`Retire entity ${row.displayName}`}
-                          onClick={() => setRetireTarget(row)}
-                        >
-                          Retire
-                        </button>
-                      )}
+                    <td className={TABLE_CELL}>{row.sensitivity ?? '—'}</td>
+                    <td className={`action-cell ${TABLE_CELL}`}>
+                      <div className="flex justify-end gap-1.5">
+                        {/* A PENDING row opens through the operator review read
+                            (`status=PENDING`, spec :309-313, review finding M2):
+                            the operator cannot approve what they cannot see. Retire
+                            stays ACTIVE-only — approving is the only way out of
+                            PENDING. */}
+                        {(row.status === 'ACTIVE' || row.status === 'PENDING') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              setSelection({
+                                id: row.id,
+                                reviewStatus: row.status === 'PENDING' ? 'PENDING' : undefined,
+                              })
+                            }
+                          >
+                            Open
+                          </Button>
+                        )}
+                        {row.status === 'ACTIVE' && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            aria-label={`Retire entity ${row.displayName}`}
+                            onClick={() => setRetireTarget(row)}
+                          >
+                            Retire
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -443,21 +469,18 @@ export function MemoryPage() {
             </table>
           </div>
         )}
-      </section>
+      </SectionCard>
 
       {/* ---------- Proposal inbox ---------- */}
-      <section className="panel">
-        <h2>
-          Proposal Inbox{' '}
-          <span className="accent">
-            {proposalsRefused ? '/ unavailable' : `/ ${countLabel(proposals.length, proposalStatus.toLowerCase())}`}
-          </span>
-        </h2>
-        <div className="filter-tabs">
+      <SectionCard
+        title="Proposal Inbox"
+        count={proposalsRefused ? '/ unavailable' : `/ ${countLabel(proposals.length, proposalStatus.toLowerCase())}`}
+      >
+        <div className="filter-tabs mb-3 flex flex-wrap gap-1.5">
           {PROPOSAL_PAGES.map((page) => (
             <button
               key={page.status}
-              className={`filter-tab${proposalStatus === page.status ? ' active' : ''}`}
+              className={filterTabClass(proposalStatus === page.status)}
               aria-pressed={proposalStatus === page.status}
               onClick={() => setProposalStatus(page.status)}
             >
@@ -477,63 +500,75 @@ export function MemoryPage() {
             }
           />
         )}
-        {proposals.map((row) => (
-          <div key={row.id} className="kitem" data-testid="memory-proposal" data-proposal-status={row.status ?? ''}>
-            <div>
-              <div className="ttl">
-                {proposalTitle(row)}{' '}
-                <span className="pill">{row.factKey ?? row.predicate ?? row.id}</span>
+        <div className="grid gap-2">
+          {proposals.map((row) => (
+            <Card
+              key={row.id}
+              size="sm"
+              className="kitem p-3"
+              data-testid="memory-proposal"
+              data-proposal-status={row.status ?? ''}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="ttl text-sm font-medium text-foreground">
+                    {proposalTitle(row)}{' '}
+                    <Badge variant="outline" className="pill">
+                      {row.factKey ?? row.predicate ?? row.id}
+                    </Badge>
+                  </div>
+                  <div className="desc mt-1 text-xs text-muted-foreground">
+                    {row.valueText ?? row.predicate ?? '—'}
+                    {row.sensitivity ? ` · ${row.sensitivity}` : ''}
+                    {row.origin ? ` · proposed by ${row.origin}` : ''}
+                  </div>
+                </div>
+                {row.status === 'PENDING' ? (
+                  <div className="ask-actions flex gap-1.5">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        // The confirmation dialog is the only place a refused
+                        // decision is reported (Task 35), so a new decision starts
+                        // from no failure: a stale refusal would read as this
+                        // proposal's outcome.
+                        decideMut.reset();
+                        setPendingDecision({ proposal: row, decision: 'APPROVE' });
+                      }}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        decideMut.reset();
+                        setPendingDecision({ proposal: row, decision: 'REJECT' });
+                      }}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                ) : (
+                  <span className={statusPill(row.status)}>{row.status}</span>
+                )}
               </div>
-              <div className="desc">
-                {row.valueText ?? row.predicate ?? '—'}
-                {row.sensitivity ? ` · ${row.sensitivity}` : ''}
-                {row.origin ? ` · proposed by ${row.origin}` : ''}
-              </div>
-            </div>
-            {row.status === 'PENDING' ? (
-              <div className="ask-actions">
-                <button
-                  className="btn primary"
-                  onClick={() => {
-                    // The confirmation dialog is the only place a refused
-                    // decision is reported (Task 35), so a new decision starts
-                    // from no failure: a stale refusal would read as this
-                    // proposal's outcome.
-                    decideMut.reset();
-                    setPendingDecision({ proposal: row, decision: 'APPROVE' });
-                  }}
-                >
-                  Approve
-                </button>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    decideMut.reset();
-                    setPendingDecision({ proposal: row, decision: 'REJECT' });
-                  }}
-                >
-                  Reject
-                </button>
-              </div>
-            ) : (
-              <span className={statusPill(row.status)}>{row.status}</span>
-            )}
-          </div>
-        ))}
-      </section>
+            </Card>
+          ))}
+        </div>
+      </SectionCard>
 
       {/* ---------- Entity detail ---------- */}
       {selectedEntityId && (
-        <section className="panel">
-          <h2>
-            Entity Detail <span className="accent">/ {detail?.entity.displayName ?? selectedEntityId}</span>
-            <button
-              className="btn btn-sm"
-              onClick={() => setSelection(null)}
-            >
+        <SectionCard
+          title="Entity Detail"
+          count={`/ ${detail?.entity.displayName ?? selectedEntityId}`}
+          actions={
+            <Button size="sm" variant="outline" onClick={() => setSelection(null)}>
               Close
-            </button>
-          </h2>
+            </Button>
+          }
+        >
           {detailQuery.isLoading && <StateNotice kind="loading" title="Loading entity…" />}
           {detailQuery.error && (
             <ErrorNotice
@@ -542,44 +577,47 @@ export function MemoryPage() {
           )}
           {detail && (
             <>
-              <div className="ask-ctx">
+              <div className="ask-ctx mb-3 text-xs text-muted-foreground">
                 {detail.facts.length} fact(s) · {detail.relations.length} relation(s) ·{' '}
                 {detail.links.length} knowledge link(s) · {detail.assertions.length} assertion(s)
               </div>
-              <div className="table-wrapper">
-                <table className="data-table">
+              <div className="table-wrapper overflow-x-auto">
+                <table className="data-table w-full border-collapse text-sm">
                   <thead>
                     <tr>
-                      <th>Fact key</th>
-                      <th>Value</th>
-                      <th>Status</th>
-                      <th>Sensitivity</th>
-                      <th>Actions</th>
+                      <th className={TABLE_HEAD}>Fact key</th>
+                      <th className={TABLE_HEAD}>Value</th>
+                      <th className={TABLE_HEAD}>Status</th>
+                      <th className={TABLE_HEAD}>Sensitivity</th>
+                      <th className={TABLE_HEAD}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {detail.facts.map((row) => (
                       <tr key={row.id}>
-                        <td className="cell-mono">{row.factKey}</td>
-                        <td>{row.valueText}</td>
-                        <td>
+                        <td className={`cell-mono ${TABLE_CELL} font-mono text-xs text-muted-foreground`}>{row.factKey}</td>
+                        <td className={TABLE_CELL}>{row.valueText}</td>
+                        <td className={TABLE_CELL}>
                           <span className={statusPill(row.status)}>{row.status}</span>
                         </td>
-                        <td>{row.sensitivity ?? '—'}</td>
-                        <td className="action-cell">
-                          {/* A fact is mutable only once it is memory. A PENDING
-                              fact is review material: its decision belongs to the
-                              proposal card's approve/reject, and retiring it here
-                              would leave the proposal itself dangling. */}
-                          {row.status === 'ACTIVE' && (
-                            <button
-                              className="btn btn-sm"
-                              aria-label={`Retire fact ${row.factKey}`}
-                              onClick={() => setRetireFactTarget(row)}
-                            >
-                              Retire
-                            </button>
-                          )}
+                        <td className={TABLE_CELL}>{row.sensitivity ?? '—'}</td>
+                        <td className={`action-cell ${TABLE_CELL}`}>
+                          <div className="flex justify-end">
+                            {/* A fact is mutable only once it is memory. A PENDING
+                                fact is review material: its decision belongs to the
+                                proposal card's approve/reject, and retiring it here
+                                would leave the proposal itself dangling. */}
+                            {row.status === 'ACTIVE' && (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                aria-label={`Retire fact ${row.factKey}`}
+                                onClick={() => setRetireFactTarget(row)}
+                              >
+                                Retire
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -588,51 +626,63 @@ export function MemoryPage() {
               </div>
             </>
           )}
-        </section>
+        </SectionCard>
       )}
 
       {/* ---------- Create entity ---------- */}
       {showCreate && (
-        <div className="modal-overlay" onClick={() => setShowCreate(false)}>
+        <div
+          className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          onClick={() => setShowCreate(false)}
+        >
           <div
-            className="modal-dialog"
+            className="modal-dialog w-full max-w-md rounded-xl bg-card p-5 text-card-foreground ring-1 ring-foreground/10"
             role="dialog"
             aria-modal="true"
             aria-label="Create memory entity"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3>Create memory entity</h3>
-            <form onSubmit={submitCreate} className="memory-form">
-              <div className="form-field">
-                <label htmlFor="memory-kind">Kind</label>
-                <input
+            <h3 className="text-base font-semibold text-foreground">Create memory entity</h3>
+            <form onSubmit={submitCreate} className="memory-form mt-3 grid gap-3">
+              <div className="form-field grid gap-1">
+                <label htmlFor="memory-kind" className="text-xs font-medium text-muted-foreground">
+                  Kind
+                </label>
+                <Input
                   id="memory-kind"
                   value={form.kind}
                   onChange={(event) => setForm({ ...form, kind: event.target.value })}
                 />
               </div>
-              <div className="form-field">
-                <label htmlFor="memory-canonical-key">Canonical key</label>
-                <input
+              <div className="form-field grid gap-1">
+                <label htmlFor="memory-canonical-key" className="text-xs font-medium text-muted-foreground">
+                  Canonical key
+                </label>
+                <Input
                   id="memory-canonical-key"
                   value={form.canonicalKey}
                   onChange={(event) => setForm({ ...form, canonicalKey: event.target.value })}
                   placeholder="e.g. person:happy"
                 />
               </div>
-              <div className="form-field">
-                <label htmlFor="memory-display-name">Display name</label>
-                <input
+              <div className="form-field grid gap-1">
+                <label htmlFor="memory-display-name" className="text-xs font-medium text-muted-foreground">
+                  Display name
+                </label>
+                <Input
                   id="memory-display-name"
                   value={form.displayName}
                   onChange={(event) => setForm({ ...form, displayName: event.target.value })}
                   placeholder="e.g. Happy"
                 />
               </div>
-              <div className="form-field">
-                <label htmlFor="memory-sensitivity">Sensitivity</label>
+              <div className="form-field grid gap-1">
+                <label htmlFor="memory-sensitivity" className="text-xs font-medium text-muted-foreground">
+                  Sensitivity
+                </label>
                 <select
                   id="memory-sensitivity"
+                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
                   value={form.sensitivity}
                   onChange={(event) =>
                     setForm({ ...form, sensitivity: event.target.value as MemorySensitivity })
@@ -655,24 +705,24 @@ export function MemoryPage() {
                 />
               )}
               {formError && (
-                <div className="error-text" role="alert">
+                <div className="error-text text-xs text-destructive" role="alert">
                   {formError}
                 </div>
               )}
-              <div className="modal-actions">
-                <button type="submit" className="btn primary" disabled={createMut.isPending}>
+              <div className="modal-actions flex justify-end gap-2">
+                <Button type="submit" disabled={createMut.isPending}>
                   {createMut.isPending ? 'Creating…' : 'Create entity'}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="btn"
+                  variant="outline"
                   onClick={() => {
                     setCreateRefusal(null);
                     setShowCreate(false);
                   }}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -762,7 +812,10 @@ export function MemoryPage() {
       />
 
       {toast && (
-        <div className="toast" role="status">
+        <div
+          className="toast fixed right-6 bottom-6 z-[200] rounded-lg border border-primary/40 bg-primary/10 px-3.5 py-2.5 text-xs text-foreground shadow-lg backdrop-blur-md"
+          role="status"
+        >
           {toast}
         </div>
       )}

@@ -104,6 +104,14 @@ describe('Toast', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('renders each toast inside a token card surface', () => {
+    renderToast();
+    emit({ type: 'run.completed', payload: {}, timestamp: 't1' });
+
+    const message = screen.getByText('Run Completed');
+    expect(message.closest('[data-slot="card"]')).not.toBeNull();
+  });
+
   it('shows a human-readable label without the raw event type for noteworthy events', () => {
     renderToast();
     emit({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });

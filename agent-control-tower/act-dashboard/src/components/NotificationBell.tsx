@@ -7,7 +7,19 @@ import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { formatTimestamp } from '../utils/formatTime';
 import { routeForNotificationType } from '../utils/notificationRoutes';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
 
+/**
+ * Browser-only notification centre: unread count on the bell, a token Card
+ * dropdown listing the feed, and manual mark-read. No OS notification, no
+ * auto-close, no countdown — the operator closes it.
+ *
+ * Wave 2 F2: the bell, count and dropdown are token surfaces (`Badge`, `Card`,
+ * `Button`). The `notif-*` hooks, the accessible names and every handler stay
+ * unchanged for the E2E specs.
+ */
 export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -152,82 +164,100 @@ export function NotificationBell() {
   }, [open]);
 
   return (
-    <div className="notif-bell-wrapper" ref={wrapperRef}>
-      <button
+    <div className="notif-bell-wrapper relative inline-flex" ref={wrapperRef}>
+      <Button
         type="button"
-        className="notif-bell-btn"
+        variant="ghost"
+        size="icon"
+        className="notif-bell-btn relative text-foreground"
         onClick={toggleDropdown}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
       >
         🔔
-        {unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+        {unreadCount > 0 && (
+          <Badge variant="destructive" className="notif-badge">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </Badge>
+        )}
         {countError && (
           // The failure notice otherwise lives inside the closed dropdown, so the
           // bell would keep looking healthy with no count at all.
           <span className="notif-error-dot" role="img" aria-label={countError} title={countError}>!</span>
         )}
-      </button>
+      </Button>
 
       {open && (
-        <div className="notif-dropdown">
-          <div className="notif-dropdown-header">
-            <span className="notif-dropdown-title">Notifications</span>
-            <button
+        <Card className="notif-dropdown absolute top-full right-0 z-[1000] mt-2 w-[360px] max-h-[480px] gap-0 py-0 ring-foreground/15">
+          <div className="notif-dropdown-header flex items-center justify-between border-b border-border px-4 py-3">
+            <span className="notif-dropdown-title text-sm font-semibold text-foreground">
+              Notifications
+            </span>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               className="notif-mark-all-btn"
               disabled={unreadCount === 0}
               onClick={handleMarkAllRead}
             >
               Mark all read
-            </button>
+            </Button>
           </div>
-          <div className="notif-dropdown-list" aria-live="polite">
+          <div className="notif-dropdown-list max-h-[400px] overflow-y-auto" aria-live="polite">
             {countError && (
-              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+              <div className="notif-empty p-8 text-center text-sm text-destructive" role="alert">
                 {countError}
               </div>
             )}
             {actionError && (
-              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+              <div className="notif-empty p-8 text-center text-sm text-destructive" role="alert">
                 {actionError}
               </div>
             )}
             {loading ? (
-              <div className="notif-empty">Loading…</div>
+              <div className="notif-empty p-8 text-center text-sm text-muted-foreground">Loading…</div>
             ) : listError ? (
-              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">{listError}</div>
+              <div className="notif-empty p-8 text-center text-sm text-destructive" role="alert">{listError}</div>
             ) : notifications.length === 0 ? (
-              <div className="notif-empty">No notifications yet</div>
+              <div className="notif-empty p-8 text-center text-sm text-muted-foreground">No notifications yet</div>
             ) : (
               notifications.map(n => (
                 <div
                   key={n.id}
-                  className={`notif-item${n.isRead ? '' : ' notif-item--unread'}`}
+                  className={`notif-item flex cursor-pointer items-start gap-2.5 border-b border-border px-4 py-2.5 transition-colors hover:bg-muted/50${n.isRead ? '' : ' notif-item--unread bg-muted/30'}`}
                   onClick={() => handleItemClick(n)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={e => { if (e.key === 'Enter') handleItemClick(n); }}
                 >
-                  <span className="notif-item-emoji">{typeEmoji[n.type] || '🔔'}</span>
-                  <div className="notif-item-content">
-                    <div className="notif-item-title">{n.title}</div>
+                  <span className="notif-item-emoji mt-0.5 shrink-0 text-lg">
+                    {typeEmoji[n.type] || '🔔'}
+                  </span>
+                  <div className="notif-item-content min-w-0 flex-1">
+                    <div className="notif-item-title text-sm leading-snug text-foreground">{n.title}</div>
                     {n.type === 'run.batch.completed' && (
-                      <button
+                      <Button
                         type="button"
-                        className="notif-mark-all-btn"
+                        variant="outline"
+                        size="xs"
+                        className="notif-mark-all-btn mt-1"
                         onClick={(e) => void handleComposeClick(e, n)}
                       >
                         彙整
-                      </button>
+                      </Button>
                     )}
-                    {n.body && <div style={{ fontSize: '0.78rem', color: 'var(--text-mute)', marginTop: 2 }}>{n.body.slice(0, 100)}</div>}
-                    <div className="notif-item-time">{fmtTime(n.createdAt)}</div>
+                    {n.body && (
+                      <div className="mt-0.5 text-xs text-muted-foreground">{n.body.slice(0, 100)}</div>
+                    )}
+                    <div className="notif-item-time mt-0.5 text-[0.72rem] text-muted-foreground">
+                      {fmtTime(n.createdAt)}
+                    </div>
                   </div>
                 </div>
               ))
             )}
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );

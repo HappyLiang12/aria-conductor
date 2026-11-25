@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
 import { routeForNotificationType } from '../utils/notificationRoutes';
-import '../styles/toast-flow.css';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
 
 interface ToastItem {
   id: number;
@@ -69,6 +70,10 @@ function toastIdFromTarget(target: EventTarget | null): number | null {
  *   never moved by the component;
  * - `aria.notification` toasts only offer View when the fine-grained type
  *   resolves to a route — never an action whose click can be a no-op.
+ *
+ * Wave 2 F2: each toast is a shadcn `Card` token surface. The stack, item,
+ * message and `data-toast-id` hooks, the polite live region and the lifecycle
+ * timers are unchanged.
  */
 export function Toast() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -244,7 +249,7 @@ export function Toast() {
 
   return (
     <div
-      className="toast-container"
+      className="toast-container fixed top-16 right-4 z-[9999] flex flex-col gap-2"
       role="status"
       aria-live="polite"
       onMouseEnter={pauseAll}
@@ -253,14 +258,26 @@ export function Toast() {
       onBlurCapture={onBlurCapture}
     >
       {toasts.map((toast) => (
-        <div key={toast.id} className="toast-item" data-toast-id={toast.id}>
-          <span className="toast-message">{toast.message}</span>
-          {toast.action && (
-            <button type="button" className="btn" onClick={toast.action.onClick}>
-              {toast.action.label}
-            </button>
-          )}
-        </div>
+        <Card
+          key={toast.id}
+          size="sm"
+          className="toast-item min-w-[300px] shadow-lg ring-foreground/15 focus-within:ring-2 focus-within:ring-ring"
+          data-toast-id={toast.id}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="toast-message text-sm text-card-foreground">{toast.message}</span>
+            {toast.action && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={toast.action.onClick}
+              >
+                {toast.action.label}
+              </Button>
+            )}
+          </div>
+        </Card>
       ))}
     </div>
   );

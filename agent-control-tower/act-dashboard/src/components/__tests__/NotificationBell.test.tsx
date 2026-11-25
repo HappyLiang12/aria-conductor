@@ -21,12 +21,13 @@ vi.mock('../../api/ariaConversations', () => ({
   composeSynthesis: vi.fn(),
 }));
 
-import { getUnreadCount, listNotifications, markRead } from '../../api/ariaNotifications';
+import { getUnreadCount, listNotifications, markAllRead, markRead } from '../../api/ariaNotifications';
 import { composeSynthesis } from '../../api/ariaConversations';
 
 const mockGetUnreadCount = getUnreadCount as Mock;
 const mockListNotifications = listNotifications as Mock;
 const mockMarkRead = markRead as Mock;
+const mockMarkAllRead = markAllRead as Mock;
 const mockComposeSynthesis = composeSynthesis as Mock;
 
 function notification(overrides: Partial<Notification> = {}): Notification {
@@ -141,6 +142,42 @@ describe('NotificationBell one-click synthesis', () => {
     await openDropdown([notification({ type: 'run.completed' })]);
     expect(await screen.findByText('Run completed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '彙整' })).not.toBeInTheDocument();
+  });
+});
+
+describe('NotificationBell unread count', () => {
+  it('exposes the unread count and clears it when marking all read', async () => {
+    mockGetUnreadCount.mockResolvedValue({ unreadCount: 3 });
+    mockListNotifications.mockResolvedValue({
+      content: [notification()],
+      totalElements: 1,
+      totalPages: 1,
+    });
+    mockMarkAllRead.mockResolvedValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>,
+    );
+
+    const bell = await screen.findByRole('button', { name: 'Notifications (3 unread)' });
+    fireEvent.click(bell);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+
+    await waitFor(() => expect(mockMarkAllRead).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument(),
+    );
+  });
+
+  it('renders the dropdown on a token card surface', async () => {
+    await openDropdown([notification()]);
+
+    expect(screen.getByText('Notifications')).toBeInTheDocument();
+    expect(document.querySelector('.notif-dropdown')?.getAttribute('data-slot')).toBe('card');
   });
 });
 

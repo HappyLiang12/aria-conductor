@@ -152,7 +152,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
     >
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-semibold">
+          <CardTitle className="dz-title text-sm font-semibold">
             ⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks
           </CardTitle>
         </CardHeader>
@@ -383,7 +383,7 @@ export function ShortApprovalView({
     >
       <Card>
         <CardHeader>
-          <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+          <CardTitle className="dz-title flex flex-wrap items-center gap-2 text-sm font-semibold">
             <RunOutcomeChip outcome={effectiveOutcome} />{' '}
             {outcome ? RUN_OUTCOME_TITLE[outcome] : 'Quick decision'}
           </CardTitle>

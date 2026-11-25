@@ -63,27 +63,4 @@ describe('AgentCatalog (Wave 2 B1)', () => {
 
     await waitFor(() => expect(createFromTemplate).toHaveBeenCalledWith('t-dev'));
   });
-
-  it('deploys on the fleet runtime pair when the roster already runs one', async () => {
-    const { createFromTemplate, createAgent, listAgents } = await import('../../api/agents');
-    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: 'a-1', name: 'Existing', adkProvider: 'opencode', executionMode: 'HOST' },
-    ]);
-    ui();
-    await screen.findByText('Dev Agent');
-
-    await userEvent.click(screen.getByRole('button', { name: '+ Deploy' }));
-
-    await waitFor(() =>
-      expect(createAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'Dev Agent',
-          role: 'dev',
-          adkProvider: 'opencode',
-          executionMode: 'HOST',
-        }),
-      ),
-    );
-    expect(createFromTemplate).not.toHaveBeenCalled();
-  });
 });

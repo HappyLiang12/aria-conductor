@@ -105,7 +105,7 @@ export function KanbanCard({
         <div className="flex min-w-0 items-center gap-2">
           <span className="font-mono text-[10.5px] text-muted-foreground">{item.id.slice(0, 8)}</span>
         </div>
-        <div className="mt-1 mb-1.5 text-sm font-semibold break-words text-card-foreground">
+        <div className="t mt-1 mb-1.5 text-sm font-semibold break-words text-card-foreground">
           {item.title}
         </div>
         {/* F24: REVIEW is a badge only while an ask is open; a finished card in

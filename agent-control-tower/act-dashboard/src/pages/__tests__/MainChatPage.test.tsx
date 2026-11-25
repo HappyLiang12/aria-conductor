@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import MainChatPage from '../MainChatPage';
@@ -301,5 +301,41 @@ describe('MainChatPage', () => {
 
     await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-2'));
     expect(await screen.findByRole('button', { name: 'Check runs' })).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 2 D6. The residual rail and live progress are token Cards; the `.mc-*`
+// hooks the aria-main-chat E2E drives stay in the markup.
+// ---------------------------------------------------------------------------
+describe('MainChatPage token surfaces', () => {
+  it('draws the conversation rail and the live progress on token Cards and keeps the mc hooks', async () => {
+    holdStream();
+    const { container } = renderPage();
+    await waitFor(() => expect(mockTimeline).toHaveBeenCalledWith('conv-1'));
+
+    // The rail is a token Card inside the preserved `.mc-sidebar` hook.
+    expect(container.querySelector('.mc-sidebar')).not.toBeNull();
+    expect(container.querySelector('.mc-sidebar [data-slot="card"]')).not.toBeNull();
+    expect(container.querySelector('.mc-conversation-list')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Deploy the crew' })).toBeTruthy();
+
+    await sendText('Long job');
+    const callbacks = mockStream.mock.calls[0][3] as StreamCallbacks;
+    act(() => callbacks.onThinking?.('run-1'));
+    await screen.findByRole('button', { name: /Stop the turn/i });
+    await waitFor(() => expect(wsHandlers.length).toBeGreaterThan(0));
+
+    act(() => {
+      wsHandlers.forEach((handler) => handler({
+        type: 'run.progress',
+        payload: { runId: 'run-1', kind: 'TOOL_CALL', content: '', toolName: 'read_file', seq: 1, partId: 'p1' },
+        timestamp: '2026-11-20T10:00:01Z',
+      } as WsEvent));
+    });
+
+    const progress = await screen.findByTestId('mc-progress');
+    expect(progress).toHaveAttribute('data-slot', 'card');
+    expect(within(progress).getByText('read_file')).toBeTruthy();
   });
 });

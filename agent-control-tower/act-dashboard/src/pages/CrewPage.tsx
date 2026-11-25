@@ -17,6 +17,8 @@ import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import ErrorNotice from '../components/ErrorNotice';
+import { PageHeader } from '../components/layout/PageHeader';
+import { SectionCard } from '../components/layout/SectionCard';
 
 
 interface CreateAgentError extends Error {
@@ -94,27 +96,22 @@ function ExecutionModePicker({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="relative">
       <span
         id="add-agent-execution-mode-label"
-        style={{ display: 'block', fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 4px', letterSpacing: '.8px', textTransform: 'uppercase' }}
+        className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase"
       >
         Execution mode
       </span>
       <button
         type="button"
         id="add-agent-execution-mode"
-        className="mode-picker-trigger"
+        className="mode-picker-trigger flex w-full items-center justify-between rounded-lg border border-input bg-background px-2.5 py-2 text-left text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
         aria-labelledby="add-agent-execution-mode-label"
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
-        style={{
-          width: '100%', padding: '8px 10px', borderRadius: 8, textAlign: 'left',
-          background: 'rgba(0,0,0,.25)', color: 'var(--text)', border: '1px solid var(--line-2)',
-          font: 'inherit', fontSize: 13, cursor: 'pointer',
-        }}
       >
         {EXECUTION_MODE_LABELS[value]}
       </button>
@@ -122,11 +119,7 @@ function ExecutionModePicker({
         <div
           role="listbox"
           aria-label="Execution modes"
-          style={{
-            position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 20,
-            background: '#131b32', border: '1px solid var(--line-2)', borderRadius: 8,
-            boxShadow: '0 12px 30px rgba(0,0,0,.5)', padding: 4,
-          }}
+          className="absolute inset-x-0 top-full z-20 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
         >
           {modes.map((mode) => (
             <button
@@ -138,11 +131,9 @@ function ExecutionModePicker({
                 onChange(mode);
                 setOpen(false);
               }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left', padding: '7px 8px',
-                borderRadius: 6, border: 'none', background: mode === value ? 'rgba(91,140,255,.16)' : 'transparent',
-                color: 'var(--text)', font: 'inherit', fontSize: 13, cursor: 'pointer',
-              }}
+              className={`block w-full rounded-md px-2 py-1.5 text-left text-sm text-foreground ${
+                mode === value ? 'bg-primary/15' : 'hover:bg-muted'
+              }`}
             >
               {EXECUTION_MODE_LABELS[mode]}
             </button>
@@ -463,72 +454,81 @@ export default function CrewPage() {
 
   return (
     <section className="view-zone" data-view="crew" style={{ display: 'block' }}>
-      <div style={{ padding: 16 }}>
-        <div className="view-header">
-          <div>
-            <h1>👥 Crew</h1>
-            <div className="sub">
-              Active agents, workload signals, and a hiring catalog of pre-configured roles.
-            </div>
-          </div>
-          <div className="actions">
-            <button type="button" className="btn" onClick={selectLeftovers}>
-              🧹 Select Leftovers ({leftoverAgents.length})
-            </button>
-            <button type="button" className="btn primary" onClick={openDialog}>
-              + Add Agent
-            </button>
-          </div>
-        </div>
+      <div className="p-4">
+        <PageHeader
+          title="👥 Crew"
+          description="Active agents, workload signals, and a hiring catalog of pre-configured roles."
+          actions={
+            <>
+              <button
+                type="button"
+                className="btn inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                onClick={selectLeftovers}
+              >
+                🧹 Select Leftovers ({leftoverAgents.length})
+              </button>
+              <button
+                type="button"
+                className="btn primary inline-flex h-8 items-center justify-center rounded-lg border border-transparent bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80"
+                onClick={openDialog}
+              >
+                + Add Agent
+              </button>
+            </>
+          }
+        />
 
         {/* Cost banner */}
-        <section className="panel" style={{ marginBottom: 16 }}>
-          <h2>Roster Cost <span className="accent">· today</span></h2>
-          {telemetryError && (
-            <div style={{ fontSize: 11, color: 'var(--amber)', marginBottom: 8 }}>
-              ⚠ Telemetry temporarily unavailable — showing cached or zero values
+        <div className="mb-4">
+          <SectionCard title="Roster Cost · today">
+            {telemetryError && (
+              <div className="mb-2 text-[11px] text-warning">
+                ⚠ Telemetry temporarily unavailable — showing cached or zero values
+              </div>
+            )}
+            <div className="crew-cost grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
+              <div className="cell rounded-xl border border-border bg-muted/40 p-3">
+                <span className="l text-[10px] tracking-[1.1px] text-muted-foreground uppercase">Active</span>
+                <span className="v mt-1 block text-2xl font-bold tabular-nums">{activeAgents.length}</span>
+                <span className="d mt-0.5 block text-[11px] text-muted-foreground">
+                  {costSummary.onlineCount} reachable · {costSummary.idleCount} idle
+                </span>
+              </div>
+              <div className="cell tok rounded-xl border border-border bg-muted/40 p-3">
+                <span className="l text-[10px] tracking-[1.1px] text-muted-foreground uppercase">Tokens · today</span>
+                <span className="v mt-1 block text-2xl font-bold tabular-nums text-primary">
+                  {formatTokens(costSummary.totalTokens)}
+                </span>
+                <span className="d mt-0.5 block text-[11px] text-muted-foreground">aggregate across crew</span>
+              </div>
+              <div className="cell spend rounded-xl border border-border bg-muted/40 p-3">
+                <span className="l text-[10px] tracking-[1.1px] text-muted-foreground uppercase">Runs · today</span>
+                <span className="v mt-1 block text-2xl font-bold tabular-nums text-warning">
+                  {costSummary.totalRuns}
+                </span>
+                <span className="d mt-0.5 block text-[11px] text-muted-foreground">started across crew</span>
+              </div>
             </div>
-          )}
-          <div className="crew-cost">
-            <div className="cell">
-              <span className="l">Active</span>
-              <span className="v">{activeAgents.length}</span>
-              <span className="d">{costSummary.onlineCount} reachable · {costSummary.idleCount} idle</span>
-            </div>
-            <div className="cell tok">
-              <span className="l">Tokens · today</span>
-              <span className="v">{formatTokens(costSummary.totalTokens)}</span>
-              <span className="d">aggregate across crew</span>
-            </div>
-            <div className="cell spend">
-              <span className="l">Runs · today</span>
-              <span className="v">{costSummary.totalRuns}</span>
-              <span className="d">started across crew</span>
-            </div>
-          </div>
-        </section>
+          </SectionCard>
+        </div>
 
         {/* Active agents */}
-        <section className="panel">
-          <h2>
-            Active Agents
-            <span className="accent">· {activeAgents.length} on crew</span>
-          </h2>
+        <SectionCard title="Active Agents" count={`${activeAgents.length} on crew`}>
           {isLoading && (
-            <div className="crew-empty">Loading crew…</div>
+            <div className="crew-empty px-3 py-7 text-center text-sm text-muted-foreground">Loading crew…</div>
           )}
           {queryError && !isLoading && (
-            <div className="crew-empty" style={{ color: 'var(--red)' }}>
+            <div className="crew-empty px-3 py-7 text-center text-sm text-destructive">
               Failed to load agents. Retry from the rail.
             </div>
           )}
           {!isLoading && !queryError && activeAgents.length === 0 && (
-            <div className="crew-empty">
+            <div className="crew-empty px-3 py-7 text-center text-sm text-muted-foreground">
               No agents on the crew yet. Hire one from the catalog below or click <strong>+ Add Agent</strong>.
             </div>
           )}
           {!isLoading && activeAgents.length > 0 && (
-            <div className="crew-grid">
+            <div className="crew-grid grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
               {activeAgents.map((a) => (
                 <AgentCard
                   key={a.id}
@@ -543,16 +543,11 @@ export default function CrewPage() {
             </div>
           )}
           {selectedAgents.size > 0 && (
-            <div
-              style={{
-                display: 'flex', gap: 10, alignItems: 'center', marginTop: 12,
-                border: '1px dashed rgba(94,234,212,.4)', borderRadius: 10, padding: '8px 12px',
-              }}
-            >
+            <div className="mt-3 flex flex-wrap items-center gap-2.5 rounded-xl border border-dashed border-primary/40 px-3 py-2">
               <span>{selectedAgents.size} selected</span>
-              <span style={{ flex: 1 }} />
+              <span className="flex-1" />
               <button
-                className="btn danger"
+                className="btn danger inline-flex h-8 items-center justify-center rounded-lg border border-destructive/40 bg-background px-2.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
                 disabled={retireBusy}
                 onClick={() => setConfirmingRetire(true)}
               >
@@ -560,9 +555,9 @@ export default function CrewPage() {
               </button>
             </div>
           )}
-          {retireNote && <div style={{ marginTop: 8, fontSize: 11.5 }}>{retireNote}</div>}
+          {retireNote && <div className="mt-2 text-[11.5px]">{retireNote}</div>}
           {retireRefusal != null && (
-            <div style={{ marginTop: 8 }}>
+            <div className="mt-2">
               <ErrorNotice
                 presented={presentError(retireRefusal, 'The retire was refused.')}
                 operatorSession
@@ -570,46 +565,58 @@ export default function CrewPage() {
               />
             </div>
           )}
-        </section>
+        </SectionCard>
 
         {/* Catalog */}
-        <section className="panel" style={{ marginTop: 16 }}>
-          <h2>Hire from Catalog <span className="accent">· deploy a pre-configured role</span></h2>
-          <AgentCatalog />
-        </section>
+        <div className="mt-4">
+          <SectionCard title="Hire from Catalog · deploy a pre-configured role">
+            <AgentCatalog />
+          </SectionCard>
+        </div>
       </div>
 
       {/* Add Agent mini dialog */}
       <div
-        className={`mini-scrim ${dialogOpen ? 'open' : ''}`}
+        className={`mini-scrim fixed inset-0 z-[165] bg-black/55 backdrop-blur-sm transition-opacity ${
+          dialogOpen ? 'open opacity-100' : 'pointer-events-none opacity-0'
+        }`}
         onClick={closeDialog}
         aria-hidden={!dialogOpen}
       />
       <div
-        className={`mini-dialog ${dialogOpen ? 'open' : ''}`}
+        className={`mini-dialog fixed top-1/2 left-1/2 z-[170] max-h-[86vh] w-[min(440px,92vw)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl transition-opacity ${
+          dialogOpen ? 'open opacity-100' : 'pointer-events-none opacity-0'
+        }`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-agent-title"
         aria-hidden={!dialogOpen}
         inert={!dialogOpen}
-        style={{ maxHeight: '86vh', overflowY: 'auto' }}
       >
-        <h3 id="add-agent-title">Add Agent</h3>
-        <p>Provision a new agent on the crew. You can refine its prompt in the drawer afterwards.</p>
+        <h3 id="add-agent-title" className="text-base font-semibold text-foreground">Add Agent</h3>
+        <p className="mt-1 mb-3 text-xs text-muted-foreground">
+          Provision a new agent on the crew. You can refine its prompt in the drawer afterwards.
+        </p>
         <form onSubmit={handleSubmit}>
-          <label htmlFor="add-agent-name">Name</label>
+          <label htmlFor="add-agent-name" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+            Name
+          </label>
           <input
             id="add-agent-name"
             type="text"
+            className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
             value={form.name}
             placeholder="e.g. Atlas-7 · Release Steward"
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             autoFocus
           />
 
-          <label htmlFor="add-agent-role">Role</label>
+          <label htmlFor="add-agent-role" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+            Role
+          </label>
           <select
             id="add-agent-role"
+            className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
             value={form.role}
             onChange={(e) => {
               const role = e.target.value;
@@ -630,18 +637,24 @@ export default function CrewPage() {
             ))}
           </select>
 
-          <label htmlFor="add-agent-model">Model <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>(optional)</span></label>
+          <label htmlFor="add-agent-model" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+            Model <span className="font-normal tracking-normal text-muted-foreground normal-case">(optional)</span>
+          </label>
           <input
             id="add-agent-model"
             type="text"
+            className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
             value={form.model}
             placeholder="e.g. gpt-4o-mini"
             onChange={(e) => setForm({ ...form, model: e.target.value })}
           />
 
-          <label htmlFor="add-agent-core">Agent core</label>
+          <label htmlFor="add-agent-core" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+            Agent core
+          </label>
           <select
             id="add-agent-core"
+            className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
             value={form.adkProvider}
             onChange={(e) => setForm({ ...form, adkProvider: e.target.value })}
           >
@@ -674,10 +687,11 @@ export default function CrewPage() {
 
           {selectedCoreInfo && (
             <div
-              style={{
-                marginTop: 8, fontSize: 11.5,
-                color: coreHealthError || coreHealth?.healthy === false ? 'var(--amber)' : 'var(--text-mute)',
-              }}
+              className={`mt-2 text-[11.5px] ${
+                coreHealthError || coreHealth?.healthy === false
+                  ? 'text-warning'
+                  : 'text-muted-foreground'
+              }`}
             >
               {coreHealthLoading
                 ? `Probing ${selectedCoreInfo.displayName}…`
@@ -689,9 +703,12 @@ export default function CrewPage() {
 
           {form.executionMode === 'HOST' && (
             <>
-              <label htmlFor="add-agent-workspace-mode">Host workspace mode</label>
+              <label htmlFor="add-agent-workspace-mode" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+                Host workspace mode
+              </label>
               <select
                 id="add-agent-workspace-mode"
+                className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                 value={form.workspaceMode}
                 onChange={(e) => {
                   const workspaceMode = e.target.value as WorkspaceMode;
@@ -709,18 +726,24 @@ export default function CrewPage() {
 
               {form.workspaceMode === 'WORKTREE' ? (
                 <>
-                  <label htmlFor="add-agent-workspace-path">Repository path</label>
+                  <label htmlFor="add-agent-workspace-path" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+                    Repository path
+                  </label>
                   <input
                     id="add-agent-workspace-path"
                     type="text"
+                    className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                     value={form.workspacePath}
                     placeholder="e.g. /srv/repos/atlas"
                     onChange={(e) => setForm({ ...form, workspacePath: e.target.value })}
                   />
-                  <label htmlFor="add-agent-workspace-base-ref">Base ref (optional)</label>
+                  <label htmlFor="add-agent-workspace-base-ref" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+                    Base ref (optional)
+                  </label>
                   <input
                     id="add-agent-workspace-base-ref"
                     type="text"
+                    className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                     value={form.workspaceBaseRef}
                     placeholder="e.g. main"
                     onChange={(e) => setForm({ ...form, workspaceBaseRef: e.target.value })}
@@ -728,15 +751,18 @@ export default function CrewPage() {
                 </>
               ) : (
                 <>
-                  <label htmlFor="add-agent-workspace-path">Direct directory</label>
+                  <label htmlFor="add-agent-workspace-path" className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+                    Direct directory
+                  </label>
                   <input
                     id="add-agent-workspace-path"
                     type="text"
+                    className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                     value={form.workspacePath}
                     placeholder="Trusted backend-local directory"
                     onChange={(e) => setForm({ ...form, workspacePath: e.target.value })}
                   />
-                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-mute)' }}>
+                  <div className="mt-1.5 text-[11px] text-muted-foreground">
                     Direct is never inferred from the browser's location and never falls back to
                     a worktree; it leases exactly the directory you name here.
                   </div>
@@ -745,14 +771,16 @@ export default function CrewPage() {
             </>
           )}
 
-          <div style={{ marginTop: 10 }}>
-            <label>Recommended skills <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>· {selectedSkills.size} selected</span></label>
-            <div style={{ maxHeight: 120, overflowY: 'auto', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, padding: 6 }}>
+          <div className="mt-2.5">
+            <label className="mt-2 mb-1 block text-[10.5px] font-semibold tracking-[.8px] text-muted-foreground uppercase">
+              Recommended skills <span className="font-normal tracking-normal text-muted-foreground normal-case">· {selectedSkills.size} selected</span>
+            </label>
+            <div className="max-h-[120px] overflow-y-auto rounded-lg border border-border p-1.5">
               {(roleDefaults?.skills ?? []).length === 0 && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12 }}>No default skills for this role yet.</div>
+                <div className="text-xs text-muted-foreground">No default skills for this role yet.</div>
               )}
               {(roleDefaults?.skills ?? []).map((s) => (
-                <label key={s.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, padding: '2px 0' }}>
+                <label key={s.id} className="flex items-center gap-2 py-0.5 text-xs">
                   <input
                     type="checkbox"
                     checked={selectedSkills.has(s.id)}
@@ -765,18 +793,18 @@ export default function CrewPage() {
           </div>
 
           {selectionError && (
-            <div style={{ marginTop: 10, color: 'var(--amber)', fontSize: 11.5 }}>{selectionError}</div>
+            <div className="mt-2.5 text-[11.5px] text-warning">{selectionError}</div>
           )}
           {error && (
-            <div style={{ marginTop: 10 }}>
+            <div className="mt-2.5">
               <ErrorNotice presented={error} />
             </div>
           )}
 
-          <div className="actions">
+          <div className="mt-3 flex justify-end gap-2">
             <button
               type="button"
-              className="btn"
+              className="btn inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
               onClick={closeDialog}
               disabled={createMutation.isPending}
             >
@@ -784,7 +812,7 @@ export default function CrewPage() {
             </button>
             <button
               type="submit"
-              className="btn primary"
+              className="btn primary inline-flex h-8 items-center justify-center rounded-lg border border-transparent bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
               disabled={createMutation.isPending || submissionBlocked}
             >
               {createMutation.isPending ? 'Hiring…' : 'Hire Agent'}

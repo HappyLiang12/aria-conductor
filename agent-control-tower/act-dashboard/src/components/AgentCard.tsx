@@ -1,6 +1,7 @@
 import type { Agent, AgentTelemetry } from '../types';
 import { dispatchOpenAgentDrawer } from './DrawerContext';
 import { RuntimeBadge } from './RuntimeBadge';
+import { Badge } from './ui/badge';
 
 /**
  * AgentCard — rich agent panel rendered inside the Crew view.
@@ -62,6 +63,15 @@ function statusLabel(s: LiveStatus): string {
   }
 }
 
+/** Token tone for the lifecycle pill; the `status` class stays as the shim. */
+function statusTone(s: LiveStatus): string {
+  switch (s) {
+    case 'online':  return 'border-success/30 bg-success/10 text-success';
+    case 'idle':    return 'border-warning/30 bg-warning/10 text-warning';
+    case 'offline': return 'border-border bg-muted text-muted-foreground';
+  }
+}
+
 /** Quick number formatter — adds K / M suffixes for tokens. */
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -103,23 +113,38 @@ export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardPro
   const bars = Array.from({ length: 6 }).map((_, i) => {
     const on = i < activityLevel;
     const tone = activityLevel >= 5 ? 'warn' : '';
-    return <i key={i} className={on ? `on ${tone}`.trim() : ''} />;
+    const shim = on ? `on ${tone}`.trim() : '';
+    return (
+      <i
+        key={i}
+        className={`${shim} h-3.5 w-1 rounded-sm ${
+          on ? (tone === 'warn' ? 'bg-warning' : 'bg-primary') : 'bg-muted'
+        }`}
+      />
+    );
   });
 
   return (
     <article
-      className={`crew-card role-${avatarKind} ${status}`}
+      className={`crew-card role-${avatarKind} ${status} relative flex cursor-pointer flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5 text-card-foreground transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
       role="button"
       tabIndex={0}
       onClick={handleOpen}
       onKeyDown={handleKey}
       aria-label={`Open details for ${agent.name}`}
     >
-      <div className="head">
-        <div className={`avatar ${avatarKind}`}>{initialsOf(agent.name)}</div>
-        <div className="who">
-          <span className="nm" title={agent.name}>{agent.name}</span>
-          <span className="role-tag" title={role || 'agent'}>{role || 'agent'}</span>
+      <div className="head flex items-center gap-2.5">
+        <div className={`avatar ${avatarKind} flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary`}>
+          {initialsOf(agent.name)}
+        </div>
+        <div className="who flex min-w-0 flex-1 flex-col">
+          <span className="nm truncate text-sm font-bold tracking-wide" title={agent.name}>{agent.name}</span>
+          <span
+            className="role-tag mt-0.5 truncate text-[10.5px] tracking-[.8px] text-muted-foreground uppercase"
+            title={role || 'agent'}
+          >
+            {role || 'agent'}
+          </span>
         </div>
         <RuntimeBadge core={agent.adkProvider} mode={agent.executionMode} />
         {onSelect && (
@@ -129,43 +154,51 @@ export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardPro
             checked={!!selected}
             onClick={(e) => e.stopPropagation()}
             onChange={onSelect}
-            style={{ marginRight: 6 }}
+            className="mr-1.5 size-3.5 accent-primary"
           />
         )}
-        <span className={`status ${status === 'online' ? '' : status}`}>
+        <Badge
+          variant="outline"
+          className={`status border ${statusTone(status)} ${status === 'online' ? '' : status}`}
+        >
           {statusLabel(status)}
-        </span>
+        </Badge>
         {agent.pickupEligible === false && (
-          <span
-            className="status wait"
+          <Badge
+            variant="outline"
+            className="status wait border-warning/30 bg-warning/10 text-warning"
             title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
               agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
             }`}
           >
             No pickup
-          </span>
+          </Badge>
         )}
       </div>
 
-      <div className="activity">
-        <span className="activity-l">Activity · today</span>
-        <div className="bars">{bars}</div>
-        <span className="lvl">{activityLevel}/6</span>
+      <div className="activity flex items-center gap-2.5 border-t border-dashed border-border pt-2">
+        <span className="activity-l shrink-0 text-[9.5px] tracking-[1px] text-muted-foreground uppercase">
+          Activity · today
+        </span>
+        <div className="bars flex items-end gap-1">{bars}</div>
+        <span className="lvl ml-auto text-[10.5px] text-muted-foreground tabular-nums">{activityLevel}/6</span>
       </div>
 
-      <div className="stats">
-        <div>
-          <span className="l">Runs · today</span>
-          <span className="v run">{runCount}</span>
+      <div className="stats grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-border bg-muted/40 px-2.5 py-2">
+          <span className="l block text-[9.5px] tracking-[.9px] text-muted-foreground uppercase">Runs · today</span>
+          <span className="v run mt-0.5 block text-sm font-bold tabular-nums">{runCount}</span>
         </div>
-        <div>
-          <span className="l">Tokens · today</span>
-          <span className="v tok">{fmtTokens(tokensToday)}</span>
+        <div className="rounded-lg border border-border bg-muted/40 px-2.5 py-2">
+          <span className="l block text-[9.5px] tracking-[.9px] text-muted-foreground uppercase">Tokens · today</span>
+          <span className="v tok mt-0.5 block text-sm font-bold tabular-nums text-primary">{fmtTokens(tokensToday)}</span>
         </div>
       </div>
 
-      <div className="meta-foot">
-        <span className="chip">{agent.model || agent.agentType}</span>
+      <div className="meta-foot flex items-center gap-2 text-[10.5px] tracking-wide text-muted-foreground">
+        <span className="chip rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">
+          {agent.model || agent.agentType}
+        </span>
         <span>{agent.provider || '—'}</span>
       </div>
     </article>

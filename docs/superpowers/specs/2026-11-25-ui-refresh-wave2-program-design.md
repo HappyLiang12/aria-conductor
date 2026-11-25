@@ -47,6 +47,7 @@ Success criteria:
 | Surface | LOC | Tests | Main E2E | CSS source |
 |---------|-----|-------|----------|------------|
 | `ChatPage` + `ReviewQueue` | 633 + 196 | `ChatPage.live` 101, `ChatPage.mobile` 138 | `chat-smoke`, `mobile-flows` | `chat-flow.css`, `index.css` |
+| `MainChatPage` + `components/main-chat/*` | 608 + 180 | `MainChatPage.test` | `aria-main-chat` | `main-chat.css` |
 | `AriaPanel` | 1,921 | `AriaPanel.test` | `aria-attachments`, `aria-engine-unification`, `aria-inflow-decisions`, `aria-session-id`, `aria-timeout-cancel`, `aria-conversation-id-regression`, `fab-send-overlap` | `main-chat.css`, `index.css` |
 | `TaskDrawer` | 580 | `TaskDrawer.test` 833 | `review-decision-zone`, `kanban-hitl` | `index.css` Drawer section |
 | `AgentDrawer` | 830 | `AgentDrawer` tests | `multi-agent-lifecycle` | `index.css` Agent live drawer |

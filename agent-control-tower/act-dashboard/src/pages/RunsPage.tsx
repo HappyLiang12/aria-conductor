@@ -8,7 +8,6 @@ import { isRunLifecycleEvent } from '../utils/wsEvents';
 import { StatusBadge } from '../components/StatusBadge';
 import { RuntimeBadge } from '../components/RuntimeBadge';
 import { RunErrorNotice, ErrorNotice } from '../components/ErrorNotice';
-import { PageHeader } from '../components/layout/PageHeader';
 import { SectionCard } from '../components/layout/SectionCard';
 import { presentError, type PresentedError } from '../api/errorPresentation';
 import { tokenUsageCell, tokenUsageText } from '../utils/tokenUsage';
@@ -133,17 +132,22 @@ export function RunsPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
-      <PageHeader
-        title="Runs"
-        actions={
+      {/* E2E/CSS contract: the page leads with `.page-header h2` (the legacy runs
+          chrome styles that selector directly), so the token type scale is set on
+          an inner span it cannot override. */}
+      <div className="page-header mb-5 flex flex-wrap items-start justify-between gap-3">
+        <h2 className="min-w-0">
+          <span className="text-2xl leading-8 font-semibold tracking-tight text-foreground normal-case">Runs</span>
+        </h2>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <button
             className="btn btn-primary inline-flex h-8 items-center justify-center rounded-lg border border-transparent bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80"
             onClick={() => setShowForm(!showForm)}
           >
             {showForm ? 'Cancel' : '+ Start Run'}
           </button>
-        }
-      />
+        </div>
+      </div>
 
       {actionError && (
         <div className="mb-3">

@@ -8,6 +8,8 @@ import type { AgentTemplate } from '../../types';
 vi.mock('../../api/agents', () => ({
   getTemplates: vi.fn(),
   createFromTemplate: vi.fn(),
+  createAgent: vi.fn(),
+  listAgents: vi.fn(),
 }));
 
 const TEMPLATES: AgentTemplate[] = [
@@ -34,9 +36,11 @@ function ui() {
 describe('AgentCatalog (Wave 2 B1)', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { getTemplates, createFromTemplate } = await import('../../api/agents');
+    const { getTemplates, createFromTemplate, createAgent, listAgents } = await import('../../api/agents');
     (getTemplates as ReturnType<typeof vi.fn>).mockResolvedValue(TEMPLATES);
     (createFromTemplate as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'a-new' });
+    (createAgent as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'a-new' });
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   it('renders each template tile on a token card surface and keeps the catalog hook', async () => {
@@ -58,5 +62,28 @@ describe('AgentCatalog (Wave 2 B1)', () => {
     await userEvent.click(screen.getByRole('button', { name: '+ Deploy' }));
 
     await waitFor(() => expect(createFromTemplate).toHaveBeenCalledWith('t-dev'));
+  });
+
+  it('deploys on the fleet runtime pair when the roster already runs one', async () => {
+    const { createFromTemplate, createAgent, listAgents } = await import('../../api/agents');
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'a-1', name: 'Existing', adkProvider: 'opencode', executionMode: 'HOST' },
+    ]);
+    ui();
+    await screen.findByText('Dev Agent');
+
+    await userEvent.click(screen.getByRole('button', { name: '+ Deploy' }));
+
+    await waitFor(() =>
+      expect(createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Dev Agent',
+          role: 'dev',
+          adkProvider: 'opencode',
+          executionMode: 'HOST',
+        }),
+      ),
+    );
+    expect(createFromTemplate).not.toHaveBeenCalled();
   });
 });

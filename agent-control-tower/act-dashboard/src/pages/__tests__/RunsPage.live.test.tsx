@@ -245,6 +245,16 @@ describe('RunsPage token surfaces (Wave 2 B3)', () => {
     runsData = [runningRun('r-1', 'RUNNING')];
   });
 
+  it('leads with the `.page-header h2` contract title', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = ui(qc);
+    await waitFor(() => expect(screen.getAllByText('Details').length).toBe(1));
+
+    const title = container.querySelector('.page-header h2');
+    expect(title).not.toBeNull();
+    expect(title).toHaveTextContent('Runs');
+  });
+
   it('renders the runs table on a token card surface', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { container } = ui(qc);

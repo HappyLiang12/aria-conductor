@@ -207,6 +207,30 @@ describe('ReportsPage gated mutations (Task 33)', () => {
   });
 });
 
+describe('ReportsPage token surfaces (Wave 2 C3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListReports.mockResolvedValue([REPORT]);
+    mockGetReportHtml.mockResolvedValue('<html><body>brief</body></html>');
+  });
+
+  it('renders the archive, preview and report viewer on token surfaces', async () => {
+    ui();
+    await screen.findByRole('button', { name: /Q1 Agent Performance Brief/ });
+
+    expect(document.querySelector('[data-slot="page-header"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-slot="card"]').length).toBeGreaterThanOrEqual(2);
+
+    // The sandboxed iframe stays, and it sits on the preview's token Card.
+    const frame = await waitFor(() => {
+      const node = document.querySelector('.report-preview iframe.report-frame');
+      expect(node).not.toBeNull();
+      return node as HTMLIFrameElement;
+    });
+    expect(frame.closest('[data-slot="card"]')).not.toBeNull();
+  });
+});
+
 const ARCHIVED_REPORT: ReportArtifact = {
   ...REPORT,
   id: 'r-2',

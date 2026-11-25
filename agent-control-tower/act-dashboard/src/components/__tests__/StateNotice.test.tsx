@@ -20,6 +20,12 @@ describe('StateNotice', () => {
     expect(onAction).toHaveBeenCalledTimes(1);
   });
 
+  it('renders on the token alert surface', () => {
+    render(<StateNotice kind="error" title="Decision queue unavailable" />);
+
+    expect(screen.getByRole('alert')).toHaveAttribute('data-slot', 'alert');
+  });
+
   it('uses status semantics for loading and empty states', () => {
     const { rerender } = render(<StateNotice kind="loading" title="Loading decisions" />);
     expect(screen.getByRole('status')).toHaveTextContent('Loading decisions');

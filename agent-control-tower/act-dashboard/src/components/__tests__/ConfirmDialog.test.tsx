@@ -107,6 +107,17 @@ describe('ConfirmDialog', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  // Wave 2 F1: the dialog renders on the shadcn alert-dialog token surface.
+  // The role stays `dialog` (not `alertdialog`) because the whole app and its
+  // E2E specs pin the existing modal role; only the surface changes.
+  it('renders the confirm dialog on a token dialog surface', () => {
+    const { container } = setup();
+    const dialog = screen.getByRole('dialog');
+
+    expect(dialog).toHaveAttribute('data-slot', 'alert-dialog-content');
+    expect(container.querySelector('[data-slot="alert-dialog-overlay"]')).not.toBeNull();
+  });
+
   it('labels the controls exactly Confirm and Cancel', () => {
     setup();
 

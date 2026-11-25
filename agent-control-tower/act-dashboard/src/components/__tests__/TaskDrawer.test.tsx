@@ -748,6 +748,27 @@ describe('TaskDrawer acceptance criteria and comments honesty', () => {
 // opener, and Escape inside an editable draft never closes the drawer.
 // ---------------------------------------------------------------------------
 
+// Wave 2 D3: the drawer chrome is a token sheet surface; the `.drawer` /
+// `.body` / `.close` hooks, the focus contract and the decision zone stay.
+describe('TaskDrawer token shell (Wave 2 D3)', () => {
+  it('renders the drawer chrome on token surfaces with its hooks intact', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('Spec task')).toBeInTheDocument();
+    const drawer = document.querySelector('.drawer') as HTMLElement;
+    expect(drawer).toHaveAttribute('data-slot', 'sheet-content');
+    expect(drawer.querySelector('[data-slot="sheet-header"]')).not.toBeNull();
+    expect(drawer.querySelector('[data-slot="sheet-footer"]')).not.toBeNull();
+    expect(drawer.querySelector('.body')).not.toBeNull();
+    expect(drawer.querySelector('.close')).not.toBeNull();
+    // The linked-run section is a token Card while keeping its hook.
+    expect(await screen.findByText('Run Result')).toBeInTheDocument();
+    expect(document.querySelector('.run-result[data-slot="card"]')).not.toBeNull();
+  });
+});
+
 describe('TaskDrawer focus contract (Task 7)', () => {
   it('focuses the card heading when the drawer opens', async () => {
     renderDrawer();

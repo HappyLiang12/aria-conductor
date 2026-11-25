@@ -13,6 +13,8 @@ import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
 import { formatTimestamp } from '../utils/formatTime';
 import { tokenUsageText } from '../utils/tokenUsage';
 import { reviewNeedsHuman } from '../utils/reviewState';
@@ -261,42 +263,50 @@ export function TaskDrawer() {
         />
       )}
       <aside
-        className={`drawer${open ? ' open' : ''}`}
+        className={`drawer${open ? ' open' : ''} fixed inset-y-0 right-0 z-[100] flex w-[min(460px,94vw)] flex-col border-l border-border bg-card text-card-foreground shadow-2xl transition-transform`}
+        data-slot="sheet-content"
         aria-hidden={!open}
         aria-label="Task details drawer"
       >
-        <header>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="id">
+        <header
+          className="flex items-center gap-2.5 border-b border-border px-4 py-3"
+          data-slot="sheet-header"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="id text-[11px] tracking-wider text-muted-foreground uppercase">
               {item ? `TASK · ${item.id.slice(0, 8).toUpperCase()}` : 'TASK'}
             </div>
-            <h3 ref={headingRef} tabIndex={-1} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <h3 ref={headingRef} tabIndex={-1} className="truncate text-[15px] font-semibold text-foreground">
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
           {/* Defect D7: entry point into the linked agent's Live Activity
               Stream — only meaningful when the card carries an agent. */}
           {item?.linkedAgentId && (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               className="btn"
               aria-label="Open live activity"
               onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
             >
               ▶ Live activity
-            </button>
+            </Button>
           )}
           {onOverview && item?.status === 'REVIEW' && (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               className="btn"
               onClick={() => item && openReviewMode(item.id)}
               aria-label="Expand review"
             >
               ⤢ Expand
-            </button>
+            </Button>
           )}
           <div
             ref={closeRef}
-            className="close"
+            className="close ml-auto cursor-pointer rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={closeTaskDrawer}
             role="button"
             tabIndex={-1}
@@ -306,16 +316,18 @@ export function TaskDrawer() {
           </div>
         </header>
 
-        <div className="body">
+        <div className="body min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
           {taskQuery.isLoading && (
-            <div className="loading-spinner" style={{ padding: 20 }}>
+            <div className="loading-spinner py-5">
               <div className="spinner" />
               <span>Loading task…</span>
             </div>
           )}
 
           {taskQuery.isError && !taskQuery.isLoading && (
-            <div className="evidence-error">Failed to load task. It may have been deleted.</div>
+            <div className="evidence-error rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Failed to load task. It may have been deleted.
+            </div>
           )}
 
           {item && (
@@ -350,15 +362,10 @@ export function TaskDrawer() {
               )}
 
               {/* Status row */}
-              <div className="section-h">Status</div>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                }}
-              >
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Status
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
                 {/* F24: badge REVIEW only while an ask is open. A finished card
                     still parked in REVIEW is waiting for sign-off, not review. */}
                 <span
@@ -370,42 +377,38 @@ export function TaskDrawer() {
                 </span>
                 <span className={PRIORITY_TONE[item.priority]}>{item.priority}</span>
                 {item.assignee && (
-                  <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
+                  <span className="text-[11.5px] text-muted-foreground">
                     · @{item.assignee}
                   </span>
                 )}
-                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)' }}>
+                <span className="ml-auto text-[11px] text-muted-foreground">
                   Updated {formatTimestamp(item.updatedAt)}
                 </span>
               </div>
 
               {/* Description */}
-              <div className="section-h">Description</div>
-              <div
-                style={{
-                  fontSize: 12.5,
-                  lineHeight: 1.55,
-                  color: 'var(--text-dim)',
-                  padding: '8px 10px',
-                  background: 'rgba(255,255,255,.025)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 8,
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Description
+              </div>
+              <div className="rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-[12.5px] leading-relaxed text-muted-foreground whitespace-pre-wrap">
                 {item.description?.trim() ? item.description : 'No description provided.'}
               </div>
 
               {/* Acceptance Criteria */}
-              <div className="section-h">Acceptance Criteria</div>
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Acceptance Criteria
+              </div>
               <div className="ac">
                 {acceptance.length === 0 && (
-                  <div style={{ fontSize: 11.5, color: 'var(--text-mute)', padding: '4px 2px' }}>
+                  <div className="px-0.5 py-1 text-[11.5px] text-muted-foreground">
                     No acceptance criteria on this card.
                   </div>
                 )}
                 {acceptance.map((row, idx) => (
-                  <div key={idx} className={`row ${row.done ? 'ok' : 'todo'}`}>
+                  <div
+                    key={idx}
+                    className={`row flex items-start gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs ${row.done ? 'ok' : 'todo'}`}
+                  >
                     <span className="check">{row.done ? '✓' : '○'}</span>
                     <div>{row.text}</div>
                   </div>
@@ -413,27 +416,32 @@ export function TaskDrawer() {
               </div>
 
               {/* Artifacts */}
-              <div className="section-h">Artifacts</div>
-              <div className="artifacts">
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Artifacts
+              </div>
+              <div className="artifacts grid gap-1.5">
                 {parsed.artifacts.length === 0 && !item.linkedRunId && (
-                  <div className="artifact" style={{ color: 'var(--text-mute)' }}>
+                  <div className="artifact flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs text-muted-foreground">
                     <span className="ic">∅</span> No artifacts linked yet.
                   </div>
                 )}
                 {item.linkedRunId && (
-                  <div className="artifact">
+                  <div className="artifact flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs">
                     <span className="ic">▶</span>
                     Run · <span className="cell-mono">{item.linkedRunId.slice(0, 12)}</span>
                   </div>
                 )}
                 {item.linkedAgentId && (
-                  <div className="artifact">
+                  <div className="artifact flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs">
                     <span className="ic">★</span>
                     Agent · <span className="cell-mono">{item.linkedAgentId.slice(0, 12)}</span>
                   </div>
                 )}
                 {parsed.artifacts.map((a, idx) => (
-                  <div key={idx} className="artifact">
+                  <div
+                    key={idx}
+                    className="artifact flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs"
+                  >
                     <span className="ic">📄</span>
                     {a}
                   </div>
@@ -443,58 +451,55 @@ export function TaskDrawer() {
               {/* Linked run result (D4): the card detail must expose what the
                   run actually produced, not just its id in Artifacts. */}
               {item.linkedRunId && (
-                <div className="run-result">
-                  <div className="section-h">Run Result</div>
-                  {runQuery.isLoading && (
-                    <div
-                      style={{ fontSize: 11.5, color: 'var(--text-mute)', padding: '4px 2px' }}
-                    >
-                      Loading run…
+                <Card size="sm" className="run-result">
+                  <CardContent className="grid gap-1.5">
+                    <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                      Run Result
                     </div>
-                  )}
-                  {runQuery.isError && !runQuery.isLoading && (
-                    <div className="evidence-error">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
-                  )}
-                  {linkedRun && (
-                    <>
-                      <div className="run-meta">
-                        <span className="pill">{linkedRun.status}</span>
-                        <span className="cell-mono">Iter {linkedRun.iterationCount}</span>
-                        <span className="cell-mono">
-                          {tokenUsageText(linkedRun.totalTokensUsed)}
-                        </span>
-                        <span className="cell-mono">
-                          {linkedRun.completedAt
-                            ? formatTimestamp(linkedRun.completedAt)
-                            : 'not finished'}
-                        </span>
+                    {runQuery.isLoading && (
+                      <div className="px-0.5 py-1 text-[11.5px] text-muted-foreground">
+                        Loading run…
                       </div>
-                      {linkedRun.errorMessage && (
-                        <div
-                          className="evidence-error"
-                          style={{
-                            background: 'rgba(255,107,122,.06)',
-                            border: '1px solid rgba(255,107,122,.2)',
-                            borderRadius: 8,
-                            padding: '10px 12px',
-                            marginTop: 8,
-                          }}
-                        >
-                          <RunErrorNotice
-                            message={linkedRun.errorMessage}
-                            surface={linkedRun.errorSurface}
-                            code={linkedRun.errorCode}
-                          />
+                    )}
+                    {runQuery.isError && !runQuery.isLoading && (
+                      <div className="evidence-error rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        Failed to load run {item.linkedRunId.slice(0, 8)}.
+                      </div>
+                    )}
+                    {linkedRun && (
+                      <>
+                        <div className="run-meta flex flex-wrap items-center gap-2">
+                          <span className="pill">{linkedRun.status}</span>
+                          <span className="cell-mono text-[11.5px] text-muted-foreground">
+                            Iter {linkedRun.iterationCount}
+                          </span>
+                          <span className="cell-mono text-[11.5px] text-muted-foreground">
+                            {tokenUsageText(linkedRun.totalTokensUsed)}
+                          </span>
+                          <span className="cell-mono text-[11.5px] text-muted-foreground">
+                            {linkedRun.completedAt
+                              ? formatTimestamp(linkedRun.completedAt)
+                              : 'not finished'}
+                          </span>
                         </div>
-                      )}
-                      {linkedRun.finalOutput && (
-                        <div className="artifact-result">
-                          <MarkdownViewer content={linkedRun.finalOutput} />
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
+                        {linkedRun.errorMessage && (
+                          <div className="evidence-error mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-xs">
+                            <RunErrorNotice
+                              message={linkedRun.errorMessage}
+                              surface={linkedRun.errorSurface}
+                              code={linkedRun.errorCode}
+                            />
+                          </div>
+                        )}
+                        {linkedRun.finalOutput && (
+                          <div className="artifact-result rounded-lg border border-success/20 bg-success/10 p-2.5 text-xs">
+                            <MarkdownViewer content={linkedRun.finalOutput} />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
               )}
 
               {transitionMutation.error && (
@@ -506,19 +511,23 @@ export function TaskDrawer() {
 
               {validTransitions.length > 1 && (
                 <>
-                  <div className="section-h">Transition To</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                    Transition To
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
                     {validTransitions
                       .filter((s) => s !== 'DONE' && s !== 'CANCELLED')
                       .map((s) => (
-                        <button
+                        <Button
                           key={s}
+                          variant="outline"
+                          size="sm"
                           className="btn"
                           disabled={transitionMutation.isPending}
                           onClick={() => handleTransition(s)}
                         >
                           → {STATUS_LABEL[s]}
-                        </button>
+                        </Button>
                       ))}
                   </div>
                 </>
@@ -527,9 +536,13 @@ export function TaskDrawer() {
           )}
         </div>
 
-        <footer>
-          <button
-            className="btn primary"
+        <footer
+          className="flex gap-2 border-t border-border bg-muted/20 px-4 py-3.5"
+          data-slot="sheet-footer"
+        >
+          <Button
+            variant="default"
+            className="btn primary flex-1"
             title={item?.pendingAskCount
               ? `Decide the ${item.pendingAskCount} pending ask${item.pendingAskCount === 1 ? '' : 's'} first`
               : undefined}
@@ -544,17 +557,18 @@ export function TaskDrawer() {
             onClick={handleApprove}
           >
             Approve
-          </button>
-          <button
-            className="btn danger"
+          </Button>
+          <Button
+            variant="destructive"
+            className="btn danger flex-1"
             disabled={!item || transitionMutation.isPending || !validTransitions.includes('CANCELLED')}
             onClick={() => setConfirmingReject(true)}
           >
             Reject
-          </button>
-          <button className="btn" onClick={closeTaskDrawer}>
+          </Button>
+          <Button variant="outline" className="btn flex-1" onClick={closeTaskDrawer}>
             Close
-          </button>
+          </Button>
         </footer>
       </aside>
 

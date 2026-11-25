@@ -611,3 +611,30 @@ describe('AgentDrawer completed-run history (D5)', () => {
     expect(container.querySelectorAll('.stream .ln').length).toBe(2);
   });
 });
+
+// Wave 2 D4: the live drawer chrome and its sections are token surfaces; the
+// `.agent-drawer` / `.stream` / `.ln` hooks and the stream behaviour stay.
+describe('AgentDrawer token shell (Wave 2 D4)', () => {
+  beforeEach(() => {
+    mockCtx.lastMessage = null;
+    mockCtx.isConnected = false;
+    wsHandlers = [];
+    drawerState.open = true;
+    drawerState.agentId = 'a-1';
+  });
+
+  it('renders the drawer chrome and its sections on token surfaces', async () => {
+    const { container } = ui();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument(),
+    );
+
+    const drawer = container.querySelector('.agent-drawer') as HTMLElement;
+    expect(drawer).toHaveAttribute('data-slot', 'sheet-content');
+    expect(drawer.querySelector('[data-slot="sheet-header"]')).not.toBeNull();
+    expect(drawer.querySelector('[data-slot="sheet-footer"]')).not.toBeNull();
+    expect(drawer.querySelector('[data-slot="card"]')).not.toBeNull();
+    expect(drawer.querySelector('.stream')).not.toBeNull();
+    expect(drawer.querySelector('.stream .ln')).not.toBeNull();
+  });
+});

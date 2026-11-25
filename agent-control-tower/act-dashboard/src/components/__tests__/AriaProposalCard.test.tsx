@@ -779,3 +779,21 @@ describe('a batch read in flight is not reported as a change (T48, seam Minor-2)
     await waitFor(() => expect(decideMemoryProposal).toHaveBeenCalledWith('ent-7', 'APPROVE'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 D1. The proposal card is drawn on the shadcn `Card` token surface while
+// keeping its `.ask-card` hook and every test id the panel/Memory surfaces read.
+// ---------------------------------------------------------------------------
+describe('AriaProposalCard token surface', () => {
+  it('renders on a token Card and keeps its hooks and decisions', () => {
+    render(<AriaProposalCard item={proposal()} onSettled={vi.fn()} />);
+
+    const card = screen.getByTestId('aria-proposal-card');
+    expect(card).toHaveAttribute('data-slot', 'card');
+    expect(card).toHaveClass('ask-card');
+    expect(card).toHaveAttribute('data-subject-type', 'FACT');
+    expect(screen.getByTestId('proposal-value')).toHaveTextContent('IntelliJ IDEA');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
+  });
+});

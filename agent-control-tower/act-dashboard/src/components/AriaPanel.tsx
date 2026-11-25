@@ -6,7 +6,6 @@ import { listApprovals, getApproval } from '../api/approvals';
 import { apiErrorMessage, isCrossOriginRejection, isOperatorRejection } from '../api/operatorSession';
 import {
   OPERATOR_REMEDY_COPY,
-  credentialRejectionRemedy,
   crossSiteSessionMessage,
   openConfigure,
   operatorSessionMessage,
@@ -17,16 +16,17 @@ import { getLatestConversation, getConversationTimeline, deleteConversation } fr
 import type { TimelineEntry } from '../api/ariaConversations';
 import { listMemoryProposals } from '../api/memory';
 import type { MemoryProposalView } from '../api/memory';
-import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import { useWebSocketContext } from './Layout';
 import { emptyState, hasUnansweredCard, panelReducer } from './ariaPanelState';
 import type { MemoryProposalSummary, PanelItem } from './ariaPanelState';
-import AriaActivityStrip from './AriaActivityStrip';
-import AriaApprovalCard from './AriaApprovalCard';
-import AriaClarificationCard from './AriaClarificationCard';
-import AriaProposalCard, { OperatorSessionNotice, PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
-import SlashCommandMenu from './SlashCommandMenu';
+import { PROPOSAL_INBOX_LIMIT } from './AriaProposalCard';
+import type { ProposalSettledState } from './AriaProposalCard';
+import { Card } from './ui/card';
+import { AriaComposer } from './aria/AriaComposer';
+import { AriaFab } from './aria/AriaFab';
+import { AriaPanelHeader } from './aria/AriaPanelHeader';
+import { AriaThread } from './aria/AriaThread';
 import {
   MAX_ATTACHMENTS,
   MAX_IMAGE_BYTES,
@@ -1504,361 +1504,117 @@ export function AriaPanel() {
     return rendered;
   }, [items]);
 
+  // The presentational children report settlements back here: the panel owns the
+  // reducer, the pending-approvals snapshot and the proposal inbox, so the
+  // dialogue logic never leaves this component.
+  const handleApprovalSettled = useCallback(
+    (item: Extract<PanelItem, { kind: 'approval' }>, settled: 'approved' | 'denied' | 'expired', reason?: string) => {
+      // The operator just settled an ask here: the queue changed.
+      invalidatePendingApprovals();
+      dispatch({
+        type: 'approvalSettled',
+        approvalId: item.approvalId,
+        state: settled,
+        reason,
+      });
+    },
+    [invalidatePendingApprovals],
+  );
+
+  const handleClarificationSettled = useCallback(
+    (item: Extract<PanelItem, { kind: 'clarification' }>, settled: 'answered' | 'expired', reason?: string) => {
+      invalidatePendingApprovals();
+      dispatch({
+        type: 'clarificationSettled',
+        approvalId: item.approvalId,
+        state: settled,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+    },
+    [invalidatePendingApprovals],
+  );
+
+  const handleProposalSettled = useCallback((proposalId: string, settled: ProposalSettledState) => {
+    dispatch({ type: 'proposalSettled', proposalId, state: settled });
+  }, []);
+
+  const refusedReads = reconcileFailure.filter((failure) => failure.operatorRejected);
+  const reconcileFaultText = reconcileFailure
+    .filter((failure) => !failure.operatorRejected)
+    .map((failure) => failure.text)
+    .join(' ') || null;
+  const refusedReadsActionLabel = refusedReads.length > 0
+    ? refusedReadsLabel(refusedReads.map((failure) => failure.action))
+    : null;
+  const composerDisabled = busy || gated || clearing;
+
   return (
     <>
-      <button
-        type="button"
-        className={`ai-fab ${open ? 'ai-fab-active' : ''}`}
-        onClick={togglePanel}
-        aria-label={open ? 'Close Aria panel' : 'Open Aria panel'}
-        aria-expanded={open}
-      >
-        <span className="ai-fab-halo" aria-hidden="true" />
-        <span className="ai-fab-glyph" aria-hidden="true">✦</span>
-        <span className="ai-fab-dot" aria-hidden="true" />
-      </button>
+      <AriaFab open={open} onToggle={togglePanel} />
 
       {open && (
         <section className="ai-panel" role="dialog" aria-label="Aria assistant">
-          <header className="ai-header">
-            <div className="ai-header-stripe" aria-hidden="true" />
-            <div className="ai-avatar" aria-hidden="true">
-              <span>A</span>
-            </div>
-            <div className="ai-header-text">
-              <div className="ai-header-title">Aria</div>
-              <div className="ai-header-sub">
-                <span className="ai-pulse-dot" aria-hidden="true" />
-                {loading ? 'Connecting…' : 'Personal Assistant · always on'}
-              </div>
-            </div>
-            <div className="ai-session-info">
-              <code className="ai-conversation-id" title={conversationId}>
-                {conversationId.slice(0, 8)}...
-              </code>
-              <button
-                type="button"
-                className="ai-copy-btn"
-                onClick={handleCopyConversationId}
-                aria-label="Copy conversation ID"
-                title="Copy conversation ID to clipboard"
-              >
-                {copied ? '✓' : '📋'}
-              </button>
-              <button
-                type="button"
-                className="ai-clear-btn"
-                onClick={handleNewConversation}
-                disabled={clearing}
-                aria-busy={clearing || undefined}
-                aria-label="Clear and start new conversation"
-                title={clearing
-                  ? 'Clearing this conversation — waiting for the run stop and transcript purge to answer'
-                  : "Clear and start new conversation — this cancels this conversation's runs and deletes its transcript"}
-              >
-                {clearing ? 'Clearing…' : 'Clear'}
-              </button>
-            </div>
-            <button
-              type="button"
-              className="ai-close"
-              onClick={openMainChat}
-              aria-label="Open Aria in the main chat"
-              title="Open in main chat"
-            >
-              ⤢
-            </button>
-            <button
-              type="button"
-              className="ai-close"
-              onClick={closePanel}
-              aria-label="Close Aria"
-            >
-              ×
-            </button>
-          </header>
-
-          <div className="ai-stack" ref={stackRef} aria-live="polite" aria-relevant="additions">
-            {isEmpty && (
-              <div className="ai-card ai-empty">
-                <div className="ai-empty-eyebrow">— operator copilot</div>
-                <div className="ai-empty-title">
-                  Good to see you. <em>How can I help?</em>
-                </div>
-                <div className="ai-empty-sub">
-                  I can brief you on agents, runs, approvals, and the knowledge
-                  base — and I can act on what you ask.
-                </div>
-              </div>
-            )}
-
-            {historyError && (
-              <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
-                {historyError}
-              </div>
-            )}
-
-            {/* A reconcile read that failed. A refusal is an authority problem
-                with a remedy, so it reads as the shared notice (naming the read
-                that was refused); a fault keeps the server's own text. Before
-                this, both were swallowed and the panel looked merely empty. */}
-            {reconcileFailure.some((failure) => !failure.operatorRejected) && (
-              <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
-                {reconcileFailure
-                  .filter((failure) => !failure.operatorRejected)
-                  .map((failure) => failure.text)
-                  .join(' ')}
-              </div>
-            )}
-            {reconcileFailure.some((failure) => failure.operatorRejected) && (
-              <div style={{ margin: '8px 12px' }}>
-                <OperatorSessionNotice
-                  actionLabel={refusedReadsLabel(reconcileFailure
-                    .filter((failure) => failure.operatorRejected)
-                    .map((failure) => failure.action))}
-                />
-              </div>
-            )}
-
-            {items.map((item) => {
-              // Live and restored failures carry the same server text, so the one
-              // remedy mapping serves both planes here (T54 F3).
-              const remedy = item.kind === 'assistant' && item.error === true
-                ? credentialRejectionRemedy(item.content)
-                : null;
-              if (item.kind === 'activity') {
-                return <AriaActivityStrip key={item.id} item={item} />;
-              }
-              if (item.kind === 'approval') {
-                return (
-                  <AriaApprovalCard
-                    key={item.id}
-                    item={item}
-                    onSettled={(settled, reason) => {
-                      // The operator just settled an ask here: the queue changed.
-                      invalidatePendingApprovals();
-                      dispatch({
-                        type: 'approvalSettled',
-                        approvalId: item.approvalId,
-                        state: settled,
-                        reason,
-                      });
-                    }}
-                  />
-                );
-              }
-              if (item.kind === 'clarification') {
-                return (
-                  <AriaClarificationCard
-                    key={item.id}
-                    item={item}
-                    onSettled={(settled, reason) => {
-                      invalidatePendingApprovals();
-                      dispatch({
-                        type: 'clarificationSettled',
-                        approvalId: item.approvalId,
-                        state: settled,
-                        ...(reason !== undefined ? { reason } : {}),
-                      });
-                    }}
-                  />
-                );
-              }
-              if (item.kind === 'queued') {
-                return (
-                  <div key={item.id} className="ai-queued-pill">
-                    <span className="pill dim">
-                      Queued · {item.runIds.map((runId) => runId.slice(0, 8)).join(', ')}
-                    </span>
-                  </div>
-                );
-              }
-              if (item.kind === 'proposal') {
-                // The card owns the decide call (Task 12a): the panel only mounts
-                // it and settles the item, so one decision renders one settlement.
-                // A proposal does not gate the composer (T45 Item 1: it parks no
-                // turn), so an undecided one is a card to act on, never a lock.
-                // A `decided-elsewhere` item renders the same card, which says why
-                // it settled and drops the controls that could only 409.
-                return (
-                  <AriaProposalCard
-                    key={item.id}
-                    item={item}
-                    onSettled={(proposalId, settled) => dispatch({
-                      type: 'proposalSettled',
-                      proposalId,
-                      state: settled,
-                    })}
-                  />
-                );
-              }
-              return (
-                <div key={item.id} className={`ai-msg ai-msg-${item.kind}`}>
-                  <div className="ai-msg-avatar" aria-hidden="true">
-                    {item.kind === 'user' ? 'You' : 'A'}
-                  </div>
-                  <div className="ai-msg-body">
-                    <div className={`ai-msg-bubble ${item.kind === 'assistant' && item.error ? 'ai-msg-bubble-error' : ''}`}>
-                      {item.kind === 'user' && item.attachments && item.attachments.length > 0 && (
-                        // The turn's images, drawn from the client's own object
-                        // URLs: nothing about the bytes is ever persisted or
-                        // restored, so a re-read transcript shows text only.
-                        <div className="ai-msg-attachments">
-                          {item.attachments.map((attachment) => (
-                            <img
-                              key={attachment.previewUrl}
-                              src={attachment.previewUrl}
-                              alt={attachment.filename}
-                              className="ai-msg-attachment-thumb"
-                            />
-                          ))}
-                        </div>
-                      )}
-                      {item.kind === 'assistant' && item.error === true && remedy !== null && (
-                        // T54 F3: a failure whose server text names no fix leads
-                        // with the cause and the action, then keeps the original
-                        // wording below it as the record the operator can quote.
-                        <div className="ai-msg-remedy" data-testid="credential-remedy">
-                          <p className="ai-msg-remedy-text">{remedy}</p>
-                          <button
-                            type="button"
-                            className="btn"
-                            onClick={() => openConfigure('llm')}
-                          >
-                            Open Configure → LLM Providers
-                          </button>
-                        </div>
-                      )}
-                      {item.kind === 'assistant' ? (
-                        <div
-                          className="ai-msg-md markdown-content"
-                          dangerouslySetInnerHTML={{ __html: assistantHtml.get(item.id) ?? '' }}
-                        />
-                      ) : (
-                        <div className="ai-msg-text">{item.content}</div>
-                      )}
-                    </div>
-                    <div className="ai-msg-meta">
-                      {item.kind === 'user' ? 'You' : 'Aria'} ·{' '}
-                      {formatTimestamp(item.timestamp)}
-                      {item.kind === 'assistant' && item.error === true && lastIsRetryable && item.id === tail?.id && (
-                        <button
-                          type="button"
-                          className="ai-retry"
-                          onClick={handleRetry}
-                          disabled={busy}
-                        >
-                          Retry
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {busy && (
-              <div className="ai-msg ai-msg-assistant">
-                <div className="ai-msg-avatar" aria-hidden="true">
-                  A
-                </div>
-                <div className="ai-msg-body">
-                  <div className="ai-msg-bubble ai-msg-bubble-thinking">
-                    <div className="typing-indicator" aria-label="Aria is thinking">
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {isEmpty && (
-              <div className="ai-suggestions" role="group" aria-label="Suggested prompts">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    className="ai-sg"
-                    onClick={() => sendStreamed(s, { attachments: pendingImages })}
-                    disabled={busy || gated || clearing}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {gated && (
-            <div className="ai-gate-hint" role="status">
-              {/* Name only what the cards actually offer: Allow/Deny on an
-                  approval, Answer on a question. There is no cancel affordance
-                  in this panel, so the copy must not promise one. */}
-              Answer the pending decision first.
-            </div>
-          )}
-
-          <div
-            className="ai-compose"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files);
-            }}
-          >
-            {pendingImages.length > 0 && (
-              <div className="ai-compose-attachments">
-                {pendingImages.map((image) => (
-                  <span key={image.id} className="ai-attachment-chip">
-                    <img src={image.previewUrl} alt={image.filename} className="ai-attachment-thumb" />
-                    <span className="ai-attachment-name">{image.filename}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeImage(image.id)}
-                      aria-label={`Remove ${image.filename}`}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            {attachmentError && <div className="ai-attachment-error" role="alert">{attachmentError}</div>}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              className="ai-attach-input"
-              data-testid="aria-attachment-input"
-              onChange={(event) => {
-                if (event.target.files) void addFiles(event.target.files);
-                event.target.value = '';
-              }}
+          {/* The token surface. `.ai-panel` stays the dialog root for the aria
+              E2E selectors; the card carries the surface the tokens own. */}
+          <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border border-border bg-card p-0 text-sm text-card-foreground shadow-xl [--card-spacing:0px]">
+            <AriaPanelHeader
+              conversationId={conversationId}
+              copied={copied}
+              clearing={clearing}
+              loading={loading}
+              onCopyConversationId={handleCopyConversationId}
+              onClear={handleNewConversation}
+              onOpenMainChat={openMainChat}
+              onClose={closePanel}
             />
-            {slash.open && (
-              <SlashCommandMenu
-                items={slash.items}
-                activeIndex={slash.activeIndex}
-                onHover={(i) => slash.move(i - slash.activeIndex)}
-                onSelect={(item) => { slash.choose(item); setInput(''); }}
-              />
-            )}
-            {slash.pendingSkill && !slash.open && (
-              <div className="ai-skill-chip">
-                <span>/{slash.pendingSkill.name}</span>
-                <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
+
+            <AriaThread
+              items={items}
+              assistantHtml={assistantHtml}
+              tailId={tail?.id}
+              lastIsRetryable={lastIsRetryable}
+              busy={busy}
+              isEmpty={isEmpty}
+              historyError={historyError}
+              reconcileFailure={reconcileFailure}
+              reconcileFaultText={reconcileFaultText}
+              refusedReadsLabel={refusedReadsActionLabel}
+              suggestions={SUGGESTIONS}
+              sendDisabled={composerDisabled}
+              stackRef={stackRef}
+              onRetry={handleRetry}
+              onSuggestion={(suggestion) => sendStreamed(suggestion, { attachments: pendingImages })}
+              onOpenConfigure={() => openConfigure('llm')}
+              onApprovalSettled={handleApprovalSettled}
+              onClarificationSettled={handleClarificationSettled}
+              onProposalSettled={handleProposalSettled}
+            />
+
+            {gated && (
+              <div
+                className="ai-gate-hint border-t border-warning/40 bg-warning/10 px-4 py-2 text-xs text-warning"
+                role="status"
+              >
+                {/* Name only what the cards actually offer: Allow/Deny on an
+                    approval, Answer on a question. There is no cancel affordance
+                    in this panel, so the copy must not promise one. */}
+                Answer the pending decision first.
               </div>
             )}
-            <textarea
-              ref={textareaRef}
-              className="ai-compose-input"
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                slash.onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length);
+
+            <AriaComposer
+              input={input}
+              busy={busy}
+              gated={gated}
+              clearing={clearing}
+              pendingImages={pendingImages}
+              attachmentError={attachmentError}
+              slash={slash}
+              fileInputRef={fileInputRef}
+              textareaRef={textareaRef}
+              onInputChange={(value, caret) => {
+                setInput(value);
+                slash.onInputChange(value, caret);
               }}
               onKeyDown={handleKeyDown}
               onPaste={(event) => {
@@ -1870,48 +1626,13 @@ export function AriaPanel() {
                   void addFiles(pasted);
                 }
               }}
-              placeholder="Ask Aria anything…  (type / for skills)"
-              rows={2}
-              disabled={busy || gated || clearing}
-              aria-controls={slash.open ? 'slash-command-listbox' : undefined}
-              aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
+              onSelectSkill={(item) => { slash.choose(item); setInput(''); }}
+              onRemoveImage={removeImage}
+              onAddFiles={addFiles}
+              onSend={handleSend}
+              onCancel={handleCancel}
             />
-            <button
-              type="button"
-              className="ai-attach-btn"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy || gated || clearing}
-              aria-label="Attach images"
-              title="Attach images (JPEG, PNG or WebP; up to 5, 4 MB each)"
-            >
-              <span aria-hidden="true">📎</span>
-            </button>
-            {busy ? (
-              <button
-                type="button"
-                className="ai-cancel-btn"
-                onClick={handleCancel}
-                aria-label="Cancel request"
-              >
-                <span aria-hidden="true">✕</span>
-                <span>Cancel</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ai-action-btn"
-                onClick={handleSend}
-                disabled={!input.trim() || gated || clearing}
-                aria-label="Send message"
-              >
-                <span className="ai-action-glyph" aria-hidden="true">↗</span>
-                <span className="ai-action-label">Send</span>
-              </button>
-            )}
-          </div>
-          <div className="ai-hint">
-            Aria streams live · acts on the live system · review approvals before destructive moves.
-          </div>
+          </Card>
         </section>
       )}
     </>

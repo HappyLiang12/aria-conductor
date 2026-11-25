@@ -13,6 +13,9 @@ import {
   nativePermissionOf,
 } from '../components/NativePermissionAsk';
 import HousekeepingPanel from '../components/HousekeepingPanel';
+import { PageHeader } from '../components/layout/PageHeader';
+import { Badge } from '../components/ui/badge';
+import { Card, CardContent, CardHeader } from '../components/ui/card';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
 import { shortRunId } from '../utils/shortRunId';
 import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
@@ -75,6 +78,21 @@ function approvalKindOf(reason: string | null | undefined): { label: string; pil
   if (r.includes('write') || r.includes('delete') || r.includes('exec')) return { label: 'Action', pill: 'pill warn' };
   return { label: 'Action', pill: 'pill dev' };
 }
+
+/** Token colours for the legacy `pill` shim classes. */
+function pillTone(shim: string): string {
+  if (shim.includes('ok')) return 'border-success/30 bg-success/10 text-success';
+  if (shim.includes('risk')) return 'border-destructive/30 bg-destructive/10 text-destructive';
+  if (shim.includes('warn')) return 'border-warning/30 bg-warning/10 text-warning';
+  if (shim.includes('qa')) return 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300';
+  if (shim.includes('ba') || shim.includes('dev')) return 'border-primary/30 bg-primary/10 text-primary';
+  return 'border-border bg-muted text-muted-foreground';
+}
+
+const BTN_CLASS =
+  'btn inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50';
+const BTN_DANGER_CLASS =
+  'btn danger inline-flex h-8 items-center justify-center rounded-lg border border-destructive/40 bg-background px-2.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50';
 
 function eventToneOf(eventType: string): string {
   const t = eventType.toLowerCase();
@@ -286,403 +304,329 @@ export default function OpsPage() {
     .map((q) => presentError(q.error, 'A dashboard query failed.').text);
 
   return (
-    <div className="view-zone" data-view="ops" style={{ display: 'block', padding: '16px' }}>
+    <div className="view-zone mx-auto w-full max-w-[1400px] p-4 sm:p-6" data-view="ops">
       {/* ---------- Header ---------- */}
-      <div className="view-header">
-        <div>
-          <h1>
-            <span style={{ color: 'var(--brand-2)', marginRight: 8 }}>◈</span>
-            Operations
-            <span
-              style={{
-                marginLeft: 10, fontSize: 11, color: 'var(--text-mute)',
-                letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 600,
+      <PageHeader
+        title="◈ Operations"
+        description="Command Surface — approval queue, run history, live activity, and morning briefing in one focused work surface."
+        actions={
+          <>
+            <Badge
+              variant="outline"
+              className="badge live gap-1.5 border-success/30 bg-success/10 text-success"
+              title="Auto-refreshing every 8–15s"
+            >
+              <span className="dot size-1.5 rounded-full bg-success" />Live
+            </Badge>
+            <button
+              className={BTN_CLASS}
+              onClick={() => {
+                qc.invalidateQueries({ queryKey: ['ops'] });
+                setToast({ kind: 'info', msg: 'Refreshing ops surface…' });
               }}
             >
-              · Command Surface
-            </span>
-          </h1>
-          <div className="sub">
-            Approval queue, run history, live activity, and morning briefing — one focused work surface.
-          </div>
-        </div>
-        <div className="actions">
-          <span
-            className="badge live"
-            title="Auto-refreshing every 8–15s"
-            style={{ alignSelf: 'center' }}
-          >
-            <span className="dot" />Live
-          </span>
-          <button
-            className="btn"
-            onClick={() => {
-              qc.invalidateQueries({ queryKey: ['ops'] });
-              setToast({ kind: 'info', msg: 'Refreshing ops surface…' });
-            }}
-          >
-            ↻ Refresh
-          </button>
-        </div>
-      </div>
+              ↻ Refresh
+            </button>
+          </>
+        }
+      />
 
       {/* ---------- Degraded panels: name what could not be loaded ---------- */}
       {degradedPanels.length > 0 && (
-        <div className="error-state" role="alert" style={{ marginBottom: 12 }}>
+        <div
+          className="error-state mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
           {Array.from(new Set(degradedPanels)).join(' ')}
         </div>
       )}
 
-      {/* ---------- 2-column ops grid (wide left, narrow right) ---------- */}
+      {/* ---------- Housekeeping + 2-column ops grid ---------- */}
       <HousekeepingPanel />
-      <div className="ops-grid-2">
+      <div className="ops-grid-2 grid grid-cols-1 gap-4 min-[1100px]:grid-cols-2">
         {/* =================== LEFT COLUMN =================== */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="flex flex-col gap-4">
           {/* ----- Approval Queue ----- */}
           <section className="panel" aria-labelledby="ops-approvals-h">
-            <h2 id="ops-approvals-h">
-              <span className="accent">⚖</span> Pending Approvals
-              <span
-                style={{
-                  marginLeft: 'auto',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '3px 10px', borderRadius: 999,
-                  fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
-                  background: pending.length > 0 ? 'rgba(246,196,83,.12)' : 'rgba(54,211,153,.10)',
-                  color: pending.length > 0 ? '#ffd884' : '#6fe2b6',
-                  border: `1px solid ${pending.length > 0 ? 'rgba(246,196,83,.30)' : 'rgba(54,211,153,.30)'}`,
-                  textTransform: 'none',
-                }}
-              >
-                {pending.length} {pending.length === 1 ? 'item' : 'items'}
-              </span>
-            </h2>
+            <Card className="gap-0">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 border-b border-border">
+                <h2
+                  id="ops-approvals-h"
+                  className="flex flex-wrap items-center gap-2 text-sm font-semibold text-card-foreground"
+                >
+                  <span className="text-primary">⚖</span> Pending Approvals
+                  <Badge
+                    variant="outline"
+                    className={
+                      pending.length > 0
+                        ? 'border-warning/30 bg-warning/10 text-warning'
+                        : 'border-success/30 bg-success/10 text-success'
+                    }
+                  >
+                    {pending.length} {pending.length === 1 ? 'item' : 'items'}
+                  </Badge>
+                </h2>
+              </CardHeader>
+              <CardContent className="p-0">
+                {pendingQ.isLoading && (
+                  <div className="px-4 py-3 text-sm text-muted-foreground">Loading queue…</div>
+                )}
+                {/* The refused decision, in the panel it was made from: the route is
+                    operator-only, so the notice names the action and the remedy. */}
+                {approvalRefusal != null && (
+                  <div className="p-3">
+                    <ErrorNotice
+                      presented={presentError(approvalRefusal.error, 'The decision was refused.')}
+                      operatorSession
+                      actionLabel={approvalRefusal.action}
+                    />
+                  </div>
+                )}
+                {pendingQ.isError && (
+                  <div className="p-3">
+                    <ErrorNotice presented={presentError(pendingQ.error, 'Failed to load approvals.')} />
+                  </div>
+                )}
+                {!pendingQ.isLoading && !pendingQ.isError && pending.length === 0 && (
+                  <div className="flex items-center gap-2.5 px-4 py-5 text-sm text-muted-foreground">
+                    <span className="text-2xl text-success">✓</span>
+                    Inbox zero. All requests resolved.
+                  </div>
+                )}
 
-            {pendingQ.isLoading && (
-              <div className="body" style={{ color: 'var(--text-dim)' }}>Loading queue…</div>
-            )}
-            {/* The refused decision, in the panel it was made from: the route is
-                operator-only, so the notice names the action and the remedy. */}
-            {approvalRefusal != null && (
-              <div className="body">
-                <ErrorNotice
-                  presented={presentError(approvalRefusal.error, 'The decision was refused.')}
-                  operatorSession
-                  actionLabel={approvalRefusal.action}
-                />
-              </div>
-            )}
-            {pendingQ.isError && (
-              <div className="body">
-                <ErrorNotice presented={presentError(pendingQ.error, 'Failed to load approvals.')} />
-              </div>
-            )}
-            {!pendingQ.isLoading && !pendingQ.isError && pending.length === 0 && (
-              <div
-                className="body"
-                style={{
-                  color: 'var(--text-dim)', display: 'flex',
-                  alignItems: 'center', gap: 10, padding: '22px 16px',
-                }}
-              >
-                <span style={{ fontSize: 22, color: 'var(--green)' }}>✓</span>
-                Inbox zero. All requests resolved.
-              </div>
-            )}
-
-            {pending.length > 0 && (
-              <div className="queue">
-                {pending.map((a, idx) => {
-                  const agent = agentMap.get(/* runId is the bridge */ a.runId);
-                  const requester = agent ?? null;
-                  const kind = approvalKindOf(a.reason);
-                  const permission = nativePermissionOf(a);
-                  const ageMs = Date.now() - new Date(a.requestedAt).getTime();
-                  const stale = ageMs > 5 * 60_000;
-                  const busy = approveM.isPending || rejectM.isPending;
-                  return (
-                    <div
-                      key={a.id}
-                      data-approval-id={a.id}
-                      className={`qitem ${idx === 0 ? 'highlight' : ''}`}
-                    >
-                      <div className="h">
-                        {permission ? (
-                          <NativePermissionKindPill permission={permission} />
-                        ) : (
-                          <span className={kind.pill}>{kind.label}</span>
-                        )}
-                        <span
-                          style={{
-                            color: stale ? '#ffd884' : 'var(--text-mute)',
-                            fontSize: 11, marginLeft: 'auto',
-                            fontVariantNumeric: 'tabular-nums',
-                          }}
-                          title={formatTimestamp(a.requestedAt)}
+                {pending.length > 0 && (
+                  <div className="queue flex flex-col gap-2 p-3">
+                    {pending.map((a, idx) => {
+                      const agent = agentMap.get(/* runId is the bridge */ a.runId);
+                      const requester = agent ?? null;
+                      const kind = approvalKindOf(a.reason);
+                      const permission = nativePermissionOf(a);
+                      const ageMs = Date.now() - new Date(a.requestedAt).getTime();
+                      const stale = ageMs > 5 * 60_000;
+                      const busy = approveM.isPending || rejectM.isPending;
+                      return (
+                        <div
+                          key={a.id}
+                          data-approval-id={a.id}
+                          className={`qitem rounded-xl border border-border bg-card p-3 text-sm ${
+                            idx === 0 ? 'highlight border-warning/40' : ''
+                          }`}
                         >
-                          {relativeTime(a.requestedAt)}
-                        </span>
-                      </div>
+                          <div className="h flex items-center gap-1.5">
+                            {permission ? (
+                              <NativePermissionKindPill permission={permission} />
+                            ) : (
+                              <span className={`${kind.pill} rounded-full border px-2 py-0.5 text-xs font-medium ${pillTone(kind.pill)}`}>
+                                {kind.label}
+                              </span>
+                            )}
+                            <span
+                              className={`ml-auto text-[11px] tabular-nums ${stale ? 'text-warning' : 'text-muted-foreground'}`}
+                              title={formatTimestamp(a.requestedAt)}
+                            >
+                              {relativeTime(a.requestedAt)}
+                            </span>
+                          </div>
 
-                      <div className="ttl">
-                        {a.reason?.trim() || (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off')}
-                      </div>
-                      <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span
-                          className={`avatar ${avatarTone(requester?.role)}`}
-                          style={{
-                            width: 22, height: 22, borderRadius: '50%', fontSize: 10,
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            color: '#fff', fontWeight: 700,
-                          }}
-                          aria-hidden
-                        >
-                          {avatarInitials(requester?.name ?? 'AG')}
-                        </span>
-                        <span style={{ color: 'var(--text)' }}>{requester?.name ?? 'Unknown agent'}</span>
-                        <span style={{ color: 'var(--text-mute)' }}>· run {shortRunId(a.runId)}</span>
-                      </div>
+                          <div className="ttl mt-1 text-sm font-semibold text-foreground">
+                            {a.reason?.trim() || (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off')}
+                          </div>
+                          <div className="desc mt-1 mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span
+                              className={`avatar ${avatarTone(requester?.role)} flex size-5 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary`}
+                              aria-hidden
+                            >
+                              {avatarInitials(requester?.name ?? 'AG')}
+                            </span>
+                            <span className="text-foreground">{requester?.name ?? 'Unknown agent'}</span>
+                            <span className="text-muted-foreground">· run {shortRunId(a.runId)}</span>
+                          </div>
 
-                      {permission && (
-                        <div className="ask-meta">
-                          <NativePermissionFacts ask={a} permission={permission} />
-                        </div>
-                      )}
+                          {permission && (
+                            <div className="ask-meta">
+                              <NativePermissionFacts ask={a} permission={permission} />
+                            </div>
+                          )}
 
-                      {a.source === 'CLARIFICATION' ? (
-                        <div className="row" style={{ color: 'var(--text-mute)', fontSize: 12 }}>
-                          This ask is waiting on the run - answer it on the kanban card (Answer &amp;
-                          continue) or finalize the run from there.
+                          {a.source === 'CLARIFICATION' ? (
+                            <div className="row text-xs text-muted-foreground">
+                              This ask is waiting on the run - answer it on the kanban card (Answer &amp;
+                              continue) or finalize the run from there.
+                            </div>
+                          ) : (
+                            <div className="row flex gap-1.5">
+                              <button
+                                className="btn inline-flex h-8 flex-1 items-center justify-center rounded-lg border border-success/40 bg-success/10 px-2.5 text-sm font-medium text-success transition-colors hover:bg-success/20 disabled:opacity-50"
+                                disabled={busy}
+                                onClick={() => approveM.mutate(a.id)}
+                              >
+                                ✓ Approve
+                              </button>
+                              <button
+                                className="btn danger inline-flex h-8 flex-1 items-center justify-center rounded-lg border border-destructive/40 bg-background px-2.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                                disabled={busy}
+                                onClick={() => rejectM.mutate(a.id)}
+                              >
+                                ✕ Deny
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <div className="row">
-                          <button
-                            className="btn"
-                            style={{
-                              flex: 1,
-                              background: 'rgba(54,211,153,.10)',
-                              borderColor: 'rgba(54,211,153,.45)',
-                              color: '#6fe2b6',
-                            }}
-                            disabled={busy}
-                            onClick={() => approveM.mutate(a.id)}
-                          >
-                            ✓ Approve
-                          </button>
-                          <button
-                            className="btn danger"
-                            style={{ flex: 1 }}
-                            disabled={busy}
-                            onClick={() => rejectM.mutate(a.id)}
-                          >
-                            ✕ Deny
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </section>
 
           {/* ----- Run History ----- */}
           <section className="panel" aria-labelledby="ops-runs-h">
-            <h2 id="ops-runs-h">
-              <span className="accent">▣</span> Recent Runs
-              <span
-                style={{
-                  marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)',
-                  letterSpacing: 1, textTransform: 'none',
-                }}
-              >
-                {runs.length} latest
-              </span>
-            </h2>
-            {runsQ.isLoading && (
-              <div className="body" style={{ color: 'var(--text-dim)' }}>Loading runs…</div>
-            )}
-            {!runsQ.isLoading && runs.length === 0 && (
-              <div className="body" style={{ color: 'var(--text-dim)' }}>No runs yet.</div>
-            )}
+            <Card className="gap-0">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 border-b border-border">
+                <h2
+                  id="ops-runs-h"
+                  className="flex flex-wrap items-center gap-2 text-sm font-semibold text-card-foreground"
+                >
+                  <span className="text-primary">▣</span> Recent Runs
+                  <span className="text-[11px] font-normal text-muted-foreground">{runs.length} latest</span>
+                </h2>
+              </CardHeader>
+              <CardContent className="p-0">
+                {runsQ.isLoading && (
+                  <div className="px-4 py-3 text-sm text-muted-foreground">Loading runs…</div>
+                )}
+                {!runsQ.isLoading && runs.length === 0 && (
+                  <div className="px-4 py-3 text-sm text-muted-foreground">No runs yet.</div>
+                )}
 
-            {runs.length > 0 && (
-              <div className="body" style={{ padding: 0 }}>
-                <div role="table" style={{ display: 'flex', flexDirection: 'column', fontSize: 12 }}>
-                  <div role="row" style={{ display: 'flex', ...headerCellShared }}>
-                    <div role="columnheader" style={{ ...hdrCell, flex: '1.1 1 0', minWidth: 0 }}>Agent</div>
-                    <div role="columnheader" style={{ ...hdrCell, flex: '2.4 1 0', minWidth: 0 }}>Prompt</div>
-                    <div role="columnheader" style={{ ...hdrCell, flex: '0 0 110px' }}>Status</div>
-                    <div role="columnheader" style={{ ...hdrCell, flex: '0 0 80px', textAlign: 'right' }}>Duration</div>
-                    <div role="columnheader" style={{ ...hdrCell, flex: '0 0 90px', textAlign: 'right' }}>When</div>
-                  </div>
-                  {runs.map((r) => {
-                    const agent = agentMap.get(r.agentId);
-                    const tone = STATUS_TONE[r.status];
-                    const isSel = selectedRunId === r.id;
-                    return (
-                      <div
-                        role="row"
-                        key={r.id}
-                        onClick={() => setSelectedRunId(isSel ? null : r.id)}
-                        style={{
-                          display: 'flex',
-                          cursor: 'pointer',
-                          background: isSel ? 'rgba(91,140,255,.10)' : 'transparent',
-                          borderLeft: isSel ? '2px solid var(--brand-2)' : '2px solid transparent',
-                          borderBottom: '1px dashed var(--line)',
-                          transition: 'background .15s ease',
-                        }}
-                      >
-                        <div style={{ ...cellStyle, flex: '1.1 1 0', minWidth: 0 }}>
-                          <span
-                            className={`avatar ${avatarTone(agent?.role)}`}
-                            style={avatarInlineStyle}
-                            aria-hidden
-                          >
-                            {avatarInitials(agent?.name ?? 'AG')}
-                          </span>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {agent?.name ?? r.agentId.slice(0, 8)}
-                          </span>
-                        </div>
+                {runs.length > 0 && (
+                  <div role="table" className="flex flex-col text-xs">
+                    <div role="row" className="flex border-b border-border bg-muted/50">
+                      <div role="columnheader" className="min-w-0 flex-[1.1] px-3 py-2.5 text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase">Agent</div>
+                      <div role="columnheader" className="min-w-0 flex-[2.4] px-3 py-2.5 text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase">Prompt</div>
+                      <div role="columnheader" className="flex-[0_0_110px] px-3 py-2.5 text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase">Status</div>
+                      <div role="columnheader" className="flex-[0_0_80px] px-3 py-2.5 text-right text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase">Duration</div>
+                      <div role="columnheader" className="flex-[0_0_90px] px-3 py-2.5 text-right text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase">When</div>
+                    </div>
+                    {runs.map((r) => {
+                      const agent = agentMap.get(r.agentId);
+                      const tone = STATUS_TONE[r.status];
+                      const isSel = selectedRunId === r.id;
+                      return (
                         <div
-                          style={{
-                            ...cellStyle,
-                            flex: '2.4 1 0',
-                            minWidth: 0,
-                            color: 'var(--text-dim)',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            display: 'block',
-                            lineHeight: '22px',
-                          }}
-                          title={r.promptSeed}
+                          role="row"
+                          key={r.id}
+                          onClick={() => setSelectedRunId(isSel ? null : r.id)}
+                          className={`flex cursor-pointer border-b border-dashed border-border transition-colors hover:bg-muted/40 ${
+                            isSel ? 'bg-primary/10' : ''
+                          }`}
                         >
-                          {r.promptSeed || <span style={{ color: 'var(--text-mute)' }}>—</span>}
-                        </div>
-                        <div style={{ ...cellStyle, flex: '0 0 110px' }}>
-                          <span className={tone.pill} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <div className="flex min-w-0 flex-[1.1] items-center gap-2 px-3 py-2.5">
                             <span
-                              style={{
-                                width: 6, height: 6, borderRadius: '50%',
-                                background: tone.dot,
-                                boxShadow: `0 0 8px ${tone.dot}`,
-                              }}
-                            />
-                            {tone.label}
-                          </span>
+                              className={`avatar ${avatarTone(agent?.role)} flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary`}
+                              aria-hidden
+                            >
+                              {avatarInitials(agent?.name ?? 'AG')}
+                            </span>
+                            <span className="truncate">{agent?.name ?? r.agentId.slice(0, 8)}</span>
+                          </div>
+                          <div
+                            className="block min-w-0 flex-[2.4] truncate px-3 py-2.5 leading-[22px] text-muted-foreground"
+                            title={r.promptSeed}
+                          >
+                            {r.promptSeed || <span className="text-muted-foreground">—</span>}
+                          </div>
+                          <div className="flex flex-[0_0_110px] items-center px-3 py-2.5">
+                            <span className={`${tone.pill} inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${pillTone(tone.pill)}`}>
+                              <span className="size-1.5 rounded-full bg-current" />
+                              {tone.label}
+                            </span>
+                          </div>
+                          <div className="flex flex-[0_0_80px] items-center justify-end px-3 py-2.5 text-muted-foreground tabular-nums">
+                            {durationOf(r)}
+                          </div>
+                          <div
+                            className="flex flex-[0_0_90px] items-center justify-end px-3 py-2.5 text-[11px] text-muted-foreground"
+                            title={formatTimestamp(r.createdAt)}
+                          >
+                            {relativeTime(r.createdAt)}
+                          </div>
                         </div>
-                        <div
-                          style={{
-                            ...cellStyle, flex: '0 0 80px', justifyContent: 'flex-end',
-                            fontVariantNumeric: 'tabular-nums', color: 'var(--text-dim)',
-                          }}
-                        >
-                          {durationOf(r)}
-                        </div>
-                        <div
-                          style={{
-                            ...cellStyle, flex: '0 0 90px', justifyContent: 'flex-end',
-                            color: 'var(--text-mute)', fontSize: 11,
-                          }}
-                          title={formatTimestamp(r.createdAt)}
-                        >
-                          {relativeTime(r.createdAt)}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </section>
         </div>
 
         {/* =================== RIGHT COLUMN =================== */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="flex flex-col gap-4">
           {/* ----- Activity Timeline ----- */}
           <section className="panel" aria-labelledby="ops-activity-h">
-            <h2 id="ops-activity-h">
-              <span className="accent">◴</span> Activity Timeline
-            </h2>
-            <div className="timeline">
-              {activityQ.isLoading && timeline.length === 0 ? (
-                <div style={{ color: 'var(--text-dim)' }}>Listening for events…</div>
-              ) : timeline.length === 0 ? (
-                <div style={{ color: 'var(--text-dim)' }}>Quiet on the wire.</div>
-              ) : (
-                <div className="tline">
-                  {timeline.map((ev, i) => (
-                    <div
-                      key={`${ev.ts}-${i}`}
-                      className={`ev ${ev.tone}`}
-                    >
-                      <span className="time">{clockHHMM(ev.ts)}</span>
-                      <span className="msg">{ev.msg}</span>
+            <Card className="gap-0">
+              <CardHeader className="border-b border-border">
+                <h2 id="ops-activity-h" className="flex items-center gap-2 text-sm font-semibold text-card-foreground">
+                  <span className="text-primary">◴</span> Activity Timeline
+                </h2>
+              </CardHeader>
+              <CardContent>
+                <div className="timeline">
+                  {activityQ.isLoading && timeline.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">Listening for events…</div>
+                  ) : timeline.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">Quiet on the wire.</div>
+                  ) : (
+                    <div className="tline relative space-y-2 border-l border-border pl-4">
+                      {timeline.map((ev, i) => (
+                        <div
+                          key={`${ev.ts}-${i}`}
+                          className={`ev ${ev.tone} relative text-sm`}
+                        >
+                          <span className="time mr-2 text-[10.5px] text-muted-foreground tabular-nums">{clockHHMM(ev.ts)}</span>
+                          <span className="msg text-foreground">{ev.msg}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-            </div>
+              </CardContent>
+            </Card>
           </section>
 
           {/* ----- Morning Briefing ----- */}
-          <section className="panel" aria-labelledby="ops-brief-h" style={{ position: 'relative' }}>
-            <h2 id="ops-brief-h">
-              <span className="accent">☀</span> Today&apos;s Briefing
-              <span
-                style={{
-                  marginLeft: 'auto', fontSize: 10, color: 'var(--text-mute)',
-                  letterSpacing: 1.2, fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                Generated {clockHHMM(now.toISOString())}
-              </span>
-            </h2>
-            <div className="body" style={{ padding: '14px 16px 18px' }}>
-              {/* narrative */}
-              <p
-                style={{
-                  margin: 0, marginBottom: 14,
-                  color: 'var(--text)',
-                  fontSize: 13.5, lineHeight: 1.55,
-                  paddingLeft: 12,
-                  borderLeft: '2px solid var(--brand-2)',
-                }}
-              >
-                {briefingNarrative}
-              </p>
+          <section className="panel" aria-labelledby="ops-brief-h">
+            <Card className="gap-0">
+              <CardHeader className="flex flex-row items-center justify-between gap-2 border-b border-border">
+                <h2 id="ops-brief-h" className="flex items-center gap-2 text-sm font-semibold text-card-foreground">
+                  <span className="text-primary">☀</span> Today&apos;s Briefing
+                </h2>
+                <span className="text-[10px] tracking-[1.2px] text-muted-foreground tabular-nums">
+                  Generated {clockHHMM(now.toISOString())}
+                </span>
+              </CardHeader>
+              <CardContent className="space-y-3.5">
+                <p className="m-0 border-l-2 border-primary pl-3 text-[13.5px] leading-relaxed text-foreground">
+                  {briefingNarrative}
+                </p>
 
-              {/* stat chips */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                  gap: 8,
-                }}
-              >
-                <BriefStat label="Active agents" value={briefing.activeAgents} tone="brand" />
-                <BriefStat label="Running" value={briefing.runningRuns} tone="amber" />
-                <BriefStat label="Completed today" value={briefing.completedToday} tone="green" />
-                <BriefStat label="Pending reviews" value={briefing.pendingApprovals} tone="purple" />
-              </div>
-
-              {briefing.failedToday > 0 && (
-                <div
-                  style={{
-                    marginTop: 12, padding: '8px 10px',
-                    borderRadius: 8,
-                    background: 'rgba(255,107,122,.08)',
-                    border: '1px solid rgba(255,107,122,.30)',
-                    color: '#ff97a3', fontSize: 12,
-                    display: 'flex', alignItems: 'center', gap: 8,
-                  }}
-                >
-                  <span>⚠</span>
-                  {briefing.failedToday} failed run{briefing.failedToday === 1 ? '' : 's'} need attention.
+                <div className="grid grid-cols-2 gap-2">
+                  <BriefStat label="Active agents" value={briefing.activeAgents} tone="brand" />
+                  <BriefStat label="Running" value={briefing.runningRuns} tone="amber" />
+                  <BriefStat label="Completed today" value={briefing.completedToday} tone="green" />
+                  <BriefStat label="Pending reviews" value={briefing.pendingApprovals} tone="purple" />
                 </div>
-              )}
-            </div>
+
+                {briefing.failedToday > 0 && (
+                  <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+                    <span>⚠</span>
+                    {briefing.failedToday} failed run{briefing.failedToday === 1 ? '' : 's'} need attention.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </section>
         </div>
       </div>
@@ -691,26 +635,13 @@ export default function OpsPage() {
       {toast && (
         <div
           role="status"
-          style={{
-            position: 'fixed', bottom: 24, right: 24, zIndex: 80,
-            padding: '10px 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 600,
-            letterSpacing: '.2px',
-            background:
-              toast.kind === 'ok'  ? 'rgba(54,211,153,.12)' :
-              toast.kind === 'err' ? 'rgba(255,107,122,.12)' :
-                                     'rgba(91,140,255,.12)',
-            color:
-              toast.kind === 'ok'  ? '#6fe2b6' :
-              toast.kind === 'err' ? '#ff97a3' :
-                                     'var(--brand-2)',
-            border: `1px solid ${
-              toast.kind === 'ok'  ? 'rgba(54,211,153,.40)' :
-              toast.kind === 'err' ? 'rgba(255,107,122,.40)' :
-                                     'rgba(91,140,255,.40)'
-            }`,
-            boxShadow: '0 12px 28px rgba(0,0,0,.45)',
-            backdropFilter: 'blur(6px)',
-          }}
+          className={`fixed right-6 bottom-6 z-[80] rounded-xl border px-3.5 py-2.5 text-xs font-semibold tracking-wide shadow-xl backdrop-blur ${
+            toast.kind === 'ok'
+              ? 'border-success/40 bg-success/10 text-success'
+              : toast.kind === 'err'
+                ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                : 'border-primary/40 bg-primary/10 text-primary'
+          }`}
         >
           {toast.msg}
         </div>
@@ -732,80 +663,25 @@ function BriefStat({
   value: number;
   tone: 'brand' | 'amber' | 'green' | 'purple';
 }) {
-  const accent =
-    tone === 'amber'  ? 'var(--amber)' :
-    tone === 'green'  ? 'var(--green)' :
-    tone === 'purple' ? '#b9a4ff' :
-                        'var(--brand-2)';
+  const accentClass =
+    tone === 'amber'  ? 'text-warning' :
+    tone === 'green'  ? 'text-success' :
+    tone === 'purple' ? 'text-primary' :
+                        'text-primary';
+  const barClass =
+    tone === 'amber'  ? 'bg-warning' :
+    tone === 'green'  ? 'bg-success' :
+    tone === 'purple' ? 'bg-primary' :
+                        'bg-primary';
   return (
-    <div
-      style={{
-        position: 'relative', overflow: 'hidden',
-        padding: '10px 12px', borderRadius: 10,
-        background: 'rgba(255,255,255,.025)',
-        border: '1px solid var(--line)',
-      }}
-    >
-      <span
-        style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: 3, background: accent,
-        }}
-      />
-      <div
-        style={{
-          fontSize: 10, color: 'var(--text-mute)',
-          letterSpacing: 1, textTransform: 'uppercase',
-        }}
-      >
+    <div className="relative overflow-hidden rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+      <span className={`absolute inset-y-0 left-0 w-[3px] ${barClass}`} />
+      <div className="pl-1 text-[10px] tracking-[1px] text-muted-foreground uppercase">
         {label}
       </div>
-      <div
-        style={{
-          fontSize: 20, fontWeight: 700, marginTop: 2,
-          color: accent, fontVariantNumeric: 'tabular-nums',
-        }}
-      >
+      <div className={`pl-1 text-xl font-bold tabular-nums ${accentClass}`}>
         {value}
       </div>
     </div>
   );
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Inline shared style objects (typed)                                        */
-/* -------------------------------------------------------------------------- */
-
-const headerCellShared: React.CSSProperties = {
-  borderBottom: '1px solid var(--line)',
-  background: 'rgba(255,255,255,.02)',
-};
-
-const hdrCell: React.CSSProperties = {
-  padding: '10px 12px',
-  fontSize: 10,
-  letterSpacing: 1.2,
-  textTransform: 'uppercase',
-  color: 'var(--text-mute)',
-};
-
-const cellStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  minWidth: 0,
-};
-
-const avatarInlineStyle: React.CSSProperties = {
-  width: 22,
-  height: 22,
-  borderRadius: '50%',
-  fontSize: 10,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#fff',
-  fontWeight: 700,
-  flex: '0 0 auto',
-};

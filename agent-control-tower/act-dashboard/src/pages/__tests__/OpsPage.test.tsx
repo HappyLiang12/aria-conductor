@@ -308,3 +308,31 @@ describe('OpsPage sparse approval payloads (T51)', () => {
     expect(await within(panel).findByText(/run run-abc/)).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 B4: every command-surface panel is a token Card while its anchor id
+// and the `.panel` hook (E2E scopes `section.panel`) stay in place.
+// ---------------------------------------------------------------------------
+describe('OpsPage token surfaces (Wave 2 B4)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    serve([]);
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+  });
+
+  it('renders each command-surface panel on a token card with its anchor id', () => {
+    const { container } = ui();
+
+    for (const id of ['ops-approvals-h', 'ops-runs-h', 'ops-activity-h', 'ops-brief-h']) {
+      const heading = container.querySelector(`#${id}`) as HTMLElement;
+      expect(heading).not.toBeNull();
+      expect(heading.closest('[data-slot="card"]')).not.toBeNull();
+    }
+    expect(window.document.querySelector('.ops-grid-2')).not.toBeNull();
+  });
+});

@@ -168,3 +168,23 @@ describe('HousekeepingPanel execute refusals (Task 30)', () => {
     expect(screen.queryByTestId('operator-session-notice')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 B4: the housekeeping surface is a token Card; its scan/confirm
+// behaviour above is unchanged.
+// ---------------------------------------------------------------------------
+describe('HousekeepingPanel token surfaces (Wave 2 B4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+    scan.mockResolvedValue(SCAN_RESULT);
+  });
+
+  it('renders the panel on a token card surface', () => {
+    ui();
+
+    const heading = screen.getByRole('heading', { name: /housekeeping/i });
+    expect(heading.closest('[data-slot="card"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /scan leftovers/i })).toBeInTheDocument();
+  });
+});

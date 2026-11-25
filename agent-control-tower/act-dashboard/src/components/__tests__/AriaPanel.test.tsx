@@ -2798,3 +2798,29 @@ describe('AriaPanel image attachments', () => {
     expect(lastOptions(retried)?.attachments).toEqual([expect.objectContaining({ filename: 'p.png' })]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 D1. The panel is split into presentational subcomponents and drawn on
+// the shadcn `Card` token surface. The split must not drop a hook or a name the
+// aria E2E suite drives: `.ai-panel` stays the dialog root, every control keeps
+// its accessible name, and the empty state's suggestion group survives.
+// ---------------------------------------------------------------------------
+describe('AriaPanel token surface', () => {
+  it('renders the panel on a token Card surface and keeps its accessible names', async () => {
+    renderPanel();
+    await openPanel();
+
+    const dialog = screen.getByRole('dialog', { name: 'Aria assistant' });
+    // The legacy hook stays on the dialog root for the E2E selectors…
+    expect(dialog).toHaveClass('ai-panel');
+    // …and the panel content is the token Card surface.
+    const surface = dialog.querySelector('[data-slot="card"]');
+    expect(surface).not.toBeNull();
+    expect(within(dialog).getByRole('group', { name: 'Suggested prompts' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Attach images' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Send message' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Close Aria' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Copy conversation ID' })).toBeInTheDocument();
+    expect(within(dialog).getByText(/How can I help/)).toBeInTheDocument();
+  });
+});

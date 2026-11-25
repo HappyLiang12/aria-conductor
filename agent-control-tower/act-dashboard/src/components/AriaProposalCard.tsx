@@ -8,6 +8,7 @@ import {
   isOperatorRejection,
 } from '../api/operatorSession';
 import type { PanelItem } from './ariaPanelState';
+import { Card } from './ui/card';
 
 /** Task 4's in-panel proposal item; this card adds no contract of its own. */
 export type ProposalPanelItem = Extract<PanelItem, { kind: 'proposal' }>;
@@ -329,44 +330,48 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
   const decideDisabled = inFlight !== null || (isBatchDecision && batch === null);
 
   return (
-    <div
-      className="ask-card"
+    <Card
+      className="ask-card gap-2 rounded-xl border border-border bg-card p-0 text-sm text-card-foreground [--card-spacing:0px]"
       data-testid="aria-proposal-card"
       data-subject-type={item.subjectType}
       data-state={state}
       data-proposal-id={item.proposalId}
     >
-      <div className="ask-q">
-        {titleOf(item.subjectType)} <span className="pill">{item.factKey ?? '—'}</span>
+      <div className="flex flex-col gap-2 px-3 py-2">
+      <div className="ask-q flex items-center gap-2 text-sm font-semibold text-card-foreground">
+        {titleOf(item.subjectType)}{' '}
+        <span className="pill inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-xs font-normal text-muted-foreground">
+          {item.factKey ?? '—'}
+        </span>
       </div>
       {/* An entity proposed without a display name carries its canonical key as
           the value too; printing it again here would say the same thing twice. */}
       {item.valueText && item.valueText !== item.factKey && (
-        <div className="ask-ctx">
+        <div className="ask-ctx text-sm text-muted-foreground">
           <span data-testid="proposal-value">{item.valueText}</span>
         </div>
       )}
       {item.subjectType === 'ENTITY' && state === 'pending' && (
-        <div className="ask-facts" data-testid="proposal-batch">
-          <div className="ask-ctx">
+        <div className="ask-facts flex flex-col gap-1.5 rounded-lg border border-border bg-muted/40 p-2" data-testid="proposal-batch">
+          <div className="ask-ctx text-sm text-muted-foreground">
             One decision decides this entity and every pending fact of it.
           </div>
-          {batch === null && <div className="ask-ctx">Reading its pending facts…</div>}
+          {batch === null && <div className="ask-ctx text-sm text-muted-foreground">Reading its pending facts…</div>}
           {batch !== null && batch !== undefined && 'unreadable' in batch && (
-            <div className="ask-ctx">
+            <div className="ask-ctx text-sm text-muted-foreground">
               The pending facts this decision also decides could not be read.
             </div>
           )}
           {batch !== null && batch !== undefined && 'facts' in batch && (
             batch.facts.length === 0 ? (
-              <div className="ask-ctx">No pending facts are attached — approving adds the entity alone.</div>
+              <div className="ask-ctx text-sm text-muted-foreground">No pending facts are attached — approving adds the entity alone.</div>
             ) : (
               <>
-                <div className="ask-ctx" data-testid="proposal-batch-complete">
+                <div className="ask-ctx text-sm text-muted-foreground" data-testid="proposal-batch-complete">
                   This is the entity&apos;s complete pending batch: {batch.facts.length}{' '}
                   fact{batch.facts.length === 1 ? '' : 's'} — one decision decides all of it.
                 </div>
-                <ul className="ask-facts-list">
+                <ul className="ask-facts-list flex list-disc flex-col gap-0.5 pl-4 text-sm text-muted-foreground">
                   {batch.facts.map((fact) => (
                     <li key={fact.id}>
                       <code>{fact.factKey ?? '—'}</code>
@@ -386,7 +391,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           decides exactly what is on screen. The copy differs from the first-read
           case below because only one of the two is a change. */}
       {batchConfirm === 'changed' && state === 'pending' && (
-        <div className="ask-ctx" role="alert" data-testid="proposal-batch-changed">
+        <div className="ask-ctx text-sm text-warning" role="alert" data-testid="proposal-batch-changed">
           The pending facts this decision covers changed while this card was open — the list
           above is what it covers now. Nothing has been decided: choose Approve or Reject again
           to confirm it.
@@ -396,24 +401,36 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           seeing this batch for the first time. Nothing changed, and the card must
           not ask them to confirm a change that never happened. */}
       {batchConfirm === 'unread-on-open' && state === 'pending' && (
-        <div className="ask-ctx" role="alert" data-testid="proposal-batch-unread-on-open">
+        <div className="ask-ctx text-sm text-warning" role="alert" data-testid="proposal-batch-unread-on-open">
           The pending facts this decision covers could not be read when this card opened — the
           list above is what it covers now. Nothing has been decided: choose Approve or Reject
           again to confirm it.
         </div>
       )}
-      <div className="ask-meta">
-        <span className={`pill ${state === 'pending' ? 'warn' : state === 'approved' ? 'ok' : 'dim'}`}>
+      <div className="ask-meta flex items-center gap-2">
+        <span
+          className={`pill inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${
+            state === 'pending'
+              ? 'warn border-warning/30 bg-warning/10 text-warning'
+              : state === 'approved'
+                ? 'ok border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]'
+                : 'dim border-border bg-muted text-muted-foreground'
+          }`}
+        >
           {stateLabel(state)}
         </span>
-        {item.sensitivity && <span className="pill dim">{item.sensitivity}</span>}
+        {item.sensitivity && (
+          <span className="pill dim inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            {item.sensitivity}
+          </span>
+        )}
       </div>
 
       {state === 'pending' ? (
-        <div className="ask-actions">
+        <div className="ask-actions flex gap-2">
           <button
             type="button"
-            className="btn primary"
+            className="btn primary inline-flex h-8 items-center rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
             disabled={decideDisabled}
             onClick={() => void decide('APPROVE')}
           >
@@ -421,7 +438,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           </button>
           <button
             type="button"
-            className="btn"
+            className="btn inline-flex h-8 items-center rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
             disabled={decideDisabled}
             onClick={() => void decide('REJECT')}
           >
@@ -437,20 +454,20 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
         // what still works, and never claim the proposal left the queue (which
         // is what `decided-elsewhere` means and would be false here).
         <>
-          <div className="ask-ctx" role="status" data-testid="aria-proposal-blocked-on-entity">
+          <div className="ask-ctx text-sm text-warning" role="status" data-testid="aria-proposal-blocked-on-entity">
             {blockedEntityId
               ? <>Approving this fact on its own was refused: its entity{' '}
-                <span className="cell-mono">{blockedEntityId}</span> is still pending. Decide the
+                <span className="cell-mono font-mono">{blockedEntityId}</span> is still pending. Decide the
                 entity proposal {blockedEntityId} to promote or retire its whole batch. Rejecting
                 this fact alone still works — it retires only this fact.</>
               : <>Approving this fact on its own was refused: its entity is still pending. Decide
                 the entity proposal to promote or retire its whole batch. Rejecting this fact alone
                 still works — it retires only this fact.</>}
           </div>
-          <div className="ask-actions">
+          <div className="ask-actions flex gap-2">
             <button
               type="button"
-              className="btn"
+              className="btn inline-flex h-8 items-center rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
               disabled={decideDisabled}
               onClick={() => void decide('REJECT')}
             >
@@ -464,13 +481,13 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
         // was an approval, a rejection, or a later retirement. Saying so is the
         // honest report; "Approved" or "Rejected" here would be invented. No
         // decision control survives either — a decision would only 409.
-        <div className="ask-ctx" role="status" data-testid="aria-proposal-decided-elsewhere">
+        <div className="ask-ctx text-sm text-muted-foreground" role="status" data-testid="aria-proposal-decided-elsewhere">
           This proposal is no longer pending — it was decided outside this panel (the Memory
           page or another operator). The inbox cannot say whether it was approved or rejected;
           open the Memory page to see its outcome.
         </div>
       ) : (
-        <div className="ask-ctx" role="status">
+        <div className="ask-ctx text-sm text-muted-foreground" role="status">
           {state === 'approved'
             ? 'Approved — this memory is now active.'
             : 'Rejected — this proposal will never become memory.'}
@@ -479,7 +496,7 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
 
       {error && (
         <>
-          <div className="error-text" role="alert">
+          <div className="error-text text-sm text-destructive" role="alert">
             {error.text}
           </div>
           {error.operatorRejected && (
@@ -490,7 +507,8 @@ export function AriaProposalCard({ item, onSettled }: AriaProposalCardProps) {
           )}
         </>
       )}
-    </div>
+      </div>
+    </Card>
   );
 }
 
@@ -524,7 +542,11 @@ export function OperatorSessionNotice({
       ? `Memory decisions are operator-only. ${OPERATOR_REMEDY_COPY}`
       : operatorSessionMessage(actionLabel);
   return (
-    <span className="ask-ctx" data-testid="operator-session-notice" role="status">
+    <span
+      className="ask-ctx inline-block rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-sm text-warning"
+      data-testid="operator-session-notice"
+      role="status"
+    >
       {text}{' '}
       Nothing was changed by the refused call.
     </span>

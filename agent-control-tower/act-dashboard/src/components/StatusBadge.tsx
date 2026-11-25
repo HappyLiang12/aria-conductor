@@ -1,3 +1,5 @@
+import { Badge } from './ui/badge';
+
 interface StatusBadgeProps {
   status: string;
   size?: 'sm' | 'md';
@@ -29,14 +31,23 @@ const statusColors: Record<string, string> = {
   REJECTED: '#f44336',
 };
 
+/**
+ * Run/agent/approval status pill.
+ *
+ * Wave 2 B3: the shadcn `Badge` token surface. The inline status colour and the
+ * `status-badge status-badge-<size>` hooks stay because page/E2E contracts and
+ * the badge suite assert them; the token badge supplies the shape after the
+ * legacy CSS is removed.
+ */
 export function StatusBadge({ status, size = 'md' }: StatusBadgeProps) {
   const color = statusColors[status] || '#90a4ae';
   return (
-    <span
-      className={`status-badge status-badge-${size}`}
+    <Badge
+      variant="outline"
+      className={`status-badge status-badge-${size} rounded-full border px-2 py-0.5 text-[10.5px] font-semibold`}
       style={{ backgroundColor: color + '22', color, borderColor: color }}
     >
       {status}
-    </span>
+    </Badge>
   );
 }

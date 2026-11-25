@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/kanban';
 import type { KanbanRejection } from '../api/kanban';
@@ -15,13 +16,13 @@ import type {
 } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
-import { reviewNeedsHuman } from '../utils/reviewState';
 import { queryPhase } from '../utils/queryState';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { StateNotice } from './StateNotice';
 import { ConfirmDialog } from './ConfirmDialog';
-import { RunOutcomeChip } from './ReviewPanels';
-import '../styles/kanban-flow.css';
+import { BoardColumn } from './kanban/BoardColumn';
+import { KanbanCard } from './kanban/KanbanCard';
+import { Button } from './ui/button';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
 import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
@@ -54,20 +55,6 @@ const LEGAL_DROPS: Record<KanbanStatus, KanbanStatus[]> = {
   CANCELLED: [],
   BLOCKED: [],
 };
-
-function priorityPillClass(priority: KanbanPriority): string {
-  switch (priority) {
-    case 'CRITICAL':
-      return 'pill risk';
-    case 'HIGH':
-      return 'pill warn';
-    case 'MEDIUM':
-      return 'pill';
-    case 'LOW':
-    default:
-      return 'pill ok';
-  }
-}
 
 /* Task 8: REVIEW-column batch decisions (spec D2/D3/D4). The header buttons
    capture the affected card set from the runOutcome filters; the executor is a
@@ -384,23 +371,47 @@ export default function KanbanBoard() {
     ? LEGAL_DROPS[(items ?? []).find((i) => i.id === draggingId)?.status ?? 'DONE'] ?? []
     : [];
 
+  const handleCardDragStart = (event: DragEvent<HTMLDivElement>, id: string) => {
+    // Deferred on purpose: mutating the dragged node synchronously inside
+    // dragstart (data-dragging attr triggers a re-render) makes Chromium cancel
+    // the native drag immediately, so no drop ever fires. (real browsers always
+    // provide dataTransfer; jsdom synthetic events do not, hence the optional
+    // chain)
+    event.dataTransfer?.setData('text/plain', id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => setDraggingId(id), 0);
+  };
+
+  const handleSendRequestChanges = (id: string) => {
+    transitionMutation.mutate({
+      id,
+      status: 'TODO',
+      feedback: cardFeedback.trim() || undefined,
+    });
+    setFeedbackFor(null);
+    setCardFeedback('');
+  };
+
   return (
-    <section className="panel" data-testid="kanban-board" style={{ position: 'relative' }}>
-      <h2>
-        <span>Kanban Board</span>
-        <span className="accent">· Governed Flow</span>
+    <section className="relative flex flex-col gap-3" data-testid="kanban-board">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold text-foreground">
+          <span>Kanban Board</span>
+          <span className="font-normal text-muted-foreground"> · Governed Flow</span>
+        </h2>
         {finishedCount > 0 && (
-          <button
-            className="btn"
-            style={{ marginLeft: 'auto' }}
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto"
             onClick={() => setClearConfirmOpen(true)}
           >
             🧹 Clear Done &amp; Cancelled ({finishedCount})
-          </button>
+          </Button>
         )}
-        <button
-          className="btn primary"
-          style={{ marginLeft: finishedCount > 0 ? 0 : 'auto' }}
+        <Button
+          size="sm"
+          className={finishedCount > 0 ? '' : 'ml-auto'}
           onClick={() => {
             setShowCreate(true);
             setError(null);
@@ -408,8 +419,8 @@ export default function KanbanBoard() {
           }}
         >
           + New Item
-        </button>
-      </h2>
+        </Button>
+      </div>
 
       {/* Board-level transition feedback (snap-back message per spec 5.1):
           the same error slot the modal uses, but visible while it is closed. */}
@@ -469,265 +480,71 @@ export default function KanbanBoard() {
               </select>
             </label>
           )}
-          <div className={narrow ? 'kanban-mobile-list' : 'kanban-grid'}>
+          <div className={narrow ? 'kanban-mobile-list' : 'grid min-w-0 grid-cols-1 gap-3 md:grid-cols-5'}>
             {visibleColumns.map((col) => {
-            const columnItems = grouped[col.key] ?? [];
-            // A card with a pending native ask needs an individual decision, so
-            // no batch preset may include it. Counts state only the eligible set.
-            const batchItems = columnItems.filter((it) => !it.pendingAskCount);
-            const heldByAsk = columnItems.length - batchItems.length;
-            // Task 8: batch sets come from the same runOutcome filters the
-            // buttons display.
-            const completedItems = batchItems.filter((it) => it.runOutcome === 'COMPLETED');
-            const failedItems = batchItems.filter((it) => it.runOutcome === 'FAILED');
-            return (
-              <div
-                key={col.key}
-                className={`col-k${col.isGate ? ' gate' : ''}`}
-                data-col={col.key}
-                onDragOver={(e) => {
-                  if (draggingId && legalTargets.includes(col.key)) e.preventDefault();
-                }}
-                onDrop={() => handleDrop(col.key)}
-              >
-                <header>
-                  <span>{col.label}</span>
-                  <span className="count">{columnItems.length}</span>
-                </header>
-                {col.isGate && columnItems.length > 0 && (
-                  <div
-                    className="batch-actions"
-                    title={heldByAsk > 0
-                      ? `${heldByAsk} card${heldByAsk === 1 ? '' : 's'} with pending asks need${heldByAsk === 1 ? 's' : ''} an individual decision`
-                      : undefined}
-                  >
-                    <button
-                      disabled={batchRunning || completedItems.length === 0}
-                      onClick={() =>
-                        setBatchAction({ kind: 'ACCEPT', items: completedItems })
-                      }
-                    >
-                      Accept all completed ({completedItems.length})
-                    </button>
-                    <button
-                      disabled={batchRunning || failedItems.length === 0}
-                      onClick={() => setBatchAction({ kind: 'REWORK', items: failedItems })}
-                    >
-                      Rework all failed ({failedItems.length})
-                    </button>
-                    <button
-                      disabled={batchRunning || batchItems.length === 0}
-                      onClick={() => setBatchAction({ kind: 'CANCEL', items: batchItems })}
-                    >
-                      Cancel all ({batchItems.length})
-                    </button>
-                  </div>
-                )}
-                <div
-                  className={`lane${
-                    draggingId && legalTargets.includes(col.key) ? ' drop-legal' : ''
-                  }${draggingId && !legalTargets.includes(col.key) ? ' drop-illegal' : ''}`}
-                  data-testid={`lane-${col.key}`}
-                >
-                  {columnItems.map((item) => (
-                    <div
+              const columnItems = grouped[col.key] ?? [];
+              // A card with a pending native ask needs an individual decision, so
+              // no batch preset may include it. Counts state only the eligible set.
+              const batchItems = columnItems.filter((it) => !it.pendingAskCount);
+              const heldByAsk = columnItems.length - batchItems.length;
+              // Task 8: batch sets come from the same runOutcome filters the
+              // buttons display.
+              const completedItems = batchItems.filter((it) => it.runOutcome === 'COMPLETED');
+              const failedItems = batchItems.filter((it) => it.runOutcome === 'FAILED');
+              return (
+                <BoardColumn
+                  key={col.key}
+                  column={col}
+                  items={columnItems}
+                  draggingId={draggingId}
+                  legalTargets={legalTargets}
+                  onDragOver={(event, key) => {
+                    if (draggingId && legalTargets.includes(key)) event.preventDefault();
+                  }}
+                  onDrop={handleDrop}
+                  batch={col.isGate ? {
+                    running: batchRunning,
+                    heldByAsk,
+                    completedCount: completedItems.length,
+                    failedCount: failedItems.length,
+                    batchCount: batchItems.length,
+                    onAcceptAll: () => setBatchAction({ kind: 'ACCEPT', items: completedItems }),
+                    onReworkAll: () => setBatchAction({ kind: 'REWORK', items: failedItems }),
+                    onCancelAll: () => setBatchAction({ kind: 'CANCEL', items: batchItems }),
+                  } : undefined}
+                  renderCard={(item) => (
+                    <KanbanCard
                       key={item.id}
-                      className={`card${col.isGate ? ' gate' : ''}${
-                        item.status === 'DONE' ? ' done' : ''
-                      }${
-                        flash?.itemId === item.id ? (flash.kind === 'err' ? ' moving-err' : ' moving') : ''
-                      }`}
-                      data-card={item.id}
-                      draggable
-                      data-dragging={draggingId === item.id || undefined}
-                      onDragStart={(e) => {
-                        // Deferred on purpose: mutating the dragged node
-                        // synchronously inside dragstart (data-dragging attr
-                        // triggers a re-render) makes Chromium cancel the
-                        // native drag immediately, so no drop ever fires.
-                        // (real browsers always provide dataTransfer; jsdom
-                        // synthetic events do not, hence the optional chain)
-                        e.dataTransfer?.setData('text/plain', item.id);
-                        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-                        setTimeout(() => setDraggingId(item.id), 0);
-                      }}
+                      item={item}
+                      isGate={Boolean(col.isGate)}
+                      dragging={draggingId === item.id}
+                      flash={flash?.itemId === item.id ? flash.kind : null}
+                      agentName={item.linkedAgentId ? agentNameById.get(item.linkedAgentId) : undefined}
+                      transitionPending={transitionMutation.isPending}
+                      feedbackOpen={feedbackFor === item.id}
+                      feedbackValue={cardFeedback}
+                      onDragStart={handleCardDragStart}
                       onDragEnd={() => setDraggingId(null)}
-                    >
-                      <button
-                        type="button"
-                        className="card-open"
-                        // The opener covers the card body, so it must itself be
-                        // the drag source: a draggable={false} button would
-                        // leave only the padding able to start a drag. dragstart
-                        // bubbles to the card handler above, which moves the
-                        // card; a clean click still opens the drawer.
-                        draggable
-                        aria-label={`Open task ${item.title}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          dispatchOpenTaskDrawer(item.id);
-                        }}
-                      >
-                      <div className="gateline" />
-                      <div className="id">{item.id.slice(0, 8)}</div>
-                      <div className="t">{item.title}</div>
-                      {/* F24: REVIEW is a badge only while an ask is open; a
-                          finished card in the Review column says so instead of
-                          reading as "needs you" (runOutcome carries the rest). */}
-                      {item.status === 'REVIEW' && reviewNeedsHuman(item) && (
-                        <span className="pill warn">Review</span>
-                      )}
-                      {item.status === 'REVIEW' && !reviewNeedsHuman(item) && (
-                        <span className="owner">awaiting sign-off · no open asks</span>
-                      )}
-                      {!!item.pendingAskCount && (
-                        <span className="pill warn">{item.pendingAskCount} asks</span>
-                      )}
-                      {item.status === 'REVIEW' && item.runOutcome && item.runOutcome !== 'UNKNOWN' && (
-                        // R-RFUX4: the board's compact REVIEW card carries the
-                        // linked run's outcome (the exported chip's own tones);
-                        // UNKNOWN/null claim nothing.
-                        <RunOutcomeChip outcome={item.runOutcome} />
-                      )}
-                      {flash?.itemId === item.id && flash.kind === 'assign' && (
-                        <span className="owner" style={{ color: 'var(--brand-2)' }}>
-                          ◐ Aria assigning…
-                        </span>
-                      )}
-                      {item.lastError && (
-                        <div className="owner" style={{ color: 'var(--red)' }}>
-                          {item.lastError}
-                        </div>
-                      )}
-                      <div className="meta">
-                        <span className={priorityPillClass(item.priority)}>
-                          {item.priority}
-                        </span>
-                        {item.linkedAgentId && agentNameById.get(item.linkedAgentId) && (
-                          <span className="owner">↪ {agentNameById.get(item.linkedAgentId)}</span>
-                        )}
-                        {item.assignee && (
-                          <span className="owner">@{item.assignee}</span>
-                        )}
-                      </div>
-                      </button>
-                      {item.status === 'REVIEW' && (
-                        // Full quick decision lives on the card face: approve,
-                        // request changes (inline composer) and deny without
-                        // ever opening the drawer or the workspace.
-                        <div className="card-approve" onClick={(e) => e.stopPropagation()}>
-                          {feedbackFor === item.id ? (
-                            <div className="cap-compose">
-                              <input
-                                className="cap-input"
-                                autoFocus
-                                placeholder="What should change?"
-                                aria-label="Request-changes feedback"
-                                value={cardFeedback}
-                                onChange={(e) => setCardFeedback(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Escape') {
-                                    setFeedbackFor(null);
-                                    setCardFeedback('');
-                                  }
-                                }}
-                              />
-                              <div className="cap-row">
-                                <button
-                                  className="cap-btn ok"
-                                  aria-label="Send request changes"
-                                  disabled={transitionMutation.isPending}
-                                  onClick={() => {
-                                    transitionMutation.mutate({
-                                      id: item.id,
-                                      status: 'TODO',
-                                      feedback: cardFeedback.trim() || undefined,
-                                    });
-                                    setFeedbackFor(null);
-                                    setCardFeedback('');
-                                  }}
-                                >
-                                  Send
-                                </button>
-                                <button
-                                  className="cap-btn"
-                                  aria-label="Cancel request changes"
-                                  onClick={() => {
-                                    setFeedbackFor(null);
-                                    setCardFeedback('');
-                                  }}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <button
-                                className="cap-btn ok"
-                                title={item.pendingAskCount
-                                  ? `Decide the ${item.pendingAskCount} pending ask${item.pendingAskCount === 1 ? '' : 's'} first`
-                                  : 'Approve (complete task)'}
-                                aria-label="Quick approve"
-                                disabled={transitionMutation.isPending || !!item.pendingAskCount}
-                                onClick={() => transitionMutation.mutate({ id: item.id, status: 'DONE' })}
-                              >
-                                ✓ Approve
-                              </button>
-                              <button
-                                className="cap-btn"
-                                title="Request changes (sent back to the agent)"
-                                aria-label="Request changes"
-                                onClick={() => {
-                                  setFeedbackFor(item.id);
-                                  setCardFeedback('');
-                                }}
-                              >
-                                ✎ Changes
-                              </button>
-                              <button
-                                className="cap-btn danger"
-                                title="Deny (cancel task)"
-                                aria-label="Quick deny"
-                                disabled={transitionMutation.isPending}
-                                onClick={() => transitionMutation.mutate({ id: item.id, status: 'CANCELLED' })}
-                              >
-                                ✕ Deny
-                              </button>
-                              <button
-                                className="cap-btn"
-                                title="Expand review workspace"
-                                aria-label="Expand review workspace"
-                                onClick={() => openReviewMode(item.id)}
-                              >
-                                ⤢
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                      {item.status !== 'DONE' && item.status !== 'CANCELLED' && (
-                        <button
-                          className="card-cancel"
-                          title="Cancel task"
-                          aria-label="Cancel task"
-                          disabled={transitionMutation.isPending}
-                          onClick={(e) => {
-                            // stopPropagation: asking to cancel must not also
-                            // open the card's drawer (Task 10).
-                            e.stopPropagation();
-                            setConfirmCancelId(item.id);
-                          }}
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+                      onOpen={dispatchOpenTaskDrawer}
+                      onQuickApprove={(id) => transitionMutation.mutate({ id, status: 'DONE' })}
+                      onRequestChanges={(id) => {
+                        setFeedbackFor(id);
+                        setCardFeedback('');
+                      }}
+                      onFeedbackChange={setCardFeedback}
+                      onCancelRequestChanges={() => {
+                        setFeedbackFor(null);
+                        setCardFeedback('');
+                      }}
+                      onSendRequestChanges={handleSendRequestChanges}
+                      onQuickDeny={(id) => transitionMutation.mutate({ id, status: 'CANCELLED' })}
+                      onExpandReview={openReviewMode}
+                      onRequestCancel={setConfirmCancelId}
+                    />
+                  )}
+                />
+              );
+            })}
           </div>
         </div>
       )}

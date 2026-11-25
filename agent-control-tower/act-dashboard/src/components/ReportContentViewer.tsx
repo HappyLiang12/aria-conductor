@@ -21,7 +21,7 @@ export function ReportContentViewer({ content, title }: Props) {
   if (looksLikeHtmlDocument(body)) {
     return (
       <iframe
-        className="report-frame"
+        className="report-frame block h-[560px] w-full rounded-lg border-0 bg-background"
         title={title}
         sandbox=""
         srcDoc={body}
@@ -30,7 +30,7 @@ export function ReportContentViewer({ content, title }: Props) {
   }
 
   return (
-    <div className="report-markdown-body">
+    <div className="report-markdown-body h-[560px] overflow-auto rounded-lg bg-card p-6 text-sm leading-relaxed text-card-foreground">
       <MarkdownViewer content={body || '_Loading report…_'} />
     </div>
   );

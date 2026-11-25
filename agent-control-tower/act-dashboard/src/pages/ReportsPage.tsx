@@ -15,6 +15,12 @@ import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { ReportContentViewer } from '../components/ReportContentViewer';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { PageHeader } from '../components/layout/PageHeader';
+import { SectionCard } from '../components/layout/SectionCard';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { formatTimestamp } from '../utils/formatTime';
 import type {
   GenerateReportRequest,
@@ -72,6 +78,10 @@ function formatRelative(iso: string | null | undefined): string {
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
 }
+
+const METRIC_TILE = 'rounded-lg bg-muted/50 p-2';
+const METRIC_LABEL = 'block text-[10px] font-medium tracking-wider text-muted-foreground uppercase';
+const METRIC_VALUE = 'mt-0.5 block text-sm font-semibold text-foreground';
 
 export function ReportsPage() {
   const queryClient = useQueryClient();
@@ -271,17 +281,12 @@ export function ReportsPage() {
   const sectionCount = useMemo(() => countSections(reportHtml), [reportHtml]);
 
   return (
-    <div className="reports-page" style={{ padding: 16 }}>
-      <div className="view-header">
-        <div>
-          <h1>📊 Generative UI · Agent Report Workspace</h1>
-          <div className="sub">
-            Agents author sandboxed HTML briefings · review them in tabs · chat to amend or regenerate.
-          </div>
-        </div>
-        <div className="actions">
-          <button
-            className="btn primary"
+    <div className="reports-page space-y-4 p-4">
+      <PageHeader
+        title="📊 Generative UI · Agent Report Workspace"
+        description="Agents author sandboxed HTML briefings · review them in tabs · chat to amend or regenerate."
+        actions={
+          <Button
             onClick={() => {
               setForm(EMPTY_FORM);
               setCreateError(null);
@@ -289,323 +294,286 @@ export function ReportsPage() {
             }}
           >
             + Generate Report
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {actionFailure && (
-        <div style={{ marginBottom: 12 }}>
-          <ErrorNotice
-            presented={presentError(actionFailure.error, actionFailure.fallback)}
-            operatorSession
-            actionLabel={actionFailure.action}
-          />
-        </div>
+        <ErrorNotice
+          presented={presentError(actionFailure.error, actionFailure.fallback)}
+          operatorSession
+          actionLabel={actionFailure.action}
+        />
       )}
 
       {isLoading && (
-        <section className="panel" style={{ padding: 18, color: 'var(--text-dim)' }}>
-          Retrieving archive…
-        </section>
+        <Card>
+          <CardContent className="text-sm text-muted-foreground">Retrieving archive…</CardContent>
+        </Card>
       )}
       {error && (
-        <section className="panel" style={{ padding: 18, color: 'var(--red, #ff8d99)' }}>
-          Failed to load reports.
-        </section>
+        <Card>
+          <CardContent className="text-sm text-destructive">Failed to load reports.</CardContent>
+        </Card>
       )}
 
       {!isLoading && !error && totalReports === 0 && (
         <section className="panel">
-          <h2>Reports <span className="accent">· no dossiers yet</span></h2>
-          <div style={{ padding: '24px 18px', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.55 }}>
-            The archive is silent. Commission your first dossier — the agent composes structured
-            HTML from a prompt and your data scope, then renders it inside a sandboxed iframe.
-            <div style={{ marginTop: 14 }}>
-              <button className="btn primary" onClick={() => setShowCreate(true)}>
-                + Generate Report
-              </button>
+          <SectionCard title="Reports · no dossiers yet">
+            <div className="max-w-3xl space-y-3 text-sm leading-relaxed text-muted-foreground">
+              <p>
+                The archive is silent. Commission your first dossier — the agent composes structured
+                HTML from a prompt and your data scope, then renders it inside a sandboxed iframe.
+              </p>
+              <Button onClick={() => setShowCreate(true)}>+ Generate Report</Button>
             </div>
-          </div>
+          </SectionCard>
         </section>
       )}
 
       {totalReports > 0 && (
         <section className="panel">
-          <h2>
-            Reports <span className="accent">· sandboxed render · amend on demand</span>
-          </h2>
-          {/* Delete soft-archives: archived dossiers are hidden unless revealed. */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 14px 0' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 11,
-                color: 'var(--text-dim)',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => setShowArchived(e.target.checked)}
-              />
-              Show archived
-            </label>
-          </div>
-          <div className="report-grid" style={{ padding: 14 }}>
-            {/* ============== LEFT: TABS + METRICS ============== */}
-            <aside>
-              {sortedReports.length === 0 && (
-                <div style={{ padding: '2px 2px 8px', color: 'var(--text-dim)', fontSize: 12, lineHeight: 1.5 }}>
-                  No active dossiers — archived reports are hidden.
-                </div>
-              )}
-              <div className="report-tabs" style={{ padding: 0 }}>
-                {sortedReports.map((r) => {
-                  const isActive = r.id === selectedId;
-                  return (
-                    <button
-                      key={r.id}
-                      type="button"
-                      className={`report-tab ${isActive ? 'active' : ''}`}
-                      style={r.status === 'ARCHIVED' ? { opacity: 0.65 } : undefined}
-                      onClick={() => setSelectedId(r.id)}
-                    >
-                      <div className="ttl">{r.title}</div>
-                      <div className="meta">
-                        {formatTimestamp(r.createdAt)}
-                        {r.owner ? ` · ${r.owner}` : ''}
-                      </div>
-                      <div className="badge-row">
-                        <span className="mini-badge">v{r.version}</span>
-                        <span className="mini-badge">{r.status}</span>
-                        {r.sensitivity && (
-                          <span className="mini-badge">{r.sensitivity}</span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="report-metrics" style={{ marginTop: 12 }}>
-                <div>
-                  <span>Words</span>
-                  <b>{selected ? wordCount.toLocaleString() : '—'}</b>
-                </div>
-                <div>
-                  <span>Sections</span>
-                  <b>{selected ? sectionCount : '—'}</b>
-                </div>
-                <div>
-                  <span>Version</span>
-                  <b>{selected ? `v${selected.version}` : '—'}</b>
-                </div>
-                <div>
-                  <span>Generated</span>
-                  <b>{formatRelative(selected?.createdAt)}</b>
-                </div>
-                <div>
-                  <span>Amended</span>
-                  <b>{selected?.amendedAt ? formatRelative(selected.amendedAt) : '—'}</b>
-                </div>
-                <div>
-                  <span>Tabs</span>
-                  <b>{sortedReports.length}</b>
-                </div>
-              </div>
-
-              {selected && wordCount === 0 && (
-                <div style={{ marginTop: 8, padding: '6px 10px', background: 'rgba(255,141,153,.1)', borderRadius: 4, fontSize: 12, color: '#ff8d99' }}>
-                  ⚠ This report has no readable content. It may be truncated. Try Regenerate.
-                </div>
-              )}
-            </aside>
-
-            {/* ============== RIGHT: TOOLBAR + PREVIEW + CHAT ============== */}
-            <div className="report-main">
-              <div className="report-toolbar">
-                <div style={{ minWidth: 0 }}>
-                  <div className="report-title" title={selected?.title ?? ''}>
-                    {selected?.title ?? 'No report selected'}
-                  </div>
-                  <div className="report-sub">
-                    {selected
-                      ? `№ ${shortId(selected.id)} · ${selected.dataScope ?? 'no scope'} · sandboxed preview`
-                      : 'Pick a report from the left, or generate a new one.'}
-                  </div>
-                </div>
-                <div className="actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {copyToast && (
-                    <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{copyToast}</span>
-                  )}
-                  <button
-                    className="btn"
-                    onClick={handleCopyLink}
-                    disabled={!selected}
-                  >
-                    Copy Link
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => selected && regenerateMutation.mutate(selected.id)}
-                    disabled={!selected || regenerateMutation.isPending}
-                  >
-                    {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={handleDownload}
-                    disabled={!selected || !reportHtml}
-                  >
-                    Download
-                  </button>
-                  <button
-                    className="btn danger"
-                    onClick={handleDelete}
-                    disabled={!selected || archiveMutation.isPending}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              <div className="report-preview" style={{ position: 'relative' }}>
-                {selected ? (
-                  <>
-                    <ReportContentViewer
-                      key={`${selected.id}-${selected.version}-${selected.amendedAt ?? ''}`}
-                      content={reportHtml}
-                      title={selected.title}
-                    />
-                    {isBusy && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: 'rgba(8,12,24,.55)',
-                          color: '#fff',
-                          fontSize: 13,
-                          letterSpacing: '.5px',
-                          textTransform: 'uppercase',
-                          fontWeight: 700,
-                          backdropFilter: 'blur(2px)',
-                        }}
-                      >
-                        {amendMutation.isPending
-                          ? '✦ Amending report…'
-                          : regenerateMutation.isPending
-                          ? '↻ Regenerating…'
-                          : 'Loading…'}
-                      </div>
-                    )}
-
-                    {selected?.status === 'INCOMPLETE' && (
-                      <div style={{
-                        position: 'absolute', inset: 0,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        background: 'rgba(20,20,30,.85)', backdropFilter: 'blur(4px)',
-                        zIndex: 10,
-                      }}>
-                        <div style={{ fontSize: 28, marginBottom: 8 }}>⚠</div>
-                        <div style={{ color: '#ff8d99', fontSize: 14, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px' }}>
-                          Report Incomplete
-                        </div>
-                        <div style={{ color: '#a0aec0', fontSize: 12, marginTop: 6, textAlign: 'center', maxWidth: 280 }}>
-                          LLM output was truncated before the report could finish. Click Regenerate to retry.
-                        </div>
-                        <button
-                          className="btn primary"
-                          style={{ marginTop: 16 }}
-                          onClick={() => selected && regenerateMutation.mutate(selected.id)}
-                          disabled={!selected || regenerateMutation.isPending}
-                        >
-                          {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
-                        </button>
-                      </div>
-                    )}
-
-                    {selected?.status === 'MISSING' && (
-                      <div style={{
-                        position: 'absolute', inset: 0,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        background: 'rgba(20,20,30,.85)', backdropFilter: 'blur(4px)',
-                        zIndex: 10,
-                      }}>
-                        <div style={{ color: '#e6e7ea', fontSize: 14, marginBottom: 12 }}>
-                          HTML file not found on disk
-                        </div>
-                        <button
-                          className="btn primary"
-                          onClick={() => selected && regenerateMutation.mutate(selected.id)}
-                          disabled={!selected || regenerateMutation.isPending}
-                        >
-                          {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div
-                    style={{
-                      height: 560,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#94a0b8',
-                      fontSize: 13,
-                    }}
-                  >
-                    Select a report from the archive to preview.
+          <SectionCard title="Reports · sandboxed render · amend on demand">
+            {/* Delete soft-archives: archived dossiers are hidden unless revealed. */}
+            <div className="mb-3 flex justify-end">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="accent-primary"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                />
+                Show archived
+              </label>
+            </div>
+            <div className="report-grid grid gap-4 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
+              {/* ============== LEFT: TABS + METRICS ============== */}
+              <aside>
+                {sortedReports.length === 0 && (
+                  <div className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                    No active dossiers — archived reports are hidden.
                   </div>
                 )}
-              </div>
-
-              <div className="report-chat">
-                <div className="row">
-                  <textarea
-                    aria-label="Ask the agent to amend this report"
-                    placeholder='Ask the agent to amend, e.g. "add a risk section", "reorder by impact", "highlight critical blockers"…'
-                    value={amendInstruction}
-                    onChange={(e) => setAmendInstruction(e.target.value)}
-                    disabled={!selected || amendMutation.isPending}
-                  />
-                  <button
-                    className="btn primary"
-                    onClick={handleAmend}
-                    disabled={
-                      !selected ||
-                      amendMutation.isPending ||
-                      !amendInstruction.trim()
-                    }
-                  >
-                    {amendMutation.isPending ? 'Asking…' : 'Ask Agent'}
-                  </button>
+                <div className="report-tabs grid gap-2">
+                  {sortedReports.map((r) => {
+                    const isActive = r.id === selectedId;
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className={`report-tab rounded-xl border p-3 text-left transition-colors ${
+                          isActive
+                            ? 'active border-primary/50 bg-primary/10'
+                            : 'border-border bg-card hover:border-ring/50 hover:bg-muted/40'
+                        } ${r.status === 'ARCHIVED' ? 'opacity-70' : ''}`}
+                        onClick={() => setSelectedId(r.id)}
+                      >
+                        <div className="ttl truncate text-sm font-semibold text-foreground">{r.title}</div>
+                        <div className="meta mt-1 text-xs text-muted-foreground">
+                          {formatTimestamp(r.createdAt)}
+                          {r.owner ? ` · ${r.owner}` : ''}
+                        </div>
+                        <div className="badge-row mt-2 flex flex-wrap gap-1.5">
+                          <span className="mini-badge inline-flex rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-secondary-foreground">
+                            v{r.version}
+                          </span>
+                          <span className="mini-badge inline-flex rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-secondary-foreground">
+                            {r.status}
+                          </span>
+                          {r.sensitivity && (
+                            <span className="mini-badge inline-flex rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-secondary-foreground">
+                              {r.sensitivity}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="report-sub" style={{ marginTop: 8 }}>
-                  Chat amendments become new report versions and stay linked to the original prompt,
-                  data scope, and run evidence.
-                  {amendMutation.isError && (
-                    <span style={{ color: '#ff8d99', marginLeft: 8 }}>
-                      · {apiErrorMessage(amendMutation.error,
-                        'Amendment failed. Check LLM provider configuration.')}
-                    </span>
-                  )}
+
+                <div className="report-metrics mt-3 grid grid-cols-3 gap-2">
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Words</span>
+                    <b className={METRIC_VALUE}>{selected ? wordCount.toLocaleString() : '—'}</b>
+                  </div>
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Sections</span>
+                    <b className={METRIC_VALUE}>{selected ? sectionCount : '—'}</b>
+                  </div>
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Version</span>
+                    <b className={METRIC_VALUE}>{selected ? `v${selected.version}` : '—'}</b>
+                  </div>
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Generated</span>
+                    <b className={METRIC_VALUE}>{formatRelative(selected?.createdAt)}</b>
+                  </div>
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Amended</span>
+                    <b className={METRIC_VALUE}>{selected?.amendedAt ? formatRelative(selected.amendedAt) : '—'}</b>
+                  </div>
+                  <div className={METRIC_TILE}>
+                    <span className={METRIC_LABEL}>Tabs</span>
+                    <b className={METRIC_VALUE}>{sortedReports.length}</b>
+                  </div>
+                </div>
+
+                {selected && wordCount === 0 && (
+                  <div className="mt-2 rounded-lg bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+                    ⚠ This report has no readable content. It may be truncated. Try Regenerate.
+                  </div>
+                )}
+              </aside>
+
+              {/* ============== RIGHT: TOOLBAR + PREVIEW + CHAT ============== */}
+              <div className="report-main grid gap-3">
+                <div className="report-toolbar flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card/60 p-3">
+                  <div className="min-w-0">
+                    <div className="report-title truncate text-sm font-semibold text-foreground" title={selected?.title ?? ''}>
+                      {selected?.title ?? 'No report selected'}
+                    </div>
+                    <div className="report-sub mt-1 text-xs text-muted-foreground">
+                      {selected
+                        ? `№ ${shortId(selected.id)} · ${selected.dataScope ?? 'no scope'} · sandboxed preview`
+                        : 'Pick a report from the left, or generate a new one.'}
+                    </div>
+                  </div>
+                  <div className="actions flex flex-wrap items-center gap-2">
+                    {copyToast && (
+                      <span className="text-xs text-muted-foreground">{copyToast}</span>
+                    )}
+                    <Button
+                      variant="outline"
+                      onClick={handleCopyLink}
+                      disabled={!selected}
+                    >
+                      Copy Link
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => selected && regenerateMutation.mutate(selected.id)}
+                      disabled={!selected || regenerateMutation.isPending}
+                    >
+                      {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleDownload}
+                      disabled={!selected || !reportHtml}
+                    >
+                      Download
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={handleDelete}
+                      disabled={!selected || archiveMutation.isPending}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+
+                <Card className="report-preview relative overflow-hidden">
+                  <CardContent className="relative">
+                    {selected ? (
+                      <>
+                        <ReportContentViewer
+                          key={`${selected.id}-${selected.version}-${selected.amendedAt ?? ''}`}
+                          content={reportHtml}
+                          title={selected.title}
+                        />
+                        {isBusy && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-background/60 text-sm font-semibold tracking-wide text-foreground uppercase backdrop-blur-sm">
+                            {amendMutation.isPending
+                              ? '✦ Amending report…'
+                              : regenerateMutation.isPending
+                              ? '↻ Regenerating…'
+                              : 'Loading…'}
+                          </div>
+                        )}
+
+                        {selected?.status === 'INCOMPLETE' && (
+                          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/85 p-4 text-center backdrop-blur-sm">
+                            <div className="text-2xl">⚠</div>
+                            <div className="text-sm font-semibold tracking-wide text-destructive uppercase">
+                              Report Incomplete
+                            </div>
+                            <div className="max-w-xs text-xs text-muted-foreground">
+                              LLM output was truncated before the report could finish. Click Regenerate to retry.
+                            </div>
+                            <Button
+                              className="mt-1"
+                              onClick={() => selected && regenerateMutation.mutate(selected.id)}
+                              disabled={!selected || regenerateMutation.isPending}
+                            >
+                              {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
+                            </Button>
+                          </div>
+                        )}
+
+                        {selected?.status === 'MISSING' && (
+                          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/85 p-4 text-center backdrop-blur-sm">
+                            <div className="text-sm text-foreground">
+                              HTML file not found on disk
+                            </div>
+                            <Button
+                              onClick={() => selected && regenerateMutation.mutate(selected.id)}
+                              disabled={!selected || regenerateMutation.isPending}
+                            >
+                              {regenerateMutation.isPending ? 'Regenerating…' : '↻ Regenerate'}
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="flex h-[560px] items-center justify-center text-sm text-muted-foreground">
+                        Select a report from the archive to preview.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <div className="report-chat rounded-xl border border-border bg-card/60 p-3">
+                  <div className="row flex items-end gap-2">
+                    <Textarea
+                      aria-label="Ask the agent to amend this report"
+                      placeholder='Ask the agent to amend, e.g. "add a risk section", "reorder by impact", "highlight critical blockers"…'
+                      className="min-h-11 flex-1"
+                      value={amendInstruction}
+                      onChange={(e) => setAmendInstruction(e.target.value)}
+                      disabled={!selected || amendMutation.isPending}
+                    />
+                    <Button
+                      onClick={handleAmend}
+                      disabled={
+                        !selected ||
+                        amendMutation.isPending ||
+                        !amendInstruction.trim()
+                      }
+                    >
+                      {amendMutation.isPending ? 'Asking…' : 'Ask Agent'}
+                    </Button>
+                  </div>
+                  <div className="report-sub mt-2 text-xs text-muted-foreground">
+                    Chat amendments become new report versions and stay linked to the original prompt,
+                    data scope, and run evidence.
+                    {amendMutation.isError && (
+                      <span className="ml-2 text-destructive">
+                        · {apiErrorMessage(amendMutation.error,
+                          'Amendment failed. Check LLM provider configuration.')}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </SectionCard>
         </section>
       )}
 
       {/* ============== GENERATE REPORT MINI DIALOG ============== */}
       <div
-        className={`mini-scrim ${showCreate ? 'open' : ''}`}
+        className={`mini-scrim ${showCreate ? 'open' : ''} fixed inset-0 z-40 bg-black/50 backdrop-blur-sm`}
         onClick={() => {
           if (!generateMutation.isPending) {
             setShowCreate(false);
@@ -614,48 +582,58 @@ export function ReportsPage() {
         }}
       />
       <div
-        className={`mini-dialog ${showCreate ? 'open' : ''}`}
+        className={`mini-dialog ${showCreate ? 'open' : ''} fixed top-1/2 left-1/2 z-50 w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-card p-5 text-card-foreground ring-1 ring-foreground/10`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="generateReportTitle"
       >
-        <h3 id="generateReportTitle">Generate New Report</h3>
-        <p>
+        <h3 id="generateReportTitle" className="text-base font-semibold text-foreground">Generate New Report</h3>
+        <p className="mt-1 mb-3 text-sm text-muted-foreground">
           Describe the briefing you want the agent to author. The output renders in a sandboxed iframe —
           no scripts, no exfiltration.
         </p>
 
-        <label>Title *</label>
-        <input
+        <label htmlFor="report-title" className="mb-1 block text-xs font-medium text-muted-foreground">Title *</label>
+        <Input
+          id="report-title"
           autoFocus
+          className="mb-3"
           value={form.title}
           onChange={(e) => setForm({ ...form, title: e.target.value })}
           placeholder="e.g. Q1 Agent Performance Brief"
         />
 
-        <label>Topic / Prompt *</label>
-        <input
+        <label htmlFor="report-topic" className="mb-1 block text-xs font-medium text-muted-foreground">Topic / Prompt *</label>
+        <Input
+          id="report-topic"
+          className="mb-3"
           value={form.description}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
           placeholder="What should the report cover? Sections, tone, structure…"
         />
 
-        <label>Data scope</label>
-        <input
+        <label htmlFor="report-scope" className="mb-1 block text-xs font-medium text-muted-foreground">Data scope</label>
+        <Input
+          id="report-scope"
+          className="mb-3"
           value={form.dataScope}
           onChange={(e) => setForm({ ...form, dataScope: e.target.value })}
           placeholder="e.g. runs:Q1, agents:coder*"
         />
 
-        <label>Owner</label>
-        <input
+        <label htmlFor="report-owner" className="mb-1 block text-xs font-medium text-muted-foreground">Owner</label>
+        <Input
+          id="report-owner"
+          className="mb-3"
           value={form.owner}
           onChange={(e) => setForm({ ...form, owner: e.target.value })}
           placeholder="e.g. alice"
         />
 
-        <label>Sensitivity</label>
+        <label htmlFor="report-sensitivity" className="mb-1 block text-xs font-medium text-muted-foreground">Sensitivity</label>
         <select
+          id="report-sensitivity"
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
           value={form.sensitivity}
           onChange={(e) => setForm({ ...form, sensitivity: e.target.value })}
         >
@@ -666,24 +644,14 @@ export function ReportsPage() {
         </select>
 
         {createError && (
-          <div
-            style={{
-              marginTop: 10,
-              fontSize: 11.5,
-              color: '#ff8d99',
-              border: '1px solid rgba(255,107,122,.4)',
-              borderRadius: 8,
-              padding: '6px 8px',
-              background: 'rgba(255,107,122,.08)',
-            }}
-          >
+          <div className="mt-2.5 rounded-lg border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
             {createError}
           </div>
         )}
 
-        <div className="actions">
-          <button
-            className="btn"
+        <div className="actions mt-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
             onClick={() => {
               setShowCreate(false);
               setCreateError(null);
@@ -691,14 +659,13 @@ export function ReportsPage() {
             disabled={generateMutation.isPending}
           >
             Cancel
-          </button>
-          <button
-            className="btn primary"
+          </Button>
+          <Button
             onClick={handleGenerate}
             disabled={generateMutation.isPending}
           >
             {generateMutation.isPending ? '✦ Composing…' : '✦ Generate'}
-          </button>
+          </Button>
         </div>
       </div>
 

@@ -306,6 +306,21 @@ test.describe('UI refresh acceptance', () => {
     expect(lightHover, 'light link on hover').toBeGreaterThanOrEqual(4.5);
   });
 
+  test('the Overview does not overflow horizontally at 390/1024/1400', async ({ page }) => {
+    // W4: the refreshed queue/board/summary surfaces must fit the three review
+    // widths. `documentElement.scrollWidth` is the whole page because the shell
+    // rail and the Overview grid share the viewport.
+    for (const width of [390, 1024, 1400]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await expect(page.getByTestId('decision-queue')).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `horizontal overflow at ${width}px`).toBeLessThanOrEqual(1);
+    }
+  });
+
   test('stopping an in-flight turn aborts the SSE fetch (stubbed path)', async ({ page }) => {
     await stubAriaConversations(page);
     // The stream request is intercepted but never fulfilled, so the turn stays

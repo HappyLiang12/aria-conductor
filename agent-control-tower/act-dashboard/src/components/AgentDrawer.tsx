@@ -4,6 +4,10 @@ import { getAgent } from '../api/agents';
 import { listRuns, getRunProgress, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
 import { RuntimeBadge } from './RuntimeBadge';
 import { RunErrorNotice } from './ErrorNotice';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
+import { Textarea } from './ui/textarea';
 import { useDrawerContext } from './DrawerContext';
 import { apiErrorMessage } from '../api/operatorSession';
 import { useWebSocketContext } from './Layout';
@@ -546,68 +550,91 @@ export function AgentDrawer() {
         />
       )}
       <aside
-        className={`agent-drawer${open ? ' open' : ''}`}
+        className={`agent-drawer${open ? ' open' : ''} fixed inset-y-0 left-0 z-[110] flex w-[min(430px,94vw)] flex-col border-r border-border bg-card text-card-foreground shadow-2xl transition-transform`}
+        data-slot="sheet-content"
         aria-hidden={!open}
         aria-label="Agent live drawer"
       >
-        <header>
-          <div className="avatar" style={{ width: 38, height: 38 }}>
+        <header
+          className="flex items-center gap-2.5 border-b border-border px-4 py-3"
+          data-slot="sheet-header"
+        >
+          <div className="avatar flex size-[38px] shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
             {agent ? initials(agent.name) : '··'}
           </div>
-          <div className="who">
-            <div className="role">
+          <div className="who min-w-0 flex-1">
+            <div className="role text-[11px] tracking-wider text-muted-foreground uppercase">
               {agent
                 ? `${agent.role || agent.agentType} · ${agent.model || '—'}`
                 : agentQuery.isLoading
                 ? 'Loading…'
                 : 'Select an agent'}
             </div>
-            <h3>{agent?.name ?? '—'}</h3>
+            <h3 className="mt-0.5 truncate text-base font-semibold text-foreground">
+              {agent?.name ?? '—'}
+            </h3>
             {agent && <RuntimeBadge core={agent.adkProvider} mode={agent.executionMode} />}
           </div>
           {agent && (
-            <span className="live-pill">
-              <span className="dot" />
+            <Badge variant="outline" className="live-pill gap-1.5">
+              <span className="dot size-1.5 rounded-full bg-success" />
               <span>{HEALTH_LABEL[agent.healthStatus]}</span>
-            </span>
+            </Badge>
           )}
-          <div className="close" onClick={closeAgentDrawer} role="button" aria-label="Close">
+          <div
+            className="close cursor-pointer rounded-md px-2 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={closeAgentDrawer}
+            role="button"
+            aria-label="Close"
+          >
             ✕
           </div>
         </header>
 
-        <div className="ad-body">
+        <div className="ad-body min-h-0 flex-1 overflow-y-auto px-4 pt-3.5 pb-3">
           {agentQuery.isLoading && (
-            <div className="loading-spinner" style={{ padding: 20 }}>
+            <div className="loading-spinner py-5">
               <div className="spinner" />
               <span>Loading agent…</span>
             </div>
           )}
 
           {agentQuery.isError && !agentQuery.isLoading && (
-            <div className="evidence-error">Failed to load agent.</div>
+            <div className="evidence-error rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Failed to load agent.
+            </div>
           )}
 
           {agent && (
             <>
               {/* Now-task / active run */}
               {activeRun ? (
-                <div className="now-task">
-                  <div className="lbl">Active Run</div>
-                  <div className="ttl">
-                    {activeRun.promptSeed?.slice(0, 80) || activeRun.id}
-                  </div>
-                  <div className="meta">
-                    <span className="pill dev">{activeRun.status}</span>
-                    <span>{activeRun.iterationCount} turns</span>
-                    <span style={{ marginLeft: 'auto' }}>{runtimeMin}m elapsed</span>
-                  </div>
-                </div>
+                <Card size="sm" className="now-task">
+                  <CardContent>
+                    <div className="lbl text-[10.5px] tracking-wider text-primary uppercase">
+                      Active Run
+                    </div>
+                    <div className="ttl mt-0.5 mb-1 text-[13.5px] font-semibold text-foreground">
+                      {activeRun.promptSeed?.slice(0, 80) || activeRun.id}
+                    </div>
+                    <div className="meta flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span className="pill dev">{activeRun.status}</span>
+                      <span>{activeRun.iterationCount} turns</span>
+                      <span className="ml-auto">{runtimeMin}m elapsed</span>
+                    </div>
+                  </CardContent>
+                </Card>
               ) : (
-                <div className="now-task" style={{ opacity: 0.7 }}>
-                  <div className="lbl">Status</div>
-                  <div className="ttl">Idle — awaiting work</div>
-                </div>
+                <Card size="sm" className="now-task opacity-70">
+                  <CardContent>
+                    <div className="lbl text-[10.5px] tracking-wider text-primary uppercase">
+                      Status
+                    </div>
+                    <div className="ttl mt-0.5 text-[13.5px] font-semibold text-foreground">
+                      Idle — awaiting work
+                    </div>
+                  </CardContent>
+                </Card>
               )}
 
               {/* Run Result / failure (defect D5): keyed on the REPLAYED run,
@@ -616,39 +643,20 @@ export function AgentDrawer() {
                   because activeRun only ever holds RUNNING/INITIALIZING/PAUSED. */}
               {replayRun?.finalOutput && (
                 <>
-                  <div className="section-h" style={{ color: '#4dd88a' }}>Run Result</div>
-                  <div
-                    className="evidence-body"
-                    style={{
-                      background: 'rgba(77,216,138,.06)',
-                      border: '1px solid rgba(77,216,138,.2)',
-                      borderRadius: 8,
-                      padding: '12px 14px',
-                      marginBottom: 12,
-                      whiteSpace: 'pre-wrap',
-                      fontSize: 13,
-                      lineHeight: 1.55,
-                      maxHeight: 300,
-                      overflowY: 'auto',
-                    }}
-                  >
+                  <div className="section-h text-[11px] tracking-wider text-success uppercase">
+                    Run Result
+                  </div>
+                  <div className="evidence-body mb-3 max-h-[300px] overflow-y-auto rounded-lg border border-success/20 bg-success/10 px-3.5 py-3 text-[13px] leading-relaxed whitespace-pre-wrap">
                     {replayRun.finalOutput}
                   </div>
                 </>
               )}
               {replayRun?.errorMessage && (
                 <>
-                  <div className="section-h" style={{ color: '#ff6b7a' }}>Run Failed</div>
-                  <div
-                    className="evidence-error"
-                    style={{
-                      background: 'rgba(255,107,122,.06)',
-                      border: '1px solid rgba(255,107,122,.2)',
-                      borderRadius: 8,
-                      padding: '12px 14px',
-                      marginBottom: 12,
-                    }}
-                  >
+                  <div className="section-h text-[11px] tracking-wider text-destructive uppercase">
+                    Run Failed
+                  </div>
+                  <div className="evidence-error mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-3 text-xs">
                     <RunErrorNotice
                       message={replayRun.errorMessage}
                       surface={replayRun.errorSurface}
@@ -659,44 +667,55 @@ export function AgentDrawer() {
               )}
 
               {/* Live activity stream (S2: fixed window + collapse + auto-follow) */}
-              <div className="section-h" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="section-h flex items-center gap-2 text-[11px] tracking-wider text-muted-foreground uppercase">
                 Live Activity Stream
-                <span className="winbadge">window · last 60 lines · auto-follow</span>
-                <span style={{ flex: 1 }} />
-                <button
+                <span className="winbadge rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] tracking-normal normal-case">
+                  window · last 60 lines · auto-follow
+                </span>
+                <span className="flex-1" />
+                <Button
                   type="button"
+                  variant="outline"
+                  size="xs"
                   className="tgl"
                   onClick={() => setStreamCollapsed((v) => !v)}
                 >
                   {streamCollapsed ? '▸ expand' : '▾ collapse'}
-                </button>
+                </Button>
               </div>
-              <div className={`stream${streamCollapsed ? ' collapsed' : ''}`} ref={streamRef}>
+              <div
+                className={`stream overflow-y-auto rounded-lg border border-border bg-muted/20 p-2 font-mono text-[11px]${streamCollapsed ? ' collapsed' : ''}`}
+                ref={streamRef}
+              >
                 {stream.length === 0 ? (
-                  <div className="ln">
-                    <span className="ts">{fmtTime(new Date())}</span>
-                    <span className="tag think">idle</span>
-                    <span className="msg caret" />
+                  <div className="ln flex flex-wrap gap-2">
+                    <span className="ts text-muted-foreground/70">{fmtTime(new Date())}</span>
+                    <span className="tag think rounded bg-muted px-1.5 text-[10px] font-bold tracking-wide">
+                      idle
+                    </span>
+                    <span className="msg caret text-foreground" />
                   </div>
                 ) : (
                   stream.map((ln, idx) => (
                     <div
                       key={ln.id}
-                      className={`ln${idx === stream.length - 1 ? ' new' : ''}`}
+                      className={`ln flex flex-wrap gap-2${idx === stream.length - 1 ? ' new' : ''}`}
                     >
-                      <span className="ts">{ln.ts}</span>
-                      <span className={`tag ${ln.tag}`}>{ln.tag.toUpperCase()}</span>
-                      <span className="msg">{ln.msg}</span>
+                      <span className="ts text-muted-foreground/70">{ln.ts}</span>
+                      <span className={`tag ${ln.tag} rounded bg-muted px-1.5 text-[10px] font-bold tracking-wide`}>
+                        {ln.tag.toUpperCase()}
+                      </span>
+                      <span className="msg break-words text-foreground">{ln.msg}</span>
                       {ln.detail && (ln.detail.thinking || ln.detail.answer || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
-                        <div className="ln-detail">
-                          {ln.detail.thinking && <div className="think">{ln.detail.thinking}</div>}
-                          {ln.detail.answer && <div className="answer">{ln.detail.answer}</div>}
+                        <div className="ln-detail my-1 ml-2 w-full text-[10.5px] text-muted-foreground">
+                          {ln.detail.thinking && <div className="think whitespace-pre-wrap break-words text-accent-foreground">{ln.detail.thinking}</div>}
+                          {ln.detail.answer && <div className="answer whitespace-pre-wrap break-words text-foreground">{ln.detail.answer}</div>}
                           {ln.detail.toolName && (
-                            <div className="tool">⚙ {ln.detail.toolName}{ln.detail.toolArgs ? ` · ${ln.detail.toolArgs}` : ''}</div>
+                            <div className="tool mt-0.5 break-words text-primary">⚙ {ln.detail.toolName}{ln.detail.toolArgs ? ` · ${ln.detail.toolArgs}` : ''}</div>
                           )}
-                          {ln.detail.toolResult && <div className="res">✓ {ln.detail.toolResult}</div>}
+                          {ln.detail.toolResult && <div className="res mt-1 ml-3 break-words text-success">✓ {ln.detail.toolResult}</div>}
                           {ln.detail.skills && ln.detail.skills.length > 0 && (
-                            <div className="skills">skills: {ln.detail.skills.join(', ')}</div>
+                            <div className="skills mt-0.5 text-muted-foreground">skills: {ln.detail.skills.join(', ')}</div>
                           )}
                         </div>
                       )}
@@ -706,105 +725,140 @@ export function AgentDrawer() {
               </div>
 
               {/* Resource grid */}
-              <div className="section-h">Resources</div>
-              <div className="resgrid">
-                <div className="res green">
-                  <div className="l">Active runs</div>
-                  <div className="v">{agentRuns.filter((r) => r.status === 'RUNNING').length}</div>
-                  <div className="sub">total {agentRuns.length}</div>
-                  <div className="bar">
-                    <i style={{ width: `${clampPercent(agentRuns.length * 20)}%` }} />
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Resources
+              </div>
+              <div className="resgrid grid grid-cols-2 gap-2">
+                <div className="res green rounded-lg border border-border bg-muted/20 p-2.5">
+                  <div className="l text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                    Active runs
+                  </div>
+                  <div className="v text-base font-semibold text-foreground">
+                    {agentRuns.filter((r) => r.status === 'RUNNING').length}
+                  </div>
+                  <div className="sub text-[10.5px] text-muted-foreground">total {agentRuns.length}</div>
+                  <div className="bar mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+                    <i
+                      className="block h-full rounded-full bg-success"
+                      style={{ width: `${clampPercent(agentRuns.length * 20)}%` }}
+                    />
                   </div>
                 </div>
-                <div className="res amber">
-                  <div className="l">Runtime</div>
-                  <div className="v">{runtimeMin}m</div>
-                  <div className="sub">since current run start</div>
-                  <div className="bar">
-                    <i style={{ width: `${clampPercent(runtimeMin * 5)}%` }} />
+                <div className="res amber rounded-lg border border-border bg-muted/20 p-2.5">
+                  <div className="l text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                    Runtime
+                  </div>
+                  <div className="v text-base font-semibold text-foreground">{runtimeMin}m</div>
+                  <div className="sub text-[10.5px] text-muted-foreground">since current run start</div>
+                  <div className="bar mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+                    <i
+                      className="block h-full rounded-full bg-warning"
+                      style={{ width: `${clampPercent(runtimeMin * 5)}%` }}
+                    />
                   </div>
                 </div>
               </div>
 
               {/* Assigned Skills */}
-              <div className="section-h">Assigned Skills</div>
-              <div className="files">
+              <div className="section-h text-[11px] tracking-wider text-muted-foreground uppercase">
+                Assigned Skills
+              </div>
+              <div className="files grid gap-1.5">
                 {agent.skills?.length ? agent.skills.map(s => (
-                  <div key={s} className="file">
-                    <span className="op read">SKILL</span>
+                  <div key={s} className="file flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs">
+                    <span className="op read rounded bg-primary/15 px-1.5 text-[10px] text-primary">SKILL</span>
                     <span>{s}</span>
                   </div>
                 )) : (
-                  <div className="file">
-                    <span className="op read">--</span>
+                  <div className="file flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs">
+                    <span className="op read rounded bg-muted px-1.5 text-[10px] text-muted-foreground">--</span>
                     <span>No skills assigned</span>
                   </div>
                 )}
               </div>
 
               {/* Config (collapsed) */}
-              <details style={{marginTop: 12}}>
-                <summary className="section-h" style={{display:'inline',cursor:'pointer'}}>Config</summary>
-                <div className="files" style={{marginTop: 8}}>
-                  <div className="file">
-                    <span className="op read">CFG</span>
+              <details className="mt-3">
+                <summary className="section-h inline cursor-pointer text-[11px] tracking-wider text-muted-foreground uppercase">
+                  Config
+                </summary>
+                <div className="files mt-2 grid gap-1.5">
+                  <div className="file flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs">
+                    <span className="op read rounded bg-primary/15 px-1.5 text-[10px] text-primary">CFG</span>
                     <span>maxToolCallRounds</span>
-                    <span className="delta">{String(agentConfig?.maxToolCallRounds ?? '—')}</span>
+                    <span className="delta ml-auto text-muted-foreground">{String(agentConfig?.maxToolCallRounds ?? '—')}</span>
                   </div>
                   {agentConfig && Object.entries(agentConfig)
                     .filter(([k]) => k !== 'maxToolCallRounds' && k !== 'systemPrompt')
                     .map(([k, v]) => (
-                      <div key={k} className="file">
-                        <span className="op read">CFG</span>
-                        <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{k}</span>
-                        <span className="delta">{String(v)}</span>
+                      <div key={k} className="file flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs">
+                        <span className="op read rounded bg-primary/15 px-1.5 text-[10px] text-primary">CFG</span>
+                        <span className="overflow-hidden text-ellipsis">{k}</span>
+                        <span className="delta ml-auto text-muted-foreground">{String(v)}</span>
                       </div>
                     ))}
                 </div>
               </details>
 
               {/* Order console */}
-              <div className="section-h">
+              <div className="section-h flex items-center text-[11px] tracking-wider text-muted-foreground uppercase">
                 Order Console
-                <span style={{ float: 'right', color: 'var(--text-mute)', fontSize: 10 }}>
+                <span className="ml-auto text-[10px] tracking-normal text-muted-foreground normal-case">
                   ⌘ + ↵ to send
                 </span>
               </div>
-              <div className="order-console">
-                <div className="oc-h">
-                  ▶ Send instruction to <span style={{ color: '#fff', marginLeft: 4 }}>{agent.name}</span>
+              <div className="order-console mt-2 rounded-lg border border-border bg-muted/20 p-2.5">
+                <div className="oc-h mb-1.5 text-[11px] text-muted-foreground">
+                  ▶ Send instruction to <span className="ml-1 text-foreground">{agent.name}</span>
                 </div>
-                <div className="chips">
-                  <span
-                    className="chip"
+                <div className="chips mb-2 flex flex-wrap gap-1.5">
+                  <Badge
+                    variant="outline"
+                    className="chip cursor-pointer"
                     onClick={() => setOrder('Focus on the highest-priority task in the queue.')}
                   >
                     🎯 Focus highest priority
-                  </span>
-                  <span
-                    className="chip"
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="chip cursor-pointer"
                     onClick={() => setOrder('Submit current evidence and request review.')}
                   >
                     🔁 Submit when ready
-                  </span>
-                  <span className="chip warn" onClick={() => setOrder('Pause and wait for review.')}>
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="chip warn cursor-pointer"
+                    onClick={() => setOrder('Pause and wait for review.')}
+                  >
                     ⏸ Pause &amp; wait
-                  </span>
-                  <span className="chip danger" onClick={() => setOrder('Stop work immediately and report state.')}>
+                  </Badge>
+                  <Badge
+                    variant="destructive"
+                    className="chip danger cursor-pointer"
+                    onClick={() => setOrder('Stop work immediately and report state.')}
+                  >
                     ⛔ Stop run
-                  </span>
+                  </Badge>
                 </div>
-                <div className="order-row">
-                  <textarea
+                <div className="order-row flex items-end gap-2">
+                  <Textarea
                     aria-label="Order instruction"
                     placeholder="Type a clear instruction…"
                     value={order}
                     onChange={(e) => setOrder(e.target.value)}
                     onKeyDown={onOrderKeyDown}
+                    className="min-h-9 flex-1"
                   />
-                  <button className="send" onClick={submitOrder} disabled={!order.trim() || !activeRun}>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="send"
+                    onClick={submitOrder}
+                    disabled={!order.trim() || !activeRun}
+                  >
                     Send ▶
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -813,14 +867,40 @@ export function AgentDrawer() {
           )}
         </div>
 
-        <footer>
-          <button className="btn warn" disabled={!activeRun || activeRun.status !== 'RUNNING'}
-            onClick={() => activeRun && pauseRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}>⏸ Pause</button>
-          <button className="btn primary" disabled={!activeRun || activeRun.status !== 'PAUSED'}
-            onClick={() => activeRun && resumeRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}>▶ Resume</button>
-          <button className="btn danger" disabled={!activeRun || (activeRun.status !== 'RUNNING' && activeRun.status !== 'PAUSED')}
-            onClick={() => activeRun && cancelRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}>⛔ Stop</button>
-          <button className="btn" onClick={closeAgentDrawer}>Close</button>
+        <footer
+          className="flex gap-2 border-t border-border bg-muted/20 px-4 py-3.5"
+          data-slot="sheet-footer"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            className="btn warn flex-1"
+            disabled={!activeRun || activeRun.status !== 'RUNNING'}
+            onClick={() => activeRun && pauseRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}
+          >
+            ⏸ Pause
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
+            className="btn primary flex-1"
+            disabled={!activeRun || activeRun.status !== 'PAUSED'}
+            onClick={() => activeRun && resumeRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}
+          >
+            ▶ Resume
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="btn danger flex-1"
+            disabled={!activeRun || (activeRun.status !== 'RUNNING' && activeRun.status !== 'PAUSED')}
+            onClick={() => activeRun && cancelRun(activeRun.id).then(() => queryClient.invalidateQueries({ queryKey: ['runs'] }))}
+          >
+            ⛔ Stop
+          </Button>
+          <Button variant="outline" size="sm" className="btn flex-1" onClick={closeAgentDrawer}>
+            Close
+          </Button>
         </footer>
       </aside>
     </>

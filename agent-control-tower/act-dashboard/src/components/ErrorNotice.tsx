@@ -5,6 +5,8 @@ import {
   type PresentedError,
 } from '../api/errorPresentation';
 import { OperatorSessionNotice } from './AriaProposalCard';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/button';
 
 /**
  * A path action is the only one that needs router state. It lives in its own
@@ -14,9 +16,9 @@ import { OperatorSessionNotice } from './AriaProposalCard';
 function PathActionButton({ action }: { action: { path: string; label: string } }) {
   const navigate = useNavigate();
   return (
-    <button type="button" className="btn" onClick={() => navigate(action.path)}>
+    <Button type="button" variant="outline" size="sm" onClick={() => navigate(action.path)}>
       {action.label}
-    </button>
+    </Button>
   );
 }
 
@@ -34,6 +36,10 @@ function PathActionButton({ action }: { action: { path: string; label: string } 
  * `OperatorSessionNotice`, so this component no longer keeps a copy of the
  * wording. The action label still names the refused action in its first
  * sentence, which the existing pins assert.
+ *
+ * Wave 2 F1: the failure renders on the shadcn `Alert` token surface. The
+ * `error-notice`/`error-text`/`error-remedy` hooks and the `error-remedy` test
+ * id stay as the compatibility shim.
  */
 export function ErrorNotice({ presented, className, operatorSession, actionLabel }: {
   presented: PresentedError;
@@ -52,32 +58,39 @@ export function ErrorNotice({ presented, className, operatorSession, actionLabel
     );
   }
   return (
-    <div
+    <Alert
+      variant="destructive"
       className={className ? `error-notice ${className}` : 'error-notice'}
-      role="alert"
-      style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}
     >
-      <span className="error-text" style={{ flex: '1 1 240px', wordBreak: 'break-word' }}>
+      <AlertTitle className="error-text text-sm font-medium break-words">
         {presented.text}
-      </span>
+      </AlertTitle>
       {presented.remedy !== undefined && (
         // The cause and the fix, when the server text names neither (T54 F3).
-        <p
-          className="error-remedy"
+        <AlertDescription
+          className="error-remedy text-xs text-muted-foreground"
           data-testid="error-remedy"
-          style={{ flex: '1 1 100%', margin: 0, color: 'var(--text-dim)', fontSize: 12 }}
         >
           {presented.remedy}
-        </p>
+        </AlertDescription>
       )}
-      {action && ('tab' in action
-        ? (
-          <button type="button" className="btn" onClick={() => openConfigure(action.tab)}>
-            {action.label}
-          </button>
-        )
-        : <PathActionButton action={action} />)}
-    </div>
+      {action && (
+        <AlertAction>
+          {('tab' in action
+            ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => openConfigure(action.tab)}
+              >
+                {action.label}
+              </Button>
+            )
+            : <PathActionButton action={action} />)}
+        </AlertAction>
+      )}
+    </Alert>
   );
 }
 

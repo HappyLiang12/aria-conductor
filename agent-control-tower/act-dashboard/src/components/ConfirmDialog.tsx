@@ -1,6 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
-import '../styles/feedback-flow.css';
 
 /**
  * The single confirmation surface for destructive actions (Task 10).
@@ -17,6 +16,14 @@ import '../styles/feedback-flow.css';
  * Tab/Shift+Tab cycle inside the dialog instead of reaching the page behind.
  * The opener is captured before the programmatic focus and restored on close,
  * including the unmount path where the dialog mounted already open.
+ *
+ * Wave 2 F1: the shell is restyled on the shadcn alert-dialog surface tokens
+ * (`data-slot="alert-dialog-*"`). The DOM stays inline — the page suites target
+ * `container.querySelector('.modal-overlay')` — and the role stays `dialog`,
+ * because the app and its E2E specs pin that role. The focus trap, Escape and
+ * opener restore are the component's own contract, so the Base UI popup is not
+ * used; the design's revisit clause allows keeping the legacy shell for a
+ * contract shadcn cannot preserve.
  */
 export interface ConfirmDialogProps {
   open: boolean;
@@ -95,30 +102,42 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    <div
+      className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      data-slot="alert-dialog-overlay"
+      onClick={onCancel}
+    >
       <div
         ref={dialogRef}
-        className="modal-dialog"
+        className="modal-dialog w-full max-w-md rounded-xl bg-card p-5 text-card-foreground ring-1 ring-foreground/10"
+        data-slot="alert-dialog-content"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         // A click inside the dialog body must not reach the backdrop handler.
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 id={titleId}>{title}</h3>
-        <p>{message}</p>
-        <div className="modal-actions">
+        <h3 id={titleId} className="mb-2 text-base font-semibold text-foreground">
+          {title}
+        </h3>
+        <p className="mb-3 text-sm text-muted-foreground">{message}</p>
+        <div className="modal-actions flex justify-end gap-2">
           {danger ? (
             <>
               {/* Danger: the safe exit is first in DOM and focus order, so a
                   stray Enter dismisses instead of confirming. */}
-              <button ref={cancelRef} type="button" className="btn" onClick={onCancel}>
+              <button
+                ref={cancelRef}
+                type="button"
+                className="btn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={onCancel}
+              >
                 Cancel
               </button>
               <button
                 ref={confirmRef}
                 type="button"
-                className="btn danger"
+                className="btn danger text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={onConfirm}
               >
                 Confirm
@@ -129,12 +148,17 @@ export function ConfirmDialog({
               <button
                 ref={confirmRef}
                 type="button"
-                className="btn primary"
+                className="btn primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={onConfirm}
               >
                 Confirm
               </button>
-              <button ref={cancelRef} type="button" className="btn" onClick={onCancel}>
+              <button
+                ref={cancelRef}
+                type="button"
+                className="btn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={onCancel}
+              >
                 Cancel
               </button>
             </>

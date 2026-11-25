@@ -53,6 +53,12 @@ describe('ErrorNotice', () => {
     expect(paths[paths.length - 1]).toBe('/crew');
   });
 
+  it('renders the failure on the token alert surface', () => {
+    renderNotice({ text: 'The bridge stream ended.' });
+
+    expect(screen.getByRole('alert')).toHaveAttribute('data-slot', 'alert');
+  });
+
   it('renders no action button when the failure names no fixable surface', () => {
     renderNotice({ text: 'The bridge stream ended.' });
 

@@ -4,6 +4,10 @@ import { listProviders, createProvider, updateProvider, deleteProvider, testProv
 import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import { ErrorNotice } from '../components/ErrorNotice';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
 import type { LlmProvider, LlmProviderType, CreateLlmProviderRequest } from '../types';
 
 interface ToastMessage {
@@ -34,6 +38,13 @@ const emptyForm: CreateLlmProviderRequest = {
   apiKey: '',
   defaultModel: '',
   maxTokens: 4096,
+};
+
+/** Toast tone as a token pair: the tint, the border and the reading colour. */
+const toastTone = (type: ToastMessage['type']): string => {
+  if (type === 'success') return 'border-success/40 bg-success/10';
+  if (type === 'error') return 'border-destructive/40 bg-destructive/10';
+  return 'border-border bg-muted';
 };
 
 export function SettingsPage() {
@@ -201,95 +212,105 @@ export function SettingsPage() {
     <div className="page">
       <div className="page-header">
         <h2>Settings</h2>
-        <button className="btn btn-primary" onClick={() => { setShowForm(true); setEditState({ open: false, provider: null }); setForm(emptyForm); setFormErrors({}); }}>
+        <Button size="sm" onClick={() => { setShowForm(true); setEditState({ open: false, provider: null }); setForm(emptyForm); setFormErrors({}); }}>
           + Add Provider
-        </button>
+        </Button>
       </div>
 
       {/* Active Provider Info */}
       {activeProvider && (
-        <div className="card" style={{ marginBottom: '1rem', borderColor: '#22c55e' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ color: '#22c55e', fontWeight: 700 }}>● Active Provider</span>
-            <span style={{ fontWeight: 600 }}>{activeProvider.name}</span>
-            <span className="type-badge">{activeProvider.type}</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+        <Card className="mb-4 border border-success/40">
+          <div className="flex flex-wrap items-center gap-2 px-(--card-spacing)">
+            <span className="text-sm font-bold text-success">● Active Provider</span>
+            <span className="text-sm font-semibold text-card-foreground">{activeProvider.name}</span>
+            <Badge variant="secondary" className="type-badge">{activeProvider.type}</Badge>
+            <span className="text-sm text-muted-foreground">
               {activeProvider.defaultModel} @ {activeProvider.baseUrl}
             </span>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Fallback YAML Config Notice */}
       {!activeProvider && (
-        <div className="card" style={{ marginBottom: '1rem', borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-          <span style={{ fontWeight: 600 }}>No active provider configured.</span>
-          <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
-            The system is using the default YAML configuration (llm.provider.* properties) as fallback.
-          </span>
-        </div>
+        <Card className="mb-4">
+          <div className="flex flex-wrap items-center gap-2 px-(--card-spacing) text-sm">
+            <span className="font-semibold text-card-foreground">No active provider configured.</span>
+            <span className="text-muted-foreground">
+              The system is using the default YAML configuration (llm.provider.* properties) as fallback.
+            </span>
+          </div>
+        </Card>
       )}
 
       {/* Create/Edit Form */}
       {(showForm || editState.open) && (
-        <form className="card form-card" onSubmit={handleSubmit}>
-          <h3 className="form-title">
-            {editState.open ? `Edit Provider: ${editState.provider?.name}` : 'Add LLM Provider'}
-          </h3>
-          <div className="form-grid">
-            <div className={`form-field ${formErrors.name ? 'field-error' : ''}`}>
-              <label>Name *</label>
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              {formErrors.name && <span className="error-text">{formErrors.name}</span>}
+        <Card className="form-card mb-4">
+          <form onSubmit={handleSubmit}>
+            <h3 className="form-title text-sm font-bold text-card-foreground">
+              {editState.open ? `Edit Provider: ${editState.provider?.name}` : 'Add LLM Provider'}
+            </h3>
+            <div className="form-grid">
+              <div className={`form-field ${formErrors.name ? 'field-error' : ''}`}>
+                <label htmlFor="settings-provider-name">Name *</label>
+                <Input id="settings-provider-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                {formErrors.name && <span className="error-text">{formErrors.name}</span>}
+              </div>
+              <div className={`form-field ${formErrors.type ? 'field-error' : ''}`}>
+                <label htmlFor="settings-provider-type">Type *</label>
+                <select
+                  id="settings-provider-type"
+                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground"
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value as LlmProviderType })}
+                >
+                  {PROVIDER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {formErrors.type && <span className="error-text">{formErrors.type}</span>}
+              </div>
+              <div className={`form-field ${formErrors.baseUrl ? 'field-error' : ''}`}>
+                <label htmlFor="settings-provider-base-url">Base URL *</label>
+                <Input id="settings-provider-base-url" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+                {formErrors.baseUrl && <span className="error-text">{formErrors.baseUrl}</span>}
+              </div>
+              <div className={`form-field ${formErrors.apiKey ? 'field-error' : ''}`}>
+                <label htmlFor="settings-provider-api-key">API Key {editState.open ? '(leave empty to keep current)' : '*'}</label>
+                <Input id="settings-provider-api-key" type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
+                {formErrors.apiKey && <span className="error-text">{formErrors.apiKey}</span>}
+              </div>
+              <div className={`form-field ${formErrors.defaultModel ? 'field-error' : ''}`}>
+                <label htmlFor="settings-provider-model">Default Model *</label>
+                <Input id="settings-provider-model" value={form.defaultModel} onChange={(e) => setForm({ ...form, defaultModel: e.target.value })} placeholder="gpt-4" />
+                {formErrors.defaultModel && <span className="error-text">{formErrors.defaultModel}</span>}
+              </div>
+              <div className="form-field">
+                <label htmlFor="settings-provider-max-tokens" title="Caps platform LLM calls such as report generation. Agent runs are bounded by the run deadline, not by this value.">
+                  Max Tokens (platform calls)
+                </label>
+                <Input
+                  id="settings-provider-max-tokens"
+                  type="number"
+                  value={form.maxTokens}
+                  title="Agent runs are not capped by this value."
+                  onChange={(e) => setForm({ ...form, maxTokens: parseInt(e.target.value) || 4096 })}
+                />
+              </div>
             </div>
-            <div className={`form-field ${formErrors.type ? 'field-error' : ''}`}>
-              <label>Type *</label>
-              <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as LlmProviderType })}>
-                {PROVIDER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              {formErrors.type && <span className="error-text">{formErrors.type}</span>}
+            <div className="form-actions">
+              <Button type="submit" size="sm" disabled={createMutation.isPending || updateMutation.isPending}>
+                {createMutation.isPending || updateMutation.isPending ? 'Saving...' : editState.open ? 'Update' : 'Create'}
+              </Button>
+              <Button variant="outline" size="sm" type="button" onClick={handleCancel}>Cancel</Button>
             </div>
-            <div className={`form-field ${formErrors.baseUrl ? 'field-error' : ''}`}>
-              <label>Base URL *</label>
-              <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
-              {formErrors.baseUrl && <span className="error-text">{formErrors.baseUrl}</span>}
-            </div>
-            <div className={`form-field ${formErrors.apiKey ? 'field-error' : ''}`}>
-              <label>API Key {editState.open ? '(leave empty to keep current)' : '*'}</label>
-              <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-              {formErrors.apiKey && <span className="error-text">{formErrors.apiKey}</span>}
-            </div>
-            <div className={`form-field ${formErrors.defaultModel ? 'field-error' : ''}`}>
-              <label>Default Model *</label>
-              <input value={form.defaultModel} onChange={(e) => setForm({ ...form, defaultModel: e.target.value })} placeholder="gpt-4" />
-              {formErrors.defaultModel && <span className="error-text">{formErrors.defaultModel}</span>}
-            </div>
-            <div className="form-field">
-              <label title="Caps platform LLM calls such as report generation. Agent runs are bounded by the run deadline, not by this value.">
-                Max Tokens (platform calls)
-              </label>
-              <input
-                type="number"
-                value={form.maxTokens}
-                title="Agent runs are not capped by this value."
-                onChange={(e) => setForm({ ...form, maxTokens: parseInt(e.target.value) || 4096 })}
-              />
-            </div>
-          </div>
-          <div className="form-actions">
-            <button className="btn btn-primary" type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
-              {createMutation.isPending || updateMutation.isPending ? 'Saving...' : editState.open ? 'Update' : 'Create'}
-            </button>
-            <button className="btn" type="button" onClick={handleCancel}>Cancel</button>
-          </div>
-        </form>
+          </form>
+        </Card>
       )}
 
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading providers...</span></div>}
       {error && <div className="error-state">Failed to load providers.</div>}
 
       {refusal != null && (
-        <div style={{ marginBottom: '1rem' }}>
+        <div className="mb-4">
           <ErrorNotice
             presented={presentError(refusal, 'The provider change was refused.')}
             operatorSession
@@ -320,29 +341,39 @@ export function SettingsPage() {
               {providers.map((provider) => (
                 <tr key={provider.id} className={provider.active ? 'row-active' : ''}>
                   <td className="cell-primary">{provider.name}</td>
-                  <td><span className="type-badge">{provider.type}</span></td>
-                  <td className="cell-mono" style={{ fontSize: '0.85rem' }}>{provider.baseUrl}</td>
+                  <td><Badge variant="secondary" className="type-badge">{provider.type}</Badge></td>
+                  <td className="cell-mono text-xs">{provider.baseUrl}</td>
                   <td>{provider.defaultModel}</td>
                   <td className="cell-mono">{provider.apiKeyMasked}</td>
                   <td>
                     {provider.active
-                      ? <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>
-                      : <span style={{ color: 'var(--text-muted)' }}>Inactive</span>
+                      ? (
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-success">
+                          <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
+                          Active
+                        </span>
+                      )
+                      : (
+                        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                          <span className="size-1.5 rounded-full bg-muted-foreground" aria-hidden="true" />
+                          Inactive
+                        </span>
+                      )
                     }
                   </td>
                   <td className="action-cell">
                     {!provider.active && (
-                      <button className="btn btn-sm btn-success" onClick={() => activateMutation.mutate(provider.id)} disabled={activateMutation.isPending}>
+                      <Button size="sm" onClick={() => activateMutation.mutate(provider.id)} disabled={activateMutation.isPending}>
                         Activate
-                      </button>
+                      </Button>
                     )}
-                    <button className="btn btn-sm" onClick={() => handleTest(provider.id)} disabled={testingId === provider.id}>
+                    <Button variant="outline" size="sm" onClick={() => handleTest(provider.id)} disabled={testingId === provider.id}>
                       {testingId === provider.id ? 'Testing...' : 'Test'}
-                    </button>
-                    <button className="btn btn-sm" onClick={() => handleEdit(provider)}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => { setConfirmDelete({ open: true, id: provider.id, name: provider.name }); setDeleteFailure(null); setDeleteRefusal(null); }}>
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => handleEdit(provider)}>Edit</Button>
+                    <Button variant="destructive" size="sm" onClick={() => { setConfirmDelete({ open: true, id: provider.id, name: provider.name }); setDeleteFailure(null); setDeleteRefusal(null); }}>
                       Delete
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -376,10 +407,10 @@ export function SettingsPage() {
               <ErrorNotice presented={presentError(deleteFailure, 'The provider was not deleted.')} />
             )}
             <div className="modal-actions">
-              <button className="btn btn-danger" onClick={() => deleteMutation.mutate(confirmDelete.id)} disabled={deleteMutation.isPending}>
+              <Button variant="destructive" size="sm" onClick={() => deleteMutation.mutate(confirmDelete.id)} disabled={deleteMutation.isPending}>
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-              </button>
-              <button className="btn" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); setDeleteFailure(null); }}>Cancel</button>
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => { setConfirmDelete({ open: false, id: '', name: '' }); setDeleteRefusal(null); setDeleteFailure(null); }}>Cancel</Button>
             </div>
           </div>
         </div>
@@ -389,13 +420,11 @@ export function SettingsPage() {
       {toasts.length > 0 && (
         <div className="toast-container" style={{ position: 'fixed', bottom: '1rem', right: '1rem', zIndex: 1000 }}>
           {toasts.map((toast) => (
-            <div key={toast.id} className="toast-item" style={{
-              background: toast.type === 'success' ? '#22c55e' : toast.type === 'error' ? '#ef4444' : '#3b82f6',
-              color: 'white',
-              padding: '0.5rem 1rem',
-              borderRadius: '0.375rem',
-              marginBottom: '0.5rem',
-            }}>
+            <div
+              key={toast.id}
+              className={`toast-item rounded-md border px-4 py-2 text-sm text-card-foreground shadow-lg ${toastTone(toast.type)}`}
+              style={{ marginBottom: '0.5rem' }}
+            >
               {toast.message}
             </div>
           ))}

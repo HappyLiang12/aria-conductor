@@ -182,3 +182,32 @@ describe('SettingsPage LLM-provider refusals (Task 30)', () => {
     expect(screen.getByRole('dialog', { name: /confirm delete/i })).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 C6: the provider form and the active-provider banner render on the
+// shadcn token surfaces. The `.form-card` hook and the field order the suite
+// drives by index stay exactly as they were.
+// ---------------------------------------------------------------------------
+describe('SettingsPage token surfaces (Wave 2 C6)', () => {
+  it('renders the provider form on a token card surface', async () => {
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /add provider/i }));
+
+    const card = document.querySelector('.form-card');
+    expect(card).not.toBeNull();
+    expect(card!.getAttribute('data-slot')).toBe('card');
+    // The suite fills the form by field order inside `.form-card`.
+    expect(document.querySelectorAll('.form-card input')).toHaveLength(5);
+    expect(document.querySelector('.form-card [data-slot="input"]')).not.toBeNull();
+  });
+
+  it('renders the active provider banner on a token card surface', async () => {
+    list.mockResolvedValue([provider({ active: true })]);
+    ui();
+
+    const marker = await screen.findByText('● Active Provider');
+    expect(marker.closest('[data-slot="card"]')).not.toBeNull();
+    expect(screen.getByText(/llama3 @ http:\/\/127\.0\.0\.1:11434/)).toBeInTheDocument();
+  });
+});

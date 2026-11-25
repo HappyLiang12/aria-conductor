@@ -428,3 +428,16 @@ describe('CrewPage cost banner honesty', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Wave 2 B1: the page chrome is the shared token surface. The fleet section
+// must be a token Card while every operator behaviour above stays unchanged.
+// ---------------------------------------------------------------------------
+describe('CrewPage token surfaces (Wave 2 B1)', () => {
+  it('renders the fleet section on a token card surface', async () => {
+    ui();
+
+    const fleet = await screen.findByRole('heading', { name: /Active Agents/ });
+    expect(fleet.closest('[data-slot="card"]')).not.toBeNull();
+  });
+});
+

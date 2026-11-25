@@ -31,8 +31,11 @@ export function AgentCatalog() {
   });
 
   return (
-    <div className="template-grid" data-testid="agent-catalog">
-      {isLoading && <div>Loading templates...</div>}
+    <div
+      className="template-grid grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2.5"
+      data-testid="agent-catalog"
+    >
+      {isLoading && <div className="text-sm text-muted-foreground">Loading templates...</div>}
       {error && <ErrorNotice presented={presentError(error, 'Failed to load templates.')} />}
       {deployMutation.error && (
         <ErrorNotice presented={presentError(deployMutation.error, 'The agent could not be deployed.')} />
@@ -40,20 +43,29 @@ export function AgentCatalog() {
       {templates?.map((tpl) => {
         const isPending = deployMutation.isPending && deployMutation.variables?.id === tpl.id;
         return (
-          <div className="tmpl" key={tpl.id} data-template={tpl.id}>
-            <div className="top">
-              <span className="ic" aria-hidden="true">{tpl.label.charAt(0)}</span>
+          <div
+            className="tmpl flex flex-col gap-2 rounded-xl border border-dashed border-border bg-card p-3 text-card-foreground transition-colors hover:border-primary/50"
+            key={tpl.id}
+            data-template={tpl.id}
+          >
+            <div className="top flex items-center gap-2">
+              <span
+                className="ic flex size-7 items-center justify-center rounded-md bg-primary/15 text-sm font-semibold text-primary"
+                aria-hidden="true"
+              >
+                {tpl.label.charAt(0)}
+              </span>
               <div>
-                <div className="nm">{tpl.label}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-mute)', marginTop: 1, letterSpacing: '.6px', textTransform: 'uppercase' }}>
+                <div className="nm text-sm font-bold">{tpl.label}</div>
+                <div className="mt-0.5 text-[10px] tracking-[.6px] text-muted-foreground uppercase">
                   role · {tpl.role}
                 </div>
               </div>
             </div>
-            <div className="desc">{tpl.description}</div>
+            <div className="desc text-xs text-muted-foreground">{tpl.description}</div>
             <button
               type="button"
-              className="add-btn"
+              className="add-btn mt-auto inline-flex h-7 items-center justify-center rounded-lg border border-transparent bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:opacity-50"
               disabled={isPending}
               onClick={() => deployMutation.mutate(tpl)}
             >

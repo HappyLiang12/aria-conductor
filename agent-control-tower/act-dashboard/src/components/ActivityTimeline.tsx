@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRecentActivity } from '../api/dashboard';
 import { useWebSocketContext } from './Layout';
 import { formatTimestamp } from '../utils/formatTime';
+import { Card, CardContent } from './ui/card';
 import type { ActivityEvent } from '../types';
 
 function eventVariant(resourceType: string, action: string): string {
@@ -52,43 +53,41 @@ export default function ActivityTimeline() {
   const recent: ActivityEvent[] = (events ?? []).slice(0, 10);
 
   return (
-    <section className="panel" id="panel-timeline">
-      <h2>
+    <section className="flex flex-col gap-2" id="panel-timeline">
+      <h2 className="flex items-baseline gap-2 text-sm font-semibold text-foreground">
         <span>Activity Timeline</span>
-        <span className="accent">· Recent</span>
+        <span className="text-xs font-normal text-muted-foreground">· Recent</span>
       </h2>
-      <div className="timeline">
-        <div className="tline">
+      <Card>
+        <CardContent>
           {isLoading && (
-            <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
-              Loading activity…
-            </div>
+            <div className="px-1 py-2 text-xs text-muted-foreground">Loading activity…</div>
           )}
           {error && (
-            <div style={{ padding: '8px 4px', color: 'var(--red)', fontSize: 12 }}>
-              Failed to load activity.
-            </div>
+            <div className="px-1 py-2 text-xs text-destructive">Failed to load activity.</div>
           )}
           {!isLoading && recent.length === 0 && (
-            <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
-              No events yet — system is quiet.
-            </div>
+            <div className="px-1 py-2 text-xs text-muted-foreground">No events yet — system is quiet.</div>
           )}
           {recent.map((ev, idx) => {
             const variant = eventVariant(ev.resourceType, ev.action);
             return (
               <div
                 key={`${ev.timestamp}-${idx}`}
-                className={`ev${variant ? ` ${variant}` : ''}`}
+                className={`ev${variant ? ` ${variant}` : ''} flex gap-3 border-b border-border/60 py-1.5 last:border-0`}
                 title={ev.conversationId ? `Conv: ${ev.conversationId.slice(0, 8)}…` : undefined}
               >
-                <div className="time">{formatTime(ev.timestamp)}</div>
-                <div className="msg">{describe(ev)}</div>
+                <div className="time w-28 shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                  {formatTime(ev.timestamp)}
+                </div>
+                <div className="msg min-w-0 text-xs break-words text-card-foreground">
+                  {describe(ev)}
+                </div>
               </div>
             );
           })}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </section>
   );
 }

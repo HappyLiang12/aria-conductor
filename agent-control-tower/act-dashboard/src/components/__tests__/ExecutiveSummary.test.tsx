@@ -218,6 +218,22 @@ describe('ExecutiveSummary usage truth', () => {
     return screen.getByText('Recorded tokens').closest('.stat') as HTMLElement;
   }
 
+  it('renders the summary on token cards and keeps the honesty copy', async () => {
+    mockedSummary.mockResolvedValue({
+      activeAgents: 1, degradedAgents: 0, runningRuns: 0,
+      totalTokensBurned: 0, runsWithoutUsage: 3,
+    } as never);
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect(await screen.findByText('not reported')).toBeInTheDocument();
+    expect(screen.getByText(/3 runs reported no usage/)).toBeInTheDocument();
+    const exec = document.querySelector('#panel-exec') as HTMLElement;
+    expect(exec.querySelector('[data-slot="card"]')).not.toBeNull();
+    expect(exec.querySelectorAll('.stat[data-slot="card"]').length).toBe(6);
+  });
+
   it('shows not reported instead of a zero token cost', async () => {
     mockedSummary.mockResolvedValue({
       activeAgents: 2, degradedAgents: 0, runningRuns: 0,

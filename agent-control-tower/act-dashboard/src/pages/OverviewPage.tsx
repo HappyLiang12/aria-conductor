@@ -17,7 +17,6 @@ import { openConfigure, presentError, type PresentedError } from '../api/errorPr
 import { useDecisionQueue, type DecisionRow } from '../hooks/useDecisionQueue';
 import { useAttentionQueue, type AttentionRow } from '../hooks/useAttentionQueue';
 import { allAuthoritative } from '../utils/queryState';
-import '../styles/overview-flow.css';
 
 interface RowError {
   id: string;
@@ -162,14 +161,20 @@ export default function OverviewPage() {
         </p>
       </header>
       <KpiRow />
-      <div className={reviewId ? 'layout overview-grid overview-grid--review' : 'layout overview-grid'}>
-        <div className="col overview-main">
+      <div
+        className={
+          reviewId
+            ? 'layout overview-grid overview-grid--review grid grid-cols-1! items-start gap-4'
+            : 'layout overview-grid grid grid-cols-1! items-start gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]!'
+        }
+      >
+        <div className="col overview-main min-w-0">
           {reviewId ? (
             <ReviewWorkspace itemId={reviewId} />
           ) : (
             <>
               <div
-                className="overview-queues"
+                className="overview-queues flex flex-col gap-3"
                 onMouseEnter={() => setQueueHover(true)}
                 onMouseLeave={() => setQueueHover(false)}
                 onFocusCapture={() => setQueueFocus(true)}
@@ -216,14 +221,14 @@ export default function OverviewPage() {
           )}
         </div>
         {!reviewId && (
-          <div className="col overview-support">
+          <div className="col overview-support min-w-0">
             <AgentTeam />
             <ActivityTimeline />
           </div>
         )}
       </div>
       {reviewId && (
-        <div className="expanded-strip overview-strip layout">
+        <div className="expanded-strip overview-strip layout grid grid-cols-1! gap-4 sm:grid-cols-2! xl:grid-cols-4!">
           <AgentTeam />
           <ActivityTimeline />
           <MorningBriefing />

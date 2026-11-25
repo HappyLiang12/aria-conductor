@@ -6,6 +6,7 @@ import { listKnowledge } from '../api/knowledge';
 import { listAgents } from '../api/agents';
 import { composeRuntimes, effectiveRuntimeOf } from '../utils/runtimeComposition';
 import { queryPhase, type QueryPhase } from '../utils/queryState';
+import { Card } from './ui/card';
 import type { RunStatus } from '../types';
 
 /** The run statuses after which no core/mode migration is ever relevant. */
@@ -22,8 +23,9 @@ interface StatCellProps {
 function StatCell({ label, value, detail, variant = 'default', onClick }: StatCellProps) {
   const variantClass = variant === 'default' ? '' : ` ${variant}`;
   return (
-    <div
-      className={`stat${variantClass}${onClick ? ' clickable' : ''}`}
+    <Card
+      size="sm"
+      className={`stat${variantClass}${onClick ? ' clickable cursor-pointer' : ''} gap-1 border-border! bg-card! p-3!`}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -35,10 +37,10 @@ function StatCell({ label, value, detail, variant = 'default', onClick }: StatCe
           : undefined
       }
     >
-      <div className="l">{label}</div>
-      <div className="v">{value}</div>
-      <div className="d">{detail}</div>
-    </div>
+      <div className="l text-[10.5px] font-medium tracking-wide text-muted-foreground uppercase">{label}</div>
+      <div className="v text-xl font-bold tracking-tight text-card-foreground tabular-nums">{value}</div>
+      <div className="d text-xs text-muted-foreground">{detail}</div>
+    </Card>
   );
 }
 
@@ -160,12 +162,12 @@ export default function ExecutiveSummary() {
 
 
   return (
-    <section className="panel" id="panel-exec">
-      <h2>
+    <section className="flex flex-col gap-2" id="panel-exec">
+      <h2 className="flex items-baseline gap-2 text-sm font-semibold text-foreground">
         <span>Executive Summary</span>
-        <span className="accent">· Live</span>
+        <span className="text-xs font-normal text-muted-foreground">· Live</span>
       </h2>
-      <div className="summary">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
         <StatCell
           label="Runtime"
           value={runtimeLabel}

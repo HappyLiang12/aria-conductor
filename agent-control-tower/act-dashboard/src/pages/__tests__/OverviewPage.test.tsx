@@ -138,6 +138,14 @@ describe('OverviewPage decision-first layout', () => {
     expect(card).not.toHaveTextContent('0');
   });
 
+  it('renders the summary on token cards and keeps the honesty copy', async () => {
+    summaryMock.mockResolvedValue(summary({ totalTokensBurned: 0, runsWithoutUsage: 3 }));
+    ui();
+    expect(await screen.findByText('not reported')).toBeInTheDocument();
+    expect(screen.getByText(/3 runs reported no usage/)).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="card"]')).not.toBeNull();
+  });
+
   it('keeps a positive total but names the runs that reported no usage', async () => {
     summaryMock.mockResolvedValue(summary({ totalTokensBurned: 1234, runsWithoutUsage: 1 }));
     ui();

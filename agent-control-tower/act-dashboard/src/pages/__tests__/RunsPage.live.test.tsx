@@ -234,3 +234,35 @@ describe('RunsPage token usage (F9)', () => {
     expect(within(detail).getByText('usage not reported')).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 B3: the list is a token card/table and the status pill is the shared
+// token badge. The list behaviour above is unchanged.
+// ---------------------------------------------------------------------------
+describe('RunsPage token surfaces (Wave 2 B3)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    runsData = [runningRun('r-1', 'RUNNING')];
+  });
+
+  it('renders the runs table on a token card surface', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = ui(qc);
+    await waitFor(() => expect(screen.getAllByText('Details').length).toBe(1));
+
+    const table = container.querySelector('table.data-table') as HTMLElement;
+    expect(table).not.toBeNull();
+    expect(table.closest('[data-slot="card"]')).not.toBeNull();
+  });
+
+  it('renders the run status on the shared token badge', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+    await waitFor(() => expect(screen.getAllByText('Details').length).toBe(1));
+
+    const row = (await screen.findByText('RUNNING', { selector: 'td span' })).closest('tr') as HTMLElement;
+    const badge = within(row).getByText('RUNNING');
+    expect(badge).toHaveAttribute('data-slot', 'badge');
+    expect(badge.className).toContain('status-badge');
+  });
+});

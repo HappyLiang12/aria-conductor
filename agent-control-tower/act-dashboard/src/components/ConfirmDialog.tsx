@@ -64,8 +64,23 @@ export function ConfirmDialog({
     ) {
       returnFocusRef.current = active;
     }
-    (danger ? cancelRef : confirmRef).current?.focus();
+    const initial = (danger ? cancelRef : confirmRef).current;
+    initial?.focus();
+    // An aria-modal dialog owns focus while it is open. Another component's
+    // deferred focus move (a drawer focuses its heading in a rAF on open) can
+    // land after this commit; re-assert the dialog's control in the next frame
+    // so the safe default is never yanked away. This only ever moves focus
+    // *into* the dialog — closing still restores the opener below.
+    const raf = requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const current = document.activeElement;
+      if (!(current instanceof Node) || !dialog.contains(current)) {
+        (danger ? cancelRef : confirmRef).current?.focus();
+      }
+    });
     return () => {
+      cancelAnimationFrame(raf);
       const opener = returnFocusRef.current;
       returnFocusRef.current = null;
       if (opener?.isConnected) opener.focus();

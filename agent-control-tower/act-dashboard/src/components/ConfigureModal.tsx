@@ -75,6 +75,10 @@ export function ConfigureModal({ initialTab = 'skills' }: { initialTab?: string 
         onClick={close}
         aria-hidden={!open}
       />
+      {/* Wave 2 D5: the modal keeps its controlled inline shell (panes stay
+          mounted while closed, and the Escape/focus/visibility contract is
+          pinned by the Configure suite), so it wears the dialog token surfaces
+          instead of mounting a Base UI popup. */}
       <div
         className={`modal${open ? ' open' : ''} z-[160] flex flex-col overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl`}
         data-slot="dialog-content"

@@ -549,6 +549,10 @@ export function AgentDrawer() {
           role="presentation"
         />
       )}
+      {/* Wave 2 D4: the drawer keeps its inline shell. `.agent-drawer.open` is
+          the DrawerContext Escape guard's hook, so it wears the sheet token
+          surfaces (`data-slot="sheet-*"`) rather than mounting a Base UI
+          popup — the design's revisit clause allows this. */}
       <aside
         className={`agent-drawer${open ? ' open' : ''} fixed inset-y-0 left-0 z-[110] flex w-[min(430px,94vw)] flex-col border-r border-border bg-card text-card-foreground shadow-2xl transition-transform`}
         data-slot="sheet-content"

@@ -1,22 +1,33 @@
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
+import { PageHeader } from '../components/layout/PageHeader';
+import { SectionCard } from '../components/layout/SectionCard';
+import { Badge } from '../components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 
 interface HealthBadgeProps {
   healthy: boolean;
 }
 
 function HealthBadge({ healthy }: HealthBadgeProps) {
-  const color = healthy ? '#4caf50' : '#f44336';
   return (
-    <span
-      className="status-badge status-badge-md"
-      style={{ backgroundColor: color + '22', color, borderColor: color }}
+    <Badge
+      variant="outline"
+      className={`status-badge status-badge-md border ${
+        healthy
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-destructive/30 bg-destructive/10 text-destructive'
+      }`}
     >
       {healthy ? 'Healthy' : 'Unhealthy'}
-    </span>
+    </Badge>
   );
 }
+
+const TH_CLASS =
+  'border-b border-border bg-muted/50 px-3 py-2 text-left text-[10px] font-semibold tracking-[1.2px] text-muted-foreground uppercase';
+const TD_CLASS = 'border-b border-border px-3 py-2 align-middle';
 
 export function ProvidersPage() {
   const { data: providers, isLoading, error } = useQuery({
@@ -42,130 +53,166 @@ export function ProvidersPage() {
   const registeredCores = new Set((providers ?? []).map((p) => p.id));
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h2>Agent Providers</h2>
-      </div>
+    <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
+      <PageHeader title="Agent Providers" />
 
       {/* Provider inventory */}
-      {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading providers...</span></div>}
-      {error && <div className="error-state">Failed to load providers. Please retry.</div>}
-
-      {!isLoading && !error && (providers?.length ?? 0) === 0 && (
-        <div className="empty-state">No providers registered.</div>
+      {isLoading && (
+        <div className="loading-spinner flex items-center gap-2 py-6 text-sm text-muted-foreground">
+          <div className="spinner size-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+          <span>Loading providers...</span>
+        </div>
       )}
-
-      {(providers?.length ?? 0) > 0 && (
-        <div className="table-wrapper">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Display Name</th>
-                <th>Capability</th>
-                <th>Default</th>
-                <th>Health</th>
-              </tr>
-            </thead>
-            <tbody>
-              {providers?.map((p, i) => {
-                const health = healthResults[i]?.data;
-                return (
-                  <tr key={p.id}>
-                    <td className="cell-mono">{p.id}</td>
-                    <td className="cell-primary">{p.displayName}</td>
-                    <td><span className="type-badge">{p.supportsTaskExecution ? 'Task' : 'Turn'}</span></td>
-                    <td>{p.isDefault && <span className="type-badge">Default</span>}</td>
-                    <td>
-                      {health ? (
-                        <HealthBadge healthy={health.healthy} />
-                      ) : healthResults[i]?.isError ? (
-                        <HealthBadge healthy={false} />
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {error && (
+        <div className="error-state rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          Failed to load providers. Please retry.
         </div>
       )}
 
-      {/* Per-agent backend overview */}
-      <div className="card" style={{ marginTop: 24 }}>
-        <h3 className="form-title">Per-Agent Backends</h3>
-        <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-          Core and execution mode are stored per agent; a run is admitted against them and is
-          never silently re-routed to another core or mode.
-        </p>
-        {agentsLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading agents...</span></div>}
-        {agentsError && <div className="error-state">Failed to load agents. Please retry.</div>}
-        {!agentsLoading && !agentsError && (agents?.length ?? 0) === 0 && (
-          <div className="empty-state">No agents registered yet.</div>
-        )}
-        {(agents?.length ?? 0) > 0 && (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Agent core</th>
-                <th>Execution mode</th>
-                <th>Readiness</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agents?.map((agent) => {
-                const core = agent.adkProvider;
-                const registered = core != null && registeredCores.has(core);
-                const healthIndex = (providers ?? []).findIndex((p) => p.id === core);
-                const health = healthIndex >= 0 ? healthResults[healthIndex]?.data : undefined;
-                const healthFailed = healthIndex >= 0 && healthResults[healthIndex]?.isError;
-                return (
-                  <tr key={agent.id} className={registered ? undefined : 'row-active'}>
-                    <td className="cell-primary">{agent.name}</td>
-                    <td>
-                      {core == null || core === '' ? (
-                        // Legacy record without a stored core: explicit unknown,
-                        // not an invented default.
-                        <span className="cell-mono">Not recorded</span>
-                      ) : registered ? (
-                        <span className="cell-mono">{core}</span>
-                      ) : (
-                        <span
-                          className="type-badge"
-                          style={{ backgroundColor: 'rgba(255,107,122,.12)', color: '#ff97a3', borderColor: 'rgba(255,107,122,.4)' }}
-                        >
-                          Unsupported core: {core}
-                        </span>
-                      )}
-                    </td>
-                    <td className="cell-mono">
-                      {agent.executionMode ?? 'Not recorded'}
-                    </td>
-                    <td>
-                      {registered ? (
-                        health ? (
+      {!isLoading && !error && (providers?.length ?? 0) === 0 && (
+        <div className="empty-state rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+          No providers registered.
+        </div>
+      )}
+
+      {(providers?.length ?? 0) > 0 && (
+        <SectionCard title="Registered Cores">
+          <div className="table-wrapper overflow-x-auto rounded-xl border border-border">
+            <table className="data-table w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className={TH_CLASS}>ID</th>
+                  <th className={TH_CLASS}>Display Name</th>
+                  <th className={TH_CLASS}>Capability</th>
+                  <th className={TH_CLASS}>Default</th>
+                  <th className={TH_CLASS}>Health</th>
+                </tr>
+              </thead>
+              <tbody>
+                {providers?.map((p, i) => {
+                  const health = healthResults[i]?.data;
+                  return (
+                    <tr key={p.id} className="hover:bg-muted/40">
+                      <td className={`${TD_CLASS} cell-mono font-mono text-[11.5px] text-muted-foreground`}>{p.id}</td>
+                      <td className={`${TD_CLASS} cell-primary font-semibold text-foreground`}>{p.displayName}</td>
+                      <td className={TD_CLASS}>
+                        <Badge variant="outline" className="type-badge">
+                          {p.supportsTaskExecution ? 'Task' : 'Turn'}
+                        </Badge>
+                      </td>
+                      <td className={TD_CLASS}>
+                        {p.isDefault && (
+                          <Badge variant="secondary" className="type-badge">Default</Badge>
+                        )}
+                      </td>
+                      <td className={TD_CLASS}>
+                        {health ? (
                           <HealthBadge healthy={health.healthy} />
-                        ) : healthFailed ? (
+                        ) : healthResults[i]?.isError ? (
                           <HealthBadge healthy={false} />
                         ) : (
                           '—'
-                        )
-                      ) : (
-                        // An unregistered core has no probe and no admitted mode
-                        // pair to report; the state itself is the finding.
-                        '—'
-                      )}
-                    </td>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Per-agent backend overview */}
+      <Card className="card mt-6">
+        <CardHeader>
+          <CardTitle className="form-title">Per-Agent Backends</CardTitle>
+          <CardDescription>
+            Core and execution mode are stored per agent; a run is admitted against them and is
+            never silently re-routed to another core or mode.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {agentsLoading && (
+            <div className="loading-spinner flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <div className="spinner size-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+              <span>Loading agents...</span>
+            </div>
+          )}
+          {agentsError && (
+            <div className="error-state rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              Failed to load agents. Please retry.
+            </div>
+          )}
+          {!agentsLoading && !agentsError && (agents?.length ?? 0) === 0 && (
+            <div className="empty-state rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+              No agents registered yet.
+            </div>
+          )}
+          {(agents?.length ?? 0) > 0 && (
+            <div className="table-wrapper overflow-x-auto rounded-xl border border-border">
+              <table className="data-table w-full border-collapse text-sm">
+                <thead>
+                  <tr>
+                    <th className={TH_CLASS}>Agent</th>
+                    <th className={TH_CLASS}>Agent core</th>
+                    <th className={TH_CLASS}>Execution mode</th>
+                    <th className={TH_CLASS}>Readiness</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {agents?.map((agent) => {
+                    const core = agent.adkProvider;
+                    const registered = core != null && registeredCores.has(core);
+                    const healthIndex = (providers ?? []).findIndex((p) => p.id === core);
+                    const health = healthIndex >= 0 ? healthResults[healthIndex]?.data : undefined;
+                    const healthFailed = healthIndex >= 0 && healthResults[healthIndex]?.isError;
+                    return (
+                      <tr key={agent.id} className={registered ? 'hover:bg-muted/40' : 'row-active bg-primary/10'}>
+                        <td className={`${TD_CLASS} cell-primary font-semibold text-foreground`}>{agent.name}</td>
+                        <td className={TD_CLASS}>
+                          {core == null || core === '' ? (
+                            // Legacy record without a stored core: explicit unknown,
+                            // not an invented default.
+                            <span className="cell-mono font-mono text-[11.5px] text-muted-foreground">Not recorded</span>
+                          ) : registered ? (
+                            <span className="cell-mono font-mono text-[11.5px] text-muted-foreground">{core}</span>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="type-badge border-destructive/40 bg-destructive/10 text-destructive"
+                            >
+                              Unsupported core: {core}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className={`${TD_CLASS} cell-mono font-mono text-[11.5px] text-muted-foreground`}>
+                          {agent.executionMode ?? 'Not recorded'}
+                        </td>
+                        <td className={TD_CLASS}>
+                          {registered ? (
+                            health ? (
+                              <HealthBadge healthy={health.healthy} />
+                            ) : healthFailed ? (
+                              <HealthBadge healthy={false} />
+                            ) : (
+                              '—'
+                            )
+                          ) : (
+                            // An unregistered core has no probe and no admitted mode
+                            // pair to report; the state itself is the finding.
+                            '—'
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

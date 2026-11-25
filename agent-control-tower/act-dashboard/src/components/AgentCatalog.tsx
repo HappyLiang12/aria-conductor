@@ -1,16 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getTemplates, createFromTemplate, createAgent, listAgents } from '../api/agents';
+import { getTemplates, createFromTemplate } from '../api/agents';
 import { presentError } from '../api/errorPresentation';
 import ErrorNotice from './ErrorNotice';
-import type { AgentCore, AgentTemplate } from '../types';
+import type { AgentTemplate } from '../types';
 
 /**
  * AgentCatalog — hireable agent template grid.
  *
  * Rendered at the bottom of the Crew view. Each tile represents a
  * pre-configured agent role. Pressing "Deploy" issues
- * POST /api/v1/agents with sensible template defaults so the user
- * gets a one-click hiring flow without filling forms.
+ * POST /api/v1/agents/from-template/{name} so the template owns its defaults.
  */
 
 export function AgentCatalog() {
@@ -21,33 +20,8 @@ export function AgentCatalog() {
     queryFn: getTemplates,
   });
 
-  const { data: agents } = useQuery({
-    queryKey: ['agents'],
-    queryFn: listAgents,
-  });
-
   const deployMutation = useMutation({
-    mutationFn: async (template: AgentTemplate) => {
-      // The fleet runs one (core, mode) pair and the backend refuses a create
-      // that would add a second. A template carries no placement, so deploy on
-      // the pair the fleet already runs, keeping the template's role/model.
-      const fleet = agents ?? (await listAgents());
-      const runtime = fleet.find((a) => a.executionMode);
-      if (!runtime?.executionMode) {
-        // Empty fleet: the template endpoint supplies its own defaults.
-        return createFromTemplate(template.id);
-      }
-      return createAgent({
-        name: template.label,
-        description: template.description,
-        agentType: template.agentType,
-        role: template.role,
-        model: template.model,
-        provider: template.provider,
-        adkProvider: (runtime.adkProvider ?? template.adkProvider) as AgentCore,
-        executionMode: runtime.executionMode,
-      });
-    },
+    mutationFn: (template: AgentTemplate) => createFromTemplate(template.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
     },

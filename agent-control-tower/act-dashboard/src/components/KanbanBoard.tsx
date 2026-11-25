@@ -393,7 +393,7 @@ export default function KanbanBoard() {
   };
 
   return (
-    <section className="relative flex flex-col gap-3" data-testid="kanban-board">
+    <section className="panel relative flex flex-col gap-3" data-testid="kanban-board">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold text-foreground">
           <span>Kanban Board</span>

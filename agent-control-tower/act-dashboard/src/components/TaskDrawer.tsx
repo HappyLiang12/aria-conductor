@@ -262,6 +262,11 @@ export function TaskDrawer() {
           role="presentation"
         />
       )}
+      {/* Wave 2 D3: the drawer keeps its inline shell. `.drawer.open`,
+          DrawerContext's Escape guard, the opening heading focus and the
+          opener restore are contracts a Base UI popup would replace, so the
+          shell wears the sheet token surfaces (`data-slot="sheet-*"`) instead
+          of mounting one — the design's revisit clause allows this. */}
       <aside
         className={`drawer${open ? ' open' : ''} fixed inset-y-0 right-0 z-[100] flex w-[min(460px,94vw)] flex-col border-l border-border bg-card text-card-foreground shadow-2xl transition-transform`}
         data-slot="sheet-content"

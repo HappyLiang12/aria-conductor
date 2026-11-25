@@ -377,3 +377,22 @@ describe('RuntimeCredentialsCard', () => {
     expect(await screen.findByText('Not configured')).toBeInTheDocument();
   });
 });
+
+// Wave 2 D5: the credential editor is a token Card surface; the
+// `runtime-credentials-card` test id and every label stay.
+describe('RuntimeCredentialsCard token surface (Wave 2 D5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGet.mockResolvedValue(CONFIGURED);
+  });
+
+  it('renders the editor on a token card surface with its hooks intact', async () => {
+    ui();
+
+    const card = await screen.findByTestId('runtime-credentials-card');
+    expect(card).toHaveAttribute('data-slot', 'card');
+    expect(card).toHaveClass('card');
+    expect(await screen.findByText('••••••••')).toBeInTheDocument();
+    expect(card.querySelector('[data-slot="input"]')).not.toBeNull();
+  });
+});

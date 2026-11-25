@@ -10,6 +10,9 @@ import {
 } from '../api/runtimeCredentials';
 import { apiErrorMessage } from '../api/operatorSession';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
+import { Input } from './ui/input';
 import { formatTimestamp } from '../utils/formatTime';
 
 /**
@@ -164,9 +167,11 @@ export function RuntimeCredentialsCard() {
   const testUnavailable = metadata ? testUnavailableReason(metadata) : null;
 
   return (
-    <div className="card" style={{ marginTop: 24 }} data-testid="runtime-credentials-card">
-      <h3 className="form-title">Qoder runtime credential</h3>
-      <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+    <Card className="card mt-6" data-testid="runtime-credentials-card">
+      <h3 className="form-title mb-4 text-sm font-semibold text-foreground">
+        Qoder runtime credential
+      </h3>
+      <p className="text-xs text-muted-foreground">
         Stored by the platform and injected only into Qoder runs. Reads are masked — the stored
         secret is never returned to the dashboard.
       </p>
@@ -179,7 +184,7 @@ export function RuntimeCredentialsCard() {
       )}
 
       {metadataQuery.isError && (
-        <div className="error-state">
+        <div className="error-state rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           <div>{apiErrorMessage(metadataQuery.error, 'Failed to load the Qoder runtime credential.')}</div>
         </div>
       )}
@@ -189,22 +194,27 @@ export function RuntimeCredentialsCard() {
           actions stay usable instead of emptying the card. */}
       {metadata && (
         <>
-          <div className="rf-meta" style={{ marginBottom: 10 }}>
+          <div className="rf-meta mb-2.5 flex flex-wrap items-center gap-2">
             {metadata.configured ? (
               <>
                 <span className="pill ok">Configured</span>
-                <span className="owner cell-mono" style={{ fontSize: 13, letterSpacing: 2 }}>
+                <span className="owner cell-mono text-[13px] tracking-widest">
                   {MASKED_CREDENTIAL_DISPLAY}
                 </span>
-                <span className="owner">
-                  injected as <code>{metadata.environmentVariable}</code>
+                <span className="owner text-xs text-muted-foreground">
+                  injected as{' '}
+                  <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+                    {metadata.environmentVariable}
+                  </code>
                 </span>
-                <span className="owner">updated {formatTimestamp(metadata.updatedAt)}</span>
+                <span className="owner text-xs text-muted-foreground">
+                  updated {formatTimestamp(metadata.updatedAt)}
+                </span>
               </>
             ) : (
               <>
                 <span className="pill warn">Not configured</span>
-                <span className="owner">
+                <span className="owner text-xs text-muted-foreground">
                   Qoder runs fail admission until an operator stores the runtime credential.
                 </span>
               </>
@@ -214,18 +224,17 @@ export function RuntimeCredentialsCard() {
           <form onSubmit={submit}>
             <label
               htmlFor="runtime-credential-value"
-              style={{ display: 'block', fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 4px', letterSpacing: '.8px', textTransform: 'uppercase' }}
+              className="mt-2 mb-1 block text-[10.5px] tracking-wider text-muted-foreground uppercase"
             >
               Runtime credential
             </label>
-            <input
+            <Input
               id="runtime-credential-value"
               type="password"
               autoComplete="off"
               value={secret}
               placeholder="Paste the Qoder runtime credential"
               onChange={(e) => setSecret(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', borderRadius: 8, background: 'rgba(0,0,0,.25)', color: 'var(--text)', border: '1px solid var(--line-2)', font: 'inherit', fontSize: 13, boxSizing: 'border-box' }}
             />
             {/* T54 F3: stated BEFORE the controls, because it is what the
                 operator needs to know before pressing Save: this build cannot
@@ -233,17 +242,18 @@ export function RuntimeCredentialsCard() {
             {testUnavailable && (
               <div
                 data-testid="credential-test-unavailable"
-                style={{ color: 'var(--text-mute)', fontSize: 11.5, marginTop: 8 }}
+                className="mt-2 text-[11.5px] text-muted-foreground"
               >
                 {testUnavailable}
               </div>
             )}
-            <div className="actions" style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-              <button type="submit" className="btn primary" disabled={save.isPending}>
+            <div className="actions mt-2.5 flex flex-wrap gap-2">
+              <Button type="submit" className="btn primary" disabled={save.isPending}>
                 {save.isPending ? 'Storing…' : 'Save credential'}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="outline"
                 className="btn"
                 disabled={test.isPending || testUnavailable !== null}
                 onClick={() => {
@@ -256,28 +266,31 @@ export function RuntimeCredentialsCard() {
                 }}
               >
                 {test.isPending ? 'Testing…' : 'Test credential'}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="destructive"
                 className="btn danger"
                 disabled={remove.isPending || !metadata.configured}
                 onClick={() => setConfirmingRemove(true)}
               >
                 Remove credential
-              </button>
+              </Button>
             </div>
           </form>
 
           {notice && (
-            <div data-testid="credential-save-notice" style={{ marginTop: 8, fontSize: 11.5 }}>
+            <div data-testid="credential-save-notice" className="mt-2 text-[11.5px] text-foreground">
               {notice}
             </div>
           )}
-          {error && <div style={{ marginTop: 8, color: 'var(--red)', fontSize: 11.5 }}>{error}</div>}
+          {error && (
+            <div className="mt-2 text-[11.5px] text-destructive">{error}</div>
+          )}
 
           {test.data && <TestOutcomeBlock outcome={test.data} />}
           {test.isError && (
-            <div className="error-state" style={{ marginTop: 10 }}>
+            <div className="error-state mt-2.5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {apiErrorMessage(test.error, 'The credential test could not be run.')}
             </div>
           )}
@@ -301,21 +314,23 @@ export function RuntimeCredentialsCard() {
         }}
         onCancel={() => setConfirmingRemove(false)}
       />
-    </div>
+    </Card>
   );
 }
 
 function TestOutcomeBlock({ outcome }: { outcome: CredentialTestOutcome }) {
   if (!outcome.tested) {
     return (
-      <div className="error-state" style={{ marginTop: 10 }}>
+      <div className="error-state mt-2.5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
         {outcome.reason ?? 'The credential test was refused; no model call was made.'}
       </div>
     );
   }
   return (
-    <div style={{ marginTop: 10, fontSize: 12 }}>
-      <div className={outcome.authenticated ? 'pill ok' : 'pill risk'} style={{ marginBottom: 6 }}>
+    <div className="mt-2.5 text-xs">
+      <div
+        className={`${outcome.authenticated ? 'pill ok' : 'pill risk'} mb-1.5`}
+      >
         {outcome.authenticated
           ? `Credential test passed — authenticated with model ${outcome.model ?? 'unknown'}`
           : 'Credential test failed — the provider rejected the credential'}
@@ -323,7 +338,7 @@ function TestOutcomeBlock({ outcome }: { outcome: CredentialTestOutcome }) {
       {outcome.detail && <div>{outcome.detail}</div>}
       <div>{usageLine(outcome)}</div>
       {outcome.costDisclosure && (
-        <div style={{ color: 'var(--text-mute)', marginTop: 6 }}>{outcome.costDisclosure}</div>
+        <div className="mt-1.5 text-muted-foreground">{outcome.costDisclosure}</div>
       )}
     </div>
   );

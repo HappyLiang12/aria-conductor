@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getTemplates, createFromTemplate } from '../api/agents';
+import { getTemplates, createFromTemplate, createAgent, listAgents } from '../api/agents';
 import { presentError } from '../api/errorPresentation';
 import ErrorNotice from './ErrorNotice';
-import type { AgentTemplate } from '../types';
+import type { AgentCore, AgentTemplate } from '../types';
 
 /**
  * AgentCatalog — hireable agent template grid.
@@ -21,9 +21,32 @@ export function AgentCatalog() {
     queryFn: getTemplates,
   });
 
+  const { data: agents } = useQuery({
+    queryKey: ['agents'],
+    queryFn: listAgents,
+  });
+
   const deployMutation = useMutation({
-    mutationFn: (template: AgentTemplate) => {
-      return createFromTemplate(template.id);
+    mutationFn: async (template: AgentTemplate) => {
+      // The fleet runs one (core, mode) pair and the backend refuses a create
+      // that would add a second. A template carries no placement, so deploy on
+      // the pair the fleet already runs, keeping the template's role/model.
+      const fleet = agents ?? (await listAgents());
+      const runtime = fleet.find((a) => a.executionMode);
+      if (!runtime?.executionMode) {
+        // Empty fleet: the template endpoint supplies its own defaults.
+        return createFromTemplate(template.id);
+      }
+      return createAgent({
+        name: template.label,
+        description: template.description,
+        agentType: template.agentType,
+        role: template.role,
+        model: template.model,
+        provider: template.provider,
+        adkProvider: (runtime.adkProvider ?? template.adkProvider) as AgentCore,
+        executionMode: runtime.executionMode,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });

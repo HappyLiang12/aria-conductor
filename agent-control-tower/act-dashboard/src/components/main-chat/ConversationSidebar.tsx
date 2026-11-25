@@ -18,8 +18,7 @@ interface Props {
  *
  * Wave 2 D6: the rail is a token Card inside the preserved `.mc-sidebar` hook.
  * `.mc-conversation-list`, `.mc-conversation-open` and `.mc-conversation-delete`
- * stay because the aria-main-chat E2E drives them; the styling is token classes
- * so `main-chat.css` is no longer needed.
+ * stay because the aria-main-chat E2E drives them; the styling is token classes.
  */
 export function ConversationSidebar({
   items, activeId, loading, error, disabled, onNew, onSelect, onDelete,

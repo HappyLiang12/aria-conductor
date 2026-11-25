@@ -77,7 +77,7 @@ export function ConnectionBanner() {
 
 /**
  * Publish the header stack height. The shadcn sidebar is fixed to the viewport
- * and no longer needs it, but `styles/main-chat.css` sizes the chat surface with
+ * and no longer needs it, but the main-chat page sizes its surface with
  * `calc(100vh - var(--top-stack-h, 67px))`, so the value must stay accurate
  * while the connection banner can appear and disappear.
  */

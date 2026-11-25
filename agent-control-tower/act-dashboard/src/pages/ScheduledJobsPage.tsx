@@ -6,6 +6,11 @@ import {
 import type { ScheduledJob, CreateScheduledJobRequest, JobCategory, JobStatus } from '../types';
 import { apiErrorMessage } from '../api/operatorSession';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { formatTimestamp } from '../utils/formatTime';
 
 /** Parse a single cron field into an array of allowed values. */
@@ -74,6 +79,13 @@ function getNextCronRuns(expr: string, count = 3): Date[] | null {
 }
 
 type TabFilter = 'ALL' | JobCategory;
+
+/** Status tone carried by a dot so it survives the Badge variant's own colours. */
+function statusDot(status: JobStatus): string {
+  if (status === 'ACTIVE') return 'bg-success';
+  if (status === 'PAUSED') return 'bg-warning';
+  return 'bg-muted-foreground';
+}
 
 export function ScheduledJobsPage() {
   const queryClient = useQueryClient();
@@ -176,9 +188,10 @@ export function ScheduledJobsPage() {
 
   return (
     <div className="page scheduled-jobs-page">
+      {/* The header keeps `.page-header` + `h2` (E2E pins `.page-header h2`). */}
       <div className="page-header">
-        <h2>📅 Scheduled Jobs</h2>
-        <button className="btn primary" onClick={openCreateModal}>+ New Job</button>
+        <h2 className="flex items-center gap-2">📅 Scheduled Jobs</h2>
+        <Button size="sm" onClick={openCreateModal}>+ New Job</Button>
       </div>
 
       <div className="scheduled-jobs-toolbar">
@@ -186,6 +199,8 @@ export function ScheduledJobsPage() {
           {(['ALL', 'REMINDER', 'MONITOR', 'BRIEF'] as const).map(tab => (
             <button
               key={tab}
+              type="button"
+              aria-pressed={categoryFilter === tab}
               className={`filter-tab${categoryFilter === tab ? ' active' : ''}`}
               onClick={() => setCategoryFilter(tab)}
             >
@@ -193,7 +208,11 @@ export function ScheduledJobsPage() {
             </button>
           ))}
         </div>
-        <select className="select-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value as JobStatus | '')}>
+        <select
+          className="select-filter h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground"
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value as JobStatus | '')}
+        >
           <option value="">All Status</option>
           <option value="ACTIVE">Active</option>
           <option value="PAUSED">Paused</option>
@@ -205,41 +224,51 @@ export function ScheduledJobsPage() {
       {isError && <div className="evidence-error">{apiErrorMessage(jobsError, 'Failed to load jobs.')}</div>}
 
       {!isLoading && !isError && jobs.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
-          <p style={{ color: 'var(--text-dim)' }}>No scheduled jobs found.</p>
+        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
+          <p className="text-sm text-muted-foreground">No scheduled jobs found.</p>
         </div>
       )}
 
       <div className="job-grid">
         {jobs.map(job => (
-          <div key={job.id} className="job-card card">
-            <div className="job-card-header">
-              <span className="job-card-emoji">{categoryEmoji[job.category] || '📌'}</span>
-              <div className="job-card-title">{job.title}</div>
-              <span className={`pill ${job.status === 'ACTIVE' ? 'ok' : job.status === 'PAUSED' ? 'warn' : ''}`}>{job.status}</span>
+          <Card key={job.id} className="job-card">
+            <div className="flex flex-col gap-2 px-(--card-spacing)">
+              <div className="job-card-header flex items-center gap-2">
+                <span className="job-card-emoji text-xl" aria-hidden="true">{categoryEmoji[job.category] || '📌'}</span>
+                <div className="job-card-title min-w-0 flex-1 truncate text-sm font-semibold text-card-foreground">{job.title}</div>
+                <Badge
+                  variant="outline"
+                  className={`pill gap-1.5 ${job.status === 'ACTIVE' ? 'ok' : job.status === 'PAUSED' ? 'warn' : ''}`}
+                >
+                  <span className={`size-1.5 rounded-full ${statusDot(job.status)}`} aria-hidden="true" />
+                  {job.status}
+                </Badge>
+              </div>
+              <div className="job-card-cron rounded-md bg-muted px-2.5 py-1 font-mono text-xs text-foreground">
+                {job.scheduleExpression}
+              </div>
+              <div className="job-card-meta flex justify-between text-[11px] text-muted-foreground">
+                <span>Next: {formatTimestamp(job.nextFireAt)}</span>
+                <span>Last: {formatTimestamp(job.lastFiredAt)}</span>
+              </div>
+              <div className="job-card-actions flex flex-wrap gap-1.5 border-t border-border pt-1.5">
+                {job.status === 'ACTIVE' && (
+                  <Button variant="outline" size="sm" onClick={() => pauseMut.mutate(job.id)} disabled={pauseMut.isPending}>
+                    {pauseMut.isPending ? 'Pausing…' : '⏸ Pause'}
+                  </Button>
+                )}
+                {job.status === 'PAUSED' && (
+                  <Button size="sm" onClick={() => resumeMut.mutate(job.id)} disabled={resumeMut.isPending}>
+                    {resumeMut.isPending ? 'Resuming…' : '▶ Resume'}
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={() => openEditModal(job)}>✏️ Edit</Button>
+                <Button variant="destructive" size="sm" onClick={() => setDeletingJob(job)} disabled={deleteMut.isPending}>
+                  {deleteMut.isPending ? 'Deleting…' : '🗑 Delete'}
+                </Button>
+              </div>
             </div>
-            <div className="job-card-cron">{job.scheduleExpression}</div>
-            <div className="job-card-meta">
-              <span>Next: {formatTimestamp(job.nextFireAt)}</span>
-              <span>Last: {formatTimestamp(job.lastFiredAt)}</span>
-            </div>
-            <div className="job-card-actions">
-              {job.status === 'ACTIVE' && (
-                <button className="btn sm" onClick={() => pauseMut.mutate(job.id)} disabled={pauseMut.isPending}>
-                  {pauseMut.isPending ? 'Pausing…' : '⏸ Pause'}
-                </button>
-              )}
-              {job.status === 'PAUSED' && (
-                <button className="btn sm primary" onClick={() => resumeMut.mutate(job.id)} disabled={resumeMut.isPending}>
-                  {resumeMut.isPending ? 'Resuming…' : '▶ Resume'}
-                </button>
-              )}
-              <button className="btn sm" onClick={() => openEditModal(job)}>✏️ Edit</button>
-              <button className="btn sm danger" onClick={() => setDeletingJob(job)} disabled={deleteMut.isPending}>
-                {deleteMut.isPending ? 'Deleting…' : '🗑 Delete'}
-              </button>
-            </div>
-          </div>
+          </Card>
         ))}
       </div>
 
@@ -252,68 +281,72 @@ export function ScheduledJobsPage() {
               <button className="close" onClick={() => setModalOpen(false)}>✕</button>
             </div>
           <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label>
+            <div className="modal-body flex flex-col gap-3">
+              <label className="flex flex-col gap-1 text-sm text-muted-foreground">
                 Title
-                <input required value={form.title} onChange={e => updateForm('title', e.target.value)} placeholder="Daily summary brief" />
+                <Input required value={form.title} onChange={e => updateForm('title', e.target.value)} placeholder="Daily summary brief" />
               </label>
-              <label>
+              <label className="flex flex-col gap-1 text-sm text-muted-foreground">
                 Category
-                <select value={form.category} onChange={e => updateForm('category', e.target.value as JobCategory)}>
+                <select
+                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground"
+                  value={form.category}
+                  onChange={e => updateForm('category', e.target.value as JobCategory)}
+                >
                   <option value="REMINDER">🔔 Reminder</option>
                   <option value="MONITOR">📊 Monitor</option>
                   <option value="BRIEF">📋 Brief</option>
                 </select>
               </label>
-              <fieldset style={{ border: 'none', padding: 0, display: 'flex', gap: 16 }}>
-                <legend style={{ fontSize: '0.85rem', fontWeight: 500, marginBottom: 4 }}>Schedule Type</legend>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <fieldset className="flex gap-4 border-0 p-0">
+                <legend className="mb-1 text-sm font-medium text-foreground">Schedule Type</legend>
+                <label className="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground">
                   <input type="radio" name="scheduleType" value="ONE_SHOT"
                     checked={form.scheduleType === 'ONE_SHOT'}
                     onChange={() => updateForm('scheduleType', 'ONE_SHOT')} />
                   One-Shot
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                <label className="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground">
                   <input type="radio" name="scheduleType" value="RECURRING"
                     checked={form.scheduleType === 'RECURRING'}
                     onChange={() => updateForm('scheduleType', 'RECURRING')} />
                   Recurring
                 </label>
               </fieldset>
-              <label>
-                Schedule Expression {form.scheduleType === 'RECURRING' && <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>(cron: min hour day month weekday)</span>}
-                <input required value={form.scheduleExpression}
+              <label className="flex flex-col gap-1 text-sm text-muted-foreground">
+                Schedule Expression {form.scheduleType === 'RECURRING' && <span className="text-xs text-muted-foreground">(cron: min hour day month weekday)</span>}
+                <Input required value={form.scheduleExpression}
                   onChange={e => updateForm('scheduleExpression', e.target.value)}
                   placeholder={form.scheduleType === 'ONE_SHOT' ? '2026-07-15T09:00:00' : '0 9 * * *'} />
               </label>
               {/* Cron Preview */}
               {form.scheduleType === 'RECURRING' && form.scheduleExpression && (
-                <div className="cron-preview">
-                  <div className="cron-preview-label">Next 3 runs:</div>
+                <div className="cron-preview rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+                  <div className="cron-preview-label mb-1 font-medium text-muted-foreground">Next 3 runs:</div>
                   {cronPreview === null ? (
-                    <div className="cron-preview-item" style={{ color: 'var(--red)' }}>Invalid expression</div>
+                    <div className="cron-preview-item text-destructive">Invalid expression</div>
                   ) : (
                     cronPreview.map((d, i) => (
-                      <div key={i} className="cron-preview-item">{formatTimestamp(d.toISOString())}</div>
+                      <div key={i} className="cron-preview-item py-px font-mono text-foreground">{formatTimestamp(d.toISOString())}</div>
                     ))
                   )}
                 </div>
               )}
-              <label>
+              <label className="flex flex-col gap-1 text-sm text-muted-foreground">
                 Notification Title
-                <input required value={form.notificationTitle} onChange={e => updateForm('notificationTitle', e.target.value)} placeholder="Daily brief ready" />
+                <Input required value={form.notificationTitle} onChange={e => updateForm('notificationTitle', e.target.value)} placeholder="Daily brief ready" />
               </label>
-              <label>
-                Notification Body <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>(optional)</span>
-                <textarea rows={3} value={form.notificationBody} onChange={e => updateForm('notificationBody', e.target.value)} placeholder="Your daily summary is ready for review." />
+              <label className="flex flex-col gap-1 text-sm text-muted-foreground">
+                Notification Body <span className="text-xs text-muted-foreground">(optional)</span>
+                <Textarea rows={3} value={form.notificationBody} onChange={e => updateForm('notificationBody', e.target.value)} placeholder="Your daily summary is ready for review." />
               </label>
             </div>
             <div className="modal-footer">
-              <button className="btn" type="button" onClick={() => setModalOpen(false)}>Cancel</button>
-              <button className="btn primary" type="submit"
+              <Button variant="outline" size="sm" type="button" onClick={() => setModalOpen(false)}>Cancel</Button>
+              <Button size="sm" type="submit"
                 disabled={createMut.isPending || updateMut.isPending}>
                 {createMut.isPending || updateMut.isPending ? 'Saving…' : editingJob ? 'Update' : 'Create'}
-              </button>
+              </Button>
             </div>
           </form>
           </div>
@@ -347,20 +380,7 @@ export function ScheduledJobsPage() {
       {toastMsg && (
         <div
           role="status"
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            right: 24,
-            zIndex: 200,
-            padding: '10px 14px',
-            border: '1px solid rgba(91,140,255,.4)',
-            background: 'rgba(91,140,255,.14)',
-            color: 'var(--text)',
-            borderRadius: 10,
-            fontSize: 12,
-            backdropFilter: 'blur(8px)',
-            boxShadow: '0 12px 32px rgba(0,0,0,.45)',
-          }}
+          className="fixed right-6 bottom-6 z-50 rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-card-foreground shadow-lg backdrop-blur"
         >
           {toastMsg}
         </div>

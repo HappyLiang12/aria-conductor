@@ -103,3 +103,42 @@ describe('ScheduledJobsPage delete confirmation (Task 10)', () => {
     expect(mockDeleteJob).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 C5: each job renders on the shadcn token card surface. The hooks the
+// E2E spec pins (`.job-card`, `.job-card-title`, `.pill`, `.page-header h2`)
+// and the schedule copy stay exactly where they were.
+// ---------------------------------------------------------------------------
+describe('ScheduledJobsPage token surfaces (Wave 2 C5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListJobs.mockResolvedValue([JOB]);
+  });
+
+  it('renders each job on a token card surface', async () => {
+    ui();
+
+    const title = await screen.findByText('Daily summary');
+    const card = title.closest('[data-slot="card"]');
+    expect(card).not.toBeNull();
+    expect(card!.classList.contains('job-card')).toBe(true);
+    expect(card).toHaveTextContent('0 9 * * *');
+    expect(card).toHaveTextContent('Next:');
+    expect(card).toHaveTextContent('Last:');
+    expect(card!.querySelector('.pill')).toHaveTextContent('ACTIVE');
+    // The header stays an h2 under .page-header (E2E `.page-header h2`).
+    const header = document.querySelector('.page-header');
+    expect(header?.querySelector('h2')).toHaveTextContent('Scheduled Jobs');
+  });
+
+  it('opens the create form on the token dialog surface', async () => {
+    ui();
+
+    await userEvent.click(screen.getByRole('button', { name: '+ New Job' }));
+
+    const dialog = document.querySelector('.modal-dialog');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.querySelector('h3')).toHaveTextContent('New Job');
+    expect(dialog!.querySelector('input[data-slot="input"]')).not.toBeNull();
+  });
+});

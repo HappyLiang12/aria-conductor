@@ -42,6 +42,14 @@ function renderQueue(over: Partial<React.ComponentProps<typeof DecisionQueue>> =
 }
 
 describe('DecisionQueue', () => {
+  it('renders the decision section with the token surface and the legacy hooks', () => {
+    renderQueue({ rows: [row], collapsed: false, count: 1 });
+    const section = screen.getByTestId('decision-queue');
+    expect(section).toHaveAttribute('data-collapsed', 'false');
+    expect(section.querySelector('.decision-queue__count')).toHaveTextContent('1');
+    expect(section.querySelector('[data-slot="card"]')).not.toBeNull();
+  });
+
   it('renders the task, reason and one task-backed action', async () => {
     const onActivate = vi.fn();
     renderQueue({ onActivate });

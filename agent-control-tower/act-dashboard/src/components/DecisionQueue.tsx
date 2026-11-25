@@ -5,7 +5,11 @@ import type { QueryPhase } from '../utils/queryState';
 import type { PresentedError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 import { StateNotice } from './StateNotice';
-import '../styles/decision-queue.css';
+import { QueueSection } from './overview/QueueSection';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
+import { Textarea } from './ui/textarea';
 
 export interface DecisionActionError {
   id: string;
@@ -51,22 +55,24 @@ function expiryLabel(iso: string | null): string | null {
   return `expires in ${Math.ceil(minutes / 60)}h`;
 }
 
-function riskOf(row: DecisionRow): { label: string; className: string } {
+type RiskBadgeVariant = 'destructive' | 'secondary' | 'outline';
+
+function riskOf(row: DecisionRow): { label: string; variant: RiskBadgeVariant } {
   switch (row.riskTier) {
     case 'DESTRUCTIVE':
-      return { label: 'Dangerous', className: 'danger' };
+      return { label: 'Dangerous', variant: 'destructive' };
     case 'PUSH':
-      return { label: 'Writes', className: 'warn' };
+      return { label: 'Writes', variant: 'secondary' };
     case 'WRITE_LOCAL':
-      return { label: 'Writes locally', className: 'warn' };
+      return { label: 'Writes locally', variant: 'secondary' };
     case 'READ':
-      return { label: 'Read', className: 'dim' };
+      return { label: 'Read', variant: 'outline' };
     default:
       // An unrecognised tier is shown verbatim, never as a reassuring label.
-      if (row.riskTier) return { label: row.riskTier, className: 'dim' };
-      if (row.approvalType === 'SPEC_REVIEW') return { label: 'Spec review', className: 'accent' };
-      if (row.source === 'CLARIFICATION') return { label: 'Question', className: 'accent' };
-      return { label: 'Approval', className: 'dim' };
+      if (row.riskTier) return { label: row.riskTier, variant: 'outline' };
+      if (row.approvalType === 'SPEC_REVIEW') return { label: 'Spec review', variant: 'secondary' };
+      if (row.source === 'CLARIFICATION') return { label: 'Question', variant: 'secondary' };
+      return { label: 'Approval', variant: 'outline' };
   }
 }
 
@@ -96,75 +102,89 @@ function Row({ row, busy, error, onActivate, onDecide, onAnswer }: {
     : null;
 
   return (
-    <li className="decision-row" data-risk={row.riskTier ?? undefined} data-testid={`decision-row-${row.id}`}>
-      <div className="decision-row__head">
-        <strong className="decision-row__title">{row.title}</strong>
-        <span className={`pill ${risk.className}`}>{risk.label}</span>
-        {row.toolName && <span className="decision-row__tool">{row.toolName}</span>}
-      </div>
-      <p className="decision-row__reason">{row.reason}</p>
-      <div className="decision-row__meta">
-        <span>{waited(row.requestedAt)}</span>
-        {expiry && <span>{expiry}</span>}
-        {slotNote && <span className="decision-row__note">{slotNote}</span>}
-        {taskless && !clarification && (
-          <span className="decision-row__note">Task details unavailable — decide here.</span>
-        )}
-      </div>
-      <div className="decision-row__actions">
-        {!taskless && (
-          <button type="button" className="btn" disabled={busy} onClick={() => onActivate(row)}>
-            {actionLabel(row)}
-          </button>
-        )}
-        {taskless && !clarification && (
-          <>
-            <button type="button" className="btn primary" disabled={busy} onClick={() => onDecide(row, true)}>
-              Approve
-            </button>
-            <button type="button" className="btn danger" disabled={busy} onClick={() => onDecide(row, false)}>
-              Deny
-            </button>
-          </>
-        )}
-        {clarification && !answerOpen && (
-          <button type="button" className="btn" disabled={busy} onClick={() => setAnswerOpen(true)}>
-            Answer
-          </button>
-        )}
-        {clarification && answerOpen && (
-          <div className="decision-row__answer">
-            <label htmlFor={answerId}>Answer</label>
-            <textarea
-              id={answerId}
-              value={draft}
-              rows={2}
-              disabled={busy}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busy || draft.trim().length === 0}
-              onClick={() => onAnswer(row, draft.trim())}
-            >
-              Answer &amp; continue
-            </button>
+    <li
+      className="decision-row list-none border-0! bg-transparent! p-0!"
+      data-risk={row.riskTier ?? undefined}
+      data-testid={`decision-row-${row.id}`}
+    >
+      <Card size="sm">
+        <CardContent className="space-y-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <strong className="min-w-0 text-sm font-semibold break-words text-card-foreground">
+              {row.title}
+            </strong>
+            <Badge variant={risk.variant}>{risk.label}</Badge>
+            {row.toolName && (
+              <span className="font-mono text-xs text-muted-foreground">{row.toolName}</span>
+            )}
           </div>
-        )}
-      </div>
-      {/* Task 37 / Item 6: these decide/answer routes are operator-only, and
-          `presentError` already marks the refusal. Rendering the bare text left
-          the operator with "Decision failed." and no remedy; the shared notice
-          replaces it and names the action that was refused. A non-refusal keeps
-          the ordinary error path. */}
-      {error && (
-        <ErrorNotice
-          presented={error}
-          operatorSession
-          actionLabel={clarification ? 'Answering the ask' : 'Deciding the ask'}
-        />
-      )}
+          <p className="line-clamp-2 text-xs break-words text-muted-foreground">{row.reason}</p>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>{waited(row.requestedAt)}</span>
+            {expiry && <span>{expiry}</span>}
+            {slotNote && <span className="text-amber-500">{slotNote}</span>}
+            {taskless && !clarification && (
+              <span className="text-amber-500">Task details unavailable — decide here.</span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            {!taskless && (
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onActivate(row)}>
+                {actionLabel(row)}
+              </Button>
+            )}
+            {taskless && !clarification && (
+              <>
+                <Button type="button" size="sm" disabled={busy} onClick={() => onDecide(row, true)}>
+                  Approve
+                </Button>
+                <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => onDecide(row, false)}>
+                  Deny
+                </Button>
+              </>
+            )}
+            {clarification && !answerOpen && (
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setAnswerOpen(true)}>
+                Answer
+              </Button>
+            )}
+            {clarification && answerOpen && (
+              <div className="flex w-full flex-col gap-1.5">
+                <label htmlFor={answerId} className="text-xs text-muted-foreground">Answer</label>
+                <Textarea
+                  id={answerId}
+                  className="min-h-0"
+                  value={draft}
+                  rows={2}
+                  disabled={busy}
+                  onChange={(event) => setDraft(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  className="self-start"
+                  disabled={busy || draft.trim().length === 0}
+                  onClick={() => onAnswer(row, draft.trim())}
+                >
+                  Answer &amp; continue
+                </Button>
+              </div>
+            )}
+          </div>
+          {/* Task 37 / Item 6: these decide/answer routes are operator-only, and
+              `presentError` already marks the refusal. Rendering the bare text left
+              the operator with "Decision failed." and no remedy; the shared notice
+              replaces it and names the action that was refused. A non-refusal keeps
+              the ordinary error path. */}
+          {error && (
+            <ErrorNotice
+              presented={error}
+              operatorSession
+              actionLabel={clarification ? 'Answering the ask' : 'Deciding the ask'}
+            />
+          )}
+        </CardContent>
+      </Card>
     </li>
   );
 }
@@ -189,26 +209,19 @@ export function DecisionQueue({
   actionError = null,
   collapsed,
 }: DecisionQueueProps): ReactElement {
-  const titleId = useId();
   const reviews = reviewCount ?? 0;
 
-  if (collapsed) {
-    return (
-      <section className="decision-queue" data-testid="decision-queue" data-collapsed="true" aria-labelledby={titleId}>
-        <h2 id={titleId} className="decision-queue__collapsed">Needs your decision · No decisions waiting</h2>
-      </section>
-    );
-  }
-
   return (
-    <section className="decision-queue" data-testid="decision-queue" data-collapsed="false" aria-labelledby={titleId}>
-      <header className="decision-queue__head">
-        <h2 id={titleId}>Needs your decision</h2>
-        <span className="decision-queue__count" aria-label={`${count ?? 'unknown'} decisions waiting`}>
-          {count ?? '—'}
-        </span>
-      </header>
-
+    <QueueSection
+      className="decision-queue"
+      countClassName="decision-queue__count text-sm! font-semibold! text-muted-foreground!"
+      countAriaLabel={`${count ?? 'unknown'} decisions waiting`}
+      title="Needs your decision"
+      collapsedLabel="Needs your decision · No decisions waiting"
+      count={count}
+      collapsed={collapsed}
+      testId="decision-queue"
+    >
       {phase === 'loading' && <StateNotice kind="loading" title="Loading decisions…" />}
       {phase === 'error' && (
         <StateNotice
@@ -232,7 +245,7 @@ export function DecisionQueue({
       )}
 
       {rows.length > 0 && (
-        <ul className="decision-queue__list">
+        <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {rows.map((row) => (
             <Row
               key={row.id}
@@ -248,18 +261,21 @@ export function DecisionQueue({
       )}
 
       {reviewCount !== null && reviewCount > 0 && (
-        <div className="decision-queue__reviews" data-testid="decision-reviews">
+        <div
+          className="flex items-center gap-3 border-t pt-3 text-xs text-muted-foreground"
+          data-testid="decision-reviews"
+        >
           <span>
             {reviewCount} run{reviewCount === 1 ? '' : 's'} awaiting review
           </span>
           {onOpenReviews && (
-            <button type="button" className="btn" onClick={onOpenReviews}>
+            <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={onOpenReviews}>
               Open review board
-            </button>
+            </Button>
           )}
         </div>
       )}
-    </section>
+    </QueueSection>
   );
 }
 

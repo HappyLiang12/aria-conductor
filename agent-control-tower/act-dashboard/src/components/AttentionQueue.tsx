@@ -1,11 +1,13 @@
-import { useId } from 'react';
 import type { ReactElement } from 'react';
 import type { AttentionRow } from '../hooks/useAttentionQueue';
 import type { QueryPhase } from '../utils/queryState';
 import type { PresentedError } from '../api/errorPresentation';
 import { ErrorNotice } from './ErrorNotice';
 import { StateNotice } from './StateNotice';
-import '../styles/attention-queue.css';
+import { QueueSection } from './overview/QueueSection';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
 
 export interface AttentionActionError {
   id: string;
@@ -35,22 +37,22 @@ function Actions({ row, busy, onOpenTask, onRetryPickup, onOpenConfigure }: {
 }): ReactElement {
   if (row.kind === 'provider') {
     return (
-      <button type="button" className="btn" onClick={onOpenConfigure}>
+      <Button type="button" variant="outline" size="sm" onClick={onOpenConfigure}>
         Open Configure
-      </button>
+      </Button>
     );
   }
   return (
     <>
       {row.taskId && (
-        <button type="button" className="btn" disabled={busy} onClick={() => onOpenTask(row)}>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onOpenTask(row)}>
           Open task
-        </button>
+        </Button>
       )}
       {row.kind === 'pickup' && row.taskId && (
-        <button type="button" className="btn primary" disabled={busy} onClick={() => onRetryPickup(row)}>
+        <Button type="button" size="sm" disabled={busy} onClick={() => onRetryPickup(row)}>
           Retry pickup (starts 1 run)
-        </button>
+        </Button>
       )}
     </>
   );
@@ -70,25 +72,18 @@ export function AttentionQueue({
   actionError = null,
   collapsed,
 }: AttentionQueueProps): ReactElement {
-  const titleId = useId();
-
-  if (collapsed) {
-    return (
-      <section className="attention-queue" data-testid="attention-queue" data-collapsed="true" aria-labelledby={titleId}>
-        <h2 id={titleId} className="attention-queue__collapsed">Needs attention · Nothing needs attention</h2>
-      </section>
-    );
-  }
-
   return (
-    <section className="attention-queue" data-testid="attention-queue" data-collapsed="false" aria-labelledby={titleId}>
-      <header className="attention-queue__head">
-        <h2 id={titleId}>Needs attention <span className="accent">· recovery</span></h2>
-        <span className="attention-queue__count" aria-label={`${count ?? 'unknown'} items need attention`}>
-          {count ?? '—'}
-        </span>
-      </header>
-
+    <QueueSection
+      className="attention-queue"
+      countClassName="attention-queue__count text-sm! font-semibold! text-muted-foreground!"
+      countAriaLabel={`${count ?? 'unknown'} items need attention`}
+      title="Needs attention"
+      accent="recovery"
+      collapsedLabel="Needs attention · Nothing needs attention"
+      count={count}
+      collapsed={collapsed}
+      testId="attention-queue"
+    >
       {phase === 'loading' && <StateNotice kind="loading" title="Loading attention items…" />}
       {phase === 'error' && (
         <StateNotice
@@ -112,30 +107,40 @@ export function AttentionQueue({
       )}
 
       {rows.length > 0 && (
-        <ul className="attention-queue__list">
+        <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {rows.map((row) => (
-            <li className="attention-row" key={row.id} data-testid={`attention-row-${row.id}`}>
-              <div className="attention-row__head">
-                <strong className="attention-row__title">{row.title}</strong>
-                <span className="pill dim">{row.kind}</span>
-                {row.cardStatus && <span className="pill">{row.cardStatus}</span>}
-              </div>
-              <p className="attention-row__reason">{row.reason}</p>
-              <div className="attention-row__actions">
-                <Actions
-                  row={row}
-                  busy={busyId === row.id}
-                  onOpenTask={onOpenTask}
-                  onRetryPickup={onRetryPickup}
-                  onOpenConfigure={onOpenConfigure}
-                />
-              </div>
-              {actionError?.id === row.id && <ErrorNotice presented={actionError.presented} />}
+            <li
+              className="attention-row list-none border-0! bg-transparent! p-0!"
+              key={row.id}
+              data-testid={`attention-row-${row.id}`}
+            >
+              <Card size="sm">
+                <CardContent className="space-y-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <strong className="min-w-0 text-sm font-semibold break-words text-card-foreground">
+                      {row.title}
+                    </strong>
+                    <Badge variant="outline">{row.kind}</Badge>
+                    {row.cardStatus && <Badge variant="secondary">{row.cardStatus}</Badge>}
+                  </div>
+                  <p className="text-xs break-words text-muted-foreground">{row.reason}</p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Actions
+                      row={row}
+                      busy={busyId === row.id}
+                      onOpenTask={onOpenTask}
+                      onRetryPickup={onRetryPickup}
+                      onOpenConfigure={onOpenConfigure}
+                    />
+                  </div>
+                  {actionError?.id === row.id && <ErrorNotice presented={actionError.presented} />}
+                </CardContent>
+              </Card>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </QueueSection>
   );
 }
 

@@ -386,6 +386,13 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     fireEvent.drop(lane);
   };
 
+  it('renders each column on a token card while keeping data-col', async () => {
+    await renderBoard([]);
+    const column = screen.getByTestId('lane-REVIEW');
+    expect(column).toHaveAttribute('data-col', 'REVIEW');
+    expect(column.querySelector('[data-slot="card"]')).not.toBeNull();
+  });
+
   it('renders five status-driven columns and NOT QA Gate / Cancelled', async () => {
     await renderBoard([
       baseItem({ status: 'BACKLOG' }),

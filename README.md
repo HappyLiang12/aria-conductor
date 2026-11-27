@@ -17,29 +17,37 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 
 ## Dashboard
 
-![Dashboard shell with grouped navigation, the runtime badge, and the live connection indicator](docs/reviews/shots/ui-refresh-shell.png)
-
 ![Overview: decision-first KPIs above the governed kanban board](docs/reviews/shots/ui-refresh-overview.png)
 
-![Aria chat in its empty state](docs/reviews/shots/ui-refresh-aria.png)
+![Crew: workload signals and the hiring catalog on the same token surfaces](docs/reviews/shots/ui-refresh-crew.png)
+
+![Workflows: the governed workflow surface after the Wave 2 refresh](docs/reviews/shots/ui-refresh-workflows.png)
+
+![Aria chat in its empty state after the Wave 2 refresh](docs/reviews/shots/ui-refresh-aria.png)
 
 A short tour of the refreshed surface:
 
+- **Every route is token-driven.** The Wave 2 refresh rebuilds the shell, Overview, operator pages
+  (Crew, Providers, Runs, Ops), knowledge/admin pages (Knowledge, Memory, Reports, Workflows, Jobs,
+  Settings), chat and the shared overlays on the same shadcn/Tailwind tokens. The captures above
+  come from the current `main`.
 - **Grouped navigation** — Operate, Build, Chat and System rails keep runs, governed work,
   conversation and configuration apart.
 - **Overview, decisions first** — the four KPIs (active agents, running runs, pending approvals,
   recorded tokens), the "Needs your decision" queue and the recovery list sit above the governed
   kanban board.
+- **Crew, Runs, Ops** — the roster and its workload signals, live run detail and the approval
+  surface use the same flat card/badge language as the Overview.
+- **Knowledge, Workflows, Reports** — versioned knowledge, governed workflow steps and generated
+  reports keep their existing behaviour with the new surfaces.
 - **Aria** — chat with send and stop controls; approval, clarification and memory-proposal asks
   render as inline decision cards, next to the same decision queue on the Overview.
-- **Live progress** — a running turn streams its progress into the transcript.
 - **Theme toggle** — dark and light, remembered per browser.
-- **Runtime badge and connection indicator** — the topbar names the agent core (and its mode when
-  the app knows it) and shows whether the live event feed is connected.
+- **Runtime badge and connection indicator** — the topbar names the agent core and shows whether
+  the live event feed is connected.
 
-Phase 1 refreshes the shell, the Overview frame and KPIs, and Aria; the other pages retain their
-current styling until their rollout wave. To see it locally, follow [Quick Start](#quick-start) and
-open [http://localhost:5173](http://localhost:5173).
+To see it locally, follow [Quick Start](#quick-start) and open
+[http://localhost:5173](http://localhost:5173).
 
 ## Current limits
 
